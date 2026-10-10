@@ -6,12 +6,12 @@
 // that only suggests. Without a docId, the docs route shows the Drive.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, Check, ClipboardCopy, CloudCheck, CloudUpload, Copy, Ellipsis, Eye, FileQuestion, History, Info, Lock, MessageSquarePlus, MessageSquareText, Pencil, Redo2, Sparkles, Star, StarOff, Trash2, Undo2, UserPlus, Users } from 'lucide-react'
-import type { Doc, Route } from '../types'
-import { newId, useStore } from '../store'
-import { ME } from '../data/people'
+import type { Doc, Folder, Route } from '../types'
+import { newId, useStore, type State } from '../store'
+import { ME, personById } from '../data/people'
 import { docs as seedDocs } from '../data/work'
 import { myDocs } from '../data/drive'
-import { canEdit as canEditItem, folderPath, isTrashed } from '../drive'
+import { canEdit as canEditItem, folderPath, isTrashed, teamFolderOf } from '../drive'
 import { AvatarStack, Button, cx, EmptyState, IconButton, Segmented, Sheet } from '../ui'
 import { ShareDialog } from '../ui/share'
 import DriveScreen from './Drive'
@@ -19,7 +19,7 @@ import Editor, { applyType, typeIcons } from './docs/Editor'
 import { BlankStart, useAssist, type AssistKind } from './docs/Assist'
 import { Comments, DetailsSheet, PermissionsSheet, stamp, Versions } from './docs/Panels'
 import { Menu, useKeyboardInset, useMedia, type MenuItem } from './docs/ui'
-import { blockOrder, byName, canComment, cap, editorIds, fullName, nameList, permissionLine, toBlocks, toMarkdown, typeLabels, UNTITLED, type BlockType } from './docs/model'
+import { blockOrder, byName, canComment, cap, editorIds, fullName, nameList, openLine, permissionLine, toBlocks, toMarkdown, typeLabels, UNTITLED, type BlockType } from './docs/model'
 import { useDocDraft, type DocDraft } from './docs/useDocDraft'
 
 export default function DocsScreen() {
@@ -50,6 +50,18 @@ const SEED_IDS = new Set([...seedDocs, ...myDocs].map(d => d.id))
 
 type Panel = 'comments' | 'history'
 
+/** Where a copy goes: next to the original if you can add files to that folder (you can edit
+ *  it, it sits under one of your folders, or it's your team's folder), otherwise My Drive.
+ *  The Drive's own Make a copy follows the same rule. */
+function copyDestination(state: State, doc: Doc): Folder | null {
+  const f = doc.folderId ? state.folders.find(x => x.id === doc.folderId) : undefined
+  if (!f || isTrashed(state.folders, f)) return null
+  if (canEditItem(f) || folderPath(state.folders, f.id)[0]?.ownerId === ME) return f
+  const team = teamFolderOf(state.folders, f)?.team
+  const inTeam = !!team && (personById[ME]?.team === team || state.conversations.some(c => c.name === team && c.members.includes(ME)))
+  return inTeam ? f : null
+}
+
 function DocView({ doc }: { doc: Doc }) {
   const store = useStore()
   const { state, navigate, back, toast, toggleStar, patchItem } = store
@@ -79,17 +91,46 @@ function DocView({ doc }: { doc: Doc }) {
     modes.set(doc.id, m)
     setModeState(m)
   }
+  // Switching to Editing puts the caret at the end of the first line you can see, as Docs does.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const switchMode = (m: 'edit' | 'view') => {
+    if (m === 'view' || editing) { setMode(m); return }
+    const area = scrollRef.current
+    const top = area?.getBoundingClientRect().top ?? 0
+    const seen = [...(area?.querySelectorAll<HTMLElement>('[data-block-key]') ?? [])].find(el => el.getBoundingClientRect().bottom > top + 24)
+    setMode('edit')
+    const key = seen?.getAttribute('data-block-key')
+    if (key) draft.focus({ key, caret: 'end' })
+  }
 
   // Opening a doc counts as opening it in the Drive (Recent).
   useEffect(() => {
     patchItem(doc.id, { lastOpenedAt: store.state.clock })
     // A new doc opens with the caret in its first empty block.
     if (fresh && editable && mode === 'edit') {
-      const first = draft.itemsRef.current.find(i => !i.block.text.trim())
-      if (first) draft.focus({ key: first.key, caret: 0 })
+      const first = openLine(draft.itemsRef.current)
+      if (first) draft.focus({ key: first.key, caret: 'end' })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Ctrl/Cmd+S out of habit: save now instead of opening the browser's "Save page".
+  const saveNow = useRef(() => {})
+  saveNow.current = () => {
+    draft.patchDoc({})
+    toast('Saved to Drive. Docs save as you type.')
+  }
+  useEffect(() => {
+    if (!editable) return
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        saveNow.current()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [editable])
 
   const title = draft.title.trim() || UNTITLED
   const path = folderPath(state.folders, doc.folderId)
@@ -130,13 +171,15 @@ function DocView({ doc }: { doc: Doc }) {
     }
   }
 
+  const copyTo = copyDestination(state, doc)
   const makeCopy = () => {
     const clock = state.clock
     const copyTitle = `Copy of ${title}`
-    const folder = path[path.length - 1]
-    const id = store.createDoc({ folderId: doc.folderId, title: copyTitle, open: false })
+    const folder = copyTo
+    const folderId = folder?.id ?? null
+    const id = store.createDoc({ folderId, title: copyTitle, open: false })
     store.updateDoc({
-      id, title: copyTitle, space: folder?.title ?? 'My Drive', folderId: doc.folderId, ownerId: ME, editors: [ME], commenters: 'none',
+      id, title: copyTitle, space: folder?.title ?? 'My Drive', folderId, ownerId: ME, editors: [ME], commenters: 'none',
       updatedAt: clock, updatedBy: ME, lastOpenedAt: clock, presence: [], emoji: draft.emoji,
       blocks: toBlocks(draft.itemsRef.current), comments: [],
       versions: [{ id: newId('v'), authorId: ME, ts: clock, summary: `Copied from “${title}”` }],
@@ -147,13 +190,26 @@ function DocView({ doc }: { doc: Doc }) {
   const moveToTrash = () => {
     draft.leave()
     store.trashItem(doc.id)
-    navigate(home)
+    // Back to the Drive you came from; otherwise to the doc's folder, replacing the doc in
+    // history so Back doesn't reopen what you just trashed.
+    if (state.history[state.history.length - 1]?.name === 'drive') back()
+    else navigate(home, { replace: true })
     toast(`Moved “${title}” to trash`, { label: 'View trash', route: { name: 'drive', view: 'trash' } })
+  }
+
+  // In the trash itself, or inside a folder that is. Restoring brings back whichever it is.
+  const trashedFolders = path.filter(f => f.trashed)
+  const inFolder = !doc.trashed && trashedFolders.length > 0
+  const canRestore = (doc.trashed ? doc.ownerId === ME || canEditItem(doc) : true) && trashedFolders.every(f => f.ownerId === ME || canEditItem(f))
+  const restore = () => {
+    if (doc.trashed) store.restoreItem(doc.id)
+    for (const f of trashedFolders) store.restoreItem(f.id)
+    toast(trashedFolders.length ? `Restored “${trashedFolders[0].title}” from trash` : 'Restored from trash')
   }
 
   const moreItems: MenuItem[] = [
     ...(!desktop ? [{ id: 'star', label: doc.starred ? 'Remove from Starred' : 'Add to Starred', icon: doc.starred ? <StarOff size={17} /> : <Star size={17} />, onSelect: () => toggleStar(doc.id) }] : []),
-    { id: 'copy', label: 'Make a copy', note: `Saved in ${path[path.length - 1]?.title ?? 'My Drive'}`, icon: <Copy size={17} />, onSelect: makeCopy },
+    { id: 'copy', label: 'Make a copy', note: `Saved in ${copyTo?.title ?? 'My Drive'}`, icon: <Copy size={17} />, onSelect: makeCopy },
     { id: 'history', label: 'Version history', note: `${doc.versions.length} ${doc.versions.length === 1 ? 'version' : 'versions'}`, icon: <History size={17} />, onSelect: () => showPanel('history') },
     { id: 'md', label: 'Copy as Markdown', note: 'PDF and Word export come later', icon: <ClipboardCopy size={17} />, onSelect: copyMarkdown },
     { id: 'details', label: 'Details', icon: <Info size={17} />, onSelect: () => setDialog('details') },
@@ -163,8 +219,10 @@ function DocView({ doc }: { doc: Doc }) {
     },
   ]
 
+  // The block types apply to the line with the caret, so they wait until you've clicked into one.
   const activeType = draft.items.find(i => i.key === active)?.block.type
-  const setType = (t: BlockType) => applyType(draft, active ?? draft.items[draft.items.length - 1]?.key ?? null, t)
+  const setType = (t: BlockType) => applyType(draft, active, t)
+  const typeHint = (t: BlockType) => (activeType ? typeLabels[t] : `${typeLabels[t]} (click a line first)`)
   const at = editing ? active ?? undefined : undefined
   const slashActions = assist.items().filter(i => !i.disabled).map(i => ({ id: `ai-${i.id}`, label: i.label, hint: '', icon: i.icon, run: (key: string) => assist.run(i.id as AssistKind, key) }))
 
@@ -172,7 +230,7 @@ function DocView({ doc }: { doc: Doc }) {
     p === 'comments' ? (
       <Comments doc={doc} draft={draft} focus={focusComment} canComment={commentable} newAnchor={newAnchor} onDoneNew={() => setNewAnchor(null)} offReason={trashed ? 'Restore this doc from the trash to comment.' : undefined} />
     ) : (
-      <Versions doc={doc} draft={draft} editable={editable} />
+      <Versions doc={doc} draft={draft} editable={editable} lockedReason={trashed ? 'Take this doc out of the trash to go back to a version.' : undefined} />
     )
 
   const blankNow = editable && assist.blank && !assist.busy
@@ -181,7 +239,7 @@ function DocView({ doc }: { doc: Doc }) {
     <div className="relative flex h-full min-h-0 flex-col">
       <DocHeader
         doc={doc} draft={draft} desktop={desktop} wide={wide} editable={editable} editing={editing} title={title} path={path} here={here}
-        onBack={goBack} onMode={setMode} onShare={() => setDialog('share')} onComments={() => setSheet('comments')} onHistory={() => setSheet('history')} openComments={openComments.length}
+        onBack={goBack} onMode={switchMode} onShare={() => setDialog('share')} onComments={() => setSheet('comments')} onHistory={() => setSheet('history')} openComments={openComments.length}
         moreOpen={menu === 'more'} onMore={() => setMenu(menu === 'more' ? null : 'more')} moreMenu={<Menu open={menu === 'more'} onClose={() => setMenu(null)} items={moreItems} title="More" popover={desktop} />}
         trashed={trashed}
       />
@@ -198,11 +256,12 @@ function DocView({ doc }: { doc: Doc }) {
                 <button
                   key={t}
                   aria-pressed={activeType === t}
-                  title={typeLabels[t]}
+                  title={typeHint(t)}
                   aria-label={typeLabels[t]}
+                  disabled={!activeType}
                   onMouseDown={e => e.preventDefault()}
                   onClick={() => setType(t)}
-                  className={cx('inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-[13px] font-medium transition', activeType === t ? 'bg-accent-soft text-accent-ink' : 'text-muted hover:bg-surface-2 hover:text-fg')}
+                  className={cx('inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-[13px] font-medium transition disabled:opacity-40 disabled:hover:bg-transparent', activeType === t ? 'bg-accent-soft text-accent-ink' : 'text-muted hover:bg-surface-2 hover:text-fg')}
                 >
                   <Icon size={16} aria-hidden /><span className="hidden xl:inline">{typeLabels[t]}</span>
                 </button>
@@ -227,13 +286,16 @@ function DocView({ doc }: { doc: Doc }) {
       )}
 
       <div className="flex min-h-0 flex-1">
-        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
+        <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
           <div className={cx('mx-auto w-full max-w-[68ch] px-5 pt-5 sm:px-8 sm:pt-8', editable && !editing && !desktop ? 'pb-28' : 'pb-16')}>
             {trashed && (
               <div className="mb-5 flex flex-wrap items-center gap-3 rounded-2xl bg-rec-soft px-4 py-3 text-sm">
                 <Trash2 size={16} className="shrink-0 text-rec" aria-hidden />
-                <span className="min-w-0 flex-1">This doc is in the trash. Restore it to edit or comment.</span>
-                {(doc.ownerId === ME || canEditItem(doc)) && <Button size="sm" variant="secondary" icon={<Undo2 size={14} />} onClick={() => { store.restoreItem(doc.id); toast('Restored from trash') }}>Restore</Button>}
+                <span className="min-w-0 flex-1 basis-56">
+                  {inFolder ? `This doc is in “${trashedFolders[0].title}”, which is in the trash.` : 'This doc is in the trash.'}
+                  {canRestore ? ` Restore ${inFolder ? 'the folder' : 'it'} to edit or comment.` : ` Only ${inFolder ? byName(trashedFolders[0].ownerId) : nameList(editorIds(doc))} can restore it.`}
+                </span>
+                {canRestore && <Button size="sm" variant="secondary" icon={<Undo2 size={14} />} onClick={restore}>{inFolder ? 'Restore folder' : 'Restore'}</Button>}
               </div>
             )}
             <MetaBar doc={doc} editable={editable} trashed={trashed} commentable={commentable} here={here} onPermissions={() => setDialog('perm')} untouched={!SEED_IDS.has(doc.id) && doc.versions.length === 1 && !draft.savedOnce && !draft.saving} />
@@ -287,24 +349,40 @@ function DocView({ doc }: { doc: Doc }) {
       </div>
 
       {!desktop && editing && (
-        <div className="flex items-center gap-0.5 border-t border-line bg-surface px-1.5 py-1.5" style={{ marginBottom: inset }} role="toolbar" aria-label="Block type">
-          {blockOrder.map(t => {
-            const Icon = typeIcons[t]
-            return (
-              <IconButton key={t} label={typeLabels[t]} active={activeType === t} aria-pressed={activeType === t} className="size-9" onMouseDown={e => e.preventDefault()} onClick={() => setType(t)}>
-                <Icon size={19} />
-              </IconButton>
-            )
-          })}
-          <span className="mx-0.5 h-6 w-px shrink-0 bg-line" aria-hidden />
-          <IconButton label="Help me write" className="size-9 text-agent" onMouseDown={e => e.preventDefault()} onClick={() => setMenu('assist-bar')}><Sparkles size={19} /></IconButton>
-          <Button size="sm" variant="primary" icon={<Check size={15} />} className="ml-auto" onClick={() => { (document.activeElement as HTMLElement | null)?.blur(); setMode('view') }}>Done</Button>
+        <div className="flex items-center gap-1 border-t border-line bg-surface px-1.5 py-1.5" style={{ marginBottom: inset }} role="toolbar" aria-label="Block type">
+          {/* The buttons share the width, so the bar fits from 320 px up without hiding Done. */}
+          <div className="flex min-w-0 flex-1 items-center">
+            {blockOrder.map(t => {
+              const Icon = typeIcons[t]
+              return (
+                <button
+                  key={t}
+                  aria-label={typeLabels[t]}
+                  title={typeHint(t)}
+                  aria-pressed={activeType === t}
+                  disabled={!activeType}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => setType(t)}
+                  className={cx('grid h-9 max-w-10 min-w-7 flex-1 place-items-center rounded-full transition disabled:opacity-40', activeType === t ? 'bg-surface-2 text-accent-ink' : 'hover:bg-surface-2')}
+                >
+                  <Icon size={19} aria-hidden />
+                </button>
+              )
+            })}
+            <span className="mx-0.5 h-6 w-px shrink-0 bg-line" aria-hidden />
+            <button aria-label="Help me write" title="Help me write" onMouseDown={e => e.preventDefault()} onClick={() => setMenu('assist-bar')} className="grid h-9 max-w-10 min-w-7 flex-1 place-items-center rounded-full text-agent transition hover:bg-surface-2">
+              <Sparkles size={19} aria-hidden />
+            </button>
+          </div>
+          <Button size="sm" variant="primary" icon={<Check size={15} />} className="shrink-0 max-[359px]:px-2.5" onClick={() => { (document.activeElement as HTMLElement | null)?.blur(); setMode('view') }}>
+            <span className="max-[359px]:sr-only">Done</span>
+          </Button>
           <Menu open={menu === 'assist-bar'} onClose={() => setMenu(null)} items={assist.items(at)} title="Help me write" popover={false} />
         </div>
       )}
       {!desktop && editable && !editing && (
         <button
-          onClick={() => setMode('edit')}
+          onClick={() => switchMode('edit')}
           className="absolute right-4 bottom-5 z-20 inline-flex h-14 items-center gap-2 rounded-full bg-accent pr-5 pl-4 font-semibold text-accent-fg shadow-card transition active:brightness-95"
         >
           <Pencil size={19} aria-hidden /> Edit
@@ -370,7 +448,15 @@ function DocHeader(p: {
         placeholder={UNTITLED}
         size={Math.max(10, draft.title.length + 1)}
         onChange={e => draft.setTitle(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); titleRef.current?.blur() } }}
+        onKeyDown={e => {
+          if (e.key !== 'Enter' && e.key !== 'Escape') return
+          e.preventDefault()
+          // Enter carries on into the doc, like Google Docs; Escape just leaves the title.
+          const items = draft.itemsRef.current
+          const next = e.key === 'Enter' && editing ? (items[0]?.block.type === 'h1' ? items[1] : items[0]) : undefined
+          if (next) draft.focus({ key: next.key, caret: 0 })
+          else titleRef.current?.blur()
+        }}
         className={cx('-ml-1.5 max-w-full min-w-0 truncate rounded-md bg-transparent px-1.5 py-0.5 font-display font-semibold outline-none [field-sizing:content] placeholder:text-muted hover:bg-surface-2 focus:bg-surface-2 focus:ring-2 focus:ring-accent', desktop ? 'text-lg' : 'w-full text-[17px]')}
       />
     </>

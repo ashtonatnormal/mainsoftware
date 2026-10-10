@@ -68,6 +68,9 @@ export function titleLinked(doc: Pick<Doc, 'title' | 'blocks'>) {
   return h.text.trim() === doc.title.trim() || (doc.title === UNTITLED && (h.text === '' || h.text === UNTITLED))
 }
 
+/** Where the caret goes in a new doc: the first empty line, or a "Label: " line waiting for text. */
+export const openLine = (items: Item[]): Item | undefined => items.find(it => !it.block.text.trim() || /: $/.test(it.block.text))
+
 /** A brand-new blank doc shows an empty heading with an "Untitled document" placeholder. */
 export function openingBlocks(doc: Doc): DocBlock[] {
   const [h, ...rest] = doc.blocks

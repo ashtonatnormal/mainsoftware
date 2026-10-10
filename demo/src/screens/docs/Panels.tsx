@@ -133,7 +133,7 @@ function CommentCard({ doc, draft, c, focused, canComment }: { doc: Doc; draft: 
 // ── Version history (DOC-04) ────────────────────────────────────────────────
 const PENDING = '__pending'
 
-export function Versions({ doc, draft, editable }: { doc: Doc; draft: DocDraft; editable: boolean }) {
+export function Versions({ doc, draft, editable, lockedReason = 'Only people who can edit can restore a version.' }: { doc: Doc; draft: DocDraft; editable: boolean; lockedReason?: string }) {
   const { state, toast } = useStore()
   const pending = draft.pendingVersion()
   const [sel, setSel] = useState<string>(pending ? PENDING : doc.versions[0]?.id ?? '')
@@ -196,7 +196,7 @@ export function Versions({ doc, draft, editable }: { doc: Doc; draft: DocDraft; 
             ) : editable ? (
               <Button size="sm" variant="secondary" className="mt-1 self-start" icon={<RotateCcw size={14} />} onClick={() => restore(v)}>Restore this version</Button>
             ) : (
-              <p className="mt-1 flex items-center gap-1.5 text-xs text-muted"><Lock size={13} aria-hidden />Only people who can edit can restore a version.</p>
+              <p className="mt-1 flex items-center gap-1.5 text-xs text-muted"><Lock size={13} className="shrink-0" aria-hidden />{lockedReason}</p>
             )
           }
         />
@@ -293,7 +293,7 @@ export function DetailsSheet({ open, onClose, doc, draft }: { open: boolean; onC
     ['Owner', fullName(doc.ownerId)],
     ['Who can open', access === 'org' ? `Everyone at ${ORG_NAME}` : access === 'team' ? `Everyone in ${team?.team ?? doc.space}` : 'Only people added to it'],
     ['Who can edit', <span className="inline-flex items-center gap-1.5"><Pencil size={13} className="text-muted" aria-hidden />{cap(nameList(editorIds(doc)))}</span>],
-    ['Modified', `${stamp(doc.updatedAt)} by ${byName(doc.updatedBy ?? doc.ownerId)}`],
+    ['Modified', `${stamp(doc.updatedAt)} by ${byName(doc.updatedBy ?? doc.versions[0]?.authorId ?? doc.ownerId)}`],
     ...(created ? [['Created', `${shortDay(created.ts)}, ${clock(created.ts)} by ${byName(created.authorId)}`] as [string, ReactNode]] : []),
     ...(doc.lastOpenedAt ? [['Opened by you', stamp(doc.lastOpenedAt)] as [string, ReactNode]] : []),
     ['Length', `${words.toLocaleString('en-SG')} ${words === 1 ? 'word' : 'words'} · ${doc.versions.length} ${doc.versions.length === 1 ? 'version' : 'versions'}`],

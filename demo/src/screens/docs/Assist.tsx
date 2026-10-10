@@ -9,7 +9,7 @@ import { ME } from '../../data/people'
 import { docTemplates } from '../../data/drive'
 import { AIMarker, AvatarStack, Button, cx, IconButton, Sheet, SourceChips } from '../../ui'
 import { clock, minutesLabel, shortDay } from '../../time'
-import { hasText, isBlank, meetingDraft, meetingTitle, newKey, summarise, SUMMARY_PREFIX, templateTitle, toItems, type Item } from './model'
+import { hasText, isBlank, meetingDraft, meetingTitle, newKey, openLine, summarise, SUMMARY_PREFIX, templateTitle, toItems, type Item } from './model'
 import type { DocDraft } from './useDocDraft'
 import type { MenuItem } from './ui'
 
@@ -264,7 +264,7 @@ export function BlankStart({ draft, onApplied, onMeeting }: { draft: DocDraft; o
     if (!tpl) return
     const name = draft.title.trim() || templateTitle(id, tpl.name, state.clock)
     const next = toItems(tpl.blocks(name, shortDay(state.clock)))
-    const target = next.find((it, i) => i > 0 && (!it.block.text.trim() || /: $/.test(it.block.text))) ?? next[next.length - 1]
+    const target = openLine(next.slice(1)) ?? next[next.length - 1]
     draft.change(next, { title: name, focus: { key: target.key, caret: 'end' } })
     draft.setEmoji(tpl.emoji)
     onApplied()

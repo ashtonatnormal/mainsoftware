@@ -129,6 +129,8 @@ export default function Editor(props: EditorProps) {
   const editing = mode === 'edit' && editable
   const [focused, setFocused] = useState<string | null>(null)
   const [slash, setSlash] = useState<{ key: string; index: number } | null>(null)
+  // A "/" menu closed with Escape stays closed until "/" is typed into an empty block again.
+  const slashDismissed = useRef<string | null>(null)
   const [pick, setPick] = useState<{ text: string; x: number; y: number } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -209,7 +211,8 @@ export default function Editor(props: EditorProps) {
       text = text.replace(/\n/g, ' ')
       block = { ...block, text }
     }
-    if (block.text.startsWith('/') && !block.text.includes('\n') && block.text.length <= 24 && (prev === '' || prev.startsWith('/'))) {
+    if (prev === '' && slashDismissed.current === it.key) slashDismissed.current = null
+    if (block.text.startsWith('/') && !block.text.includes('\n') && block.text.length <= 24 && (prev === '' || prev.startsWith('/')) && slashDismissed.current !== it.key) {
       setSlash({ key: it.key, index: 0 })
     } else if (slash?.key === it.key) setSlash(null)
     set(draft.itemsRef.current.map(i => (i.key === it.key ? { ...i, block } : i)), focus, focus ? undefined : it.key)
@@ -241,6 +244,7 @@ export default function Editor(props: EditorProps) {
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
+        slashDismissed.current = it.key
         setSlash(null)
         return
       }
@@ -311,8 +315,16 @@ export default function Editor(props: EditorProps) {
       set(replaceAt(idx, { type: 'p', text: '' }), { key: it.key, caret: 0 })
       return
     }
-    // At the start of a non-empty block: open a new line above (not above the title).
-    if (s === 0 && en === 0 && text && idx > 0) {
+    const nb = all[idx + 1]
+    // At the start of a non-empty block: open a new line above. The title stays first,
+    // so there the new line goes just below it instead.
+    if (s === 0 && en === 0 && text) {
+      if (idx === 0 && b.type === 'h1') {
+        if (nb && nb.block.type === 'p' && !nb.block.text) { draft.focus({ key: nb.key, caret: 0 }); return }
+        const below: Item = { key: newKey(), block: { type: 'p', text: '' } }
+        set([all[0], below, ...all.slice(1)], { key: below.key, caret: 0 })
+        return
+      }
       const t = nextType(b.type)
       const above: Item = { key: newKey(), block: t === 'todo' ? { type: t, text: '', done: false } : { type: t, text: '' } }
       set([...all.slice(0, idx), above, ...all.slice(idx)], { key: it.key, caret: 0 })
@@ -320,7 +332,6 @@ export default function Editor(props: EditorProps) {
     }
     const before = text.slice(0, s)
     const after = text.slice(en)
-    const nb = all[idx + 1]
     // A heading followed by an empty paragraph: just move down into it.
     if ((b.type === 'h1' || b.type === 'h2') && !after && nb?.block.type === 'p' && !nb.block.text) {
       set(replaceAt(idx, { ...b, text: before }), { key: nb.key, caret: 0 })
@@ -506,7 +517,8 @@ export default function Editor(props: EditorProps) {
               {editing ? (
                 <div className="relative">
                   <div aria-hidden className={cx(textCls(b), 'pointer-events-none whitespace-pre-wrap break-words text-transparent', b.type === 'todo' && b.done && 'line-through decoration-muted')}>
-                    {content(it, false)}
+                    {/* An empty block sizes to its placeholder, so a long hint wraps instead of being cut. */}
+                    {b.text ? content(it, false) : placeholder(b, idx, isFocused)}
                     {'​'}
                   </div>
                   <textarea
