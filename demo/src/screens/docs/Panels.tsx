@@ -82,7 +82,7 @@ function CommentCard({ doc, draft, c, focused, canComment }: { doc: Doc; draft: 
   const [reply, setReply] = useState('')
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (focused) ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    if (focused) ref.current?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
   }, [focused])
   const update = (next: DocComment) => draft.patchDoc({ comments: doc.comments.map(x => (x.id === c.id ? next : x)) })
   return (

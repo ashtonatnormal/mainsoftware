@@ -9,7 +9,7 @@ import { clock, shortDay } from '../../time'
 import { diffLines, linesOf, openingBlocks, sameBlocks, titleLinked, toBlocks, toItems, undoVersion, UNTITLED, type Item } from './model'
 
 export interface Focus { key: string; caret: number | 'end' }
-interface Snapshot { items: Item[]; title: string; focus?: Focus }
+interface Snapshot { items: Item[]; title: string; emoji: string; focus?: Focus }
 
 // What a doc looked like right after a version was made, so restores made in
 // this visit are exact. Older seed versions are worked out from their diffs.
@@ -92,7 +92,7 @@ export function useDocDraft(doc: Doc) {
   const change = (next: Item[], opts: { focus?: Focus; title?: string; typing?: string } = {}) => {
     const now = Date.now()
     if (!opts.typing || opts.typing !== lastTyping.current.key || now - lastTyping.current.at > 1000) {
-      undoStack.current.push({ items: itemsRef.current, title: titleRef.current, focus: caretNow() })
+      undoStack.current.push({ items: itemsRef.current, title: titleRef.current, emoji: emojiRef.current, focus: caretNow() })
       if (undoStack.current.length > 200) undoStack.current.shift()
     }
     lastTyping.current = { at: now, key: opts.typing ?? '' }
@@ -125,10 +125,13 @@ export function useDocDraft(doc: Doc) {
   const step = (from: { current: Snapshot[] }, to: { current: Snapshot[] }) => {
     const snap = from.current.pop()
     if (!snap) return false
-    to.current.push({ items: itemsRef.current, title: titleRef.current, focus: caretNow() })
+    to.current.push({ items: itemsRef.current, title: titleRef.current, emoji: emojiRef.current, focus: caretNow() })
     lastTyping.current = { at: 0, key: '' }
     const keys = new Set(snap.items.map(i => i.key))
     const focus = snap.focus && keys.has(snap.focus.key) ? snap.focus : snap.items[0] && { key: snap.items[snap.items.length - 1].key, caret: 'end' as const }
+    // A template or meeting draft also set the emoji; undo puts it back too.
+    emojiRef.current = snap.emoji
+    setEmojiState(snap.emoji)
     apply(snap.items, { title: snap.title, focus })
     return true
   }
