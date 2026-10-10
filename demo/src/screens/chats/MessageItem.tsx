@@ -9,6 +9,8 @@ import { ME, personById } from '../../data/people'
 import { AgentBadge, AIMarker, Avatar, AvatarStack, CitedText, cx, Feedback, IconButton, personName, SourceChips } from '../../ui'
 import { NotesCard } from '../../ui/notes'
 import { clock, duration, NOW } from '../../time'
+import type { DriveEntry } from '../../drive'
+import { canOpen } from '../drive/model'
 import { quickReactions } from './content'
 import { isAI, RichText, taskTitleFrom } from './parts'
 
@@ -121,7 +123,7 @@ function BubbleRow({ m, c, first, read, threadCount, threadIds, lastReplyTs, sou
           <VoicePlayer m={m} mine={mine} />
         ) : m.kind === 'file' && m.file ? (
           <>
-            <FileCard file={m.file} />
+            <FileCard file={m.file} conversationId={m.conversationId} />
             {m.text && (
               <p className="mt-1.5 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                 <RichText text={m.text} />
@@ -356,12 +358,14 @@ const fileKinds = {
   image: { icon: ImageIcon, label: 'Image' },
 } as const
 
-function FileCard({ file }: { file: NonNullable<Message['file']> }) {
-  const { toast } = useStore()
+function FileCard({ file, conversationId }: { file: NonNullable<Message['file']>; conversationId: string }) {
+  const { state, openItem, toast } = useStore()
   const k = fileKinds[file.type]
+  // FILE-08: a file shared in chat is the same file as in the Drive, so it opens there.
+  const upload = state.uploads.find(u => u.title === file.name && (u.fromConversationId === conversationId || canOpen(state, { kind: u.kind, item: u } as DriveEntry)))
   return (
     <button
-      onClick={() => toast('File previews come later in the demo.')}
+      onClick={() => (upload ? openItem(upload.id) : toast('File previews come later in the demo.'))}
       className="mt-0.5 flex w-full items-center gap-3 rounded-xl bg-surface-2 p-2.5 text-left transition hover:bg-line"
     >
       <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-surface text-accent-ink">

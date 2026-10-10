@@ -16,15 +16,14 @@ const REACTIONS = ['👍', '👏', '😂', '🎉']
 // Rooms whose recording notice was shown on the pre-join panel this visit (REC-06).
 const noticeSeen = new Set<string>()
 
-function useIsDesktop() {
-  const query = '(min-width: 768px)'
+function useIsDesktop(query = '(min-width: 768px)') {
   const [desktop, setDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches)
   useEffect(() => {
     const mq = window.matchMedia(query)
     const on = () => setDesktop(mq.matches)
     mq.addEventListener('change', on)
     return () => mq.removeEventListener('change', on)
-  }, [])
+  }, [query])
   return desktop
 }
 
@@ -275,6 +274,9 @@ function PreJoin({ room }: { room: Room }) {
 function InRoom({ room }: { room: Room }) {
   const { state, navigate, leaveRoom, setSpeaking, toast } = useStore()
   const desktop = useIsDesktop()
+  // Landscape tiles only once the stage is wide enough beside the room chat (from 1024px);
+  // narrower, they'd be too short for the avatar and name.
+  const roomy = useIsDesktop('(min-width: 1024px)')
   const [muted, setMuted] = useState(() => !window.matchMedia('(min-width: 768px)').matches)
   const [camera, setCamera] = useState(false)
   const [hand, setHand] = useState(false)
@@ -346,7 +348,9 @@ function InRoom({ room }: { room: Room }) {
           <>
             <span className="hidden items-center gap-1 text-xs text-muted sm:flex"><Users size={14} /> {room.participants.length}</span>
             {room.conversationId && !desktop && (
-              <Button variant="secondary" icon={<MessageSquare size={16} />} onClick={openChat}>Room chat</Button>
+              <Button variant="secondary" icon={<MessageSquare size={16} />} onClick={openChat} aria-label="Room chat" className="max-[359px]:px-2.5">
+                <span className="max-[359px]:sr-only">Room chat</span>
+              </Button>
             )}
           </>
         }
@@ -383,7 +387,7 @@ function InRoom({ room }: { room: Room }) {
                       key={p}
                       id={p}
                       small={!!sharing}
-                      wide={!sharing && (desktop || tiles.length === 1)}
+                      wide={!sharing && (roomy || tiles.length === 1)}
                       me={me}
                       muted={me ? muted : roomMuted.includes(p)}
                       speaking={!me && room.speakingId === p && recording}
@@ -510,10 +514,12 @@ function ScreenShareTile({ by }: { by: string }) {
 }
 
 function Controls(p: { muted: boolean; camera: boolean; hand: boolean; picker: boolean; onMute: () => void; onCamera: () => void; onShare: () => void; onHand: () => void; onPicker: () => void; onReact: (e: string) => void; onLeave: () => void }) {
+  // Six controls fit from 320px (smaller below 360px), and beside the room chat at 768px
+  // (Leave shows its label once there's room, from 1024px).
   const btn = (active: boolean, danger = false) =>
-    cx('grid size-12 shrink-0 place-items-center rounded-full transition', danger ? 'bg-rec-soft text-rec' : active ? 'bg-accent-soft text-accent-ink' : 'bg-surface-2 text-fg hover:bg-line')
+    cx('grid size-11 shrink-0 place-items-center rounded-full transition min-[360px]:size-12', danger ? 'bg-rec-soft text-rec' : active ? 'bg-accent-soft text-accent-ink' : 'bg-surface-2 text-fg hover:bg-line')
   return (
-    <div className="relative border-t border-line bg-surface px-3 py-3">
+    <div className="relative border-t border-line bg-surface px-2 py-3 min-[360px]:px-3">
       {p.picker && (
         <div className="anim-in absolute bottom-full left-1/2 mb-2 flex -translate-x-1/2 gap-1 rounded-full border border-line bg-surface p-1.5 shadow-card" role="menu" aria-label="Reactions">
           {REACTIONS.map(e => (
@@ -521,7 +527,7 @@ function Controls(p: { muted: boolean; camera: boolean; hand: boolean; picker: b
           ))}
         </div>
       )}
-      <div className="mx-auto flex max-w-lg items-center justify-center gap-2 sm:gap-3">
+      <div className="mx-auto flex max-w-lg items-center justify-center gap-1.5 min-[360px]:gap-2 lg:gap-3">
         <button className={btn(false, p.muted)} onClick={p.onMute} aria-label={p.muted ? 'Unmute' : 'Mute'} aria-pressed={p.muted} title={p.muted ? 'Unmute' : 'Mute'}>
           {p.muted ? <MicOff size={20} /> : <Mic size={20} />}
         </button>
@@ -531,9 +537,9 @@ function Controls(p: { muted: boolean; camera: boolean; hand: boolean; picker: b
         <button className={btn(false)} onClick={p.onShare} aria-label="Share screen" title="Share screen"><MonitorUp size={20} /></button>
         <button className={btn(p.hand)} onClick={p.onHand} aria-label={p.hand ? 'Lower hand' : 'Raise hand'} aria-pressed={p.hand} title="Raise hand"><Hand size={20} /></button>
         <button className={btn(p.picker)} onClick={p.onPicker} aria-label="Reactions" aria-expanded={p.picker} title="Reactions"><Smile size={20} /></button>
-        <button onClick={p.onLeave} className="flex h-12 shrink-0 items-center gap-2 rounded-full bg-rec px-4 font-semibold text-white transition hover:brightness-105 sm:px-5" aria-label="Leave room">
+        <button onClick={p.onLeave} className="flex h-11 shrink-0 items-center gap-2 rounded-full bg-rec px-3 font-semibold text-white transition hover:brightness-105 min-[360px]:h-12 min-[360px]:px-4 lg:px-5" aria-label="Leave room">
           <PhoneOff size={20} />
-          <span className="hidden sm:inline">Leave</span>
+          <span className="hidden sm:inline md:hidden lg:inline">Leave</span>
         </button>
       </div>
     </div>

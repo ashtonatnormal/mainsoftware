@@ -3,7 +3,7 @@
 // meeting room, and a static "Find a time" helper (CAL-04).
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { CalendarClock, CalendarSearch, Check, Clock, DoorOpen, HelpCircle, ListChecks, MapPin, Mic, Palmtree, PlayCircle, Plus, Users, X } from 'lucide-react'
-import type { CalendarEvent } from '../types'
+import type { CalendarEvent, Session } from '../types'
 import { useStore } from '../store'
 import { ME } from '../data/people'
 import { AIMarker, Avatar, AvatarStack, Button, cx, personName, Pill, ScreenHeader, SectionTitle, Sheet, SourceChips } from '../ui'
@@ -15,13 +15,18 @@ const GRID_END = 18
 const HOUR_PX = 56
 
 const range = (e: CalendarEvent) => `${clock(e.start)} – ${clock(e.end)}`
-const isLive = (e: CalendarEvent, now: number) => e.kind !== 'leave' && e.start <= now && now < e.end
-const canJoin = (e: CalendarEvent, now: number) => !!e.roomId && now < e.end && e.start - now <= 5 * 60_000
+/** The meeting's recording, once it has one. The Ops standup gets one when it wraps up, before its end time. */
+const sessionOf = (e: CalendarEvent, sessions: Session[]) => sessions.find(s => s.id === e.sessionId || s.meetingId === e.id)
+const isOver = (e: CalendarEvent, now: number, sessions: Session[]) => e.end <= now || !!sessionOf(e, sessions)
+const isLive = (e: CalendarEvent, now: number, sessions: Session[]) => e.kind !== 'leave' && e.start <= now && !isOver(e, now, sessions)
+const canJoin = (e: CalendarEvent, now: number, sessions: Session[]) => !!e.roomId && !isOver(e, now, sessions) && e.start - now <= 5 * 60_000
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 const isLeave = (e: CalendarEvent) => e.kind === 'leave'
 
+// The week grid needs room for five days beside the 380px detail pane, so tablets
+// (768–1023px) get the phone agenda and event view.
 function useWide() {
-  const q = '(min-width: 768px)'
+  const q = '(min-width: 1024px)'
   const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches)
   useEffect(() => {
     const mq = window.matchMedia(q)
@@ -56,7 +61,7 @@ export default function CalendarScreen() {
         <WeekHeader onFindTime={() => setFindOpen(true)} />
         <WeekGrid selectedId={event?.id} />
       </div>
-      <aside className="flex w-[380px] shrink-0 flex-col border-l border-line bg-surface lg:w-[420px]">
+      <aside className="flex w-[380px] shrink-0 flex-col border-l border-line bg-surface xl:w-[420px]">
         {event ? <EventDetail event={event} onFindTime={() => setFindOpen(true)} /> : <Agenda compact onFindTime={() => setFindOpen(true)} />}
       </aside>
       <FindTimeSheet open={findOpen} onClose={closeFind} attendees={event?.attendees} />
@@ -73,10 +78,10 @@ function useNewEvent() {
 function WeekHeader({ onFindTime }: { onFindTime: () => void }) {
   const newEvent = useNewEvent()
   return (
-    <div className="flex items-center gap-3 border-b border-line px-6 py-4">
+    <div className="flex flex-wrap items-center gap-3 border-b border-line px-6 py-4">
       <div className="min-w-0 flex-1">
         <h1 className="font-display text-2xl font-semibold">Calendar</h1>
-        <p className="text-sm text-muted">This week · 12 – 16 October</p>
+        <p className="text-sm whitespace-nowrap text-muted">This week · 12 – 16 October</p>
       </div>
       <Button size="sm" variant="secondary" icon={<CalendarSearch size={15} />} onClick={onFindTime}>Find a time</Button>
       <Button size="sm" variant="primary" icon={<Plus size={15} />} onClick={newEvent}>New event</Button>
@@ -92,7 +97,7 @@ function WeekGrid({ selectedId }: { selectedId?: string }) {
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
-      <div className="min-w-[640px] px-4 pb-6">
+      <div className="min-w-[560px] px-4 pb-6">
         {/* day headers + all-day row */}
         <div className="sticky top-0 z-10 grid grid-cols-[52px_repeat(5,minmax(0,1fr))] bg-bg pt-3">
           <div />
@@ -136,7 +141,7 @@ function WeekGrid({ selectedId }: { selectedId?: string }) {
                   const startH = (e.start - d) / 3_600_000
                   const top = (startH - GRID_START) * HOUR_PX
                   const height = Math.max(24, ((e.end - e.start) / 3_600_000) * HOUR_PX - 3)
-                  const live = isLive(e, now)
+                  const live = isLive(e, now, state.sessions)
                   const pending = e.rsvp === 'pending'
                   const short = height < 40
                   return (
@@ -222,8 +227,10 @@ function Agenda({ compact, onFindTime }: { compact?: boolean; onFindTime: () => 
 function AgendaRow({ event: e }: { event: CalendarEvent }) {
   const { state, navigate, joinRoom, rsvp, toast } = useStore()
   const now = state.clock
-  const live = isLive(e, now)
-  const past = e.end <= now
+  const live = isLive(e, now, state.sessions)
+  const past = isOver(e, now, state.sessions)
+  const ended = e.end > now && past // wrapped up early, recording saved
+  const session = ended ? sessionOf(e, state.sessions) : undefined
   const open = () => navigate({ name: 'calendar', eventId: e.id })
 
   if (isLeave(e)) {
@@ -259,8 +266,11 @@ function AgendaRow({ event: e }: { event: CalendarEvent }) {
           </div>
         )}
       </div>
-      {canJoin(e, now) && (
+      {canJoin(e, now, state.sessions) && (
         <Button size="sm" variant="danger" icon={<Mic size={14} />} onClick={() => { joinRoom(e.roomId!); navigate({ name: 'rooms', roomId: e.roomId }) }}>Join</Button>
+      )}
+      {session && (
+        <Button size="sm" variant="secondary" icon={<PlayCircle size={14} />} onClick={() => navigate({ name: 'session', sessionId: session.id })}>View notes</Button>
       )}
     </li>
   )
@@ -278,11 +288,11 @@ const rsvpWord = { yes: 'Going', maybe: 'Maybe', no: 'Not going', pending: 'No r
 function EventDetail({ event: e, onFindTime }: { event: CalendarEvent; onFindTime: () => void }) {
   const { state, navigate, joinRoom, rsvp, toast } = useStore()
   const now = state.clock
-  const live = isLive(e, now)
-  const past = e.end <= now
-  const joinable = canJoin(e, now)
+  const live = isLive(e, now, state.sessions)
+  const past = isOver(e, now, state.sessions)
+  const joinable = canJoin(e, now, state.sessions)
   const room = state.rooms.find(r => r.id === e.roomId)
-  const session = e.sessionId ? state.sessions.find(s => s.id === e.sessionId) : undefined
+  const session = sessionOf(e, state.sessions)
   // Other attendees' replies are example data; mine comes from the store.
   const replyOf = (id: string): CalendarEvent['rsvp'] => (id === ME ? e.rsvp : otherReplies[e.id]?.[id] ?? 'yes')
 

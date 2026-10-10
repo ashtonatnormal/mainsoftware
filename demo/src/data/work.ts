@@ -187,6 +187,22 @@ export const docs: Doc[] = [
     comments: [],
   },
   {
+    id: 'd_itpeople', title: 'Adding people', space: 'IT wiki', folderId: 'f_it', access: 'org', ownerId: 'u_arjun', editors: ['u_arjun'], commenters: 'org', updatedAt: at('2026-09-15T10:00'), emoji: '🧑‍💻', presence: [],
+    blocks: [
+      { type: 'h1', text: 'Adding people' },
+      { type: 'p', text: 'How admins add a new joiner to Hearth.' },
+      { type: 'h2', text: 'One person' },
+      { type: 'li', text: 'Go to Admin → People → Add person.' },
+      { type: 'li', text: 'Fill in their name, phone, department, team, manager and role.' },
+      { type: 'h2', text: 'Several people' },
+      { type: 'li', text: 'Import a CSV with the columns name, phone, department, team, manager and role.' },
+      { type: 'h2', text: 'Their first sign-in' },
+      { type: 'li', text: 'The new joiner signs in with their phone number and sets a PIN.' },
+    ],
+    versions: [{ id: 'itv1', authorId: 'u_arjun', ts: at('2026-09-15T10:00'), summary: 'First version' }],
+    comments: [],
+  },
+  {
     id: 'd_checklist', title: 'Day-one checklist', space: 'People', folderId: 'f_people', access: 'org', ownerId: 'u_huimin', editors: ['u_huimin'], commenters: 'org', updatedAt: minutesAgo(50), emoji: '✅', presence: ['u_nadia'],
     blocks: [
       { type: 'h1', text: 'Day-one checklist' },

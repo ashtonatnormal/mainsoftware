@@ -503,7 +503,7 @@ export default function Editor(props: EditorProps) {
                 title={editable ? undefined : 'Only editors can tick this'}
                 onMouseDown={e => editing && e.preventDefault()}
                 onClick={() => toggle(it.key)}
-                className={cx('grid size-5 place-items-center rounded-md border-2 transition disabled:cursor-not-allowed', b.done ? 'border-ok bg-ok text-white' : 'border-muted', editable && !b.done && 'hover:border-accent')}
+                className={cx("relative grid size-5 place-items-center rounded-md border-2 transition after:absolute after:-inset-2.5 after:content-[''] disabled:cursor-not-allowed", b.done ? 'border-ok bg-ok text-white' : 'border-muted', editable && !b.done && 'hover:border-accent')}
               >
                 {b.done && <Check size={13} strokeWidth={3} />}
               </button>

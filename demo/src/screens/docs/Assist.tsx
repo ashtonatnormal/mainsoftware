@@ -2,7 +2,7 @@
 // things the user can open, shown as a preview with the AI marker and its
 // sources, and only enters the doc when they choose Insert.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { BookOpen, Check, Compass, Copy, Hand, Mic, NotebookPen, PenLine, ScrollText, Sparkles, X } from 'lucide-react'
+import { Check, Copy, Mic, PenLine, ScrollText, Sparkles, X } from 'lucide-react'
 import type { Doc, DocBlock, DocTemplateId, Session, SourceRef } from '../../types'
 import { useStore } from '../../store'
 import { ME } from '../../data/people'
@@ -11,7 +11,7 @@ import { AIMarker, AvatarStack, Button, cx, IconButton, Sheet, SourceChips } fro
 import { clock, minutesLabel, shortDay } from '../../time'
 import { hasText, isBlank, meetingDraft, meetingTitle, newKey, openLine, summarise, SUMMARY_PREFIX, templateTitle, toItems, type Item } from './model'
 import type { DocDraft } from './useDocDraft'
-import type { MenuItem } from './ui'
+import { templateIcons, type MenuItem } from './ui'
 
 export type AssistKind = 'paragraph' | 'meeting' | 'summary'
 
@@ -250,10 +250,6 @@ function MeetingPicker({ open, onClose, sessions, onPick }: { open: boolean; onC
       )}
     </Sheet>
   )
-}
-
-const templateIcons: Partial<Record<DocTemplateId, ReactNode>> = {
-  'meeting-notes': <NotebookPen size={16} />, 'project-brief': <Compass size={16} />, policy: <BookOpen size={16} />, onboarding: <Hand size={16} />,
 }
 
 /** A blank doc offers templates (DOC-08) and Help me write. Picking a template replaces the blank body. */

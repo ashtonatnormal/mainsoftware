@@ -391,7 +391,7 @@ export type Route =
   | { name: 'drive'; view?: DriveView; folderId?: string }
   | { name: 'docs'; docId?: string } // without docId this shows the Drive
   | { name: 'sheets'; sheetId: string }
-  | { name: 'slides'; deckId: string }
+  | { name: 'slides'; deckId: string; slide?: number } // slide: 0-based, where to open
   | { name: 'file'; fileId: string } // preview of an uploaded file
   | { name: 'insights' }
   | { name: 'ask'; q?: string }

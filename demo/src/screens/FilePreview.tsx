@@ -2,7 +2,7 @@
 // with details, location, who has access, where it was shared, and versions
 // (upload a new one, restore an old one).
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
-import { AlertTriangle, ArrowRight, Download, EllipsisVertical, FileQuestion, Folder as FolderIcon, Hash, HardDrive, History, Lock, Play, RotateCcw, Search, Star, Trash2, Upload, UserPlus, Users } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowRight, Download, Ellipsis, FileQuestion, Folder as FolderIcon, Hash, HardDrive, History, Lock, Play, RotateCcw, Search, Star, Trash2, Upload, UserPlus, Users } from 'lucide-react'
 import type { DriveUpload, FileVersion } from '../types'
 import { newId, useStore } from '../store'
 import { canEdit, findEntry, folderPath, isInMyDrive, isTrashed, routeFor } from '../drive'
@@ -12,6 +12,8 @@ import { Avatar, AvatarStack, Button, cx, EmptyState, IconButton, personName, Pi
 import { conversationLabel } from './ask/search'
 import { DriveActionsProvider, useDriveActions } from './drive/actions'
 import { GeneratedArt, KindIcon } from './drive/art'
+import { FileCrumbs, ShareButton } from './drive/header'
+import { useWide } from './drive/hooks'
 import { extractText, formatBytes, fullWhen, generalAccessLabel, generalAccessOf, inheritedPeople, kindFromFile, kindNames, peopleWithAccess, versionsOf, when, whoCanChange } from './drive/model'
 
 export default function FilePreviewScreen() {
@@ -63,27 +65,26 @@ function FileView({ u, onBack }: { u: DriveUpload; onBack: () => void }) {
   const actions = useDriveActions()
   const trashed = isTrashed(state.folders, u)
   const editable = canEdit(u)
+  const wide = useWide()
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ScreenHeader
-        back={onBack}
-        leading={<KindIcon kind={u.kind} size="md" className="hidden sm:grid" />}
-        title={u.title}
-        subtitle={`${kindNames[u.kind]} · ${u.size}`}
-        actions={
-          <>
-            <IconButton label={u.starred ? 'Remove from Starred' : 'Add to Starred'} aria-pressed={!!u.starred} onClick={() => toggleStar(u.id)} className={u.starred ? 'text-warn' : 'text-muted'}>
-              <Star size={19} fill={u.starred ? 'currentColor' : 'none'} />
-            </IconButton>
-            <span className="hidden sm:block"><Button size="sm" variant="primary" icon={<UserPlus size={15} />} onClick={() => actions.share(u.id)}>Share</Button></span>
-            <IconButton label="Share" onClick={() => actions.share(u.id)} className="sm:hidden"><UserPlus size={19} /></IconButton>
-            <IconButton label="More actions" aria-haspopup="menu" onClick={e => actions.menu(u.id, e.currentTarget)}><EllipsisVertical size={19} /></IconButton>
-          </>
-        }
-      />
+      {/* Same header as the editors: where it lives, Star, Share, More. */}
+      <header className="flex min-h-14 shrink-0 items-center gap-0.5 border-b border-line bg-surface px-2 py-1.5 sm:gap-2 sm:px-3">
+        <IconButton label="Back" onClick={onBack}><ArrowLeft size={20} /></IconButton>
+        <KindIcon kind={u.kind} size="md" className="hidden sm:grid" />
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate font-display text-[17px] leading-tight font-semibold sm:text-lg">{u.title}</h1>
+          <FileCrumbs item={u} compact={!wide} trailing={<span className="truncate">{kindNames[u.kind]} · {u.size}</span>} />
+        </div>
+        <IconButton label={u.starred ? 'Remove from Starred' : 'Add to Starred'} aria-pressed={!!u.starred} onClick={() => toggleStar(u.id)}>
+          <Star size={19} className={u.starred ? 'fill-current text-warn' : 'text-muted'} />
+        </IconButton>
+        <ShareButton itemId={u.id} onClick={() => actions.share(u.id)} compact={!wide} />
+        <IconButton label="More" aria-haspopup="menu" onClick={e => actions.menu(u.id, e.currentTarget)}><Ellipsis size={20} /></IconButton>
+      </header>
       {trashed && (
-        <div className="flex flex-wrap items-center gap-3 border-b border-line bg-warn-soft px-4 py-2.5 text-sm text-warn">
-          <Trash2 size={16} className="shrink-0" aria-hidden />
+        <div className="flex flex-wrap items-center gap-3 border-b border-line bg-rec-soft px-4 py-2.5 text-sm">
+          <Trash2 size={16} className="shrink-0 text-rec" aria-hidden />
           <span className="min-w-0 flex-1">{u.trashed ? 'This file is in the trash. It’s deleted forever after 30 days.' : 'This file’s folder is in the trash.'}</span>
           {u.trashed && editable && <Button size="sm" variant="secondary" icon={<RotateCcw size={14} />} onClick={() => { restoreItem(u.id); toast(`Restored “${u.title}”`) }}>Restore</Button>}
         </div>

@@ -193,7 +193,7 @@ export function search(q: string, src: SearchSource): SearchResult[] {
   // Drive (FILE-06): names and the text inside every file you can open.
   for (const e of driveEntries(src)) {
     if (isTrashed(src.folders, e.item) || !canOpen({ ...src, clock: 0 }, e)) continue
-    const hit = driveHit(e, terms)
+    const hit = driveHit(e, terms, q)
     add(
       {
         id: e.item.id,
@@ -203,7 +203,8 @@ export function search(q: string, src: SearchSource): SearchResult[] {
         context: driveLocation(src, e),
         snippet: hit.snippet,
         meta: hit.meta,
-        route: routeFor(e),
+        // A deck opens at the slide that matched.
+        route: e.kind === 'slides' && hit.slide ? { name: 'slides', deckId: e.item.id, slide: hit.slide } : routeFor(e),
         driveId: e.item.id,
         ts: e.item.updatedAt,
       },
@@ -272,8 +273,10 @@ function driveIcon(e: DriveEntry): ResultIcon {
 }
 
 /** The searchable text of a Drive item, the snippet to show for these terms, and a meta line. */
-function driveHit(e: DriveEntry, terms: string[]): { text: string; snippet: string; meta: string } {
-  const edited = `Edited ${listStamp(e.item.updatedAt)}`
+function driveHit(e: DriveEntry, terms: string[], q = ''): { text: string; snippet: string; meta: string; slide?: number } {
+  // "Edited Fri", "Sheet · edited Fri", "Edited yesterday": only the day name keeps its capital.
+  const stamp = listStamp(e.item.updatedAt).replace(/^Yesterday$/, 'yesterday')
+  const edited = `Edited ${stamp}`
   switch (e.kind) {
     case 'folder': {
       const f = e.item as Folder
@@ -295,17 +298,22 @@ function driveHit(e: DriveEntry, terms: string[]): { text: string; snippet: stri
         const rowVals = cells.filter(c => c.tab === cell.tab && c.addr.replace(/^[A-Z]+/, '') === row).sort((a, b) => a.addr.localeCompare(b.addr)).map(c => c.v)
         snippet = `${sh.tabs.length > 1 ? `${cell.tab.name} · ` : ''}Row ${row}: ${rowVals.join(' · ')}`
       }
-      return { text: cells.map(c => c.v).join(' '), snippet, meta: `Sheet · ${edited.toLowerCase()}` }
+      return { text: cells.map(c => c.v).join(' '), snippet, meta: `Sheet · edited ${stamp}` }
     }
     case 'slides': {
       const dk = e.item as Deck
       const lines = dk.slides.map((sl, i) => ({ n: i + 1, text: [sl.title, sl.subtitle, ...(sl.bullets ?? []), sl.left?.heading, ...(sl.left?.bullets ?? []), sl.right?.heading, ...(sl.right?.bullets ?? []), sl.stat && `${sl.stat} ${sl.statLabel ?? ''}`].filter(Boolean) as string[] }))
-      let snippet = `${dk.slides.length} slides`
+      // The line that matches best: the whole phrase first, then the most terms, then the earliest slide.
+      const phrase = q.trim().toLowerCase()
+      let best: { n: number; line: string; score: number } | undefined
       for (const l of lines) {
-        const line = l.text.find(t => hits(t, terms).length)
-        if (line) { snippet = `Slide ${l.n}: ${snippetAround(line, terms, 140)}`; break }
+        for (const t of l.text) {
+          const score = (phrase && t.toLowerCase().includes(phrase) ? 100 : 0) + hits(t, terms).length
+          if (score > 0 && (!best || score > best.score)) best = { n: l.n, line: t, score }
+        }
       }
-      return { text: lines.flatMap(l => l.text).join(' '), snippet, meta: `Slides · ${edited.toLowerCase()}` }
+      const snippet = best ? `Slide ${best.n}: ${snippetAround(best.line, terms, 140)}` : `${dk.slides.length} slides`
+      return { text: lines.flatMap(l => l.text).join(' '), snippet, meta: `Slides · edited ${stamp}`, slide: best ? best.n - 1 : undefined }
     }
     default: {
       const u = e.item as DriveUpload

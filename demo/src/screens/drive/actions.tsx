@@ -155,7 +155,7 @@ function MenuRow({ item, big }: { item: MenuItem; big?: boolean }) {
         disabled={item.disabled}
         onClick={item.run}
         className={cx(
-          'flex w-full items-start gap-3 px-4 text-left text-sm transition outline-none hover:bg-surface-2 focus-visible:bg-surface-2 disabled:pointer-events-none',
+          'flex w-full items-start gap-3 px-4 text-left text-sm transition hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:-outline-offset-2 disabled:pointer-events-none',
           big ? 'py-3 text-[15px]' : 'py-2',
           item.danger && !item.disabled && 'text-rec',
         )}

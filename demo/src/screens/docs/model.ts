@@ -185,7 +185,8 @@ export function canComment(doc: Doc, editable: boolean) {
 
 /** DOC-03: "Only Priya and you can edit · team can comment" */
 export function permissionLine(doc: Doc) {
-  const comment = doc.commenters === 'team' ? ' · team can comment' : doc.commenters === 'org' ? ' · everyone can comment' : ''
+  const named = (doc.sharedWith ?? []).filter(s => s.role === 'commenter').map(s => s.personId)
+  const comment = doc.commenters === 'team' ? ' · team can comment' : doc.commenters === 'org' ? ' · everyone can comment' : named.length ? ` · ${nameList(named)} can comment` : ''
   return `Only ${nameList(editorIds(doc))} can edit${comment}`
 }
 

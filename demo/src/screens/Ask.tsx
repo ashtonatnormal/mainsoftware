@@ -533,7 +533,7 @@ function ResultRow({ r, re }: { r: SearchResult; re: RegExp | null }) {
   )
   if (!r.route) return <div className="flex gap-3 px-4 py-3">{body}</div>
   return (
-    <button onClick={() => (r.driveId ? openItem(r.driveId) : navigate(r.route!))} className="flex w-full gap-3 px-4 py-3 text-left transition hover:bg-surface-2">
+    <button onClick={() => (r.driveId ? openItem(r.driveId, r.route) : navigate(r.route!))} className="flex w-full gap-3 px-4 py-3 text-left transition hover:bg-surface-2">
       {body}
     </button>
   )

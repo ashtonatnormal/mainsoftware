@@ -5,9 +5,10 @@ import { CheckCircle2, Eye, FileText, Lock, MessageSquare, Pencil, RotateCcw, Se
 import type { Doc, DocComment, DocVersion } from '../../types'
 import { newId, useStore } from '../../store'
 import { ME, ORG_NAME } from '../../data/people'
-import { accessOf, folderPath, teamFolderOf } from '../../drive'
+import { accessOf, folderPath } from '../../drive'
 import { Avatar, Button, Card, cx, EmptyState, IconButton, Pill, SectionTitle, Sheet } from '../../ui'
 import { clock, listStamp, shortDay } from '../../time'
+import { teamNameOf } from '../drive/model'
 import { byName, cap, editorIds, fullName, nameList, permissionLine, wordCount } from './model'
 import type { DocDraft } from './useDocDraft'
 
@@ -226,7 +227,6 @@ export function PermissionsSheet({ open, onClose, doc, onShare }: { open: boolea
   const { state } = useStore()
   const editors = editorIds(doc)
   const named = (doc.sharedWith ?? []).filter(s => !editors.includes(s.personId))
-  const team = teamFolderOf(state.folders, doc)
   const roleOf = (id: string) => (id === doc.ownerId ? 'Owner' : 'Editor')
   const roles = [
     { name: 'Owner', body: 'Edits, comments, shares and decides who else can edit.' },
@@ -234,7 +234,10 @@ export function PermissionsSheet({ open, onClose, doc, onShare }: { open: boolea
     { name: 'Commenter', body: 'Reads and comments, but can’t change the text.' },
     { name: 'Viewer', body: 'Reads only.' },
   ]
-  const everyone = doc.commenters === 'team' ? `Everyone in ${team?.team ?? doc.space}` : doc.commenters === 'org' ? `Everyone at ${ORG_NAME}` : accessOf(state.folders, doc) === 'org' ? `Everyone at ${ORG_NAME}` : accessOf(state.folders, doc) === 'team' && team ? `Everyone in ${team.team}` : null
+  // The same team the Share dialog names (a team folder's team, else the owner's team).
+  const teamName = teamNameOf(state, doc)
+  const access = accessOf(state.folders, doc)
+  const everyone = doc.commenters === 'team' ? `Everyone in ${teamName}` : doc.commenters === 'org' ? `Everyone at ${ORG_NAME}` : access === 'org' ? `Everyone at ${ORG_NAME}` : access === 'team' ? `Everyone in ${teamName}` : null
   return (
     <Sheet open={open} onClose={onClose} title="Who can do what" footer={<Button variant="secondary" icon={<Users size={15} />} onClick={() => { onClose(); onShare() }}>Share settings</Button>}>
       <div className="flex flex-col gap-5">
@@ -283,7 +286,6 @@ export function DetailsSheet({ open, onClose, doc, draft }: { open: boolean; onC
   const { state, navigate } = useStore()
   const path = folderPath(state.folders, doc.folderId)
   const access = accessOf(state.folders, doc)
-  const team = teamFolderOf(state.folders, doc)
   const created = doc.versions[doc.versions.length - 1]
   const words = wordCount(draft.items.map(i => i.block))
   const where = path.length ? path.map(f => f.title).join(' › ') : doc.ownerId === ME ? 'My Drive' : 'Shared with me'
@@ -291,7 +293,7 @@ export function DetailsSheet({ open, onClose, doc, draft }: { open: boolean; onC
     ['Type', <span className="inline-flex items-center gap-1.5"><FileText size={14} className="text-accent-ink" aria-hidden />Doc</span>],
     ['Location', <button className="text-left font-medium text-accent-ink hover:underline" onClick={() => { onClose(); navigate(path.length ? { name: 'drive', folderId: path[path.length - 1].id } : { name: 'drive', view: doc.ownerId === ME ? 'my' : 'shared' }) }}>Drive › {where}</button>],
     ['Owner', fullName(doc.ownerId)],
-    ['Who can open', access === 'org' ? `Everyone at ${ORG_NAME}` : access === 'team' ? `Everyone in ${team?.team ?? doc.space}` : 'Only people added to it'],
+    ['Who can open', access === 'org' ? `Everyone at ${ORG_NAME}` : access === 'team' ? `Everyone in ${teamNameOf(state, doc)}` : 'Only people added to it'],
     ['Who can edit', <span className="inline-flex items-center gap-1.5"><Pencil size={13} className="text-muted" aria-hidden />{cap(nameList(editorIds(doc)))}</span>],
     ['Modified', `${stamp(doc.updatedAt)} by ${byName(doc.updatedBy ?? doc.versions[0]?.authorId ?? doc.ownerId)}`],
     ...(created ? [['Created', `${shortDay(created.ts)}, ${clock(created.ts)} by ${byName(created.authorId)}`] as [string, ReactNode]] : []),

@@ -1,7 +1,14 @@
 // Small pieces for the doc screen: media queries, the phone keyboard inset and
 // a menu that is a popover on desktop and a bottom sheet on phones.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { BookOpen, Compass, FileText, Hand, NotebookPen } from 'lucide-react'
+import type { DocTemplateId } from '../../types'
 import { cx, Sheet } from '../../ui'
+
+/** One icon per doc template, wherever templates are offered (the blank doc, the Drive's New › Doc). */
+export const templateIcons: Record<DocTemplateId, ReactNode> = {
+  blank: <FileText size={16} />, 'meeting-notes': <NotebookPen size={16} />, 'project-brief': <Compass size={16} />, policy: <BookOpen size={16} />, onboarding: <Hand size={16} />,
+}
 
 export function useMedia(query: string) {
   const [match, setMatch] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches)
@@ -48,10 +55,17 @@ export function Menu({ open, onClose, items, title, popover, align = 'right', si
   const ref = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
   closeRef.current = onClose
+  // The button that opened the menu gets focus back when it closes, before an item
+  // runs, so a dialog the item opens returns focus there too.
+  const opener = useRef<HTMLElement | null>(null)
+  const wasOpen = useRef(false)
+  if (open && !wasOpen.current) opener.current = document.activeElement as HTMLElement | null
+  wasOpen.current = open
+  const refocus = () => { if (opener.current?.isConnected) opener.current.focus({ preventScroll: true }) }
   useEffect(() => {
     if (!open || !popover) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); closeRef.current(); return }
+      if (e.key === 'Escape') { e.stopPropagation(); closeRef.current(); refocus(); return }
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
       const btns = [...(ref.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])]
       if (!btns.length) return
@@ -70,8 +84,8 @@ export function Menu({ open, onClose, items, title, popover, align = 'right', si
       <button
         role="menuitem"
         disabled={it.disabled}
-        onClick={() => { onClose(); it.onSelect() }}
-        className={cx('flex w-full items-start gap-3 px-4 py-2.5 text-left transition hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-none disabled:cursor-not-allowed', popover ? 'rounded-xl px-3 py-2' : '', it.danger && !it.disabled ? 'text-rec' : '', it.disabled && 'opacity-60')}
+        onClick={() => { onClose(); refocus(); it.onSelect() }}
+        className={cx('flex w-full items-start gap-3 px-4 py-2.5 text-left transition hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:-outline-offset-2 disabled:cursor-not-allowed', popover ? 'rounded-xl px-3 py-2' : '', it.danger && !it.disabled ? 'text-rec' : '', it.disabled && 'opacity-60')}
       >
         <span className={cx('mt-0.5 shrink-0', it.danger && !it.disabled ? 'text-rec' : 'text-muted')}>{it.icon}</span>
         <span className="min-w-0 flex-1">
@@ -90,7 +104,7 @@ export function Menu({ open, onClose, items, title, popover, align = 'right', si
   }
   return (
     <>
-      <button aria-label="Close menu" tabIndex={-1} className="fixed inset-0 z-40 cursor-default" onClick={onClose} />
+      <button aria-label="Close menu" tabIndex={-1} className="fixed inset-0 z-40 cursor-default" onClick={() => { onClose(); refocus() }} />
       <div ref={ref} role="menu" aria-label={title} className={cx('anim-in absolute z-50 rounded-2xl border border-line bg-surface p-1.5 text-fg shadow-card', side === 'below' ? 'top-full mt-1.5' : 'bottom-full mb-1.5', width, align === 'right' ? 'right-0' : 'left-0')}>
         {list}
       </div>

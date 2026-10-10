@@ -24,16 +24,19 @@ export function Popover({ anchor, open, onClose, children, align = 'left', label
     return () => window.removeEventListener('resize', place)
   }, [open, anchor, align])
 
+  // Items you can see and use (a hidden one can't take focus, so arrows would stall on it).
+  const items = () => [...(ref.current?.querySelectorAll<HTMLElement>('button:not([disabled])') ?? [])].filter(el => el.offsetParent !== null)
+
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.stopPropagation(); onClose(); anchor?.focus(); return }
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
-      const items = [...(ref.current?.querySelectorAll<HTMLElement>('button:not([disabled])') ?? [])]
-      if (!items.length) return
+      const list = items()
+      if (!list.length) return
       e.preventDefault()
-      const i = items.indexOf(document.activeElement as HTMLElement)
-      items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus()
+      const i = list.indexOf(document.activeElement as HTMLElement)
+      list[(i + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length].focus()
     }
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node
@@ -41,9 +44,17 @@ export function Popover({ anchor, open, onClose, children, align = 'left', label
     }
     window.addEventListener('keydown', onKey, true)
     window.addEventListener('pointerdown', onDown, true)
-    ref.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus()
     return () => { window.removeEventListener('keydown', onKey, true); window.removeEventListener('pointerdown', onDown, true) }
   }, [open, onClose, anchor])
+
+  // Focus the first item once the menu is placed (it's invisible, so unfocusable, until then).
+  const focused = useRef(false)
+  useEffect(() => {
+    if (!open) { focused.current = false; return }
+    if (!pos || focused.current) return
+    focused.current = true
+    items()[0]?.focus()
+  }, [open, pos])
 
   if (!open) return null
   return (
@@ -65,7 +76,7 @@ export function MenuItem({ icon, children, onClick, danger, disabled, hint }: { 
       role="menuitem"
       disabled={disabled}
       onClick={onClick}
-      className={cx('flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm transition hover:bg-surface-2 disabled:opacity-50 disabled:hover:bg-transparent', danger ? 'text-rec' : 'text-fg')}
+      className={cx('flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm transition hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:-outline-offset-2 disabled:opacity-50 disabled:hover:bg-transparent', danger ? 'text-rec' : 'text-fg')}
     >
       {icon && <span className={cx('shrink-0', danger ? 'text-rec' : 'text-muted')}>{icon}</span>}
       <span className="min-w-0 flex-1">{children}</span>

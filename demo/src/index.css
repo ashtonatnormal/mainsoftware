@@ -5,23 +5,25 @@
    quiet. Ember is the one bold colour; agents get a calm teal so AI is always
    recognisable; recording is always red. */
 :root {
+  /* Light values are dark enough for small text: each colour is at least 4.5:1 on
+     its own -soft ground and on surfaces, and white is 4.5:1 on accent and rec. */
   --bg: #f4f5f7;          /* app ground, slate-tinted */
   --surface: #ffffff;     /* cards, panels, others' bubbles */
   --surface-2: #eceef2;   /* inputs, hover, chips */
   --fg: #1b2130;          /* ink */
   --muted: #5e6778;       /* secondary text */
   --line: #dde1e8;        /* hairlines */
-  --accent: #e8590c;      /* ember */
+  --accent: #c84d0a;      /* ember */
   --accent-fg: #ffffff;
   --accent-soft: #ffe8d6; /* my bubbles, highlights */
   --accent-ink: #b8460a;  /* accent used as text on light grounds */
-  --agent: #0f8b8d;       /* agents and AI */
+  --agent: #0b7375;       /* agents and AI */
   --agent-soft: #dcf2f1;
-  --rec: #d93a3f;         /* recording / live */
+  --rec: #c22d33;         /* recording / live */
   --rec-soft: #fde4e4;
-  --ok: #2b8a3e;
+  --ok: #257a36;
   --ok-soft: #dff3e3;
-  --warn: #b7791f;
+  --warn: #94600f;
   --warn-soft: #fbf0d9;
   --chat-wall: #eef0f3;   /* conversation background */
   --shadow: 0 1px 2px rgb(16 22 35 / 0.06), 0 4px 16px rgb(16 22 35 / 0.06);

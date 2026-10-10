@@ -12,6 +12,7 @@ export const folders: Folder[] = [
   { id: 'f_ops', title: 'Ops wiki', ownerId: 'u_priya', folderId: null, team: 'Operations', access: 'org', color: 'teal', updatedAt: at('2026-10-10T18:05'), description: 'Runbooks, rosters and site guides for Woodlands DC.' },
   { id: 'f_hr', title: 'HR wiki', ownerId: 'u_huimin', folderId: null, team: 'People', access: 'org', color: 'rose', updatedAt: at('2026-10-09T16:55'), description: 'Policies and benefits. Everyone can read; People edits.' },
   { id: 'f_people', title: 'People', ownerId: 'u_huimin', folderId: null, team: 'People', access: 'org', color: 'amber', updatedAt: minutesAgo(50), description: 'Onboarding, all-hands and team pages.' },
+  { id: 'f_it', title: 'IT wiki', ownerId: 'u_arjun', folderId: null, team: 'IT', access: 'org', color: 'slate', updatedAt: at('2026-09-15T10:00'), description: 'How-tos for Hearth, devices and accounts. Everyone can read; IT edits.' },
   { id: 'f_q4_contract', title: 'Contract and pricing', ownerId: 'u_ahmad', folderId: 'f_q4', updatedAt: at('2026-09-28T11:40') },
   // Ashton's own folders (My Drive)
   { id: 'f_board', title: 'Board pack · October', ownerId: ME, folderId: null, access: 'restricted', color: 'slate', updatedAt: at('2026-10-11T21:10') },
@@ -31,8 +32,8 @@ export const uploads: DriveUpload[] = [
     previewText: 'Photo: forklift 3 at bay 4 with oil pooling under the mast.',
   },
   {
-    id: 'up_kranji', kind: 'pdf', title: 'Kranji Movers quote.pdf', ownerId: 'u_priya', folderId: 'f_vendor',
-    size: '312 KB', pages: 3, updatedAt: at('2026-10-09T19:12'), lastOpenedAt: at('2026-10-09T19:40'),
+    id: 'up_kranji', kind: 'pdf', title: 'Kranji Movers – quote.pdf', ownerId: 'u_priya', folderId: 'f_vendor',
+    size: '212 KB', pages: 3, updatedAt: at('2026-10-09T19:12'), lastOpenedAt: at('2026-10-09T19:40'),
     previewText: 'Kranji Movers Pte Ltd · Quotation Q-2291 · Racking relocation, Woodlands DC cold room. Scope: dismantle, move and reinstall 14 bays over 3 days, 2–4 Nov. Price: S$18,400 before GST. Insurance: goods-in-transit cover up to S$500,000. Weekend work at no extra charge. Valid until 16 Oct.',
   },
   {
