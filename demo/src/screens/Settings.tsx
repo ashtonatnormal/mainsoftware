@@ -98,6 +98,11 @@ export default function SettingsScreen() {
   )
 }
 
+// The app-wide :focus-visible outline in index.css sits outside Tailwind's layers, so it
+// beats outline-none and rounded-*: it would draw a second ring and square the corners.
+// Fields that draw their own focus ring override it with important (!) utilities.
+const fieldClass = 'w-full resize-none rounded-xl! bg-surface-2 px-3 py-2 text-[15px] outline-hidden! placeholder:text-muted focus:ring-2 focus:ring-accent'
+
 // ── Pieces ───────────────────────────────────────────────────────────────────
 function Profile() {
   const { toast } = useStore()
@@ -250,7 +255,7 @@ function MemorySection() {
                   className="flex flex-col gap-2"
                 >
                   <label htmlFor={`mem-${m.id}`} className="sr-only">Edit memory</label>
-                  <textarea id={`mem-${m.id}`} value={text} autoFocus rows={2} onChange={e => setText(e.target.value)} className="w-full resize-none rounded-xl bg-surface-2 px-3 py-2 text-[15px] outline-none focus:ring-2 focus:ring-accent" />
+                  <textarea id={`mem-${m.id}`} value={text} autoFocus rows={2} onChange={e => setText(e.target.value)} className={fieldClass} />
                   <div className="flex justify-end gap-2">
                     <Button size="sm" variant="ghost" type="button" onClick={() => setEditing(null)}>Cancel</Button>
                     <Button size="sm" variant="primary" type="submit">Save</Button>
@@ -360,7 +365,7 @@ function Privacy() {
           <div className="flex flex-col gap-3">
             <p className="text-sm text-muted">{copy.intro}</p>
             <label htmlFor="pdpa-detail" className="text-[13px] font-medium">{copy.field}</label>
-            <textarea id="pdpa-detail" rows={4} value={detail} onChange={e => setDetail(e.target.value)} placeholder={copy.placeholder} className="w-full resize-none rounded-xl bg-surface-2 px-3 py-2 text-[15px] outline-none placeholder:text-muted focus:ring-2 focus:ring-accent" />
+            <textarea id="pdpa-detail" rows={4} value={detail} onChange={e => setDetail(e.target.value)} placeholder={copy.placeholder} className={fieldClass} />
             <p className="text-[13px] text-muted">Sent as Ashton Teo, +65 9123 4567. The DPO may check it’s you before replying.</p>
           </div>
         )}

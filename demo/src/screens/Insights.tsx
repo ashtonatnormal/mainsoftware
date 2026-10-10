@@ -276,6 +276,9 @@ function Bar({ value, max, className }: { value: number; max: number; className?
   )
 }
 
+// The app-wide :focus-visible outline in index.css sits outside Tailwind's layers, so it
+// beats outline-none and rounded-*: it would draw a second ring and square the corners.
+// The select draws their own focus ring override it with important (!) utilities.
 function Select({ id, label, value, onChange, options }: { id: string; label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
@@ -284,7 +287,7 @@ function Select({ id, label, value, onChange, options }: { id: string; label: st
         id={id}
         value={value}
         onChange={e => onChange(e.target.value)}
-        className="h-9 w-full min-w-0 rounded-full border border-line bg-surface px-3 text-[13px] font-medium text-fg outline-none focus:ring-2 focus:ring-accent"
+        className="h-9 w-full min-w-0 rounded-full! border border-line bg-surface px-3 text-[13px] font-medium text-fg outline-hidden! focus:ring-2 focus:ring-accent"
       >
         {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>

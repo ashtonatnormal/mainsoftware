@@ -103,6 +103,7 @@ function PhoneStep({ onNext }: { onNext: () => void }) {
     <>
       <StepTitle title="Your mobile number" body="Use the number your company added for you. We’ll text you a code." />
       <label htmlFor="ob-phone" className="mb-1.5 text-[13px] font-medium text-muted">Mobile number</label>
+      {/* The wrapper draws the focus ring; outline-hidden! stops the app-wide :focus-visible outline adding a second one. */}
       <div className="flex h-14 items-center gap-3 rounded-2xl bg-surface-2 px-4 focus-within:ring-2 focus-within:ring-accent">
         <span className="text-lg font-semibold tabular text-muted">+65</span>
         <span className="h-6 w-px bg-line" aria-hidden />
@@ -112,7 +113,7 @@ function PhoneStep({ onNext }: { onNext: () => void }) {
           autoComplete="tel-national"
           value={num}
           onChange={e => setNum(e.target.value)}
-          className="min-w-0 flex-1 bg-transparent text-lg font-semibold tabular tracking-wide outline-none"
+          className="min-w-0 flex-1 bg-transparent text-lg font-semibold tabular tracking-wide outline-hidden!"
         />
       </div>
       <p className="mt-3 text-[13px] text-muted">Only numbers on the {ORG_NAME} staff list can sign in.</p>
