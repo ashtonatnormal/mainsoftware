@@ -687,7 +687,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
         />
       </div>
       {others.length > 0 && (
-        <span className="flex items-center" title={`${others.map(personShort).join(', ')} ${others.length === 1 ? 'is' : 'are'} here`}>
+        <span className="hidden items-center min-[360px]:flex" title={`${others.map(personShort).join(', ')} ${others.length === 1 ? 'is' : 'are'} here`}>
           <AvatarStack ids={others} size="sm" />
         </span>
       )}
