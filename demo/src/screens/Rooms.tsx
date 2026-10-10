@@ -513,7 +513,7 @@ function Controls(p: { muted: boolean; camera: boolean; hand: boolean; picker: b
   const btn = (active: boolean, danger = false) =>
     cx('grid size-12 shrink-0 place-items-center rounded-full transition', danger ? 'bg-rec-soft text-rec' : active ? 'bg-accent-soft text-accent-ink' : 'bg-surface-2 text-fg hover:bg-line')
   return (
-    <div className="relative border-t border-line bg-surface px-3 py-3" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}>
+    <div className="relative border-t border-line bg-surface px-3 py-3">
       {p.picker && (
         <div className="anim-in absolute bottom-full left-1/2 mb-2 flex -translate-x-1/2 gap-1 rounded-full border border-line bg-surface p-1.5 shadow-card" role="menu" aria-label="Reactions">
           {REACTIONS.map(e => (

@@ -142,7 +142,7 @@ function TabBar({ hidden }: { hidden: boolean }) {
   }
   return (
     <>
-      <nav className="flex border-t border-line bg-surface md:hidden" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label="Main">
+      <nav className="flex border-t border-line bg-surface md:hidden" aria-label="Main">
         {mainNav.map(tab)}
         <button onClick={() => setMore(true)} className={cx('flex flex-1 flex-col items-center gap-0.5 pt-2 pb-1.5 text-[11px] font-medium', moreActive ? 'text-accent-ink' : 'text-muted')}>
           <span className={cx('grid h-7 w-12 place-items-center rounded-full', moreActive && 'bg-accent-soft')}><LayoutGrid size={20} /></span>
@@ -184,7 +184,7 @@ function InRoomBar() {
 function Toasts() {
   const { state, navigate, dismissToast } = useStore()
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-3 z-[60] flex flex-col items-center gap-2 px-4" aria-live="polite">
+    <div className="pointer-events-none fixed inset-x-0 z-[60] flex flex-col items-center gap-2 px-4" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)' }} aria-live="polite">
       {state.toasts.map(t => (
         <div key={t.id} className="anim-in pointer-events-auto flex max-w-md items-center gap-3 rounded-2xl bg-fg px-4 py-2.5 text-sm text-bg shadow-card">
           <span className="min-w-0 flex-1">{t.text}</span>

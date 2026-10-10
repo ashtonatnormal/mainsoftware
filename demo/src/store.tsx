@@ -360,11 +360,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [state.onboarded, state.theme])
 
-  // Apply theme choice to the document root.
+  // Apply the theme choice to the document root. "System" leaves the root alone,
+  // so a theme the host page set (or the OS setting) still applies; switching back
+  // to it restores whatever was there before the demo changed it.
+  const hostTheme = useRef<string | null | undefined>(undefined)
   useEffect(() => {
     const root = document.documentElement
-    if (state.theme === 'system') root.removeAttribute('data-theme')
-    else root.setAttribute('data-theme', state.theme)
+    if (state.theme === 'system') {
+      if (hostTheme.current === undefined) return
+      if (hostTheme.current === null) root.removeAttribute('data-theme')
+      else root.setAttribute('data-theme', hostTheme.current)
+      hostTheme.current = undefined
+      return
+    }
+    if (hostTheme.current === undefined) hostTheme.current = root.getAttribute('data-theme')
+    root.setAttribute('data-theme', state.theme)
   }, [state.theme])
 
   // Demo clock ticks so "live" durations move.

@@ -73,7 +73,7 @@ export function Composer({ c }: { c: Conversation }) {
 
   if (recSec !== null) {
     return (
-      <div className="border-t border-line bg-surface px-2 py-2 sm:px-4" style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom, 0px))' }}>
+      <div className="border-t border-line bg-surface px-2 py-2 sm:px-4">
         <div className="mx-auto flex w-full max-w-3xl items-center gap-2">
           <Button variant="ghost" size="sm" icon={<Trash size={15} />} onClick={() => setRecSec(null)}>
             Cancel
@@ -101,7 +101,7 @@ export function Composer({ c }: { c: Conversation }) {
   }
 
   return (
-    <div className="border-t border-line bg-surface px-2 pt-2 sm:px-4" style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom, 0px))' }}>
+    <div className="border-t border-line bg-surface px-2 pt-2 pb-2 sm:px-4">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
         {drafted && (
           <div className="anim-in flex items-center gap-2 rounded-xl bg-agent-soft px-3 py-2 text-[13px]">
