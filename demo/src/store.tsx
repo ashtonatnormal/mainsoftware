@@ -86,7 +86,7 @@ export type ItemPatch = Partial<Pick<DriveMeta, 'title' | 'folderId' | 'starred'
   editors?: PersonId[]
   commenters?: 'team' | 'org' | 'none'
   space?: string
-}
+} & Partial<Pick<DriveUpload, 'size' | 'url' | 'previewText' | 'versions'>> // FILE-05: a new version of an upload
 
 function patchIn<T extends { id: string }>(arr: T[], id: string, patch: ItemPatch): T[] {
   return arr.some(x => x.id === id) ? arr.map(x => (x.id === id ? { ...x, ...patch } : x)) : arr

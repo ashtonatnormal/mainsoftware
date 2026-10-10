@@ -270,6 +270,19 @@ export interface DriveUpload extends DriveMeta {
   url?: string // blob: URL for a file added in this browser session (image previews)
   hue?: number // seeded images: colour of the generated preview
   fromConversationId?: ConversationId // FILE-08: shared in this chat
+  versions?: FileVersion[] // FILE-05: newest first; absent means only the original upload
+}
+
+/** One uploaded version of a file (FILE-05). */
+export interface FileVersion {
+  id: string
+  ts: number
+  by: PersonId
+  name: string
+  size: string
+  url?: string
+  previewText?: string
+  note?: string // e.g. "Restored from Fri 9 Oct"
 }
 
 // Sheets (DOC-12)
