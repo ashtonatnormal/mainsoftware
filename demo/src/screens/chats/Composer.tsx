@@ -26,7 +26,7 @@ export function Composer({ c }: { c: Conversation }) {
 
   // PA-08: the assistant put this draft here; the user edits and sends it.
   const drafted = draft.trim()
-    ? [...state.actionables, ...seedActionables].find(a => a.draft?.conversationId === c.id && a.draft.text === draft)
+    ? [...state.actionables, ...seedActionables].find(a => a.draft?.conversationId === c.id && (a.draft.text === draft || a.draft.withoutMemory === draft)) // either version (PA-10)
     : undefined
   if (drafted) usedDraftFrom.current = drafted.id
 

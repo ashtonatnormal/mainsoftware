@@ -183,7 +183,7 @@ function reducer(s: State, a: Action): State {
     case 'memoryOn':
       return withMemoryDrafts({ ...s, memoryOn: a.on })
     case 'addMemory':
-      return { ...s, memories: [...s.memories, a.memory] }
+      return withMemoryDrafts({ ...s, memories: [...s.memories, a.memory] })
     case 'toast':
       return { ...s, toasts: [...s.toasts.slice(-2), a.toast] }
     case 'dismissToast':
@@ -206,7 +206,8 @@ function withoutMe(r: Room, clock: number): Room {
 
 // ── Scripted replies so conversations feel alive ──────────────────────────────
 const scriptedReplies: Record<string, { from: string; text: string }> = {
-  dm_priya: { from: 'u_priya', text: 'Great, thanks! I’ll confirm the insurance cover on tomorrow’s call and send them the notice letter after. 👍' },
+  // Fits either Today draft to Priya (with or without memory, PA-10).
+  dm_priya: { from: 'u_priya', text: 'Thanks! I’ll check the insurance cover with Kranji on tomorrow’s call and let you know before Tuesday. 👍' },
   dm_marcus: { from: 'u_marcus', text: 'Thanks boss, telling the crew now 👍' },
   g_q4: { from: 'u_daniel', text: 'Thanks! I’ll walk everyone through v3 at the 3 pm review.' },
   ag_it: { from: 'a_it', text: 'I’ve noted that. For anything urgent, Arjun is on #it-help until 6 pm.' },
@@ -369,8 +370,9 @@ function withMemoryDrafts(s: State): State {
       const seed = seedActionableById[a.id]
       const d = seed?.draft
       if (!a.draft || !d?.memoryId || d.withoutMemory === undefined) return a
-      const memory = s.memoryOn ? s.memories.find(m => m.id === d.memoryId) : undefined
-      const used = memory && sameFact(memory.text, seedMemoryById[d.memoryId]?.text ?? '') ? memory : undefined
+      // The memory as written, under its own id or taught again in the Assistant chat.
+      const fact = seedMemoryById[d.memoryId]?.text ?? ''
+      const used = s.memoryOn ? s.memories.find(m => m.id === d.memoryId && sameFact(m.text, fact)) ?? s.memories.find(m => sameFact(m.text, fact)) : undefined
       const text = used ? d.text : d.withoutMemory
       const sources = used ? [...(seed.sources ?? []), memoryUsed(used)] : seed.sources
       return a.draft.text === text && a.sources === sources ? a : { ...a, draft: { ...a.draft, text }, sources }
