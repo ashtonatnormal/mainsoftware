@@ -1,544 +1,593 @@
-// Docs (DOC-01..13, J6): spaces and recent docs, a reading view with live
-// presence, restricted editing (DOC-03), anchored comments (DOC-05), version
-// history with diffs (DOC-04) and an AI draft the user must accept (DOC-09).
-import { Fragment, useEffect, useState, type ReactNode } from 'react'
-import { BookOpen, Check, CheckCircle2, ChevronRight, Eye, FileText, History, Lock, MessageSquare, MessageSquareText, Pencil, RotateCcw, Rocket, Send, Shield, Sparkles, Users } from 'lucide-react'
-import type { Doc, DocBlock, DocComment, DocVersion, SourceRef } from '../types'
-import { newId, useStore } from '../store'
-import DriveScreen from './Drive'
+// Docs (DOC-01..11, J6, D16, D19): a Google Docs-style editor that lives in the
+// Drive. Editors switch between Editing and Viewing; every block is editable,
+// with keyboard flow, a "/" menu and Markdown shortcuts. Saves are debounced to
+// the store and each visit you change adds a "You edited" version. Viewing keeps
+// anchored comments, live presence, version history with restore, and AI help
+// that only suggests. Without a docId, the docs route shows the Drive.
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowLeft, Check, ClipboardCopy, CloudCheck, CloudUpload, Copy, Ellipsis, Eye, FileQuestion, History, Info, Lock, MessageSquarePlus, MessageSquareText, Pencil, Redo2, Sparkles, Star, StarOff, Trash2, Undo2, UserPlus, Users } from 'lucide-react'
+import type { Doc, Folder, Route } from '../types'
+import { newId, useStore, type State } from '../store'
 import { ME, personById } from '../data/people'
-import { AIMarker, Avatar, AvatarStack, Button, Card, cx, EmptyState, IconButton, personName, personShort, Pill, ScreenHeader, Segmented, SectionTitle, Sheet, SourceChips } from '../ui'
-import { clock, listStamp, shortDay } from '../time'
-
-function useWide() {
-  const q = '(min-width: 1024px)'
-  const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches)
-  useEffect(() => {
-    const mq = window.matchMedia(q)
-    const on = () => setWide(mq.matches)
-    mq.addEventListener('change', on)
-    return () => mq.removeEventListener('change', on)
-  }, [])
-  return wide
-}
-
-const stamp = (ms: number) => `${listStamp(ms)}${listStamp(ms).includes(':') ? '' : `, ${clock(ms)}`}`
-const names = (ids: string[]) => {
-  const n = ids.map(id => (id === ME ? 'you' : personShort(id)))
-  return n.length <= 1 ? n.join('') : `${n.slice(0, -1).join(', ')} and ${n[n.length - 1]}`
-}
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+import { docs as seedDocs } from '../data/work'
+import { myDocs } from '../data/drive'
+import { canEdit as canEditItem, folderPath, isTrashed, teamFolderOf } from '../drive'
+import { AvatarStack, Button, cx, EmptyState, IconButton, Segmented, Sheet } from '../ui'
+import { ShareDialog } from '../ui/share'
+import DriveScreen from './Drive'
+import Editor, { applyType, typeIcons } from './docs/Editor'
+import { BlankStart, useAssist, type AssistKind } from './docs/Assist'
+import { Comments, DetailsSheet, PermissionsSheet, stamp, Versions } from './docs/Panels'
+import { Menu, useKeyboardInset, useMedia, type MenuItem } from './docs/ui'
+import { blockOrder, byName, canComment, cap, editorIds, fullName, nameList, openLine, permissionLine, toBlocks, toMarkdown, typeLabels, UNTITLED, type BlockType } from './docs/model'
+import { useDocDraft, type DocDraft } from './docs/useDocDraft'
 
 export default function DocsScreen() {
   const { state } = useStore()
   const docId = state.route.name === 'docs' ? state.route.docId : undefined
+  if (!docId) return <DriveScreen />
   const doc = state.docs.find(d => d.id === docId)
-  // Without a doc, the Docs route shows the Drive (FILE-01).
-  return doc ? <DocView key={doc.id} doc={doc} /> : <DriveScreen />
+  return doc ? <DocView key={doc.id} doc={doc} /> : <MissingDoc />
 }
 
-// ── Home ──────────────────────────────────────────────────────────────────────
-const SPACES: { name: string; icon: ReactNode; blurb: string }[] = [
-  { name: 'Q4 launch', icon: <Rocket size={18} />, blurb: 'Meridian launch plan' },
-  { name: 'HR wiki', icon: <BookOpen size={18} />, blurb: 'Policies and benefits' },
-  { name: 'Ops wiki', icon: <Shield size={18} />, blurb: 'Runbooks for the sites' },
-  { name: 'People', icon: <Users size={18} />, blurb: 'Onboarding and teams' },
-]
-
-function DocsHome() {
-  const { state, navigate, toast } = useStore()
-  const [space, setSpace] = useState<string | null>(null)
-  const recent = [...state.docs].sort((a, b) => b.updatedAt - a.updatedAt).filter(d => !space || d.space === space)
-
+function MissingDoc() {
+  const { state, back, navigate } = useStore()
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-4xl px-4 py-5 sm:px-6">
-        <div className="mb-5 flex items-center justify-between gap-3">
-          <h1 className="hidden font-display text-2xl font-semibold md:block">Docs</h1>
-          <Button size="sm" variant="primary" icon={<Pencil size={14} />} className="ml-auto" onClick={() => toast('Creating docs comes later in the demo')}>New doc</Button>
-        </div>
-
-        <SectionTitle>Spaces</SectionTitle>
-        <div className="mb-8 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {SPACES.map(s => {
-            const count = state.docs.filter(d => d.space === s.name).length
-            const active = space === s.name
-            return (
-              <button
-                key={s.name}
-                aria-pressed={active}
-                onClick={() => setSpace(active ? null : s.name)}
-                className={cx('flex min-w-0 flex-col gap-2 rounded-2xl border bg-surface p-3 text-left transition hover:border-muted', active ? 'border-accent ring-1 ring-accent' : 'border-line')}
-              >
-                <span className="grid size-9 place-items-center rounded-xl bg-accent-soft text-accent-ink">{s.icon}</span>
-                <span className="min-w-0">
-                  <span className="block truncate font-semibold">{s.name}</span>
-                  <span className="block truncate text-xs text-muted">{s.blurb}</span>
-                </span>
-                <span className="text-xs text-muted tabular">{count} {count === 1 ? 'doc' : 'docs'}</span>
-              </button>
-            )
-          })}
-        </div>
-
-        <SectionTitle action={space ? <Button size="sm" variant="ghost" onClick={() => setSpace(null)}>Show all</Button> : undefined}>
-          {space ? `In ${space}` : 'Recent'}
-        </SectionTitle>
-        {recent.length === 0 ? (
-          <EmptyState icon={<FileText size={28} />} title="No docs here yet" />
-        ) : (
-          <ul className="divide-y divide-line border-y border-line">
-            {recent.map(d => (
-              <li key={d.id}>
-                <button onClick={() => navigate({ name: 'docs', docId: d.id })} className="flex w-full items-center gap-3 py-3 text-left transition hover:bg-surface-2/60 sm:px-2">
-                  <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-surface-2 text-xl" aria-hidden>{d.emoji ?? '📄'}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{d.title}</span>
-                    <span className="block truncate text-xs text-muted">{d.space} · {personName(d.ownerId)} · edited {stamp(d.updatedAt)}</span>
-                  </span>
-                  {d.presence.length > 0 && (
-                    <span className="flex shrink-0 items-center gap-1.5">
-                      <AvatarStack ids={d.presence} max={3} size="xs" />
-                      <span className="hidden text-xs text-ok sm:inline">here now</span>
-                    </span>
-                  )}
-                  {d.comments.some(c => !c.resolved) && (
-                    <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted" aria-label={`${d.comments.filter(c => !c.resolved).length} open comments`}>
-                      <MessageSquare size={13} aria-hidden />{d.comments.filter(c => !c.resolved).length}
-                    </span>
-                  )}
-                  <ChevronRight size={16} className="shrink-0 text-muted" aria-hidden />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+    <div className="flex h-full flex-col">
+      <header className="flex min-h-14 items-center gap-2 border-b border-line bg-surface px-2 py-2 sm:px-4">
+        <IconButton label="Back" onClick={() => (state.history.length ? back() : navigate({ name: 'drive' }))}><ArrowLeft size={20} /></IconButton>
+        <h1 className="font-display text-lg font-semibold">Doc not found</h1>
+      </header>
+      <EmptyState icon={<FileQuestion size={28} />} title="This doc isn’t here any more" body="It may have been deleted from the trash, or you may no longer have access." action={<Button variant="primary" onClick={() => navigate({ name: 'drive' })}>Go to Drive</Button>} />
     </div>
   )
 }
 
-// ── Doc view ──────────────────────────────────────────────────────────────────
+// Per-visit choices that should survive leaving and coming back while the page is open.
+const modes = new Map<string, 'edit' | 'view'>()
+const requested = new Set<string>()
+const SEED_IDS = new Set([...seedDocs, ...myDocs].map(d => d.id))
+
 type Panel = 'comments' | 'history'
 
-// DOC-09: canned drafts per doc, grounded in things the user can open.
-const aiDrafts: Record<string, { text: string; sources: SourceRef[] }> = {
-  d_q4: {
-    text: 'To cover the ramp-up, we will hire a spare forklift from 26 Oct to 30 Nov and keep cold-room picks on the morning shift until forklift 3 is back. Meridian pricing follows the Q3 review: list prices hold for Q4, with a 5% tier above 200 pallets a month.',
-    sources: [
-      { label: 'Farah in #ops-north-site · forklift 3', kind: 'message', route: { name: 'chats', conversationId: 'c_ops' } },
-      { label: 'Q3 pricing review · Fri 9 Oct', kind: 'session', route: { name: 'session', sessionId: 's_pricing' } },
-    ],
-  },
+/** Where a copy goes: next to the original if you can add files to that folder (you can edit
+ *  it, it sits under one of your folders, or it's your team's folder), otherwise My Drive.
+ *  The Drive's own Make a copy follows the same rule. */
+function copyDestination(state: State, doc: Doc): Folder | null {
+  const f = doc.folderId ? state.folders.find(x => x.id === doc.folderId) : undefined
+  if (!f || isTrashed(state.folders, f)) return null
+  if (canEditItem(f) || folderPath(state.folders, f.id)[0]?.ownerId === ME) return f
+  const team = teamFolderOf(state.folders, f)?.team
+  const inTeam = !!team && (personById[ME]?.team === team || state.conversations.some(c => c.name === team && c.members.includes(ME)))
+  return inTeam ? f : null
 }
 
 function DocView({ doc }: { doc: Doc }) {
-  const { navigate } = useStore()
-  const wide = useWide()
+  const store = useStore()
+  const { state, navigate, back, toast, toggleStar, patchItem } = store
+  const desktop = useMedia('(min-width: 768px)')
+  const wide = useMedia('(min-width: 1024px)')
+  const inset = useKeyboardInset()
+  const draft = useDocDraft(doc)
+  const trashed = isTrashed(state.folders, doc)
+  const editable = canEditItem(doc) && !trashed
+  const commentable = canComment(doc, editable) && !trashed
+  const canTrash = (doc.ownerId === ME || canEditItem(doc)) && !trashed
+  const fresh = !SEED_IDS.has(doc.id) && doc.ownerId === ME && doc.versions.length <= 1
+  const [mode, setModeState] = useState<'edit' | 'view'>(() => modes.get(doc.id) ?? (doc.ownerId === ME ? 'edit' : 'view'))
+  const editing = editable && mode === 'edit'
   const [panel, setPanel] = useState<Panel>('comments')
   const [sheet, setSheet] = useState<Panel | null>(null)
-  const [permOpen, setPermOpen] = useState(false)
   const [focusComment, setFocusComment] = useState<string | null>(null)
-  const canEdit = doc.editors.includes(ME)
-  const openComments = doc.comments.filter(c => !c.resolved)
+  const [newAnchor, setNewAnchor] = useState<string | null>(null)
+  const [active, setActive] = useState<string | null>(null)
+  const [selection, setSelection] = useState<{ key: string; text: string } | null>(null)
+  const [menu, setMenu] = useState<'more' | 'assist-toolbar' | 'assist-footer' | 'assist-bar' | null>(null)
+  const [dialog, setDialog] = useState<'share' | 'perm' | 'details' | 'trash' | null>(null)
+  const [markdown, setMarkdown] = useState<string | null>(null)
+  const assist = useAssist({ doc, draft, editable, title: draft.title.trim() || UNTITLED })
 
-  const showComment = (id: string) => {
-    setFocusComment(id)
-    if (wide) setPanel('comments')
-    else setSheet('comments')
+  const setMode = (m: 'edit' | 'view') => {
+    modes.set(doc.id, m)
+    setModeState(m)
+  }
+  // Switching to Editing puts the caret at the end of the first line you can see, as Docs does.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const switchMode = (m: 'edit' | 'view') => {
+    if (m === 'view' || editing) { setMode(m); return }
+    const area = scrollRef.current
+    const top = area?.getBoundingClientRect().top ?? 0
+    const seen = [...(area?.querySelectorAll<HTMLElement>('[data-block-key]') ?? [])].find(el => el.getBoundingClientRect().bottom > top + 24)
+    setMode('edit')
+    const key = seen?.getAttribute('data-block-key')
+    if (key) draft.focus({ key, caret: 'end' })
   }
 
+  // Opening a doc counts as opening it in the Drive (Recent).
+  useEffect(() => {
+    patchItem(doc.id, { lastOpenedAt: store.state.clock })
+    // A new doc opens with the caret in its first empty block.
+    if (fresh && editable && mode === 'edit') {
+      const first = openLine(draft.itemsRef.current)
+      if (first) draft.focus({ key: first.key, caret: 'end' })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Ctrl/Cmd+S out of habit: save now instead of opening the browser's "Save page".
+  const saveNow = useRef(() => {})
+  saveNow.current = () => {
+    draft.patchDoc({})
+    toast('Saved to Drive. Docs save as you type.')
+  }
+  useEffect(() => {
+    if (!editable) return
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        saveNow.current()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [editable])
+
+  const title = draft.title.trim() || UNTITLED
+  const path = folderPath(state.folders, doc.folderId)
+  const home: Route = path.length ? { name: 'drive', folderId: path[path.length - 1].id } : { name: 'drive', view: doc.ownerId === ME ? 'my' : 'shared' }
+  const openComments = doc.comments.filter(c => !c.resolved)
+  const here = doc.presence.filter(id => id !== ME)
+  const cursorBy = here[0]
+  // A collaborator's simulated caret sits at the end of the last paragraph or list item.
+  // It stays on that block while you type, and finds a new one if the block goes.
+  const cursorAt = useRef<string | undefined>(undefined)
+  if (cursorBy && !draft.items.some(i => i.key === cursorAt.current)) {
+    const items = draft.items
+    cursorAt.current = undefined
+    for (let i = items.length - 1; i >= 0; i--) if ((items[i].block.type === 'p' || items[i].block.type === 'li') && items[i].block.text) { cursorAt.current = items[i].key; break }
+  }
+  const cursorKey = cursorAt.current
+
+  const goBack = () => (state.history.length ? back() : navigate(home))
+  const showPanel = (p: Panel) => (wide ? setPanel(p) : setSheet(p))
+  const showComment = (id: string, passive?: boolean) => {
+    setFocusComment(id)
+    if (wide) setPanel('comments')
+    else if (!passive) setSheet('comments')
+  }
+  const startComment = (anchor: string) => {
+    setNewAnchor(anchor)
+    setFocusComment(null)
+    showPanel('comments')
+  }
+
+  const copyMarkdown = () => {
+    const md = toMarkdown(title, toBlocks(draft.itemsRef.current))
+    const ok = () => toast('Copied as Markdown. PDF and Word export aren’t in the demo yet.')
+    try {
+      navigator.clipboard.writeText(md).then(ok, () => setMarkdown(md))
+    } catch {
+      setMarkdown(md)
+    }
+  }
+
+  const copyTo = copyDestination(state, doc)
+  const makeCopy = () => {
+    const clock = state.clock
+    const copyTitle = `Copy of ${title}`
+    const folder = copyTo
+    const folderId = folder?.id ?? null
+    const id = store.createDoc({ folderId, title: copyTitle, open: false })
+    store.updateDoc({
+      id, title: copyTitle, space: folder?.title ?? 'My Drive', folderId, ownerId: ME, editors: [ME], commenters: 'none',
+      updatedAt: clock, updatedBy: ME, lastOpenedAt: clock, presence: [], emoji: draft.emoji,
+      blocks: toBlocks(draft.itemsRef.current), comments: [],
+      versions: [{ id: newId('v'), authorId: ME, ts: clock, summary: `Copied from “${title}”` }],
+    })
+    toast(`Made “${copyTitle}” in ${folder?.title ?? 'My Drive'}`, { label: 'Open', route: { name: 'docs', docId: id } })
+  }
+
+  const moveToTrash = () => {
+    draft.leave()
+    store.trashItem(doc.id)
+    // Back to the Drive you came from; otherwise to the doc's folder, replacing the doc in
+    // history so Back doesn't reopen what you just trashed.
+    if (state.history[state.history.length - 1]?.name === 'drive') back()
+    else navigate(home, { replace: true })
+    toast(`Moved “${title}” to trash`, { label: 'View trash', route: { name: 'drive', view: 'trash' } })
+  }
+
+  // In the trash itself, or inside a folder that is. Restoring brings back whichever it is.
+  const trashedFolders = path.filter(f => f.trashed)
+  const inFolder = !doc.trashed && trashedFolders.length > 0
+  const canRestore = (doc.trashed ? doc.ownerId === ME || canEditItem(doc) : true) && trashedFolders.every(f => f.ownerId === ME || canEditItem(f))
+  const restore = () => {
+    if (doc.trashed) store.restoreItem(doc.id)
+    for (const f of trashedFolders) store.restoreItem(f.id)
+    toast(trashedFolders.length ? `Restored “${trashedFolders[0].title}” from trash` : 'Restored from trash')
+  }
+
+  const moreItems: MenuItem[] = [
+    ...(!desktop ? [{ id: 'star', label: doc.starred ? 'Remove from Starred' : 'Add to Starred', icon: doc.starred ? <StarOff size={17} /> : <Star size={17} />, onSelect: () => toggleStar(doc.id) }] : []),
+    { id: 'copy', label: 'Make a copy', note: `Saved in ${copyTo?.title ?? 'My Drive'}`, icon: <Copy size={17} />, onSelect: makeCopy },
+    { id: 'history', label: 'Version history', note: `${doc.versions.length} ${doc.versions.length === 1 ? 'version' : 'versions'}`, icon: <History size={17} />, onSelect: () => showPanel('history') },
+    { id: 'md', label: 'Copy as Markdown', note: 'PDF and Word export come later', icon: <ClipboardCopy size={17} />, onSelect: copyMarkdown },
+    { id: 'details', label: 'Details', icon: <Info size={17} />, onSelect: () => setDialog('details') },
+    {
+      id: 'trash', label: 'Move to trash', divider: true, danger: true, icon: <Trash2 size={17} />, disabled: !canTrash, onSelect: () => setDialog('trash'),
+      note: trashed ? 'Already in the trash' : canTrash ? 'You can restore it from Trash for 30 days' : `Only ${nameList(editorIds(doc))} can move this to trash`,
+    },
+  ]
+
+  // The block types apply to the line with the caret, so they wait until you've clicked into one.
+  const activeType = draft.items.find(i => i.key === active)?.block.type
+  const setType = (t: BlockType) => applyType(draft, active, t)
+  const typeHint = (t: BlockType) => (activeType ? typeLabels[t] : `${typeLabels[t]} (click a line first)`)
+  const at = editing ? active ?? undefined : undefined
+  const slashActions = assist.items().filter(i => !i.disabled).map(i => ({ id: `ai-${i.id}`, label: i.label, hint: '', icon: i.icon, run: (key: string) => assist.run(i.id as AssistKind, key) }))
+
+  const panelBody = (p: Panel) =>
+    p === 'comments' ? (
+      <Comments doc={doc} draft={draft} focus={focusComment} canComment={commentable} newAnchor={newAnchor} onDoneNew={() => setNewAnchor(null)} offReason={trashed ? 'Restore this doc from the trash to comment.' : undefined} />
+    ) : (
+      <Versions doc={doc} draft={draft} editable={editable} lockedReason={trashed ? 'Take this doc out of the trash to go back to a version.' : undefined} />
+    )
+
+  const blankNow = editable && assist.blank && !assist.busy
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <ScreenHeader
-        back={() => navigate({ name: 'docs' })}
-        leading={<span className="text-xl" aria-hidden>{doc.emoji ?? '📄'}</span>}
-        title={doc.title}
-        subtitle={<span>Docs <span aria-hidden>›</span> {doc.space}</span>}
-        actions={
-          !wide && (
-            <>
-              <IconButton label={`Comments (${openComments.length})`} onClick={() => setSheet('comments')} className="relative">
-                <MessageSquareText size={20} />
-                {openComments.length > 0 && <span className="absolute top-1 right-1 grid size-4 place-items-center rounded-full bg-accent text-[10px] font-bold text-accent-fg">{openComments.length}</span>}
-              </IconButton>
-              <IconButton label="Version history" onClick={() => setSheet('history')}><History size={20} /></IconButton>
-            </>
-          )
-        }
+    <div className="relative flex h-full min-h-0 flex-col">
+      <DocHeader
+        doc={doc} draft={draft} desktop={desktop} wide={wide} editable={editable} editing={editing} title={title} path={path} here={here}
+        onBack={goBack} onMode={switchMode} onShare={() => setDialog('share')} onComments={() => setSheet('comments')} onHistory={() => setSheet('history')} openComments={openComments.length}
+        moreOpen={menu === 'more'} onMore={() => setMenu(menu === 'more' ? null : 'more')} moreMenu={<Menu open={menu === 'more'} onClose={() => setMenu(null)} items={moreItems} title="More" popover={desktop} />}
+        trashed={trashed}
       />
+
+      {editing && desktop && (
+        <div className="flex items-center gap-2 border-b border-line bg-surface px-3 py-1.5 sm:px-4" role="toolbar" aria-label="Block type">
+          <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+            <IconButton label="Undo" title="Undo (Ctrl+Z)" className="size-8 text-muted hover:text-fg disabled:opacity-40" disabled={!draft.canUndo()} onMouseDown={e => e.preventDefault()} onClick={draft.undo}><Undo2 size={16} /></IconButton>
+            <IconButton label="Redo" title="Redo (Ctrl+Shift+Z)" className="size-8 text-muted hover:text-fg disabled:opacity-40" disabled={!draft.canRedo()} onMouseDown={e => e.preventDefault()} onClick={draft.redo}><Redo2 size={16} /></IconButton>
+            <span className="mx-1.5 h-5 w-px shrink-0 bg-line" aria-hidden />
+            {blockOrder.map(t => {
+              const Icon = typeIcons[t]
+              return (
+                <button
+                  key={t}
+                  aria-pressed={activeType === t}
+                  title={typeHint(t)}
+                  aria-label={typeLabels[t]}
+                  disabled={!activeType}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => setType(t)}
+                  className={cx('inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-[13px] font-medium transition disabled:opacity-40 disabled:hover:bg-transparent', activeType === t ? 'bg-accent-soft text-accent-ink' : 'text-muted hover:bg-surface-2 hover:text-fg')}
+                >
+                  <Icon size={16} aria-hidden /><span className="hidden xl:inline">{typeLabels[t]}</span>
+                </button>
+              )
+            })}
+            <span className="mx-1.5 h-5 w-px shrink-0 bg-line" aria-hidden />
+            <button
+              onMouseDown={e => e.preventDefault()}
+              disabled={!selection}
+              onClick={() => selection && startComment(selection.text)}
+              title={selection ? `Comment on “${selection.text}”` : 'Select text to comment on it'}
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-[13px] font-medium text-muted transition hover:bg-surface-2 hover:text-fg disabled:opacity-40 disabled:hover:bg-transparent"
+            >
+              <MessageSquarePlus size={16} aria-hidden /><span className="hidden lg:inline">Comment</span>
+            </button>
+          </div>
+          <div className="relative shrink-0">
+            <Button size="sm" variant="agent" icon={<Sparkles size={14} />} onMouseDown={e => e.preventDefault()} onClick={() => setMenu(menu === 'assist-toolbar' ? null : 'assist-toolbar')} aria-expanded={menu === 'assist-toolbar'}>Help me write</Button>
+            <Menu open={menu === 'assist-toolbar'} onClose={() => setMenu(null)} items={assist.items(at)} title="Help me write" popover />
+          </div>
+        </div>
+      )}
+
       <div className="flex min-h-0 flex-1">
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-[68ch] px-5 py-5 sm:px-8 sm:py-8">
-            <MetaBar doc={doc} canEdit={canEdit} onPermissions={() => setPermOpen(true)} />
-            <DocBody doc={doc} canEdit={canEdit} onAnchor={showComment} focusComment={focusComment} />
-            {canEdit && <AIDraft doc={doc} />}
+        <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
+          <div className={cx('mx-auto w-full max-w-[68ch] px-5 pt-5 sm:px-8 sm:pt-8', editable && !editing && !desktop ? 'pb-28' : 'pb-16')}>
+            {trashed && (
+              <div className="mb-5 flex flex-wrap items-center gap-3 rounded-2xl bg-rec-soft px-4 py-3 text-sm">
+                <Trash2 size={16} className="shrink-0 text-rec" aria-hidden />
+                <span className="min-w-0 flex-1 basis-56">
+                  {inFolder ? `This doc is in “${trashedFolders[0].title}”, which is in the trash.` : 'This doc is in the trash.'}
+                  {canRestore ? ` Restore ${inFolder ? 'the folder' : 'it'} to edit or comment.` : ` Only ${inFolder ? byName(trashedFolders[0].ownerId) : nameList(editorIds(doc))} can restore it.`}
+                </span>
+                {canRestore && <Button size="sm" variant="secondary" icon={<Undo2 size={14} />} onClick={restore}>{inFolder ? 'Restore folder' : 'Restore'}</Button>}
+              </div>
+            )}
+            <MetaBar doc={doc} editable={editable} trashed={trashed} commentable={commentable} here={here} onPermissions={() => setDialog('perm')} untouched={!SEED_IDS.has(doc.id) && doc.versions.length === 1 && !draft.savedOnce && !draft.saving} />
+            <Editor
+              doc={doc}
+              draft={draft}
+              mode={editing ? 'edit' : 'view'}
+              editable={editable}
+              commentable={commentable}
+              cursor={cursorBy && cursorKey ? { key: cursorKey, personId: cursorBy } : undefined}
+              focusComment={focusComment}
+              onAnchor={showComment}
+              onActive={setActive}
+              onSelectText={setSelection}
+              onComment={startComment}
+              slashActions={slashActions}
+              afterTitle={assist.slot('top')}
+              afterBlock={assist.afterBlock()}
+              end={
+                <>
+                  {assist.slot('body')}
+                  {assist.endSlot()}
+                  {blankNow ? (
+                    <BlankStart draft={draft} onApplied={() => setMode('edit')} onMeeting={() => assist.run('meeting')} />
+                  ) : !assist.busy && !trashed && (
+                    <div className="mt-12 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-5 font-sans">
+                      <div className="relative">
+                        <Button variant="agent" icon={<Sparkles size={15} />} onClick={() => (editable ? setMenu(menu === 'assist-footer' ? null : 'assist-footer') : assist.run('summary'))} aria-expanded={menu === 'assist-footer'}>
+                          {editable ? 'Help me write' : 'Summarise this doc'}
+                        </Button>
+                        <Menu open={menu === 'assist-footer'} onClose={() => setMenu(null)} items={assist.items()} title="Help me write" popover={desktop} align="left" side="above" />
+                      </div>
+                      <p className="min-w-0 flex-1 basis-56 text-xs text-muted">
+                        {editable ? 'Drafts and summaries from what you can open. Nothing goes in until you insert it.' : 'A short summary built from this doc’s own text, to read or copy.'}
+                      </p>
+                    </div>
+                  )}
+                </>
+              }
+            />
           </div>
         </div>
         {wide && (
-          <aside className="flex w-[360px] shrink-0 flex-col border-l border-line bg-surface">
+          <aside className="flex w-[360px] shrink-0 flex-col border-l border-line bg-surface" aria-label="Comments and history">
             <div className="border-b border-line px-4 py-3">
-              <Segmented
-                value={panel}
-                onChange={setPanel}
-                options={[
-                  { value: 'comments', label: `Comments · ${openComments.length}` },
-                  { value: 'history', label: 'History' },
-                ]}
-              />
+              <Segmented value={panel} onChange={setPanel} options={[{ value: 'comments', label: `Comments · ${openComments.length}` }, { value: 'history', label: 'Version history' }]} />
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-              {panel === 'comments' ? <Comments doc={doc} focus={focusComment} /> : <Versions doc={doc} />}
-            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">{panelBody(panel)}</div>
           </aside>
         )}
       </div>
 
+      {!desktop && editing && (
+        <div className="flex items-center gap-1 border-t border-line bg-surface px-1.5 py-1.5" style={{ marginBottom: inset }} role="toolbar" aria-label="Block type">
+          {/* The buttons share the width, so the bar fits from 320 px up without hiding Done. */}
+          <div className="flex min-w-0 flex-1 items-center">
+            {blockOrder.map(t => {
+              const Icon = typeIcons[t]
+              return (
+                <button
+                  key={t}
+                  aria-label={typeLabels[t]}
+                  title={typeHint(t)}
+                  aria-pressed={activeType === t}
+                  disabled={!activeType}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => setType(t)}
+                  className={cx('grid h-9 max-w-10 min-w-7 flex-1 place-items-center rounded-full transition disabled:opacity-40', activeType === t ? 'bg-surface-2 text-accent-ink' : 'hover:bg-surface-2')}
+                >
+                  <Icon size={19} aria-hidden />
+                </button>
+              )
+            })}
+            <span className="mx-0.5 h-6 w-px shrink-0 bg-line" aria-hidden />
+            <button aria-label="Help me write" title="Help me write" onMouseDown={e => e.preventDefault()} onClick={() => setMenu('assist-bar')} className="grid h-9 max-w-10 min-w-7 flex-1 place-items-center rounded-full text-agent transition hover:bg-surface-2">
+              <Sparkles size={19} aria-hidden />
+            </button>
+          </div>
+          <Button size="sm" variant="primary" icon={<Check size={15} />} className="shrink-0 max-[359px]:px-2.5" onClick={() => { (document.activeElement as HTMLElement | null)?.blur(); setMode('view') }}>
+            <span className="max-[359px]:sr-only">Done</span>
+          </Button>
+          <Menu open={menu === 'assist-bar'} onClose={() => setMenu(null)} items={assist.items(at)} title="Help me write" popover={false} />
+        </div>
+      )}
+      {!desktop && editable && !editing && (
+        <button
+          onClick={() => switchMode('edit')}
+          className="absolute right-4 bottom-5 z-20 inline-flex h-14 items-center gap-2 rounded-full bg-accent pr-5 pl-4 font-semibold text-accent-fg shadow-card transition active:brightness-95"
+        >
+          <Pencil size={19} aria-hidden /> Edit
+        </button>
+      )}
+
       {!wide && (
-        <Sheet open={sheet !== null} onClose={() => setSheet(null)} title={sheet === 'history' ? 'Version history' : `Comments · ${openComments.length}`}>
-          {sheet === 'history' ? <Versions doc={doc} /> : <Comments doc={doc} focus={focusComment} />}
+        <Sheet open={sheet !== null} onClose={() => { setSheet(null); setNewAnchor(null) }} title={sheet === 'history' ? 'Version history' : `Comments · ${openComments.length}`}>
+          {sheet && panelBody(sheet)}
         </Sheet>
       )}
-      <PermissionsSheet open={permOpen} onClose={() => setPermOpen(false)} doc={doc} />
+      {assist.pickerSheet}
+      <ShareDialog itemId={doc.id} open={dialog === 'share'} onClose={() => setDialog(null)} />
+      <PermissionsSheet open={dialog === 'perm'} onClose={() => setDialog(null)} doc={doc} onShare={() => setDialog('share')} />
+      <DetailsSheet open={dialog === 'details'} onClose={() => setDialog(null)} doc={doc} draft={draft} />
+      <Sheet
+        open={dialog === 'trash'}
+        onClose={() => setDialog(null)}
+        title="Move to trash?"
+        footer={<><Button variant="ghost" onClick={() => setDialog(null)}>Cancel</Button><Button variant="danger" icon={<Trash2 size={15} />} onClick={() => { setDialog(null); moveToTrash() }}>Move to trash</Button></>}
+      >
+        <p className="text-sm">“{title}” moves to Trash in Drive. Anyone it’s shared with loses access until it’s restored. Items in the trash are deleted after 30 days.</p>
+      </Sheet>
+      <Sheet open={markdown !== null} onClose={() => setMarkdown(null)} title="Copy as Markdown">
+        <p className="mb-2 text-sm text-muted">Your browser didn’t allow copying from here. Select the text below and copy it.</p>
+        <label htmlFor="md-out" className="sr-only">Markdown</label>
+        <textarea id="md-out" readOnly value={markdown ?? ''} rows={12} onFocus={e => e.currentTarget.select()} className="w-full resize-none rounded-xl bg-surface-2 p-3 font-mono text-xs outline-none focus:ring-2 focus:ring-accent" />
+      </Sheet>
     </div>
   )
 }
 
-function permissionLine(doc: Doc) {
-  const editors = doc.editors
-  const who = names(editors.includes(ME) ? [...editors.filter(id => id !== ME), ME] : editors)
-  const comment = doc.commenters === 'team' ? 'team can comment' : doc.commenters === 'org' ? 'everyone can comment' : 'no comments'
-  return `Only ${who} can edit · ${comment}`
-}
+// ── Header ──────────────────────────────────────────────────────────────────
+function DocHeader(p: {
+  doc: Doc; draft: DocDraft; desktop: boolean; wide: boolean; editable: boolean; editing: boolean; title: string; path: { id: string; title: string }[]; here: string[]
+  onBack: () => void; onMode: (m: 'edit' | 'view') => void; onShare: () => void; onComments: () => void; onHistory: () => void; openComments: number
+  moreOpen: boolean; onMore: () => void; moreMenu: ReactNode; trashed: boolean
+}) {
+  const { doc, draft, desktop, editable, editing, path, here } = p
+  const { navigate, toggleStar } = useStore()
+  const titleRef = useRef<HTMLInputElement>(null)
+  const crumbs: { label: string; route: Route }[] = [
+    { label: 'Drive', route: { name: 'drive' } },
+    ...(path.length ? path.map(f => ({ label: f.title, route: { name: 'drive', folderId: f.id } as Route })) : [{ label: doc.ownerId === ME ? 'My Drive' : 'Shared with me', route: { name: 'drive', view: doc.ownerId === ME ? 'my' : 'shared' } as Route }]),
+  ]
+  const shown = !desktop && crumbs.length > 2 ? [crumbs[0], { label: '…', route: crumbs[crumbs.length - 2].route }, crumbs[crumbs.length - 1]] : crumbs
+  const saveState = p.trashed ? (
+    <span className="inline-flex shrink-0 items-center gap-1 text-rec"><Trash2 size={12} aria-hidden />In trash</span>
+  ) : !editable ? (
+    <span className="inline-flex shrink-0 items-center gap-1"><Eye size={12} aria-hidden />View only</span>
+  ) : draft.saving ? (
+    <span className="inline-flex shrink-0 items-center gap-1" aria-live="polite"><CloudUpload size={13} className="anim-pulse" aria-hidden />Saving…</span>
+  ) : (
+    <span className="inline-flex shrink-0 items-center gap-1" aria-live="polite"><CloudCheck size={13} aria-hidden />Saved to Drive</span>
+  )
+  const titleEl = editable ? (
+    <>
+      <label htmlFor="doc-title" className="sr-only">Doc title</label>
+      <input
+        id="doc-title"
+        ref={titleRef}
+        value={draft.title}
+        placeholder={UNTITLED}
+        size={Math.max(10, draft.title.length + 1)}
+        onChange={e => draft.setTitle(e.target.value)}
+        onKeyDown={e => {
+          if (e.key !== 'Enter' && e.key !== 'Escape') return
+          e.preventDefault()
+          // Enter carries on into the doc, like Google Docs; Escape just leaves the title.
+          const items = draft.itemsRef.current
+          const next = e.key === 'Enter' && editing ? (items[0]?.block.type === 'h1' ? items[1] : items[0]) : undefined
+          if (next) draft.focus({ key: next.key, caret: 0 })
+          else titleRef.current?.blur()
+        }}
+        className={cx('-ml-1.5 max-w-full min-w-0 truncate rounded-md bg-transparent px-1.5 py-0.5 font-display font-semibold outline-none [field-sizing:content] placeholder:text-muted hover:bg-surface-2 focus:bg-surface-2 focus:ring-2 focus:ring-accent', desktop ? 'text-lg' : 'w-full text-[17px]')}
+      />
+    </>
+  ) : (
+    <h1 className={cx('truncate font-display font-semibold', desktop ? 'text-lg' : 'text-[17px]')}>{p.title}</h1>
+  )
+  const crumbLine = (
+    <nav aria-label="Location" className="flex min-w-0 items-center gap-1 text-xs text-muted">
+      <span className="flex min-w-0 items-center gap-1 truncate">
+        {shown.map((c, i) => (
+          <span key={i} className={cx('flex items-center gap-1', i === shown.length - 1 ? 'min-w-0' : 'shrink-0')}>
+            {i > 0 && <span aria-hidden>›</span>}
+            <button onClick={() => navigate(c.route)} className="truncate rounded hover:text-fg hover:underline" title={c.label === '…' ? crumbs.slice(1, -1).map(x => x.label).join(' › ') : undefined}>{c.label}</button>
+          </span>
+        ))}
+      </span>
+      <span aria-hidden>·</span>
+      {saveState}
+    </nav>
+  )
+  const comments = (
+    <IconButton label={`Comments (${p.openComments})`} onClick={p.onComments} className="relative">
+      <MessageSquareText size={20} />
+      {p.openComments > 0 && <span className="absolute top-1 right-1 grid size-4 place-items-center rounded-full bg-accent text-[10px] font-bold text-accent-fg">{p.openComments}</span>}
+    </IconButton>
+  )
+  const more = (
+    <div className="relative">
+      <IconButton label="More" aria-expanded={p.moreOpen} active={p.moreOpen} onClick={p.onMore}><Ellipsis size={20} /></IconButton>
+      {p.moreMenu}
+    </div>
+  )
 
-function MetaBar({ doc, canEdit, onPermissions }: { doc: Doc; canEdit: boolean; onPermissions: () => void }) {
-  const here = doc.presence.filter(id => id !== ME)
-  const editedBy = doc.versions[0]?.authorId ?? doc.ownerId
+  if (!desktop) {
+    return (
+      <header className="flex min-h-14 items-center gap-0.5 border-b border-line bg-surface py-1.5 pr-1 pl-1">
+        <IconButton label="Back" onClick={p.onBack}><ArrowLeft size={20} /></IconButton>
+        <div className="min-w-0 flex-1 pl-0.5">
+          {titleEl}
+          {crumbLine}
+        </div>
+        {comments}
+        <IconButton label="Share" onClick={p.onShare}><UserPlus size={20} /></IconButton>
+        {more}
+      </header>
+    )
+  }
   return (
-    <div className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line pb-4 text-xs text-muted">
+    <header className="flex min-h-16 items-center gap-2 border-b border-line bg-surface px-2 py-2 sm:px-4">
+      <IconButton label="Back" onClick={p.onBack}><ArrowLeft size={20} /></IconButton>
+      <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-surface-2 text-xl" aria-hidden>{draft.emoji}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-0.5">
+          {titleEl}
+          <IconButton label={doc.starred ? 'Remove from Starred' : 'Add to Starred'} className="size-8" onClick={() => toggleStar(doc.id)}>
+            <Star size={17} className={doc.starred ? 'fill-current text-warn' : 'text-muted'} />
+          </IconButton>
+        </div>
+        {crumbLine}
+      </div>
       {here.length > 0 && (
-        <span className="flex items-center gap-2">
-          <AvatarStack ids={here} max={3} size="xs" />
-          <span><span className="text-fg">{cap(names(here))}</span> {here.length === 1 ? 'is' : 'are'} here</span>
+        <span className="hidden items-center gap-2 lg:flex" title={`${cap(nameList(here))} ${here.length === 1 ? 'is' : 'are'} here`}>
+          <AvatarStack ids={here} max={3} size="sm" />
         </span>
       )}
-      <button onClick={onPermissions} className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 font-medium text-fg transition hover:bg-line">
-        {canEdit ? <Pencil size={12} className="shrink-0" aria-hidden /> : <Lock size={12} className="shrink-0" aria-hidden />}
-        <span className="truncate">{permissionLine(doc)}</span>
-      </button>
-      <span>Edited {stamp(doc.updatedAt)} by {editedBy === ME ? 'you' : personName(editedBy)}</span>
-    </div>
+      {editable && (
+        <Segmented
+          value={editing ? 'edit' : 'view'}
+          onChange={p.onMode}
+          options={[
+            { value: 'edit', label: <span className="inline-flex items-center gap-1.5" title="Editing"><Pencil size={13} aria-hidden /><span className="sr-only lg:not-sr-only">Editing</span></span> },
+            { value: 'view', label: <span className="inline-flex items-center gap-1.5" title="Viewing"><Eye size={13} aria-hidden /><span className="sr-only lg:not-sr-only">Viewing</span></span> },
+          ]}
+        />
+      )}
+      {!p.wide && comments}
+      {!p.wide && <IconButton label="Version history" onClick={p.onHistory}><History size={20} /></IconButton>}
+      <Button size="sm" variant="primary" icon={doc.access === 'restricted' || !doc.access ? <Lock size={14} /> : <Users size={14} />} onClick={p.onShare}>Share</Button>
+      {more}
+    </header>
   )
 }
 
-/** Splits text around comment anchors so they can be highlighted. */
-function withAnchors(text: string, comments: DocComment[], onAnchor: (id: string) => void, focus: string | null): ReactNode {
-  const hit = comments.find(c => !c.resolved && text.includes(c.anchor))
-  if (!hit) return text
-  const i = text.indexOf(hit.anchor)
-  return (
-    <>
-      {text.slice(0, i)}
-      <button
-        onClick={() => onAnchor(hit.id)}
-        aria-label={`Comment from ${personName(hit.authorId)} on “${hit.anchor}”`}
-        className={cx('inline rounded-sm border-b-2 border-warn bg-warn-soft px-0.5 text-left text-inherit [box-decoration-break:clone] transition hover:brightness-95', focus === hit.id && 'ring-2 ring-warn')}
-      >
-        {hit.anchor}
-      </button>
-      {withAnchors(text.slice(i + hit.anchor.length), comments.filter(c => c.id !== hit.id), onAnchor, focus)}
-    </>
-  )
-}
-
-function LiveCursor({ personId }: { personId: string }) {
-  const p = personById[personId]
-  if (!p) return null
-  const color = `oklch(0.58 0.12 ${p.hue})`
-  return (
-    <span className="whitespace-nowrap" aria-label={`${p.short} is editing here`}>
-      <span className="ml-0.5 inline-block h-[1.1em] w-0.5 translate-y-[0.2em] anim-pulse" style={{ background: color }} aria-hidden />
-      <span className="ml-0.5 rounded px-1 py-px align-[0.15em] text-[10px] leading-none font-semibold text-white" style={{ background: color }} aria-hidden>{p.short}</span>
+// ── Presence, permissions and who last edited ──────────────────────────────
+function MetaBar({ doc, editable, trashed, commentable, here, onPermissions, untouched }: { doc: Doc; editable: boolean; trashed: boolean; commentable: boolean; here: string[]; onPermissions: () => void; untouched: boolean }) {
+  const { toast } = useStore()
+  const [asked, setAsked] = useState(requested.has(doc.id))
+  const editedBy = doc.updatedBy ?? doc.versions[0]?.authorId ?? doc.ownerId
+  const presence = here.length > 0 && (
+    <span className="flex items-center gap-2">
+      <AvatarStack ids={here} max={3} size="xs" />
+      <span><span className="text-fg">{cap(nameList(here))}</span> {here.length === 1 ? 'is' : 'are'} here</span>
     </span>
   )
-}
-
-function DocBody({ doc, canEdit, onAnchor, focusComment }: { doc: Doc; canEdit: boolean; onAnchor: (id: string) => void; focusComment: string | null }) {
-  const { updateDoc } = useStore()
-  // A simulated live cursor for the first other person here, parked in the body.
-  const cursorBy = doc.presence.find(id => id !== ME)
-  const [cursorAt] = useState(() => (cursorBy ? lastIndex(doc.blocks, b => b.type === 'p' || b.type === 'li') : -1))
-  const toggle = (i: number) => {
-    updateDoc({ ...doc, blocks: doc.blocks.map((b, j) => (j === i ? { ...b, done: !b.done } : b)) })
-  }
-
-  const items: ReactNode[] = []
-  doc.blocks.forEach((b, i) => {
-    const content = (
-      <>
-        {withAnchors(b.text, doc.comments, onAnchor, focusComment)}
-        {i === cursorAt && cursorBy && <LiveCursor personId={cursorBy} />}
-      </>
-    )
-    items.push(<Fragment key={i}>{renderBlock(b, i, content, canEdit, toggle)}</Fragment>)
-  })
-  return <article className="flex flex-col gap-3 text-[16px] leading-relaxed">{items}</article>
-}
-
-function lastIndex<T>(arr: T[], fn: (x: T) => boolean) {
-  for (let i = arr.length - 1; i >= 0; i--) if (fn(arr[i])) return i
-  return -1
-}
-
-function renderBlock(b: DocBlock, i: number, content: ReactNode, canEdit: boolean, toggle: (i: number) => void) {
-  switch (b.type) {
-    case 'h1':
-      return <h2 className="font-display text-3xl leading-tight font-semibold">{content}</h2>
-    case 'h2':
-      return <h3 className="mt-4 font-display text-xl font-semibold">{content}</h3>
-    case 'p':
-      return <p>{content}</p>
-    case 'li':
-      return <p className="flex gap-3 pl-1"><span className="mt-[0.7em] size-1.5 shrink-0 rounded-full bg-fg" aria-hidden /><span className="min-w-0">{content}</span></p>
-    case 'quote':
-      return <blockquote className="border-l-4 border-accent py-1 pl-4 text-muted italic">{content}</blockquote>
-    case 'todo':
-      return (
-        <div className="flex items-start gap-3">
-          <button
-            role="checkbox"
-            aria-checked={!!b.done}
-            aria-label={b.text}
-            disabled={!canEdit}
-            title={canEdit ? undefined : 'Only editors can tick this'}
-            onClick={() => toggle(i)}
-            className={cx('mt-1 grid size-5 shrink-0 place-items-center rounded-md border-2 transition disabled:cursor-not-allowed', b.done ? 'border-ok bg-ok text-white' : 'border-muted', canEdit && !b.done && 'hover:border-accent')}
-          >
-            {b.done && <Check size={13} strokeWidth={3} />}
-          </button>
-          <span className={cx('min-w-0', b.done && 'text-muted line-through')}>{content}</span>
-        </div>
-      )
-  }
-}
-
-// ── AI draft (DOC-09) ─────────────────────────────────────────────────────────
-function AIDraft({ doc }: { doc: Doc }) {
-  const { state: store, updateDoc, toast } = useStore()
-  const [state, setState] = useState<'idle' | 'thinking' | 'shown'>('idle')
-  const draft = aiDrafts[doc.id]
-  useEffect(() => {
-    if (state !== 'thinking') return
-    const t = window.setTimeout(() => setState('shown'), 900)
-    return () => clearTimeout(t)
-  }, [state])
-
-  if (state === 'idle') {
+  const edited = <span>{untouched ? 'Created' : 'Edited'} {stamp(doc.updatedAt)} by {byName(editedBy)}</span>
+  if (!editable && !trashed) {
+    const owner = fullName(doc.ownerId)
     return (
-      <div className="mt-8 border-t border-line pt-5">
-        <Button variant="agent" icon={<Sparkles size={15} />} onClick={() => setState('thinking')}>Ask AI to draft</Button>
-        <p className="mt-2 text-xs text-muted">Suggests a paragraph from what you can open. Nothing goes in until you insert it.</p>
-      </div>
-    )
-  }
-
-  if (state === 'thinking') {
-    return (
-      <div className="mt-8 flex items-center gap-2 border-t border-line pt-5 text-sm text-muted" aria-live="polite">
-        <Sparkles size={15} className="text-agent anim-pulse" aria-hidden /> Drafting from your messages, meetings and docs…
-      </div>
-    )
-  }
-
-  const text = draft?.text ?? 'I couldn’t find enough in the messages, meetings and docs you can open to draft something useful here. Try adding a heading first.'
-  return (
-    <div className="anim-in mt-8 rounded-2xl border border-agent/30 bg-agent-soft/40 p-4" aria-live="polite">
-      <div className="mb-2 flex items-center gap-2">
-        <AIMarker label="Suggested paragraph" />
-      </div>
-      <p className="mb-3 leading-relaxed">{text}</p>
-      {draft && <div className="mb-3"><SourceChips sources={draft.sources} /></div>}
-      <div className="flex flex-wrap gap-2">
-        {draft && (
-          <Button size="sm" variant="primary" icon={<Check size={14} />} onClick={() => {
-            updateDoc({
-              ...doc,
-              updatedAt: store.clock,
-              blocks: [...doc.blocks, { type: 'p', text: draft.text }],
-              versions: [{ id: newId('v'), authorId: ME, ts: store.clock, summary: 'Added a paragraph drafted with AI', added: [draft.text] }, ...doc.versions],
-            })
-            setState('idle')
-            toast('Paragraph inserted at the end of the doc')
-          }}>Insert</Button>
-        )}
-        <Button size="sm" variant="ghost" onClick={() => setState('idle')}>Discard</Button>
-      </div>
-    </div>
-  )
-}
-
-// ── Comments (DOC-05) ─────────────────────────────────────────────────────────
-function Comments({ doc, focus }: { doc: Doc; focus: string | null }) {
-  const [showResolved, setShowResolved] = useState(false)
-  const open = doc.comments.filter(c => !c.resolved)
-  const resolved = doc.comments.filter(c => c.resolved)
-  if (!doc.comments.length) {
-    return <EmptyState icon={<MessageSquare size={26} />} title="No comments" body={doc.commenters === 'none' ? 'Comments are off for this doc.' : 'Comments on this doc will show here.'} />
-  }
-  return (
-    <div className="flex flex-col gap-3">
-      {open.map(c => <CommentCard key={c.id} doc={doc} c={c} focused={focus === c.id} />)}
-      {!open.length && <p className="py-4 text-center text-sm text-muted">All comments are resolved.</p>}
-      {resolved.length > 0 && (
-        <>
-          <Button size="sm" variant="ghost" className="self-start" onClick={() => setShowResolved(s => !s)}>
-            {showResolved ? 'Hide' : 'Show'} resolved ({resolved.length})
-          </Button>
-          {showResolved && resolved.map(c => <CommentCard key={c.id} doc={doc} c={c} focused={false} />)}
-        </>
-      )}
-    </div>
-  )
-}
-
-function CommentCard({ doc, c, focused }: { doc: Doc; c: DocComment; focused: boolean }) {
-  const { state, updateDoc, toast } = useStore()
-  const [reply, setReply] = useState('')
-  const update = (next: DocComment) => updateDoc({ ...doc, comments: doc.comments.map(x => (x.id === c.id ? next : x)) })
-  return (
-    <Card className={cx('flex flex-col gap-2 p-3', focused && 'ring-2 ring-warn', c.resolved && 'opacity-70')}>
-      <p className="truncate border-l-2 border-warn pl-2 text-xs text-muted">“{c.anchor}”</p>
-      <div className="flex items-start gap-2">
-        <Avatar id={c.authorId} size="sm" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm"><span className="font-semibold">{personName(c.authorId)}</span> <span className="text-xs text-muted">{stamp(c.ts)}</span></p>
-          <p className="text-sm">{c.text}</p>
-        </div>
-      </div>
-      {c.replies?.map((r, i) => (
-        <div key={i} className="ml-9 flex items-start gap-2">
-          <Avatar id={r.authorId} size="xs" className="mt-0.5" />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm"><span className="font-semibold">{r.authorId === ME ? 'You' : personName(r.authorId)}</span> <span className="text-xs text-muted">{stamp(r.ts)}</span></p>
-            <p className="text-sm">{r.text}</p>
+      <div className="mb-6 flex flex-col gap-3 border-b border-line pb-4">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-line bg-surface px-3.5 py-2.5">
+          <Eye size={16} className="shrink-0 text-muted" aria-hidden />
+          <div className="min-w-0 flex-1 basis-48">
+            <button onClick={onPermissions} className="text-left text-sm font-medium hover:underline">View only · {cap(nameList(editorIds(doc)))} can edit</button>
+            <p className="text-xs text-muted">{commentable ? 'You can read and comment.' : 'You can read this doc.'}</p>
           </div>
-        </div>
-      ))}
-      {!c.resolved ? (
-        <div className="flex flex-col gap-2 pt-1">
-          <form
-            className="flex items-center gap-1 rounded-full bg-surface-2 py-0.5 pr-0.5 pl-3 focus-within:ring-2 focus-within:ring-accent"
-            onSubmit={e => {
-              e.preventDefault()
-              if (!reply.trim()) return
-              update({ ...c, replies: [...(c.replies ?? []), { authorId: ME, text: reply.trim(), ts: state.clock }] })
-              setReply('')
+          <Button
+            size="sm"
+            variant={asked ? 'ghost' : 'secondary'}
+            disabled={asked}
+            icon={asked ? <Check size={14} /> : <Pencil size={14} />}
+            onClick={() => {
+              requested.add(doc.id)
+              setAsked(true)
+              toast(`Edit access requested from ${owner}`)
             }}
           >
-            <label htmlFor={`reply-${c.id}`} className="sr-only">Reply to {personName(c.authorId)}</label>
-            <input id={`reply-${c.id}`} value={reply} onChange={e => setReply(e.target.value)} placeholder="Reply…" className="min-w-0 flex-1 bg-transparent py-1.5 text-sm outline-none placeholder:text-muted" />
-            <IconButton label="Send reply" type="submit" className="size-8" disabled={!reply.trim()}><Send size={15} /></IconButton>
-          </form>
-          <Button size="sm" variant="ghost" className="self-start" icon={<CheckCircle2 size={14} />} onClick={() => { update({ ...c, resolved: true }); toast('Comment resolved') }}>Resolve</Button>
+            {asked ? 'Edit access requested' : 'Request edit access'}
+          </Button>
         </div>
-      ) : (
-        <Button size="sm" variant="ghost" className="self-start" icon={<RotateCcw size={14} />} onClick={() => update({ ...c, resolved: false })}>Reopen</Button>
-      )}
-    </Card>
-  )
-}
-
-// ── Version history (DOC-04) ──────────────────────────────────────────────────
-function Versions({ doc }: { doc: Doc }) {
-  const { toast } = useStore()
-  const [sel, setSel] = useState<string>(doc.versions[0]?.id ?? '')
-  const v = doc.versions.find(x => x.id === sel)
-  return (
-    <div className="flex flex-col gap-4">
-      <ul className="flex flex-col gap-1">
-        {doc.versions.map((x, i) => (
-          <li key={x.id}>
-            <button
-              aria-pressed={sel === x.id}
-              onClick={() => setSel(x.id)}
-              className={cx('flex w-full items-start gap-2.5 rounded-xl px-2 py-2 text-left transition', sel === x.id ? 'bg-accent-soft' : 'hover:bg-surface-2')}
-            >
-              <Avatar id={x.authorId} size="sm" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{x.summary}</span>
-                <span className="block text-xs text-muted">{personName(x.authorId)} · {shortDay(x.ts)}, {clock(x.ts)}</span>
-              </span>
-              {i === 0 && <Pill tone="ok">Current</Pill>}
-            </button>
-          </li>
-        ))}
-      </ul>
-      {v && <Diff v={v} isCurrent={v.id === doc.versions[0]?.id} onRestore={() => toast('Restored as a new version')} />}
-    </div>
-  )
-}
-
-function Diff({ v, isCurrent, onRestore }: { v: DocVersion; isCurrent: boolean; onRestore: () => void }) {
-  const has = (v.added?.length ?? 0) + (v.removed?.length ?? 0) > 0
-  return (
-    <div className="flex flex-col gap-2 border-t border-line pt-4">
-      <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-muted">Changes in this version</p>
-      {!has && <p className="text-sm text-muted">{v.summary}. No earlier version to compare with.</p>}
-      {v.removed?.map((l, i) => (
-        <p key={`r${i}`} className="rounded-lg bg-rec-soft px-2.5 py-1.5 text-sm text-fg line-through decoration-rec"><span className="sr-only">Removed: </span>{l}</p>
-      ))}
-      {v.added?.map((l, i) => (
-        <p key={`a${i}`} className="rounded-lg bg-ok-soft px-2.5 py-1.5 text-sm text-fg"><span className="sr-only">Added: </span>{l}</p>
-      ))}
-      {!isCurrent ? (
-        <Button size="sm" variant="secondary" className="mt-1 self-start" icon={<RotateCcw size={14} />} onClick={onRestore}>Restore this version</Button>
-      ) : (
-        <p className="mt-1 flex items-center gap-1.5 text-xs text-muted"><Eye size={13} aria-hidden />You’re looking at this version now.</p>
-      )}
-    </div>
-  )
-}
-
-// ── Permissions (DOC-03) ──────────────────────────────────────────────────────
-function PermissionsSheet({ open, onClose, doc }: { open: boolean; onClose: () => void; doc: Doc }) {
-  const roleOf = (id: string) => (id === doc.ownerId ? 'Owner' : doc.editors.includes(id) ? 'Editor' : 'Commenter')
-  const people = [...new Set([doc.ownerId, ...doc.editors])]
-  const roles = [
-    { name: 'Owner', body: 'Edits, comments, shares and decides who else can edit.' },
-    { name: 'Editor', body: 'Edits and comments. Can’t change who has access.' },
-    { name: 'Commenter', body: 'Reads and comments, but can’t change the text.' },
-    { name: 'Viewer', body: 'Reads only.' },
-  ]
-  return (
-    <Sheet open={open} onClose={onClose} title="Who can do what">
-      <div className="flex flex-col gap-5">
-        <p className="text-sm">{permissionLine(doc)}.</p>
-        <ul className="flex flex-col divide-y divide-line border-y border-line">
-          {people.map(id => (
-            <li key={id} className="flex items-center gap-3 py-2">
-              <Avatar id={id} size="sm" />
-              <span className="min-w-0 flex-1 truncate text-sm">{id === ME ? 'You' : personName(id)}</span>
-              <Pill tone={roleOf(id) === 'Owner' ? 'accent' : 'neutral'}>{roleOf(id)}</Pill>
-            </li>
-          ))}
-          <li className="flex items-center gap-3 py-2">
-            <span className="grid size-7 shrink-0 place-items-center rounded-full bg-surface-2 text-muted"><Users size={14} /></span>
-            <span className="min-w-0 flex-1 truncate text-sm">{doc.commenters === 'team' ? `Everyone in ${doc.space}` : 'Everyone at Tembusu Logistics'}</span>
-            <Pill>{doc.commenters === 'none' ? 'Viewer' : 'Commenter'}</Pill>
-          </li>
-        </ul>
-        <div>
-          <SectionTitle>Roles</SectionTitle>
-          <dl className="flex flex-col gap-2 text-sm">
-            {roles.map(r => (
-              <div key={r.name} className="flex gap-3">
-                <dt className="w-24 shrink-0 font-semibold">{r.name}</dt>
-                <dd className="min-w-0 text-muted">{r.body}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted">{presence}{edited}</div>
       </div>
-    </Sheet>
+    )
+  }
+  return (
+    <div className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line pb-4 text-xs text-muted">
+      {presence}
+      <button onClick={onPermissions} className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 font-medium text-fg transition hover:bg-line">
+        {editable ? <Pencil size={12} className="shrink-0" aria-hidden /> : <Lock size={12} className="shrink-0" aria-hidden />}
+        <span className="truncate">{permissionLine(doc)}</span>
+      </button>
+      {edited}
+    </div>
   )
 }
