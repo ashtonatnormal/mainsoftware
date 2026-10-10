@@ -75,7 +75,7 @@ const TRASH_W = 'w-[84px] sm:w-[148px]'
 
 function modifiedCell(it: DriveEntry['item'], mode: RowMode, clock: number) {
   if (mode === 'trash') return `Trashed ${when(it.trashedAt ?? clock)}`
-  if (mode === 'recent' && it.lastOpenedAt) return `You opened ${when(it.lastOpenedAt)}`
+  if (mode === 'recent' && it.lastOpenedAt) return `Opened ${when(it.lastOpenedAt)}`
   return modifiedLabel(it)
 }
 
