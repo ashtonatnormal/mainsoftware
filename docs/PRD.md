@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.2 — for review |
+| **Status** | Draft v0.3 — for review |
 | **Date** | 2026-10-10 |
 | **Scope** | v1 (first org-wide release) plus post-v1 roadmap |
 | **Source** | Product discovery sessions; every product decision is recorded in [Appendix A](#appendix-a--decision-log) |
@@ -552,7 +552,7 @@ Maximum financial penalties are 10% of annual Singapore turnover (for organizati
 | PDPA-07 | **Corrections.** Anyone, including people who can't see the item, can ask for personal data about them to be corrected in transcripts, AI notes, messages, Org Brain entries, or memory. Requests go to the DPO queue with a 30-day timer and a template letter. The DPO corrects the item or, if refusing, attaches an annotation recording what was requested. Transcripts and notes keep the original machine output alongside corrections (redactions excepted, REC-18). Corrections and annotations flow to notes and the Org Brain and stop the old data resurfacing in AI answers (Rule 7). Participant edits under REC-15 are separate and don't close a request. | P0 |
 | PDPA-08 | **Machine-generated labels and human review.** Transcripts and AI notes are labelled as machine-generated, with the model name and Hearth's transcription pipeline version (B.5). When anyone exports, downloads, or saves to a doc (DOC-10) a transcript or AI note, or a Compliance Officer or the DPO attaches one to a case (Rule 9), Hearth shows the machine-generated warning, asks them to confirm someone checked it against the recording while the audio is kept, and logs who, what, and the stated purpose. Use outside Hearth is governed by the org's HR policy. | P1 |
 | PDPA-09 | **Retention engine.** A configurable retention period for each data type, finite by default. "Keep indefinitely" is not available for audio/video, transcripts, or AI notes (D12); for other types it needs a written justification and sends the DPO an annual review reminder. Legal holds (ADM-08) and access-request holds pause deletion; a hold after a refused access request lasts at least 30 days after the refusal, longer if the PDPC reviews it. Deletion cascades to derived content (notes, indexes, embeddings, caches, version histories, original machine output). After any backup restore, the deletion log is replayed so deleted data doesn't reappear. Every deletion is logged. **Defaults** (audio periods decided, D36; the rest are proposals for the DPO to confirm, Q13): session audio/video 120 days and voice-message audio 360 days (D36); transcripts, AI notes, messages, and voice-message transcripts 3 years; docs and files 3 years after last edit unless the owner renews; assistant and agent conversations 1 year; people-insight figures 2 years; audit and access logs 2 years; search indexes, embeddings, and version histories follow their source item; backups 35 days; a leaver's personal memory deleted at deactivation (ACC-05); tasks and calendar events 3 years; agent memory 1 year, reviewed by the central AI team; a deactivated user's phone number, devices, and sign-in records deleted with the audit logs (2 years), with their profile reduced to name and title for attribution while their content is kept; acknowledgment records kept as long as the person's data is kept; DPO case records and the breach register as set by the DPO. | P0 |
-| PDPA-10 | **Transfer register.** Lists every provider that receives personal data (OpenAI for transcription, the AI model provider, the SMS provider, the cloud host) with: data types, processing and storage countries (as confirmed in writing by the provider), the transfer safeguard, how long the provider keeps data (e.g. up to 30 days of abuse-monitoring logs where zero retention isn't granted), and a review date. It feeds the notice (PDPA-02). **Before any real personal data, including pilot data, is sent to a provider:** sign a data processing agreement that binds the provider to PDPA-comparable protection, names the processing countries, and requires prompt incident notification (adding an addendum, e.g. based on the ASEAN Model Contractual Clauses, if the standard agreement falls short); turn off training on org data; apply for zero data retention; and record the result here. Certification is recorded as the safeguard only if the certificate has been verified. | P0 |
+| PDPA-10 | **Transfer register.** Lists every provider that receives personal data (AWS as the cloud host and, through Bedrock, the Claude model provider; LiveKit Cloud; OpenAI for transcription; the SMS provider) with: data types, processing and storage countries (as confirmed in writing by the provider), the transfer safeguard, how long the provider keeps data (e.g. up to 30 days of abuse-monitoring logs where zero retention isn't granted), and a review date. It feeds the notice (PDPA-02). **Before any real personal data, including pilot data, is sent to a provider:** sign a data processing agreement that binds the provider to PDPA-comparable protection, names the processing countries, and requires prompt incident notification (adding an addendum, e.g. based on the ASEAN Model Contractual Clauses, if the standard agreement falls short); turn off training on org data; apply for zero data retention; and record the result here. Certification is recorded as the safeguard only if the certificate has been verified. | P0 |
 | PDPA-11 | **Breach response.** An incident record with a timeline (first aware, assessment, decision), clocks for the 30-day assessment and the 3-day PDPC deadline, notification templates for the PDPC and affected people, and a breach register. | P1 |
 | PDPA-11a | **Breach scoping.** Identify the exposed items (from audit logs and the access of the compromised account or credential), then count the unique people whose personal data appears in them — authors, speakers, participants, and people named, including former employees — and the data types involved. 500 or more makes the breach notifiable on scale, unless the access stayed inside the organization. | P0 |
 | PDPA-12 | **Limit the blast radius.** Storage and encryption keys are separated by team or space; no single service credential can read every transcript; bulk exports and unusual access raise alerts. | P1 |
@@ -603,7 +603,7 @@ Maximum financial penalties are 10% of annual Singapore turnover (for organizati
 - AI providers under no-training business terms, with zero data retention wherever the provider grants it. Each provider's actual retention, processing countries, and safeguard are recorded in the transfer register (PDPA-10).
 - **Prompt-injection resistance** per Rule 8; AI red-team testing before launch.
 - Independent penetration test before the org-wide launch.
-- Data stored in a single cloud region chosen by the org (Q6).
+- Data stored in AWS Singapore (ap-southeast-1) (D37, B.6).
 
 ### 9.5 Accessibility and language
 
@@ -627,7 +627,7 @@ Maximum financial penalties are 10% of annual Singapore turnover (for organizati
 
 *Assumptions:* each person spends 2 hours a day in voice sessions, 4 people per session on average, 22 workdays a month, someone speaking about 80% of session time, and 3 minutes of voice messages per person per day. About 15% is added for the padding around each spoken passage and per-request rounding. The range covers quieter or chattier rooms.
 
-*What changes it:* sending whole tracks including silence would multiply the cost by about 4 (≈ $12 per user per month), so speech-only sending is a hard requirement. Any OpenAI data-residency project, including Singapore (storage only), adds 10% for `gpt-transcribe` and needs abuse-monitoring or zero-retention approval; because the transcription endpoint keeps no stored data, residency adds little here, and the estimate assumes a standard project at list price. OpenAI's Batch API discount doesn't apply to transcription, and negotiated volume pricing isn't assumed. The figures exclude AI notes and assistant costs and storage. Media-server and recording compute still needs its own estimate, sized for the §9.2 peak of 200 sessions.
+*What changes it:* sending whole tracks including silence would multiply the cost by about 4 (≈ $12 per user per month), so speech-only sending is a hard requirement. Any OpenAI data-residency project, including Singapore (storage only), adds 10% for `gpt-transcribe` and needs abuse-monitoring or zero-retention approval; because the transcription endpoint keeps no stored data, residency adds little here, and the estimate assumes a standard project at list price. OpenAI's Batch API discount doesn't apply to transcription, and negotiated volume pricing isn't assumed. The figures exclude AI notes and assistant costs and storage. Hosting, voice rooms, and recording compute are estimated in B.6 (total running cost ≈ $6 per user per month at 1,000 users).
 
 ## 10. Success metrics
 
@@ -696,7 +696,7 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | Q3 | DPO and counsel confirm the legal basis for each purpose in the processing register (PDPA-01), especially org-wide AI indexing of transcripts, the recording of casual drop-in rooms, and showing recordings to people who weren't there (REC-20). | Before M1 pilot |
 | Q4 | Who is on the central AI team, and how much of their time is committed? | M4 |
 | Q5 | Monthly budget for AI notes, the assistant and agents. (Transcription is estimated at ≈ $3/user/month, §9.6.) | M3 |
-| Q6 | Cloud provider and data region. Deferred by the founder; decide before real data is stored. | Before M1 pilot |
+| Q6 | ~~Cloud provider and data region~~ Resolved: AWS Singapore (D37, B.6). | — |
 | Q7 | Final launch agent set (§8.12 proposal). | M5 |
 | Q8 | Is whole-org visibility of public-room transcripts acceptable (REC-20 default), or should public-room transcripts be limited to participants? Depends on Q3. | M2 (with Q3) |
 | Q9 | Read receipts on or off by default? | M1 |
@@ -748,6 +748,7 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | D34 | **People insights for leadership; own stats for everyone** | Leadership and admins see org-wide rankings; each person sees their own figures. Metrics: messages and reactions, talk time, time in rooms and meetings, tasks completed. Counts only: no AI scoring of what people say. Replaces an earlier "no people analytics" rule. |
 | D35 | **The DPO is Ashton Teo** | Founder; holds the DPO role (ACC-10, PDPA-13). |
 | D36 | **Session recordings kept 120 days; voice-message audio 360 days** | Replaces the earlier 90-day proposal. Transcripts and notes follow their own periods (PDPA-09). |
+| D37 | **Host on AWS Singapore (ap-southeast-1)** | Chosen after the cloud research in B.6. Recommended alongside it: LiveKit Cloud for rooms with Hearth's own recorder bot, and Claude through Amazon Bedrock in Singapore. |
 
 ## Appendix B — Build approach and suggested building blocks
 
@@ -774,10 +775,10 @@ Two options were considered:
 | Server | A single modular TypeScript service to start; WebSockets for real time | Simplest to run for one person; split later if needed. |
 | Database | PostgreSQL (with `pgvector` for semantic search) | One database for app data, search, and AI retrieval at v1 scale. Size for transcript volume: about 74 million words a month at 1,000 users, roughly 2.7 billion over 3 years of retention. Keyword search needs a BM25-style index (a Postgres extension or a separate engine) to meet §9.2; access-filtered vector search needs pgvector 0.8+ iterative scans or per-scope partitions. M6 scale tests include search and retrieval at 3-year volume. |
 | Cache / presence | Redis | Presence, typing indicators, pub/sub. |
-| Voice/video | **LiveKit** (open-source WebRTC media server), recording each participant's tracks separately (Track Egress, no transcoding) rather than a mixed composite | Rooms, screen share, recording; per-participant tracks give speaker attribution and support export, withdrawal, and redaction (REC-02). |
+| Voice/video | **LiveKit Cloud** (LiveKit is an open-source WebRTC media server) plus Hearth's own recorder bot, which records each participant's tracks separately (no transcoding) rather than a mixed composite | Rooms, screen share, recording; per-participant tracks give speaker attribution and support export, withdrawal, and redaction (REC-02). Hosting choice and costs in B.6. |
 | Co-editing | **Yjs** (CRDT sync) with a TipTap/ProseMirror editor and a Yjs sync server, garbage collection on | Live co-editing without keeping deleted text in the shared state sent to clients. The sync server authenticates every connection and rejects updates from Viewers and Commenters (DOC-03). Version history (DOC-04) is kept server-side: each accepted update is tagged with author and time and compacted into stored snapshots that can be deleted or redacted (PDPA-09). Comments (DOC-05) are stored outside the shared document. |
 | Files and recordings | S3-compatible object storage | Durable, cheap, lifecycle rules for retention. |
-| AI | Internal model layer → cloud model APIs (e.g. Claude) | D4; swappable. |
+| AI | Internal model layer → Claude through Amazon Bedrock in Singapore (B.6) | D4; swappable. |
 | Speech-to-text | OpenAI `gpt-transcribe` (session transcripts, voice messages), plus Hearth's own speech detection on each track (e.g. Silero VAD) | D30; see B.5. |
 | Agent UI streaming | Consider **AG-UI** (the protocol OpenDots uses) for streaming agent output and approval cards | Proven pattern for approve/decline cards. |
 | SMS | Established SMS OTP provider | ACC-01. |
@@ -801,7 +802,7 @@ All AI features — Ask, the assistant, agents, summaries — must retrieve cont
 
 Based on OpenAI's API as of October 2026 (its SDK source and documentation). Re-check these facts in a spike before the M1 pilot.
 
-**Speech detector (session tracks).** For every participant track, a speech detector runs in or next to the media server. It marks where each spoken passage starts and stops on the session clock, with about 300 ms of padding, and drops passages shorter than about 300 ms. Each passage becomes `{session, speaker, start, end, audio}`. Speaker and timestamps therefore never depend on the model.
+**Speech detector (session tracks).** For every participant track, a speech detector runs in Hearth's recorder bot (B.6). It marks where each spoken passage starts and stops on the session clock, with about 300 ms of padding, and drops passages shorter than about 300 ms. Each passage becomes `{session, speaker, start, end, audio}`. Speaker and timestamps therefore never depend on the model.
 
 **1. Session transcripts (REC-10).**
 - Send one passage per request to `/v1/audio/transcriptions` with model `gpt-transcribe`, `languages: ["en"]`, `keywords` from the org vocabulary (REC-19), and the meeting title plus the last few transcript lines as `prompt`.
@@ -831,6 +832,51 @@ Based on OpenAI's API as of October 2026 (its SDK source and documentation). Re-
 **Data location.** OpenAI's Singapore data residency covers storage only; requests are processed outside Singapore (OpenAI offers in-region processing only in the US, EU, and UAE). Sending audio to OpenAI is therefore an overseas transfer under the PDPA (PDPA-10). The processing countries for Hearth's OpenAI project must be confirmed in writing by OpenAI, ideally named in the agreement, and recorded in PDPA-10 before they appear in the notice. Hearth's own storage of recordings and transcripts can stay in Singapore.
 
 **If word-by-word timestamps are ever needed:** OpenAI's only models that return them are scheduled to shut down on 2027-02-26. Use a self-hosted forced aligner instead (e.g. the approach WhisperX uses), which runs locally and sends no data out.
+
+### B.6 Hosting on AWS Singapore (D37)
+
+Based on cloud research in October 2026 (provider documentation, price lists, and SDK sources, fact-checked). Confirm prices in the AWS console and with LiveKit before committing.
+
+**Why AWS:**
+- **Claude can be processed inside Singapore** through Amazon Bedrock (Claude Sonnet 5, in-region in ap-southeast-1 since 2026-09-30, at about a 10% premium over global routing). Meeting notes and the assistant then need no overseas transfer and fall under the same AWS agreement as hosting. No other provider could be confirmed to offer this.
+- **MTCS SS 584 Level 3** (Singapore's multi-tier cloud security standard), plus SOC 2, ISO 27001/27017/27018, and a standard data processing agreement.
+- **Every Hearth component has a managed service in Singapore**, at about the same cost as the alternatives considered (Google Cloud, Azure, DigitalOcean, Supabase with Railway or Vercel).
+
+**Recommended setup (ap-southeast-1):**
+
+| Component | Service | Notes |
+|---|---|---|
+| App server, Yjs sync, workers | ECS Express Mode on Fargate (ARM) behind an Application Load Balancer | App Runner stopped taking new customers in April 2026. Set the load balancer idle timeout to about an hour; clients send a heartbeat every ~25 s and reconnect automatically. |
+| Database | RDS PostgreSQL 17/18, Multi-AZ, starting at db.m7g.large | pgvector 0.8.2 with iterative scans (`hnsw.iterative_scan = relaxed_order`); move to 0.8.4+ when RDS ships it (fixes for heavy HNSW deletes). RDS has no BM25 extension: use Postgres full-text search (tsvector with a GIN index) for keyword search, and add OpenSearch only if needed. |
+| Cache / presence | ElastiCache for Valkey, small node plus replica | |
+| Files and recordings | S3 with lifecycle rules | Standard → Standard-IA after 30 days → deleted at 120 days (session recordings) or 360 days (voice-message audio). |
+| Claude | Amazon Bedrock, in-region Claude Sonnet 5 | Block global cross-region model IDs for any request containing personal data. Check in-region quotas before launch. |
+| Voice rooms | LiveKit Cloud | See below. |
+| Recorder and speech detection | Hearth's own recorder bot, on ECS or EC2 in Singapore | Joins each active room as a participant, writes each person's audio as segmented Opus/OGG straight to S3, runs speech detection, and feeds transcription (B.5). Replaces LiveKit's paid Track Egress. |
+| Infrastructure | AWS CDK or Terraform | Everything is defined in code, so AI coding tools can build and change it. |
+
+**Voice rooms: LiveKit Cloud first, self-host later.**
+- LiveKit Cloud with Hearth's recorder bot costs about **$470–500 a month at 250 users, $560 at 500, and $1,300 at 1,000**.
+- Self-hosting LiveKit on AWS would save only about $70–400 a month, but adds 2–5 days of setup, 4–8 hours a month of operations, and being on call for everyone's rooms. It starts to pay off at around 1,000–1,100 users, or once Hearth serves several organisations.
+- Don't record with LiveKit Cloud's Track Egress: about $3,600 a month at 1,000 users, and more simultaneous recordings than the Scale plan allows.
+- Use only features that also exist in self-hosted LiveKit, so moving later is a configuration change. Use the "speech" audio preset with DTX on.
+- PDPA: LiveKit Cloud carries media through its Singapore edge but keeps logs and room metadata in the US or EU. Record this in the transfer register (PDPA-10), and don't turn on LiveKit Cloud's agent observability or session recording.
+- LiveKit's prices could not be checked directly in this research and must be confirmed.
+
+**Estimated monthly running cost at 1,000 users:**
+
+| Item | ≈ per month |
+|---|---|
+| AWS hosting (app, database, cache, storage, egress) | $1,100 |
+| LiveKit Cloud with Hearth's recorder | $1,300 |
+| Recorder and speech-detection compute | $150–300 |
+| Transcription (§9.6) | $3,000 |
+| Claude meeting notes (Bedrock, in-region) | $400 |
+| **Total, before assistant and agent usage (Q5)** | **≈ $6,000 (≈ $6 per user)** |
+
+One-year commitments take about $150–250 a month off the AWS line.
+
+**Transcription stays with OpenAI (D30)** and is processed outside Singapore. If Hearth ever needs everything processed in Singapore, Amazon Transcribe runs there (about $0.006 a minute in batch), but it charges a 15-second minimum per request, so the passage-by-passage design would have to change. Benchmark its accuracy first.
 
 ## Appendix C — What we take from each reference product
 
