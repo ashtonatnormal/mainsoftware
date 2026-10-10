@@ -1,10 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
-import type { Actionable, CalendarEvent, Conversation, ConversationId, Doc, Memory, Message, Room, RoomId, Route, Session, SuggestedTask, Task, TaskStatus } from './types'
+import type { Actionable, CalendarEvent, Conversation, ConversationId, Doc, Memory, Message, Room, RoomId, Route, Session, SourceRef, SuggestedTask, Task, TaskStatus } from './types'
 import { conversations as seedConversations, messages as seedMessages } from './data/chat'
 import { events as seedEvents, opsStandupScript, rooms as seedRooms, sessions as seedSessions } from './data/meetings'
 import { actionables as seedActionables, askAnswers, askFallback, docs as seedDocs, memories as seedMemories, suggestedTasks as seedSuggested, tasks as seedTasks } from './data/work'
 import { ASSISTANT, ME } from './data/people'
-import { NOW } from './time'
+import { NOW, shortDay } from './time'
 
 export type ThemeChoice = 'system' | 'light' | 'dark'
 
@@ -63,6 +63,7 @@ type Action =
   | { type: 'deleteMemory'; id: string }
   | { type: 'editMemory'; id: string; text: string }
   | { type: 'memoryOn'; on: boolean }
+  | { type: 'addMemory'; memory: Memory }
   | { type: 'toast'; toast: Toast }
   | { type: 'dismissToast'; id: number }
   | { type: 'theme'; theme: ThemeChoice }
@@ -181,6 +182,8 @@ function reducer(s: State, a: Action): State {
       return { ...s, memories: s.memories.map(m => (m.id === a.id ? { ...m, text: a.text } : m)) }
     case 'memoryOn':
       return { ...s, memoryOn: a.on }
+    case 'addMemory':
+      return { ...s, memories: [...s.memories, a.memory] }
     case 'toast':
       return { ...s, toasts: [...s.toasts.slice(-2), a.toast] }
     case 'dismissToast':
@@ -207,6 +210,90 @@ const scriptedReplies: Record<string, { from: string; text: string }> = {
   dm_marcus: { from: 'u_marcus', text: 'Thanks boss, telling the crew now 👍' },
   g_q4: { from: 'u_daniel', text: 'Thanks! I’ll walk everyone through v3 at the 3 pm review.' },
   ag_it: { from: 'a_it', text: 'I’ve noted that. For anything urgent, Arjun is on #it-help until 6 pm.' },
+}
+
+// ── Personal memory (PA-10) ───────────────────────────────────────────────────
+// The assistant saves something only when you ask it to in the Assistant chat and
+// memory is on, and it only uses what it remembered while memory is on. Turning
+// memory off keeps the list (you can still see, edit and delete it in Settings)
+// but stops both. It never changes the setting or deletes memories itself (PA-03).
+const MEMORY_SOURCE: SourceRef = { label: 'Your assistant memory', kind: 'person', route: { name: 'settings', section: 'memory' } }
+const MEMORY_OFF = 'Memory is off, so I’m not using anything I remembered about you and I’m not saving anything new. You can turn it back on in Settings › Assistant memory.'
+const MEMORY_OFF_SAVE = 'Memory is off, so I won’t remember that. Turn it on in Settings › Assistant memory if you’d like me to.'
+
+// Figures of speech about the user's own memory are ordinary questions, not about the assistant's.
+const MEMORY_IDIOM = /\b(?:refresh|jog)\s+(?:my|your)\s+memory\b|\bif (?:my|your) memory serves\b|\bfrom memory\b/i
+// "Turn off your memory", "Delete my memories", "Forget that…": the assistant can't do these itself.
+const MEMORY_COMMAND = /\b(?:turn|switch)\b[^?]*\bmemor(?:y|ies)\b|\b(?:disable|enable|pause|stop|delete|remove|clear|erase|wipe|reset|forget)\b[^?]*\bmemor(?:y|ies)\b|^\s*(?:(?:please|can you|could you)\s+)?forget\b/i
+// "What do you remember about me?", "Tell me what you know about me", "What's in your memory?"
+const RECALL = /\b(?:remember(?:ed)?|know|learn(?:ed|t)?)\b[^.!?]*\babout me\b|\bwhat(?:['’]s| is) in (?:your|my) memory\b|\b(?:show|list|see|read)\b[^.!?]*\b(?:your|my) memor(?:y|ies)\b/i
+// Anything else about the memory itself: "How does your memory work?", "Is my memory on?"
+const MEMORY_TOPIC = /\b(?:your|my|assistant(?:['’]s)?) memor(?:y|ies)\b/i
+
+/**
+ * "Remember that I'm off on Fridays" → { fact: "You’re off on Fridays." }.
+ * A bare "Remember that" → { fact: null } (nothing to save). Not a save request → null:
+ * reminders ("remember to…"), questions ("Remember the Kranji quote?", "remember what…").
+ */
+function parseRemember(text: string): { fact: string | null } | null {
+  const m = /^\s*(?:(?:hey|hi|ok|okay|also|and|oh|so|assistant|please|can you|could you|would you|will you)\b[\s,]*)*remember\b[\s,:;–—-]*(.*)$/is.exec(text)
+  if (!m) return null
+  let rest = m[1].trim()
+  const explicit = /^that\b/i.test(rest)
+  if (explicit) rest = rest.replace(/^that\b[\s,:]*/i, '')
+  else if (/^(?:to|what|when|where|who|whom|whose|which|why|how|if|whether|anything|everything|something)\b/i.test(rest)) return null
+  if (!explicit && /\?\s*$/.test(text)) return null
+  rest = rest.replace(/[\s,]+(?:thanks|thank you|thx|cheers|please)[\s.!]*$/i, '').replace(/[.!?\s]+$/, '')
+  if (!rest || /^(?:that|this|it|so|them|me|everything)$/i.test(rest)) return { fact: null }
+  return { fact: aboutYou(rest) }
+}
+
+// The assistant writes memories to you, so swap the speaker: your "I/my" become "you/your",
+// and "you/your" (meaning the assistant) become "I/my".
+const SWAP: Record<string, string> = {
+  'i am': 'you are', 'i’m': 'you’re', 'i was': 'you were', 'i wasn’t': 'you weren’t', 'i’ve': 'you’ve', 'i’ll': 'you’ll', 'i’d': 'you’d',
+  i: 'you', me: 'you', my: 'your', mine: 'yours', myself: 'yourself',
+  'you are': 'I am', 'you’re': 'I’m', 'you were': 'I was', 'you weren’t': 'I wasn’t', 'you’ve': 'I’ve', 'you’ll': 'I’ll', 'you’d': 'I’d',
+  your: 'my', yours: 'mine', yourself: 'myself',
+}
+const PRONOUN = /\b(?:i am|i['’]m|i was|i wasn['’]t|i['’]ve|i['’]ll|i['’]d|you are|you['’]re|you were|you weren['’]t|you['’]ve|you['’]ll|you['’]d|myself|yourself|mine|yours|my|your|me|i(?!\.\w)|you)\b/gi
+
+/** "I was promoted in March" → "You were promoted in March."; "you should call me Ash" → "I should call you Ash." */
+function aboutYou(text: string) {
+  const swapped = text.replace(PRONOUN, (w: string, at: number, all: string) => {
+    const key = w.toLowerCase().replace(/'/g, '’')
+    // A bare "you" is the subject ("I") at the start of a clause, otherwise the object ("me").
+    if (key === 'you') return /(?:^|[,;:]\s*|\b(?:and|but|or|that|when|if|so|because|then|while|unless)\s+)$/i.test(all.slice(0, at)) ? 'I' : 'me'
+    return SWAP[key]
+  })
+  return `${swapped.replace(/(^|[.!?]\s+)([a-z])/g, (_, p: string, c: string) => p + c.toUpperCase())}.`
+}
+
+const sameFact = (a: string, b: string) => {
+  // Compare ignoring case, punctuation, spacing and contractions ("you’re" = "you are").
+  const norm = (t: string) => t.toLowerCase().replace(/'/g, '’')
+    .replace(/n’t\b/g, ' not').replace(/’re\b/g, ' are').replace(/’m\b/g, ' am').replace(/’ve\b/g, ' have').replace(/’ll\b/g, ' will').replace(/’d\b/g, ' would')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  return norm(a) === norm(b)
+}
+const sentence = (t: string) => (/[.!?]$/.test(t.trim()) ? t.trim() : `${t.trim()}.`)
+
+/** ask()'s answer when the question is about the assistant's memory, or null. */
+function memoryAnswer(q: string, s: Pick<State, 'memoryOn' | 'memories'>): { answer: string; sources: SourceRef[] } | null {
+  if (MEMORY_IDIOM.test(q)) return null
+  if (MEMORY_COMMAND.test(q)) return { answer: 'I can’t change memory settings or delete what I remember myself. You can turn memory off, or edit and delete anything I remember, in Settings › Assistant memory.', sources: [MEMORY_SOURCE] }
+  if (parseRemember(q)) return s.memoryOn ? { answer: 'To have me remember something, tell me in your Assistant chat, starting with “Remember that…”.', sources: [] } : { answer: MEMORY_OFF_SAVE, sources: [] }
+  if (RECALL.test(q)) {
+    if (!s.memoryOn) return { answer: MEMORY_OFF, sources: [] }
+    if (!s.memories.length) return { answer: 'I don’t remember anything about you yet. Tell me “Remember that…” in your Assistant chat and I’ll save it where you can see it, in Settings › Assistant memory.', sources: [] }
+    return { answer: `Here’s what I remember about you: ${s.memories.map(m => sentence(m.text)).join(' ')} You can edit or delete any of it in Settings › Assistant memory.`, sources: [MEMORY_SOURCE] }
+  }
+  if (MEMORY_TOPIC.test(q)) {
+    return s.memoryOn
+      ? { answer: 'Memory is on. When you tell me “Remember that…” in your Assistant chat, I save it, and you can ask me what I remember. You can see, edit or delete it all, or turn memory off, in Settings › Assistant memory.', sources: [MEMORY_SOURCE] }
+      : { answer: MEMORY_OFF, sources: [] }
+  }
+  return null
 }
 
 let idSeq = 1000
@@ -294,6 +381,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const ask = useCallback((q: string) => {
     const lower = q.toLowerCase()
+    const mem = memoryAnswer(q, stateRef.current)
+    if (mem) return { ...mem, matched: true }
     const hit = askAnswers.find(a => a.keywords.some(k => lower.includes(k)))
     return hit ? { answer: hit.answer, sources: hit.sources, matched: true } : { answer: askFallback, sources: [], matched: false }
   }, [])
@@ -304,9 +393,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'setDraft', conversationId, text: '' })
     const conv = s.conversations.find(c => c.id === conversationId)
     if (conv?.kind === 'assistant') {
-      const res = ask(text)
       dispatch({ type: 'typing', conversationId, personId: ASSISTANT })
-      later(1400, () => dispatch({ type: 'addMessage', message: { id: newId('m'), conversationId, authorId: ASSISTANT, kind: 'text', text: res.answer, sources: res.sources, ts: stateRef.current.clock } }))
+      // Decide at reply time, so flipping the memory switch mid-reply is respected.
+      later(1400, () => {
+        const now = stateRef.current
+        const req = parseRemember(text)
+        let answer: string
+        let sources: SourceRef[] | undefined
+        if (!req) ({ answer, sources } = ask(text))
+        else if (!now.memoryOn) answer = MEMORY_OFF_SAVE
+        else if (!req.fact) answer = 'What would you like me to remember? Start with “Remember that…”, for example “Remember that I’m off on Fridays.”'
+        else if (now.memories.some(m => sameFact(m.text, req.fact!))) answer = `I already remember that: “${req.fact}”`
+        else {
+          dispatch({ type: 'addMemory', memory: { id: newId('mem'), text: req.fact, learnedFrom: `You told me on ${shortDay(now.clock).split(' ').slice(1).join(' ')}` } })
+          answer = `Got it. I’ll remember: “${req.fact}” You can edit or delete it in Settings › Assistant memory.`
+        }
+        dispatch({ type: 'addMessage', message: { id: newId('m'), conversationId, authorId: ASSISTANT, kind: 'text', text: answer, sources, ts: now.clock } })
+      })
       return
     }
     const reply = scriptedReplies[conversationId]
