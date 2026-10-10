@@ -34,6 +34,8 @@ function activeIndex(s: Session, sec: number) {
   s.transcript.forEach((p, i) => {
     if (p.startSec <= sec + 0.01) idx = i
   })
+  // After the last passage ends no one is speaking, so nothing stays highlighted.
+  if (idx === s.transcript.length - 1 && sec > s.transcript[idx].endSec + 5) return -1
   return idx
 }
 
@@ -65,6 +67,7 @@ function SessionView({ session, t }: { session: Session; t?: number }) {
   const [corrections, setCorrections] = useState<Record<number, string>>({})
   const [editing, setEditing] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
+  const [openedAt] = useState(state.clock)
 
   // Playback is simulated: advance a local clock while "playing".
   useEffect(() => {
@@ -108,7 +111,7 @@ function SessionView({ session, t }: { session: Session; t?: number }) {
       actions={
         <span className="flex items-center gap-2">
           {session.restricted && <Pill tone="warn" icon={<Lock size={10} />}>Restricted</Pill>}
-          <span className="hidden sm:inline-flex"><AvatarStack ids={session.participants} max={4} size="sm" /></span>
+          <AvatarStack ids={session.participants} max={desktop ? 4 : 3} size={desktop ? 'sm' : 'xs'} />
         </span>
       }
     />
@@ -201,7 +204,7 @@ function SessionView({ session, t }: { session: Session; t?: number }) {
             <div className="space-y-6 p-5">
               {notes}
               <AskMeeting session={session} />
-              <ViewedBy session={session} />
+              <ViewedBy session={session} openedAt={openedAt} />
             </div>
           </aside>
         </div>
@@ -244,7 +247,7 @@ function SessionView({ session, t }: { session: Session; t?: number }) {
                     {session.restricted && <Detail label="Access">Only the people in this session</Detail>}
                   </div>
                 </section>
-                <ViewedBy session={session} />
+                <ViewedBy session={session} openedAt={openedAt} />
               </>
             )}
           </div>
@@ -305,7 +308,7 @@ function Player({ session, current, playing, speed, active, onPlay, onSeek, onSp
                 step={1}
                 value={Math.round(current)}
                 onChange={e => onSeek(Number(e.target.value))}
-                className="absolute inset-0 h-5 w-full cursor-pointer appearance-none bg-transparent accent-accent [&::-moz-range-thumb]:size-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-accent [&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent"
+                className="absolute inset-x-0 top-1/2 h-10 w-full -translate-y-1/2 cursor-pointer appearance-none bg-transparent accent-accent [&::-moz-range-thumb]:size-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-accent [&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent"
               />
             </div>
           </div>
@@ -313,7 +316,7 @@ function Player({ session, current, playing, speed, active, onPlay, onSeek, onSp
       </div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs text-muted tabular">{duration(current)} / {duration(session.durationSec)}</span>
-        <Segmented<Speed> value={speed} onChange={onSpeed} options={SPEEDS.map(s => ({ value: s, label: `${s}×` }))} className="[&>button]:px-2.5 [&>button]:py-1 [&>button]:text-xs" />
+        <Segmented<Speed> value={speed} onChange={onSpeed} options={SPEEDS.map(s => ({ value: s, label: `${s}×` }))} className="[&>button]:px-2.5 [&>button]:py-2 [&>button]:text-xs" />
       </div>
     </div>
   )
@@ -377,7 +380,7 @@ function Transcript({ session, active, query, onQuery, corrections, onSeek, onCo
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate text-sm font-semibold">{personName(p.speakerId)}</span>
-                    <button onClick={() => onSeek(p.startSec)} className="shrink-0 rounded-full px-1.5 text-xs text-accent-ink tabular hover:bg-surface-2" aria-label={`Play from ${duration(p.startSec)}`}>
+                    <button onClick={() => onSeek(p.startSec)} className="relative shrink-0 rounded-full px-1.5 text-xs text-accent-ink tabular after:absolute after:-inset-x-1 after:-inset-y-3 hover:bg-surface-2" aria-label={`Play from ${duration(p.startSec)}`}>
                       {duration(p.startSec)}
                     </button>
                   </div>
@@ -483,25 +486,22 @@ function AskMeeting({ session }: { session: Session }) {
 }
 
 // ── Viewed by (REC-21) ────────────────────────────────────────────────────────
-function ViewedBy({ session }: { session: Session }) {
-  const views = [...session.viewedBy].sort((a, b) => b.at - a.at)
+function ViewedBy({ session, openedAt }: { session: Session; openedAt: number }) {
+  // Opening this page is itself a logged view, so it shows up here too.
+  const views = [{ personId: ME, at: openedAt }, ...session.viewedBy].sort((a, b) => b.at - a.at)
   return (
     <section>
       <SectionTitle count={views.length}>Viewed by</SectionTitle>
       <div className="rounded-2xl border border-line bg-surface">
-        {views.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-muted">No one has opened this session yet.</p>
-        ) : (
-          <ul className="divide-y divide-line">
-            {views.map((v, i) => (
-              <li key={i} className="flex items-center gap-3 px-4 py-2.5">
-                <Avatar id={v.personId} size="sm" />
-                <span className="min-w-0 flex-1 truncate text-sm">{personName(v.personId)}</span>
-                <span className="shrink-0 text-xs text-muted tabular">{shortDay(v.at)}, {clock(v.at)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
+        <ul className="divide-y divide-line">
+          {views.map((v, i) => (
+            <li key={i} className="flex items-center gap-3 px-4 py-2.5">
+              <Avatar id={v.personId} size="sm" />
+              <span className="min-w-0 flex-1 truncate text-sm">{v.personId === ME ? 'You' : personName(v.personId)}</span>
+              <span className="shrink-0 text-xs text-muted tabular">{shortDay(v.at)}, {clock(v.at)}</span>
+            </li>
+          ))}
+        </ul>
         <p className="flex items-center gap-1.5 border-t border-line px-4 py-2 text-[11px] text-muted"><Eye size={12} /> Every view is logged.</p>
       </div>
     </section>

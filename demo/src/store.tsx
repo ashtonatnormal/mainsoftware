@@ -48,6 +48,7 @@ type Action =
   | { type: 'react'; messageId: string; emoji: string }
   | { type: 'joinRoom'; roomId: RoomId }
   | { type: 'leaveRoom' }
+  | { type: 'endRoom'; roomId: RoomId }
   | { type: 'setSpeaking'; roomId: RoomId; personId?: string }
   | { type: 'addSession'; session: Session }
   | { type: 'addSuggested'; items: SuggestedTask[] }
@@ -146,6 +147,8 @@ function reducer(s: State, a: Action): State {
       }
     case 'leaveRoom':
       return { ...s, myRoomId: undefined, rooms: s.rooms.map(r => (r.id === s.myRoomId ? withoutMe(r, s.clock) : r)) }
+    case 'endRoom': // everyone has left: the session ends and recording stops
+      return { ...s, rooms: s.rooms.map(r => (r.id === a.roomId ? { ...r, participants: [], sessionStartedAt: undefined, speakingId: undefined, screenShareBy: undefined } : r)) }
     case 'setSpeaking':
       return { ...s, rooms: s.rooms.map(r => (r.id === a.roomId ? { ...r, speakingId: a.personId } : r)) }
     case 'addSession':
@@ -330,6 +333,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const sessionId = 's_standup_mon'
     const start = Date.parse('2026-10-12T08:30:00+08:00')
     const lines = opsStandupScript.lines
+    const transcriptEnd = 610 + lines.length * 34
     const session: Session = {
       id: sessionId,
       title: 'Ops standup',
@@ -337,7 +341,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       conversationId: 'c_ops',
       meetingId: 'e_standup',
       startedAt: start,
-      durationSec: Math.max(16 * 60, Math.round((s.clock - start) / 1000)),
+      durationSec: Math.max(transcriptEnd, Math.round((s.clock - start) / 1000)),
       participants: ['u_priya', 'u_marcus', 'u_farah', ME],
       viewedBy: [],
       transcript: [
@@ -347,7 +351,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ],
       notes: opsStandupScript.notes,
     }
-    toast('Recording saved. Notes in under 5 minutes.')
+    // The standup wraps up as you leave, so the room empties and recording stops.
+    dispatch({ type: 'endRoom', roomId })
+    toast('Standup wrapped up. Recording saved, notes in under 5 minutes.')
     dispatch({ type: 'addSession', session })
     later(3500, () => {
       dispatch({ type: 'addMessage', message: { id: newId('m'), conversationId: 'c_ops', authorId: ME, kind: 'notes', sessionId, ts: stateRef.current.clock } })

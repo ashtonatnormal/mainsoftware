@@ -173,7 +173,7 @@ function InRoomBar() {
     <div className="flex items-center gap-2 bg-fg px-3 py-1.5 text-bg sm:px-5">
       <button onClick={() => navigate({ name: 'rooms', roomId: room.id })} className="flex min-w-0 flex-1 items-center gap-2 text-left text-[13px] font-medium">
         <span className="size-2 shrink-0 rounded-full bg-rec anim-pulse" aria-hidden />
-        <span className="truncate">{room.name} · {room.participants.length} in room · recording</span>
+        <span className="truncate">{room.name} · {room.participants.length} in room · {room.participants.length >= 2 ? 'recording' : 'recording paused'}</span>
         <span className="ml-auto shrink-0 font-semibold text-accent">Return</span>
       </button>
       <button onClick={leaveRoom} className="shrink-0 rounded-full bg-rec px-3 py-1 text-xs font-semibold text-white">Leave</button>

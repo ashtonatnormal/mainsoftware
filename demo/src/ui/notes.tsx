@@ -15,6 +15,7 @@ export function NotesCard({ sessionId, compact }: { sessionId: string; compact?:
   if (!session) return null
   const notes = session.notes
   const toSession = (t?: number) => navigate({ name: 'session', sessionId, t })
+  const onSessionPage = state.route.name === 'session' && state.route.sessionId === sessionId
 
   return (
     <div className="w-full overflow-hidden rounded-2xl border border-line bg-surface">
@@ -90,14 +91,16 @@ export function NotesCard({ sessionId, compact }: { sessionId: string; compact?:
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2">
-        <Button size="sm" variant="ghost" icon={<PlayCircle size={16} />} onClick={() => toSession()}>{compact ? 'Transcript' : 'Transcript & recording'}</Button>
-        {compact && notes && (
-          <Button size="sm" variant="ghost" icon={open ? <ChevronUp size={16} /> : <ChevronDown size={16} />} onClick={() => setOpen(o => !o)}>
-            {open ? 'Less' : 'Decisions & actions'}
-          </Button>
-        )}
-      </div>
+      {(!onSessionPage || (compact && notes)) && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2">
+          {!onSessionPage && <Button size="sm" variant="ghost" icon={<PlayCircle size={16} />} onClick={() => toSession()}>{compact ? 'Transcript' : 'Transcript & recording'}</Button>}
+          {compact && notes && (
+            <Button size="sm" variant="ghost" icon={open ? <ChevronUp size={16} /> : <ChevronDown size={16} />} onClick={() => setOpen(o => !o)}>
+              {open ? 'Less' : 'Decisions & actions'}
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

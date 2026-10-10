@@ -7,7 +7,7 @@ import { useStore } from '../store'
 import type { Message, Room, Route } from '../types'
 import { ME, ORG_NAME } from '../data/people'
 import { Avatar, Button, cx, EmptyState, Page, personName, personShort, Pill, RecordingIndicator, ScreenHeader, SectionTitle } from '../ui'
-import { clock, duration, minutesLabel, shortDay } from '../time'
+import { clock, dayLabel, duration, isToday, minutesLabel, shortDay } from '../time'
 
 // People who keep their mic muted in the scripted rooms (Marcus is on the warehouse floor).
 const mutedInRoom: Record<string, string[]> = { r_ops: ['u_marcus'], r_design: [] }
@@ -116,9 +116,9 @@ function RoomsList() {
                         </span>
                       </button>
                       {mine ? (
-                        <Button size="sm" variant="secondary" onClick={() => navigate({ name: 'rooms', roomId: r.id })}>You’re in</Button>
+                        <Button variant="secondary" onClick={() => navigate({ name: 'rooms', roomId: r.id })}>You’re in</Button>
                       ) : (
-                        <Button size="sm" variant="primary" icon={<Mic size={14} />} onClick={() => join(r.id)}>Join</Button>
+                        <Button variant="primary" icon={<Mic size={16} />} onClick={() => join(r.id)}>Join</Button>
                       )}
                     </li>
                   )
@@ -155,9 +155,9 @@ function RoomsList() {
                       </span>
                     </button>
                     {mine ? (
-                      <Button size="sm" variant="secondary" onClick={() => navigate({ name: 'rooms', roomId: r.id })}>You’re in</Button>
+                      <Button variant="secondary" onClick={() => navigate({ name: 'rooms', roomId: r.id })}>You’re in</Button>
                     ) : (
-                      <Button size="sm" variant="secondary" onClick={() => navigate({ name: 'rooms', roomId: r.id })}>Join</Button>
+                      <Button variant="secondary" onClick={() => navigate({ name: 'rooms', roomId: r.id })}>Join</Button>
                     )}
                   </li>
                 )
@@ -296,6 +296,8 @@ function InRoom({ room }: { room: Room }) {
       setSpeaking(room.id, undefined)
       return
     }
+    idx.current %= ids.length
+    setSpeaking(room.id, ids[idx.current])
     const t = window.setInterval(() => {
       idx.current = (idx.current + 1) % ids.length
       setSpeaking(room.id, ids[idx.current])
@@ -328,8 +330,15 @@ function InRoom({ room }: { room: Room }) {
         back={() => navigate({ name: 'rooms' })}
         subtitle={
           <span className="flex items-center gap-2">
-            <RecordingIndicator compact label={recording ? 'Recording · Transcribing' : 'Recording paused'} />
-            {recording && <span className="tabular">{duration(elapsed)}</span>}
+            {recording ? (
+              <>
+                <RecordingIndicator compact label="Recording · Transcribing" />
+                <span className="tabular">{duration(elapsed)}</span>
+              </>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold"><Pause size={11} aria-hidden /> Recording paused</span>
+            )}
+            {room.restricted && <Pill tone="warn" icon={<Lock size={10} />}>Restricted</Pill>}
             {ch && <span className="hidden truncate sm:inline">· #{ch}</span>}
           </span>
         }
@@ -337,7 +346,7 @@ function InRoom({ room }: { room: Room }) {
           <>
             <span className="hidden items-center gap-1 text-xs text-muted sm:flex"><Users size={14} /> {room.participants.length}</span>
             {room.conversationId && !desktop && (
-              <Button size="sm" variant="secondary" icon={<MessageSquare size={14} />} onClick={openChat}>Room chat</Button>
+              <Button variant="secondary" icon={<MessageSquare size={16} />} onClick={openChat}>Room chat</Button>
             )}
           </>
         }
@@ -349,11 +358,11 @@ function InRoom({ room }: { room: Room }) {
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
               {showNotice && (
                 <div className="anim-in flex items-start gap-3 rounded-2xl bg-rec-soft px-4 py-3 text-sm">
-                  <span className="mt-1.5 size-2 shrink-0 rounded-full bg-rec anim-pulse" aria-hidden />
+                  <span className={cx('mt-1.5 size-2 shrink-0 rounded-full bg-rec', recording && 'anim-pulse')} aria-hidden />
                   <p className="min-w-0 flex-1">
                     <span className="font-semibold text-rec">This room is recorded and transcribed.</span> Recordings are kept for 120 days and transcripts for 3 years. {audienceLine(room, ch)}
                   </p>
-                  <button aria-label="Dismiss notice" className="-m-1 grid size-8 shrink-0 place-items-center rounded-full hover:bg-surface" onClick={() => setShowNotice(false)}><X size={16} /></button>
+                  <button aria-label="Dismiss notice" className="-m-2 grid size-10 shrink-0 place-items-center rounded-full hover:bg-surface" onClick={() => setShowNotice(false)}><X size={16} /></button>
                 </div>
               )}
               {!recording && (
@@ -374,7 +383,7 @@ function InRoom({ room }: { room: Room }) {
                       key={p}
                       id={p}
                       small={!!sharing}
-                      wide={!sharing && desktop}
+                      wide={!sharing && (desktop || tiles.length === 1)}
                       me={me}
                       muted={me ? muted : roomMuted.includes(p)}
                       speaking={!me && room.speakingId === p && recording}
@@ -568,7 +577,7 @@ function RoomChat({ room, channel }: { room: Room; channel?: string }) {
                   <div className="min-w-0 flex-1">
                     <p className="flex items-baseline gap-2 text-xs">
                       <span className="truncate font-semibold">{m.authorId === ME ? 'You' : personShort(m.authorId)}</span>
-                      <span className="shrink-0 text-muted tabular">{clock(m.ts)}</span>
+                      <span className="shrink-0 text-muted tabular">{isToday(m.ts) ? clock(m.ts) : `${dayLabel(m.ts)}, ${clock(m.ts)}`}</span>
                     </p>
                     <p className="line-clamp-3 text-sm break-words">{preview(m, state.sessions)}</p>
                   </div>
