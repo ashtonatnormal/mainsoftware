@@ -312,6 +312,7 @@ export interface Slide {
   stat?: string // big-number layout, e.g. "1,200"
   statLabel?: string
   imageHue?: number // image layout: generated placeholder colour
+  imageUrl?: string // image layout: a picture added in this browser session (blob: URL)
   notes?: string // speaker notes
 }
 
