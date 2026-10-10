@@ -2,7 +2,7 @@
 // the colour tokens in index.css (bg, surface, surface-2, fg, muted, line,
 // accent, accent-soft, accent-ink, agent, agent-soft, rec, rec-soft, ok, ok-soft,
 // warn, warn-soft, wall) so both themes stay correct.
-import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { useEffect, useId, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { ArrowLeft, Bot, Calendar, CheckSquare, FileText, MessageSquare, Mic, Paperclip, Presentation, Sheet as SheetIcon, Sparkles, ThumbsDown, ThumbsUp, User, X } from 'lucide-react'
 import type { PersonId, SourceRef } from '../types'
 import { personById } from '../data/people'
@@ -274,12 +274,19 @@ export function EmptyState({ icon, title, body, action }: { icon?: ReactNode; ti
 /** Bottom sheet on phones, centred dialog on larger screens. */
 export function Sheet({ open, onClose, title, children, footer }: { open: boolean; onClose: () => void; title: ReactNode; children: ReactNode; footer?: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null)
+  const titleId = useId()
   // Escape closes; Tab stays inside the dialog; focus goes back where it was on close.
   const closeRef = useRef(onClose)
   closeRef.current = onClose
+  // What had focus when the sheet opened, read while rendering so a child with
+  // autoFocus hasn't taken it yet.
+  const opener = useRef<HTMLElement | null>(null)
+  const wasOpen = useRef(false)
+  if (open && !wasOpen.current) opener.current = document.activeElement as HTMLElement | null
+  wasOpen.current = open
   useEffect(() => {
     if (!open) return
-    const opener = document.activeElement as HTMLElement | null
+    const back = opener.current
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') closeRef.current()
       if (e.key !== 'Tab' || !ref.current) return
@@ -294,16 +301,20 @@ export function Sheet({ open, onClose, title, children, footer }: { open: boolea
     if (!ref.current?.contains(document.activeElement)) ref.current?.focus()
     return () => {
       window.removeEventListener('keydown', onKey)
-      if (opener?.isConnected) opener.focus()
+      // Only if closing left focus nowhere: what the sheet led to (another screen,
+      // a field with autoFocus) may already have it.
+      const a = document.activeElement
+      if (back?.isConnected && (!a || a === document.body)) back.focus({ preventScroll: true })
     }
   }, [open])
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true">
-      <button aria-label="Close" className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div ref={ref} tabIndex={-1} className="anim-in relative flex max-h-[88%] w-full flex-col rounded-t-3xl bg-surface shadow-card outline-none sm:max-w-lg sm:rounded-3xl" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      {/* Pointer-only: the Close button and Escape cover keyboards and screen readers. */}
+      <button aria-hidden tabIndex={-1} className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className="anim-in relative flex max-h-[88%] w-full flex-col rounded-t-3xl bg-surface shadow-card outline-none sm:max-w-lg sm:rounded-3xl" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
         <div className="flex items-center gap-2 border-b border-line px-5 py-3">
-          <h2 className="flex-1 font-display text-lg font-semibold">{title}</h2>
+          <h2 id={titleId} className="flex-1 font-display text-lg font-semibold">{title}</h2>
           <IconButton label="Close" onClick={onClose}><X size={18} /></IconButton>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>

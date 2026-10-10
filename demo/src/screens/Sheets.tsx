@@ -2,11 +2,11 @@
 // evaluated by sheets/formula.ts; "Ask about this sheet" answers from the
 // cells (sheets/ask.ts) and only suggests. Restricted editing per DOC-03.
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { ArrowLeft, Check, ChevronRight, ClipboardCopy, Copy, FilePlus2, Lock, MoreHorizontal, MoreVertical, Pencil, Plus, Share2, Sheet as SheetIcon, Sparkles, Star, Trash2, X } from 'lucide-react'
+import { ArrowLeft, Check, ClipboardCopy, Copy, Ellipsis, FilePlus2, Lock, MoreVertical, Pencil, Plus, Sheet as SheetIcon, Sparkles, Star, Trash2, Undo2, X } from 'lucide-react'
 import type { PersonId, Sheet, SheetCell, SheetTab } from '../types'
 import { newId, useStore } from '../store'
 import { ME } from '../data/people'
-import { canEdit, folderPath } from '../drive'
+import { canEdit, folderPath, isTrashed } from '../drive'
 import { clock, listStamp } from '../time'
 import { AvatarStack, Button, cx, EmptyState, IconButton, personName, personShort, Sheet as Dialog } from '../ui'
 import { ShareDialog } from '../ui/share'
@@ -16,6 +16,10 @@ import { Toolbar, type QuickFn } from './sheets/Toolbar'
 import { AskPanel, AskTitle } from './sheets/AskPanel'
 import { numericRunAbove, suggestFormula, type CellRef } from './sheets/ask'
 import { MenuItem, Popover } from './sheets/Popover'
+import { useCopy } from './drive/actions'
+import { KindIcon } from './drive/art'
+import { FileCrumbs, ShareButton } from './drive/header'
+import { destinationFor } from './drive/create'
 
 function useMedia(q: string) {
   const [on, setOn] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches)
@@ -69,10 +73,12 @@ type Sel = { a: Pos; f: Pos }
 
 function SheetEditor({ sheet }: { sheet: Sheet }) {
   const store = useStore()
-  const { state, updateSheet, renameItem, toggleStar, trashItem, restoreItem, createSheet, navigate, toast } = store
+  const { state, updateSheet, renameItem, toggleStar, trashItem, restoreItem, createSheet, navigate, toast, patchItem } = store
   const desktop = useMedia('(min-width: 768px)')
   const wide = useMedia('(min-width: 1024px)')
-  const editable = canEdit(sheet) && !sheet.trashed
+  // In the trash itself, or inside a folder that is (as in Docs and Slides).
+  const trashed = isTrashed(state.folders, sheet)
+  const editable = canEdit(sheet) && !trashed
   const rowH = desktop ? 30 : 36
   const headH = desktop ? 26 : 30
 
@@ -109,6 +115,8 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   const isNew = useRef(!seen.has(sheet.id) && sheet.ownerId === ME && sheet.title === 'Untitled sheet' && sheet.tabs.every(t => Object.keys(t.cells).length === 0))
   useEffect(() => {
     seen.add(sheet.id)
+    // Opening a sheet counts as opening it in the Drive (Recent), wherever you came from.
+    patchItem(sheet.id, { lastOpenedAt: state.clock })
     if (isNew.current && titleRef.current) { titleRef.current.focus(); titleRef.current.select() }
     else gridRef.current?.focus({ preventScroll: true })
   }, [sheet.id])
@@ -237,7 +245,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
     refInsert.current = null
     setEdit({ value, mode })
   }
-  const commitEdit = (dr = 0, dc = 0) => {
+  const commitEdit = (dr = 0, dc = 0, refocus = true) => {
     const e = editRef.current
     if (!e) return
     setEdit(null)
@@ -248,7 +256,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
       writeCells({ [activeAddr]: e.value.trim() === '' ? null : { v: e.value, ...(lit.fmt && !activeCell?.fmt ? { fmt: lit.fmt } : {}) } })
     }
     if (dr || dc) select({ r: active.r + dr, c: active.c + dc })
-    focusGrid()
+    if (refocus) focusGrid()
   }
   const cancelEdit = () => { setEdit(null); refInsert.current = null; focusGrid() }
 
@@ -385,10 +393,17 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   }
 
   // ── Keyboard ────────────────────────────────────────────────────────────
+  // Tab walks along the row like a spreadsheet, but never traps focus (WCAG 2.1.2):
+  // it leaves the grid past the last filled column (Shift+Tab before column A),
+  // and straight away after Escape.
+  const leaving = useRef(false)
+  const lastCol = useMemo(() => Object.keys(tab.cells).reduce((m, a) => (tab.cells[a].v ? Math.max(m, parseAddr(a)?.c ?? 0) : m), 0), [tab])
   const onGridKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.target !== gridRef.current) return
     const mod = e.ctrlKey || e.metaKey
     const k = e.key
+    const wasLeaving = leaving.current
+    if (k !== 'Shift') leaving.current = false
     if (mod && !e.altKey) {
       const lk = k.toLowerCase()
       if (lk === 'z') { e.preventDefault(); if (!editable) return; if (e.shiftKey) redo(); else undo(); return }
@@ -409,14 +424,16 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
       case 'ArrowDown': e.preventDefault(); move(1, 0, e.shiftKey); return
       case 'ArrowLeft': e.preventDefault(); move(0, -1, e.shiftKey); return
       case 'ArrowRight': e.preventDefault(); move(0, 1, e.shiftKey); return
-      case 'Tab': e.preventDefault(); move(0, e.shiftKey ? -1 : 1); return
+      case 'Tab':
+        if (wasLeaving || (e.shiftKey ? active.c <= 0 : active.c >= lastCol)) return
+        e.preventDefault(); move(0, e.shiftKey ? -1 : 1); return
       case 'Enter': e.preventDefault(); move(e.shiftKey ? -1 : 1, 0); return
       case 'Home': e.preventDefault(); select({ r: active.r, c: 0 }); return
       case 'End': e.preventDefault(); select({ r: active.r, c: tab.cols - 1 }); return
       case 'PageDown': e.preventDefault(); move(10, 0, e.shiftKey); return
       case 'PageUp': e.preventDefault(); move(-10, 0, e.shiftKey); return
       case 'F2': e.preventDefault(); startEdit('inplace'); return
-      case 'Escape': e.preventDefault(); select(active); return
+      case 'Escape': e.preventDefault(); select(active); leaving.current = true; return
       case 'Delete': case 'Backspace': e.preventDefault(); if (editable) clearRange(); return
     }
     if (k.length === 1 && !e.altKey && editable) {
@@ -568,19 +585,21 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
     for (const a of Object.keys(tab.cells)) { const p = parseAddr(a); if (p && tab.cells[a].v) { maxR = Math.max(maxR, p.r); maxC = Math.max(maxC, p.c) } }
     for (let r = 0; r <= maxR; r++) rows.push(Array.from({ length: maxC + 1 }, (_, c) => { const a = addrOf({ r, c }); return formatValue(values.get(a) ?? null, tab.cells[a]?.fmt) }))
     const csv = toCSV(rows)
+    // Where the browser won't allow copying, show the CSV to select and copy (as Docs does).
     try {
-      navigator.clipboard.writeText(csv).then(
-        () => toast(`Copied “${tab.name}” as CSV (${rows.length} rows)`),
-        () => toast('Couldn’t reach the clipboard here. Select the cells and press Ctrl+C instead.'),
-      )
+      navigator.clipboard.writeText(csv).then(() => toast(`Copied “${tab.name}” as CSV (${rows.length} rows)`), () => setCsvOut(csv))
     } catch {
-      toast('Couldn’t reach the clipboard here. Select the cells and press Ctrl+C instead.')
+      setCsvOut(csv)
     }
   }
-  const makeCopy = () => {
-    const tabs = sheet.tabs.map(t => ({ ...t, id: newId('tab'), cells: { ...t.cells }, colWidths: t.colWidths && { ...t.colWidths } }))
-    createSheet({ folderId: sheet.folderId, title: `Copy of ${sheet.title}`, tabs })
-    toast('Copy made. You own it, and only you can edit it until you share it.')
+  const [csvOut, setCsvOut] = useState<string | null>(null)
+  // Make a copy and New sheet follow the Drive's rule: next to this sheet if you can add files there, else My Drive.
+  const copy = useCopy()
+  const makeCopy = () => copy({ kind: 'sheet', item: sheet })
+  const newSheet = () => {
+    const dest = destinationFor(state, sheet.folderId ?? undefined)
+    createSheet({ folderId: dest.folderId })
+    if (dest.blocked) toast(`You can only view ${dest.blocked}, so the new sheet is in My Drive.`)
   }
   const moveToTrash = () => {
     trashItem(sheet.id)
@@ -590,6 +609,15 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
 
   // ── Derived labels ─────────────────────────────────────────────────────
   const path = folderPath(state.folders, sheet.folderId)
+  // Restoring brings back whichever is in the trash: the sheet, the folders above it, or both.
+  const trashedFolders = path.filter(f => f.trashed)
+  const inFolder = !sheet.trashed && trashedFolders.length > 0
+  const canRestore = (!sheet.trashed || canEdit(sheet)) && trashedFolders.every(f => canEdit(f))
+  const restore = () => {
+    if (sheet.trashed) restoreItem(sheet.id)
+    for (const f of trashedFolders) restoreItem(f.id)
+    toast(trashedFolders.length ? `Restored “${trashedFolders[0].title}” from trash` : 'Restored from trash')
+  }
   const editors = [...new Set([sheet.ownerId, ...sheet.editors])]
   const editorNames = (() => {
     const n = editors.map(id => (id === ME ? 'you' : personName(id)))
@@ -627,9 +655,9 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   const rangeOn = range.r0 !== range.r1 || range.c0 !== range.c1
 
   const header = (
-    <header className="flex min-h-14 shrink-0 items-center gap-1.5 border-b border-line bg-surface px-2 py-1.5 md:gap-2 md:px-3">
+    <header className="flex min-h-14 shrink-0 items-center gap-0.5 border-b border-line bg-surface px-2 py-1.5 sm:gap-2 sm:px-3">
       <IconButton label="Back" onClick={store.back}><ArrowLeft size={20} /></IconButton>
-      <span className="hidden size-9 shrink-0 place-items-center rounded-xl bg-ok-soft text-ok sm:grid" aria-hidden><SheetIcon size={18} /></span>
+      <KindIcon kind="sheet" size="md" className="hidden sm:grid" />
       <div className="min-w-0 flex-1">
         {editable ? (
           <>
@@ -647,39 +675,29 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
         ) : (
           <h1 className="truncate font-display text-[17px] leading-tight font-semibold md:text-lg">{sheet.title}</h1>
         )}
-        <div className="flex min-w-0 items-center gap-1 text-xs text-muted">
-          <nav aria-label="Folder" className="flex max-w-[60%] min-w-0 shrink-0 items-center gap-0.5 truncate">
-            {path.length === 0 ? (
-              <button className="shrink-0 hover:text-fg hover:underline" onClick={() => navigate({ name: 'drive', view: sheet.ownerId === ME ? 'my' : 'shared' })}>{sheet.ownerId === ME ? 'My Drive' : 'Shared with me'}</button>
-            ) : (
-              path.map((f, i) => (
-                <span key={f.id} className={cx('flex min-w-0 items-center gap-0.5', i < path.length - 1 && 'hidden sm:flex')}>
-                  {i > 0 && <ChevronRight size={11} className="shrink-0" aria-hidden />}
-                  <button className="truncate hover:text-fg hover:underline" onClick={() => navigate({ name: 'drive', folderId: f.id })}>{f.title}</button>
-                </span>
-              ))
-            )}
-          </nav>
-          <span aria-hidden>·</span>
-          <span className="flex min-w-0 items-center gap-1" aria-live="polite">
-            {!saving && sheet.updatedBy === ME && <Check size={12} className="text-ok" aria-hidden />}
-            <span className="truncate">{savedLabel}</span>
-          </span>
-        </div>
+        <FileCrumbs
+          item={sheet}
+          compact={!desktop}
+          trailing={
+            <span className="flex min-w-0 items-center gap-1" aria-live="polite">
+              {trashed ? <Trash2 size={12} className="shrink-0 text-rec" aria-hidden /> : !saving && sheet.updatedBy === ME && <Check size={12} className="shrink-0 text-ok" aria-hidden />}
+              <span className={cx('truncate', trashed && 'text-rec')}>{trashed ? 'In trash' : savedLabel}</span>
+            </span>
+          }
+        />
       </div>
       {others.length > 0 && (
         <span className="flex items-center" title={`${others.map(personShort).join(', ')} ${others.length === 1 ? 'is' : 'are'} here`}>
           <AvatarStack ids={others} size="sm" />
         </span>
       )}
-      <IconButton label={sheet.starred ? 'Unstar' : 'Star'} className="hidden md:grid" onClick={() => toggleStar(sheet.id)}>
-        <Star size={18} className={cx(sheet.starred && 'fill-current text-warn')} />
-      </IconButton>
-      {!wide && <IconButton label="Ask about this sheet" onClick={() => setAskOpen(true)} className="text-agent"><Sparkles size={19} /></IconButton>}
       {wide && <Button size="sm" variant={askOpen ? 'agent' : 'ghost'} icon={<Sparkles size={15} />} onClick={() => setAskOpen(o => !o)} aria-pressed={askOpen}>Ask</Button>}
-      <span className="md:hidden"><IconButton label="Share" onClick={() => setShareOpen(true)}><Share2 size={18} /></IconButton></span>
-      <span className="hidden md:block"><Button size="sm" variant="primary" icon={<Share2 size={15} />} onClick={() => setShareOpen(true)}>Share</Button></span>
-      <button ref={moreRef} aria-label="More" title="More" aria-expanded={moreOpen} onClick={() => setMoreOpen(o => !o)} className="grid size-10 shrink-0 place-items-center rounded-full transition hover:bg-surface-2"><MoreHorizontal size={19} /></button>
+      <IconButton label={sheet.starred ? 'Remove from Starred' : 'Add to Starred'} aria-pressed={!!sheet.starred} onClick={() => toggleStar(sheet.id)}>
+        <Star size={19} className={sheet.starred ? 'fill-current text-warn' : 'text-muted'} />
+      </IconButton>
+      <ShareButton itemId={sheet.id} onClick={() => setShareOpen(true)} compact={!desktop} />
+      {!wide && <IconButton label="Ask about this sheet" onClick={() => setAskOpen(true)} className="text-agent"><Sparkles size={19} /></IconButton>}
+      <button ref={moreRef} aria-label="More" title="More" aria-expanded={moreOpen} onClick={() => setMoreOpen(o => !o)} className={cx('grid size-10 shrink-0 place-items-center rounded-full transition hover:bg-surface-2', moreOpen && 'bg-surface-2 text-accent-ink')}><Ellipsis size={20} /></button>
     </header>
   )
 
@@ -687,23 +705,28 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
     <div ref={rootRef} className="flex h-full min-h-0 flex-col bg-bg">
       {header}
       <Popover label="More" anchor={moreRef.current} open={moreOpen} onClose={() => setMoreOpen(false)} align="right">
-        <div className="md:hidden">
-          <MenuItem icon={<Star size={16} />} onClick={() => { toggleStar(sheet.id); setMoreOpen(false) }}>{sheet.starred ? 'Remove star' : 'Star'}</MenuItem>
-        </div>
-        <MenuItem icon={<FilePlus2 size={16} />} onClick={() => { setMoreOpen(false); createSheet({ folderId: editable ? sheet.folderId : null }) }}>New sheet</MenuItem>
+        <MenuItem icon={<FilePlus2 size={16} />} onClick={() => { setMoreOpen(false); newSheet() }}>New sheet</MenuItem>
         <MenuItem icon={<Copy size={16} />} onClick={() => { setMoreOpen(false); makeCopy() }}>Make a copy</MenuItem>
         <MenuItem icon={<ClipboardCopy size={16} />} onClick={() => { setMoreOpen(false); copyCsv() }} hint={tab.name}>Copy as CSV</MenuItem>
         <div className="my-1 h-px bg-line" />
         <MenuItem icon={<Trash2 size={16} />} danger disabled={!editable} onClick={() => { setMoreOpen(false); moveToTrash() }}>Move to trash</MenuItem>
-        {!editable && !sheet.trashed && <p className="px-3 pb-1 text-[11px] text-muted">Only editors can move it to trash.</p>}
+        {!editable && !trashed && <p className="px-3 pb-1 text-[11px] text-muted">Only editors can move it to trash.</p>}
       </Popover>
       <ShareDialog itemId={sheet.id} open={shareOpen} onClose={() => setShareOpen(false)} />
+      <Dialog open={csvOut !== null} onClose={() => setCsvOut(null)} title="Copy as CSV">
+        <p className="mb-2 text-sm text-muted">Copying isn’t allowed here. Select the text below and copy it.</p>
+        <label htmlFor="csv-out" className="sr-only">CSV</label>
+        <textarea id="csv-out" readOnly value={csvOut ?? ''} rows={12} onFocus={e => e.currentTarget.select()} className="w-full resize-none rounded-xl bg-surface-2 p-3 font-mono text-xs outline-none focus:ring-2 focus:ring-accent" />
+      </Dialog>
 
-      {sheet.trashed ? (
-        <div className="flex shrink-0 items-center gap-3 border-b border-line bg-rec-soft px-4 py-2 text-sm">
+      {trashed ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-line bg-rec-soft px-4 py-2 text-sm">
           <Trash2 size={16} className="shrink-0 text-rec" aria-hidden />
-          <span className="min-w-0 flex-1">This sheet is in the trash, so it can’t be edited.</span>
-          <Button size="sm" onClick={() => { restoreItem(sheet.id); toast('Restored') }}>Restore</Button>
+          <span className="min-w-0 flex-1 basis-56">
+            {inFolder ? `This sheet is in “${trashedFolders[0].title}”, which is in the trash, so it can’t be edited.` : 'This sheet is in the trash, so it can’t be edited.'}
+            {!canRestore && ` Only ${inFolder ? personName(trashedFolders[0].ownerId) : editorNames} can restore it.`}
+          </span>
+          {canRestore && <Button size="sm" variant="secondary" icon={<Undo2 size={14} />} onClick={restore}>{inFolder ? 'Restore folder' : 'Restore'}</Button>}
         </div>
       ) : !editable && (
         <div className="flex shrink-0 items-center gap-2 border-b border-line bg-surface-2 px-4 py-2 text-[13px] text-muted">
@@ -740,7 +763,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
           onChange={e => setEdit({ value: e.target.value, mode: editRef.current?.mode ?? 'bar' })}
           onKeyDown={e => {
             if (e.key === 'Enter') { e.preventDefault(); commitEdit(e.shiftKey ? -1 : 1, 0) }
-            else if (e.key === 'Tab') { e.preventDefault(); commitEdit(0, e.shiftKey ? -1 : 1) }
+            else if (e.key === 'Tab') commitEdit(0, 0, false) // commit, then Tab moves on as usual
             else if (e.key === 'Escape') { e.preventDefault(); cancelEdit() }
           }}
           onBlur={() => { if (editRef.current?.mode === 'bar') onEditorBlur() }}

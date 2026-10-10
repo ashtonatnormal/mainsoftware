@@ -3,12 +3,17 @@
 // who can open the deck can view and present it. AI help (D16) only suggests.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import {
-  ArrowDown, ArrowLeft, ArrowUp, Check, TriangleAlert, ChevronDown, ChevronRight, Copy, ImageUp, LayoutTemplate, NotebookText, Palette, Play, Plus, Presentation, Share2, Sparkles, Star, Trash2, Undo2,
+  ArrowDown, ArrowLeft, ArrowUp, Check, TriangleAlert, ChevronDown, ChevronRight, Copy, Ellipsis, ImageUp, LayoutTemplate, NotebookText, Palette, Play, Plus, Presentation, Sparkles, Star, Trash2, Undo2,
 } from 'lucide-react'
 import type { Deck, Doc, Slide, SlideLayout } from '../types'
 import { useStore } from '../store'
 import { ME } from '../data/people'
 import { canEdit, folderPath, isTrashed } from '../drive'
+import { canAddTo } from './drive/model'
+import { folderName, useCopy } from './drive/actions'
+import { KindIcon } from './drive/art'
+import { FileCrumbs, ShareButton } from './drive/header'
+import { Menu, type MenuItem } from './docs/ui'
 import { listStamp } from '../time'
 import { AIMarker, AvatarStack, Button, cx, EmptyState, IconButton, Pill, personShort, Sheet, SourceChips } from '../ui'
 import { ShareDialog } from '../ui/share'
@@ -80,7 +85,8 @@ function DeckEditor({ deck }: { deck: Deck }) {
   const trashed = isTrashed(state.folders, deck)
   const editable = canEdit(deck) && !trashed
   const slides = deck.slides
-  const [sel, setSel] = useState(0)
+  // A search result can open the deck at the slide it matched.
+  const [sel, setSel] = useState(() => (state.route.name === 'slides' ? state.route.slide ?? 0 : 0))
   const idx = Math.max(0, Math.min(sel, slides.length - 1))
   const slide: Slide | undefined = slides[idx]
   const [sheet, setSheet] = useState<SheetName>(null)
@@ -185,8 +191,17 @@ function DeckEditor({ deck }: { deck: Deck }) {
     setDeleted({ slide, at: idx })
     setSlides(list => list.filter((_, j) => j !== idx))
     setSel(Math.max(0, idx - 1))
+    refocusDelete.current = true
     setConfirmDelete(false)
   }
+  // Cancel (or Escape) puts focus back on the toolbar's Delete button rather than losing it to the page.
+  const refocusDelete = useRef(false)
+  const cancelDelete = () => { refocusDelete.current = true; setConfirmDelete(false) }
+  useEffect(() => {
+    if (confirmDelete || !refocusDelete.current) return
+    refocusDelete.current = false
+    document.querySelector<HTMLElement>('[role=toolbar][aria-label="Slide tools"] [aria-label="Delete slide"]:not(:disabled)')?.focus()
+  }, [confirmDelete])
   const undoDelete = () => {
     if (!deleted) return
     const { slide: s, at } = deleted
@@ -344,21 +359,65 @@ function DeckEditor({ deck }: { deck: Deck }) {
       onDuplicate={duplicate}
       onMove={move}
       onDelete={() => setConfirmDelete(true)}
-      onCancelDelete={() => setConfirmDelete(false)}
+      onCancelDelete={cancelDelete}
       onConfirmDelete={remove}
       onDraft={() => setSheet('draft')}
       onNotes={suggestNotes}
       onAI={() => setSheet('ai')}
+      trashed={trashed}
     />
   )
 
+  // ── More: copy and trash, as in Docs and Sheets ──
+  const copy = useCopy()
+  const [moreOpen, setMoreOpen] = useState(false)
+  const path = folderPath(state.folders, deck.folderId)
+  const home = path.length ? { name: 'drive' as const, folderId: path[path.length - 1].id } : { name: 'drive' as const, view: deck.ownerId === ME ? 'my' as const : 'shared' as const }
+  const canTrash = canEdit(deck) && !trashed
+  const moveToTrash = () => {
+    api.trashItem(deck.id)
+    // Back to the Drive you came from; otherwise to the deck's folder, replacing the deck in history.
+    if (state.history[state.history.length - 1]?.name === 'drive') api.back()
+    else api.navigate(home, { replace: true })
+    api.toast(`Moved “${deck.title}” to trash`, { label: 'View trash', route: { name: 'drive', view: 'trash' } })
+  }
+  const moreItems: MenuItem[] = [
+    { id: 'copy', label: 'Make a copy', note: `Saved in ${folderName(state, canAddTo(state, deck.folderId) ? deck.folderId : null)}`, icon: <Copy size={17} />, onSelect: () => copy({ kind: 'slides', item: deck }) },
+    {
+      id: 'trash', label: 'Move to trash', divider: true, danger: true, icon: <Trash2 size={17} />, disabled: !canTrash, onSelect: moveToTrash,
+      note: trashed ? 'Already in the trash' : canTrash ? 'You can restore it from Trash for 30 days' : `Only ${personShort(deck.ownerId)} and editors can move it to trash`,
+    },
+  ]
+
+  // In the trash itself, or inside a folder that is. Restoring brings back whichever it is.
+  const trashedFolders = path.filter(f => f.trashed)
+  const inFolder = !deck.trashed && trashedFolders.length > 0
+  const canRestore = (!deck.trashed || canEdit(deck)) && trashedFolders.every(f => canEdit(f))
+  const restore = () => {
+    if (deck.trashed) api.restoreItem(deck.id)
+    for (const f of trashedFolders) api.restoreItem(f.id)
+    api.toast(trashedFolders.length ? `Restored “${trashedFolders[0].title}” from trash` : 'Restored from trash')
+  }
+
   return (
     <div className="flex h-full flex-col bg-bg">
-      <Header deck={deck} editable={editable} wide={wide} saved={saved} onShare={() => setSheet('share')} onPresent={present} />
+      <Header
+        deck={deck} editable={editable} wide={wide} saved={saved} trashed={trashed} onShare={() => setSheet('share')} onPresent={present}
+        more={
+          <div className="relative">
+            <IconButton label="More" aria-expanded={moreOpen} active={moreOpen} onClick={() => setMoreOpen(o => !o)}><Ellipsis size={20} /></IconButton>
+            <Menu open={moreOpen} onClose={() => setMoreOpen(false)} items={moreItems} title="More" popover={wide} />
+          </div>
+        }
+      />
       {trashed && (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line bg-warn-soft px-4 py-2 text-sm text-warn">
-          <span className="min-w-0 flex-1">This deck is in the bin. Restore it to edit.</span>
-          <Button size="sm" variant="secondary" icon={<Undo2 size={14} />} onClick={() => api.restoreItem(deck.id)}>Restore</Button>
+        <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-line bg-rec-soft px-4 py-2 text-sm">
+          <Trash2 size={16} className="shrink-0 text-rec" aria-hidden />
+          <span className="min-w-0 flex-1 basis-56">
+            {inFolder ? `This deck is in “${trashedFolders[0].title}”, which is in the trash.` : 'This deck is in the trash.'}
+            {canRestore ? ` Restore ${inFolder ? 'the folder' : 'it'} to edit. You can still view and present it.` : ` Only ${inFolder ? personShort(trashedFolders[0].ownerId) : `${personShort(deck.ownerId)} and editors`} can restore it.`}
+          </span>
+          {canRestore && <Button size="sm" variant="secondary" icon={<Undo2 size={14} />} onClick={restore}>{inFolder ? 'Restore folder' : 'Restore'}</Button>}
         </div>
       )}
       {toolbar}
@@ -412,9 +471,8 @@ function DeckEditor({ deck }: { deck: Deck }) {
 }
 
 // ── Header ───────────────────────────────────────────────────────────────────
-function Header({ deck, editable, wide, saved, onShare, onPresent }: { deck: Deck; editable: boolean; wide: boolean; saved: 'idle' | 'saving' | 'saved'; onShare: () => void; onPresent: () => void }) {
+function Header({ deck, editable, wide, saved, trashed, onShare, onPresent, more }: { deck: Deck; editable: boolean; wide: boolean; saved: 'idle' | 'saving' | 'saved'; trashed: boolean; onShare: () => void; onPresent: () => void; more: ReactNode }) {
   const { state, back, navigate, renameItem, toggleStar } = useStore()
-  const path = folderPath(state.folders, deck.folderId)
   const leave = () => (state.history.length ? back() : navigate({ name: 'drive', folderId: deck.folderId ?? undefined }))
   const status =
     saved === 'saving' ? 'Saving…'
@@ -422,24 +480,10 @@ function Header({ deck, editable, wide, saved, onShare, onPresent }: { deck: Dec
     : `Edited ${listStamp(deck.updatedAt).replace(/^(Yesterday|Today)/, w => w.toLowerCase())}${deck.updatedBy ? ` by ${deck.updatedBy === ME ? 'you' : personShort(deck.updatedBy)}` : ''}`
   const others = deck.presence.filter(p => p !== ME)
 
-  const crumbs = (
-    <nav aria-label="Folder" className="flex min-w-0 items-center gap-0.5 text-xs text-muted">
-      <button className="shrink-0 hover:text-fg hover:underline" onClick={() => navigate({ name: 'drive', view: deck.ownerId === ME ? 'my' : path.length ? 'home' : 'shared' })}>
-        {path.length ? 'Drive' : deck.ownerId === ME ? 'My Drive' : 'Shared with me'}
-      </button>
-      {path.map(f => (
-        <span key={f.id} className="flex min-w-0 items-center gap-0.5">
-          <ChevronRight size={12} className="shrink-0" aria-hidden />
-          <button className="truncate hover:text-fg hover:underline" onClick={() => navigate({ name: 'drive', folderId: f.id })}>{f.title}</button>
-        </span>
-      ))}
-    </nav>
-  )
-
   return (
-    <header className="flex shrink-0 items-center gap-1.5 border-b border-line bg-surface px-2 py-2 sm:gap-2 sm:px-3">
+    <header className="flex min-h-14 shrink-0 items-center gap-0.5 border-b border-line bg-surface px-2 py-1.5 sm:gap-2 sm:px-3">
       <IconButton label="Back" onClick={leave}><ArrowLeft size={20} /></IconButton>
-      <span className="hidden size-9 shrink-0 place-items-center rounded-lg bg-warn-soft text-warn sm:grid" aria-hidden><Presentation size={18} /></span>
+      <KindIcon kind="slides" size="md" className="hidden sm:grid" />
       <div className="min-w-0 flex-1">
         {editable ? (
           <>
@@ -456,15 +500,23 @@ function Header({ deck, editable, wide, saved, onShare, onPresent }: { deck: Dec
         ) : (
           <h1 className="truncate font-display text-[17px] leading-tight font-semibold sm:text-lg">{deck.title}</h1>
         )}
-        <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted">
-          {wide && crumbs}
-          {wide && <span aria-hidden>·</span>}
-          <span className={cx('flex min-w-0 items-center gap-1', saved === 'saved' && 'text-ok')} aria-live="polite">
-            {saved === 'saved' && <Check size={12} className="shrink-0" aria-hidden />}
-            <span className="truncate">{status}</span>
-          </span>
-          {!editable && <Pill className="ml-1 shrink-0">View only</Pill>}
-        </div>
+        <FileCrumbs
+          item={deck}
+          compact={!wide}
+          trailing={
+            trashed ? (
+              <span className="inline-flex shrink-0 items-center gap-1 text-rec"><Trash2 size={12} aria-hidden />In trash</span>
+            ) : (
+              <>
+                <span className={cx('flex min-w-0 items-center gap-1', saved === 'saved' && 'text-ok')} aria-live="polite">
+                  {saved === 'saved' && <Check size={12} className="shrink-0" aria-hidden />}
+                  <span className="truncate">{status}</span>
+                </span>
+                {!editable && <Pill className="ml-1 shrink-0">View only</Pill>}
+              </>
+            )
+          }
+        />
       </div>
       {wide && others.length > 0 && (
         <span className="flex items-center gap-1.5 pr-1" title={`${others.map(personShort).join(', ')} ${others.length === 1 ? 'is' : 'are'} here`}>
@@ -472,22 +524,17 @@ function Header({ deck, editable, wide, saved, onShare, onPresent }: { deck: Dec
           <span className="sr-only">{others.map(personShort).join(', ')} viewing now</span>
         </span>
       )}
-      <IconButton label={deck.starred ? 'Unstar' : 'Star'} onClick={() => toggleStar(deck.id)} className={cx(deck.starred && 'text-accent-ink')}>
-        <Star size={19} fill={deck.starred ? 'currentColor' : 'none'} />
+      {wide && <Button size="sm" variant="secondary" icon={<Play size={14} fill="currentColor" />} onClick={onPresent} disabled={!deck.slides.length}>Present</Button>}
+      <IconButton label={deck.starred ? 'Remove from Starred' : 'Add to Starred'} aria-pressed={!!deck.starred} onClick={() => toggleStar(deck.id)}>
+        <Star size={19} className={deck.starred ? 'fill-current text-warn' : 'text-muted'} />
       </IconButton>
-      {wide ? (
-        <>
-          <Button variant="secondary" icon={<Share2 size={16} />} onClick={onShare}>Share</Button>
-          <Button variant="primary" icon={<Play size={16} fill="currentColor" />} onClick={onPresent} disabled={!deck.slides.length}>Present</Button>
-        </>
-      ) : (
-        <>
-          <IconButton label="Share" onClick={onShare}><Share2 size={19} /></IconButton>
-          <button aria-label="Present" title="Present" onClick={onPresent} disabled={!deck.slides.length} className="grid size-10 shrink-0 place-items-center rounded-full bg-accent text-accent-fg transition hover:brightness-105 disabled:opacity-50">
-            <Play size={17} fill="currentColor" />
-          </button>
-        </>
+      <ShareButton itemId={deck.id} onClick={onShare} compact={!wide} />
+      {!wide && (
+        <IconButton label="Present" onClick={onPresent} disabled={!deck.slides.length} className="disabled:opacity-50">
+          <Play size={18} fill="currentColor" />
+        </IconButton>
       )}
+      {more}
     </header>
   )
 }
@@ -496,10 +543,11 @@ function Header({ deck, editable, wide, saved, onShare, onPresent }: { deck: Dec
 function Toolbar(p: {
   wide: boolean; editable: boolean; deck: Deck; slide?: Slide; index: number; confirmDelete: boolean
   onLayout: () => void; onTheme: () => void; onDuplicate: () => void; onMove: (by: -1 | 1) => void; onDelete: () => void
-  onCancelDelete: () => void; onConfirmDelete: () => void; onDraft: () => void; onNotes: () => void; onAI: () => void
+  onCancelDelete: () => void; onConfirmDelete: () => void; onDraft: () => void; onNotes: () => void; onAI: () => void; trashed: boolean
 }) {
   const { deck, slide, index, wide } = p
   const n = deck.slides.length
+  if (p.trashed) return null // the trash banner above says what you can do
   if (!p.editable) {
     return (
       <div className="flex shrink-0 items-start gap-2 border-b border-line bg-surface px-4 py-2 text-sm text-muted">
@@ -510,7 +558,7 @@ function Toolbar(p: {
   }
   if (p.confirmDelete && slide) {
     return (
-      <div className="flex shrink-0 items-center gap-2 border-b border-line bg-rec-soft px-3 py-2 sm:px-4" role="alertdialog" aria-label="Confirm delete">
+      <div className="flex shrink-0 items-center gap-2 border-b border-line bg-rec-soft px-3 py-2 sm:px-4" role="alertdialog" aria-label="Confirm delete" onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); p.onCancelDelete() } }}>
         <Trash2 size={16} className="shrink-0 text-rec" aria-hidden />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">Delete slide {index + 1}{slide.title ? ` “${slide.title}”` : ''}?</span>
         <Button size="sm" variant="ghost" onClick={p.onCancelDelete} autoFocus>Cancel</Button>

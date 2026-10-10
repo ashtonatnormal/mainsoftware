@@ -8,6 +8,7 @@ import { useStore } from '../../store'
 import { docTemplates } from '../../data/drive'
 import { shortDay } from '../../time'
 import { Button, cx, Sheet } from '../../ui'
+import { templateIcons } from '../docs/ui'
 import { DocLines } from './art'
 import { Popover } from './actions'
 import { focusSoon, useWide } from './hooks'
@@ -98,7 +99,7 @@ export function NewMenu({ folderId, trigger: renderTrigger }: { folderId?: strin
   const rows = (big: boolean) => shown.map(i => (
     <div key={i.key}>
       {i.divider && <div className="my-1 border-t border-line" role="separator" />}
-      <button role="menuitem" onClick={i.run} className={cx('flex w-full items-center gap-3 px-4 text-left outline-none transition hover:bg-surface-2 focus-visible:bg-surface-2', big ? 'py-3 text-[15px]' : 'py-2 text-sm')}>
+      <button role="menuitem" onClick={i.run} className={cx('flex w-full items-center gap-3 px-4 text-left transition hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:-outline-offset-2', big ? 'py-3 text-[15px]' : 'py-2 text-sm')}>
         <span className="shrink-0 text-muted" aria-hidden>{i.icon}</span>
         {i.label}
       </button>
@@ -178,7 +179,7 @@ function TemplatePicker({ dest, onClose }: { dest: { folderId: string | null; na
                   </span>
                 </span>
                 <span className="flex min-w-0 items-start gap-2 px-3 py-2.5">
-                  <span className="text-lg leading-none" aria-hidden>{t.emoji}</span>
+                  <span className="mt-0.5 shrink-0 text-accent-ink" aria-hidden>{templateIcons[t.id]}</span>
                   <span className="min-w-0">
                     <span className="line-clamp-2 text-sm leading-snug font-semibold">{t.name}</span>
                     <span className="line-clamp-2 text-xs text-muted">{t.blurb}</span>

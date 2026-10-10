@@ -2,7 +2,7 @@
 // assistant shows here is a suggestion: drafts go into the composer, suggested
 // tasks need a tap to accept, and nothing is sent on the user's behalf.
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { AtSign, CalendarClock, Check, ChevronDown, ChevronRight, CircleCheckBig, FileSearch, Hash, ListChecks, MessageSquareReply, Mic, MonitorUp, PenLine, Plus, Search, Sparkles, Users, X } from 'lucide-react'
+import { AtSign, CalendarClock, Check, ChevronDown, ChevronRight, CircleCheckBig, FileSearch, FileText, Hash, ListChecks, MessageSquareReply, Mic, MonitorUp, PenLine, Plus, Search, Sparkles, Users, X } from 'lucide-react'
 import { useStore } from '../store'
 import type { Actionable, CalendarEvent, Conversation, Room, SourceRef, SuggestedTask, Task, TaskSource } from '../types'
 import { ASSISTANT, ME } from '../data/people'
@@ -263,7 +263,9 @@ function UpNext() {
   const { state, navigate } = useStore()
   const now = state.clock
   const roomLive = (id?: string) => (state.rooms.find(r => r.id === id)?.participants.length ?? 0) >= 2
-  const isLive = (e: CalendarEvent) => e.start <= now && (now < e.end || roomLive(e.roomId))
+  // A meeting that has wrapped up (its recording is saved) isn't live any more, even before its end time.
+  const ended = (e: CalendarEvent) => state.sessions.some(x => x.meetingId === e.id)
+  const isLive = (e: CalendarEvent) => e.start <= now && !ended(e) && (now < e.end || roomLive(e.roomId))
   const upcoming = state.events
     .filter(e => e.kind !== 'leave' && sameDay(e.start, now) && (e.end > now || isLive(e)))
     .sort((a, b) => a.start - b.start)
@@ -290,7 +292,9 @@ function EventRow({ ev, live, className }: { ev: CalendarEvent; live: boolean; c
   const { state, navigate, joinRoom } = useStore()
   const room = state.rooms.find(r => r.id === ev.roomId)
   const inRoom = !!ev.roomId && state.myRoomId === ev.roomId
-  const joinable = !!ev.roomId && (live || ev.start - state.clock <= 5 * 60_000)
+  // Wrapped up early (everyone left and the recording was saved): no Join, link to the notes instead.
+  const session = state.sessions.find(x => x.meetingId === ev.id)
+  const joinable = !!ev.roomId && !session && (live || ev.start - state.clock <= 5 * 60_000)
   const [time, ampm] = clock(ev.start).split(' ')
   const others = room?.participants.filter(p => p !== ME) ?? []
 
@@ -300,6 +304,11 @@ function EventRow({ ev, live, className }: { ev: CalendarEvent; live: boolean; c
         {live ? (
           <>
             <span className="block text-sm font-bold text-rec">Now</span>
+            <span className="block text-[11px] text-muted tabular">{time}</span>
+          </>
+        ) : session ? (
+          <>
+            <span className="block text-sm font-semibold text-muted">Ended</span>
             <span className="block text-[11px] text-muted tabular">{time}</span>
           </>
         ) : (
@@ -315,13 +324,14 @@ function EventRow({ ev, live, className }: { ev: CalendarEvent; live: boolean; c
         </button>
         <p className="truncate text-xs text-muted">
           {clock(ev.start)} – {clock(ev.end)}
-          {!live && ` · ${inLabel(ev.start - state.clock)}`}
+          {session ? ' · Recording saved' : !live && ` · ${inLabel(ev.start - state.clock)}`}
         </p>
         {live && room && (
           <p className="mt-1 flex min-w-0 items-center gap-2">
-            <RecordingIndicator compact />
+            {/* Recording runs only while 2 or more people are in the room (REC-05). */}
+            {room.participants.length >= 2 && <RecordingIndicator compact />}
             <span className="truncate text-xs text-muted">
-              {inRoom ? `You and ${others.length} others` : `${others.length} in the room`}
+              {inRoom ? `You and ${others.length} ${others.length === 1 ? 'other' : 'others'}` : `${others.length} in the room`}
             </span>
           </p>
         )}
@@ -341,7 +351,12 @@ function EventRow({ ev, live, className }: { ev: CalendarEvent; live: boolean; c
               {inRoom ? 'Back to room' : 'Join'}
             </Button>
           )}
-          {ev.prep && (
+          {session && (
+            <Button size="sm" variant="secondary" icon={<FileText size={14} aria-hidden />} onClick={() => navigate({ name: 'session', sessionId: session.id })}>
+              View notes
+            </Button>
+          )}
+          {ev.prep && !session && (
             <Button size="sm" variant="agent" icon={<Sparkles size={14} aria-hidden />} onClick={() => navigate({ name: 'calendar', eventId: ev.id })}>
               Prep brief
             </Button>

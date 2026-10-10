@@ -495,8 +495,8 @@ interface Api {
   trashItem: (id: string) => void
   restoreItem: (id: string) => void
   deleteForever: (id: string) => void
-  /** Opens any Drive item in its editor or preview and marks it as recently opened. */
-  openItem: (id: string) => void
+  /** Opens any Drive item in its editor or preview (or at `at`, a route inside it) and marks it as recently opened. */
+  openItem: (id: string, at?: Route) => void
   updateSheet: (sheet: Sheet) => void
   updateDeck: (deck: Deck) => void
   deleteMemory: (id: string) => void
@@ -512,15 +512,17 @@ const Ctx = createContext<Api | null>(null)
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initial, init => {
+    // A deep link (#drive) works even when storage is blocked, so read it on its own.
+    const tab = window.location.hash.slice(1)
+    const tabs = ['today', 'chats', 'rooms', 'tasks', 'calendar', 'drive', 'docs', 'insights', 'ask', 'settings']
+    const route = tabs.includes(tab) ? ({ name: tab } as Route) : init.route
+    let saved: { onboarded?: boolean; theme?: ThemeChoice } = {}
     try {
-      const saved = JSON.parse(localStorage.getItem('hearth-demo') ?? '{}')
-      const tab = window.location.hash.slice(1)
-      const tabs = ['today', 'chats', 'rooms', 'tasks', 'calendar', 'drive', 'docs', 'insights', 'ask', 'settings']
-      const route = tabs.includes(tab) ? ({ name: tab } as Route) : init.route
-      return withMemoryDrafts({ ...init, route, onboarded: !!saved.onboarded || tabs.includes(tab), theme: saved.theme ?? 'system' })
+      saved = JSON.parse(localStorage.getItem('hearth-demo') ?? '{}') ?? {}
     } catch {
-      return withMemoryDrafts(init)
+      /* storage unavailable: start fresh */
     }
+    return withMemoryDrafts({ ...init, route, onboarded: !!saved.onboarded || tabs.includes(tab), theme: saved.theme ?? 'system' })
   })
   const stateRef = useRef(state)
   stateRef.current = state
@@ -763,11 +765,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     trashItem: id => dispatch({ type: 'patchItem', id, patch: { trashed: true, trashedAt: stateRef.current.clock } }),
     restoreItem: id => dispatch({ type: 'patchItem', id, patch: { trashed: false, trashedAt: undefined } }),
     deleteForever: id => dispatch({ type: 'deleteItem', id }),
-    openItem: id => {
+    openItem: (id, at) => {
       const e = findEntry(stateRef.current, id)
       if (!e) return
       if (e.kind !== 'folder') dispatch({ type: 'patchItem', id, patch: { lastOpenedAt: stateRef.current.clock } })
-      dispatch({ type: 'navigate', route: routeFor(e) })
+      dispatch({ type: 'navigate', route: at ?? routeFor(e) })
     },
     updateSheet: sheet => dispatch({ type: 'updateSheet', sheet }),
     updateDeck: deck => dispatch({ type: 'updateDeck', deck }),

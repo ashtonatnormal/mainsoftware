@@ -1,11 +1,13 @@
 // Visual pieces for Drive items: kind icon tiles (token colours), thumbnails
-// that show real content, and the generated art seeded images and videos use.
+// that show real content (decks through the Slides renderer), and the generated
+// art seeded images and videos use.
 import type { CSSProperties, ReactNode } from 'react'
 import { File as FileIcon, Film, Folder as FolderIcon, FileText, Image as ImageIcon, Music, Play, Presentation, Sheet as SheetIcon } from 'lucide-react'
-import type { Deck, Doc, DocBlock, DriveKind, DriveUpload, Folder, Sheet, Slide } from '../../types'
+import type { Deck, Doc, DocBlock, DriveKind, DriveUpload, Folder, Sheet } from '../../types'
 import type { DriveEntry } from '../../drive'
 import { cx } from '../../ui'
 import { duration } from '../../time'
+import { SlideFrame } from '../slides/render'
 import { folderDot } from './model'
 
 // ── Kind tiles ───────────────────────────────────────────────────────────────
@@ -85,39 +87,6 @@ export function GeneratedArt({ hue = 200, plan, className, style }: { hue?: numb
   )
 }
 
-// ── Slide faces (theme colours are slide content, so they don't follow app light/dark) ──
-export const slideTheme: Record<Deck['theme'], { bg: string; fg: string; accent: string; muted: string }> = {
-  ember: { bg: ok(0.97, 0.025, 70), fg: ok(0.27, 0.04, 40), accent: ok(0.64, 0.19, 42), muted: ok(0.5, 0.04, 50) },
-  slate: { bg: ok(0.26, 0.025, 255), fg: ok(0.96, 0.01, 255), accent: ok(0.78, 0.14, 65), muted: ok(0.75, 0.02, 255) },
-  teal: { bg: ok(0.46, 0.08, 195), fg: ok(0.98, 0.01, 190), accent: ok(0.88, 0.1, 175), muted: ok(0.86, 0.04, 190) },
-}
-
-export function SlideFace({ slide, theme, className }: { slide: Slide; theme: Deck['theme']; className?: string }) {
-  const t = slideTheme[theme]
-  const big = slide.layout === 'title' || slide.layout === 'section'
-  return (
-    <div className={cx('relative flex aspect-video w-full flex-col justify-center overflow-hidden rounded-md px-[8%]', className)} style={{ background: t.bg, color: t.fg, containerType: 'inline-size' }}>
-      <span className="absolute top-0 left-0 h-[6%] w-[22%]" style={{ background: t.accent }} />
-      {slide.layout === 'big-number' && slide.stat ? (
-        <>
-          <span className="font-display leading-none font-bold" style={{ fontSize: '17cqw', color: t.accent }}>{slide.stat}</span>
-          <span className="mt-[2%] line-clamp-2 leading-tight" style={{ fontSize: '5cqw', color: t.muted }}>{slide.statLabel}</span>
-        </>
-      ) : (
-        <>
-          <span className={cx('line-clamp-2 font-display leading-[1.1] font-semibold', !big && 'self-start')} style={{ fontSize: big ? '9cqw' : '7cqw' }}>{slide.title}</span>
-          {slide.subtitle && <span className="mt-[3%] line-clamp-1" style={{ fontSize: '4.6cqw', color: t.muted }}>{slide.subtitle}</span>}
-          {slide.bullets && (
-            <span className="mt-[3%] flex flex-col gap-[1.5%]" style={{ fontSize: '4.2cqw', color: t.muted }}>
-              {slide.bullets.slice(0, 3).map((b, i) => <span key={i} className="line-clamp-1">• {b}</span>)}
-            </span>
-          )}
-        </>
-      )}
-    </div>
-  )
-}
-
 // ── Thumbnails ───────────────────────────────────────────────────────────────
 /** A paper page with tiny lines of real text. */
 function Paper({ children, className }: { children: ReactNode; className?: string }) {
@@ -182,9 +151,10 @@ export function Thumb({ entry }: { entry: DriveEntry }) {
       return <SheetGrid sheet={entry.item as Sheet} />
     case 'slides': {
       const deck = entry.item as Deck
+      // The Slides area's own renderer, so the card looks like the deck's first slide.
       return (
-        <div className="absolute inset-0 grid place-items-center px-4 py-3">
-          {deck.slides[0] ? <SlideFace slide={deck.slides[0]} theme={deck.theme} className="shadow-card" /> : <span className="text-xs text-muted">No slides yet</span>}
+        <div className="absolute inset-0 grid place-items-center px-4 py-3" aria-hidden>
+          {deck.slides[0] ? <SlideFrame slide={deck.slides[0]} theme={deck.theme} className="shadow-card" /> : <span className="text-xs text-muted">No slides yet</span>}
         </div>
       )
     }

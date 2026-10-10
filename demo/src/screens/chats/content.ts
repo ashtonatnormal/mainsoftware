@@ -50,7 +50,7 @@ export const seedSources: Record<string, SourceRef[]> = {
     { label: '#ops-north-site', kind: 'message', route: { name: 'chats', conversationId: 'c_ops' } },
     { label: 'Hui Min in #announcements', kind: 'message', route: { name: 'chats', conversationId: 'c_announce' } },
   ],
-  m_it_2: [{ label: 'Adding people · IT wiki', kind: 'doc', route: { name: 'docs' } }],
+  m_it_2: [{ label: 'Adding people · IT wiki', kind: 'doc', route: { name: 'docs', docId: 'd_itpeople' } }],
 }
 
 /** AGT-08 participation levels, explained in plain words. */

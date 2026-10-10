@@ -5,7 +5,7 @@
 // anchored comments, live presence, version history with restore, and AI help
 // that only suggests. Without a docId, the docs route shows the Drive.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, Check, ClipboardCopy, CloudCheck, CloudUpload, Copy, Ellipsis, Eye, FileQuestion, History, Info, Lock, MessageSquarePlus, MessageSquareText, Pencil, Redo2, Sparkles, Star, StarOff, Trash2, Undo2, UserPlus, Users } from 'lucide-react'
+import { ArrowLeft, Check, ClipboardCopy, CloudCheck, CloudUpload, Copy, Ellipsis, Eye, FileQuestion, History, Info, Lock, MessageSquarePlus, MessageSquareText, Pencil, Redo2, Sparkles, Star, Trash2, Undo2 } from 'lucide-react'
 import type { Doc, Folder, Route } from '../types'
 import { newId, useStore, type State } from '../store'
 import { ME, personById } from '../data/people'
@@ -14,6 +14,8 @@ import { myDocs } from '../data/drive'
 import { canEdit as canEditItem, folderPath, isTrashed, teamFolderOf } from '../drive'
 import { AvatarStack, Button, cx, EmptyState, IconButton, Segmented, Sheet } from '../ui'
 import { ShareDialog } from '../ui/share'
+import { KindIcon } from './drive/art'
+import { FileCrumbs, ShareButton } from './drive/header'
 import DriveScreen from './Drive'
 import Editor, { applyType, typeIcons } from './docs/Editor'
 import { BlankStart, useAssist, type AssistKind } from './docs/Assist'
@@ -208,7 +210,6 @@ function DocView({ doc }: { doc: Doc }) {
   }
 
   const moreItems: MenuItem[] = [
-    ...(!desktop ? [{ id: 'star', label: doc.starred ? 'Remove from Starred' : 'Add to Starred', icon: doc.starred ? <StarOff size={17} /> : <Star size={17} />, onSelect: () => toggleStar(doc.id) }] : []),
     { id: 'copy', label: 'Make a copy', note: `Saved in ${copyTo?.title ?? 'My Drive'}`, icon: <Copy size={17} />, onSelect: makeCopy },
     { id: 'history', label: 'Version history', note: `${doc.versions.length} ${doc.versions.length === 1 ? 'version' : 'versions'}`, icon: <History size={17} />, onSelect: () => showPanel('history') },
     { id: 'md', label: 'Copy as Markdown', note: 'PDF and Word export come later', icon: <ClipboardCopy size={17} />, onSelect: copyMarkdown },
@@ -421,14 +422,9 @@ function DocHeader(p: {
   onBack: () => void; onMode: (m: 'edit' | 'view') => void; onShare: () => void; onComments: () => void; onHistory: () => void; openComments: number
   moreOpen: boolean; onMore: () => void; moreMenu: ReactNode; trashed: boolean
 }) {
-  const { doc, draft, desktop, editable, editing, path, here } = p
-  const { navigate, toggleStar } = useStore()
+  const { doc, draft, desktop, editable, editing, here } = p
+  const { toggleStar } = useStore()
   const titleRef = useRef<HTMLInputElement>(null)
-  const crumbs: { label: string; route: Route }[] = [
-    { label: 'Drive', route: { name: 'drive' } },
-    ...(path.length ? path.map(f => ({ label: f.title, route: { name: 'drive', folderId: f.id } as Route })) : [{ label: doc.ownerId === ME ? 'My Drive' : 'Shared with me', route: { name: 'drive', view: doc.ownerId === ME ? 'my' : 'shared' } as Route }]),
-  ]
-  const shown = !desktop && crumbs.length > 2 ? [crumbs[0], { label: '…', route: crumbs[crumbs.length - 2].route }, crumbs[crumbs.length - 1]] : crumbs
   const saveState = p.trashed ? (
     <span className="inline-flex shrink-0 items-center gap-1 text-rec"><Trash2 size={12} aria-hidden />In trash</span>
   ) : !editable ? (
@@ -463,19 +459,11 @@ function DocHeader(p: {
   ) : (
     <h1 className={cx('truncate font-display font-semibold', desktop ? 'text-lg' : 'text-[17px]')}>{p.title}</h1>
   )
-  const crumbLine = (
-    <nav aria-label="Location" className="flex min-w-0 items-center gap-1 text-xs text-muted">
-      <span className="flex min-w-0 items-center gap-1 truncate">
-        {shown.map((c, i) => (
-          <span key={i} className={cx('flex items-center gap-1', i === shown.length - 1 ? 'min-w-0' : 'shrink-0')}>
-            {i > 0 && <span aria-hidden>›</span>}
-            <button onClick={() => navigate(c.route)} className="truncate rounded hover:text-fg hover:underline" title={c.label === '…' ? crumbs.slice(1, -1).map(x => x.label).join(' › ') : undefined}>{c.label}</button>
-          </span>
-        ))}
-      </span>
-      <span aria-hidden>·</span>
-      {saveState}
-    </nav>
+  const crumbLine = <FileCrumbs item={doc} compact={!desktop} trailing={saveState} />
+  const star = (
+    <IconButton label={doc.starred ? 'Remove from Starred' : 'Add to Starred'} aria-pressed={!!doc.starred} onClick={() => toggleStar(doc.id)}>
+      <Star size={19} className={doc.starred ? 'fill-current text-warn' : 'text-muted'} />
+    </IconButton>
   )
   const comments = (
     <IconButton label={`Comments (${p.openComments})`} onClick={p.onComments} className="relative">
@@ -492,29 +480,25 @@ function DocHeader(p: {
 
   if (!desktop) {
     return (
-      <header className="flex min-h-14 items-center gap-0.5 border-b border-line bg-surface py-1.5 pr-1 pl-1">
+      <header className="flex min-h-14 items-center gap-0.5 border-b border-line bg-surface px-2 py-1.5">
         <IconButton label="Back" onClick={p.onBack}><ArrowLeft size={20} /></IconButton>
         <div className="min-w-0 flex-1 pl-0.5">
           {titleEl}
           {crumbLine}
         </div>
+        {star}
+        <ShareButton itemId={doc.id} onClick={p.onShare} compact />
         {comments}
-        <IconButton label="Share" onClick={p.onShare}><UserPlus size={20} /></IconButton>
         {more}
       </header>
     )
   }
   return (
-    <header className="flex min-h-16 items-center gap-2 border-b border-line bg-surface px-2 py-2 sm:px-4">
+    <header className="flex min-h-14 items-center gap-2 border-b border-line bg-surface px-2 py-1.5 sm:px-3">
       <IconButton label="Back" onClick={p.onBack}><ArrowLeft size={20} /></IconButton>
-      <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-surface-2 text-xl" aria-hidden>{draft.emoji}</span>
+      <KindIcon kind="doc" size="md" className="hidden sm:grid" />
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-0.5">
-          {titleEl}
-          <IconButton label={doc.starred ? 'Remove from Starred' : 'Add to Starred'} className="size-8" onClick={() => toggleStar(doc.id)}>
-            <Star size={17} className={doc.starred ? 'fill-current text-warn' : 'text-muted'} />
-          </IconButton>
-        </div>
+        {titleEl}
         {crumbLine}
       </div>
       {here.length > 0 && (
@@ -534,7 +518,8 @@ function DocHeader(p: {
       )}
       {!p.wide && comments}
       {!p.wide && <IconButton label="Version history" onClick={p.onHistory}><History size={20} /></IconButton>}
-      <Button size="sm" variant="primary" icon={doc.access === 'restricted' || !doc.access ? <Lock size={14} /> : <Users size={14} />} onClick={p.onShare}>Share</Button>
+      {star}
+      <ShareButton itemId={doc.id} onClick={p.onShare} />
       {more}
     </header>
   )
