@@ -72,10 +72,11 @@ export function isTrashed(folders: Folder[], item: DriveMeta): boolean {
   return !!item.trashed || folderPath(folders, item.folderId).some(f => f.trashed)
 }
 
-/** Effective general access: explicit, else inherited from a team folder, else restricted. */
+/** Effective general access: set on the item, else on the nearest folder above it
+    (sharing a folder shares what's inside, team folders included), else restricted. */
 export function accessOf(folders: Folder[], item: DriveMeta): NonNullable<DriveMeta['access']> {
   if (item.access) return item.access
-  return teamFolderOf(folders, item)?.access ?? 'restricted'
+  return [...folderPath(folders, item.folderId)].reverse().find(f => f.access)?.access ?? 'restricted'
 }
 
 export function canEdit(item: DriveMeta & { editors?: PersonId[] }, person: PersonId = ME): boolean {

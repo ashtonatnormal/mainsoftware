@@ -83,6 +83,8 @@ type Action =
 type AnyItem = Folder | Doc | Sheet | Deck | DriveUpload
 /** Fields any Drive item can change in place: rename, move, star, trash, share. */
 export type ItemPatch = Partial<Pick<DriveMeta, 'title' | 'folderId' | 'starred' | 'trashed' | 'trashedAt' | 'lastOpenedAt' | 'access' | 'sharedWith' | 'updatedAt' | 'updatedBy'>> & {
+  pages?: number // uploads: a new version can change the page count
+  size?: string
   editors?: PersonId[]
   commenters?: 'team' | 'org' | 'none'
   space?: string
