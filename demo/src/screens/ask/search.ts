@@ -6,7 +6,7 @@
 import type { CalendarEvent, Conversation, Deck, Doc, DriveUpload, Folder, Message, PersonId, Route, Session, Sheet, Task } from '../../types'
 import { ASSISTANT, ME, people, personById } from '../../data/people'
 import { clock, listStamp, shortDay } from '../../time'
-import { driveEntries, folderPath, isTrashed, kindLabel, routeFor, type DriveEntry } from '../../drive'
+import { driveEntries, folderPath, isInMyDrive, isTrashed, kindLabel, routeFor, type DriveEntry } from '../../drive'
 import { canOpen } from '../drive/model'
 
 /** 'docs' holds every Drive result; the screen labels it "Files". */
@@ -194,14 +194,13 @@ export function search(q: string, src: SearchSource): SearchResult[] {
   for (const e of driveEntries(src)) {
     if (isTrashed(src.folders, e.item) || !canOpen({ ...src, clock: 0 }, e)) continue
     const hit = driveHit(e, terms)
-    const path = folderPath(src.folders, e.item.folderId).map(f => f.title)
     add(
       {
         id: e.item.id,
         group: 'docs',
         icon: driveIcon(e),
         title: e.item.title,
-        context: e.kind === 'doc' ? (e.item as Doc).space : path.length ? path.join(' › ') : e.item.ownerId === ME ? 'My Drive' : 'Shared with me',
+        context: driveLocation(src, e),
         snippet: hit.snippet,
         meta: hit.meta,
         route: routeFor(e),
@@ -260,6 +259,13 @@ export function search(q: string, src: SearchSource): SearchResult[] {
 }
 
 // ── Drive helpers ────────────────────────────────────────────────────────────
+/** Where a Drive item lives, from its folders (always current, even after a folder is renamed or moved). */
+export function driveLocation(src: Pick<SearchSource, 'folders' | 'docs' | 'sheets' | 'decks' | 'uploads'>, e: DriveEntry) {
+  const path = folderPath(src.folders, e.item.folderId).map(f => f.title)
+  if (path.length) return path.join(' › ')
+  return isInMyDrive(src, e) ? 'My Drive' : 'Shared with me'
+}
+
 function driveIcon(e: DriveEntry): ResultIcon {
   if (e.kind === 'file') return 'upload'
   return e.kind

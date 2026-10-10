@@ -5,14 +5,14 @@ import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'r
 import { AlertTriangle, ArrowRight, Download, EllipsisVertical, FileQuestion, Folder as FolderIcon, Hash, HardDrive, History, Lock, Play, RotateCcw, Search, Star, Trash2, Upload, UserPlus, Users } from 'lucide-react'
 import type { DriveUpload, FileVersion } from '../types'
 import { newId, useStore } from '../store'
-import { accessOf, canEdit, findEntry, folderPath, isInMyDrive, isTrashed, routeFor } from '../drive'
+import { canEdit, findEntry, folderPath, isInMyDrive, isTrashed, routeFor } from '../drive'
 import { ME } from '../data/people'
 import { duration } from '../time'
 import { Avatar, AvatarStack, Button, cx, EmptyState, IconButton, personName, Pill, ScreenHeader, SectionTitle } from '../ui'
 import { conversationLabel } from './ask/search'
 import { DriveActionsProvider, useDriveActions } from './drive/actions'
 import { GeneratedArt, KindIcon } from './drive/art'
-import { formatBytes, fullWhen, generalAccessLabel, isTextFile, kindFromFile, kindNames, peopleWithAccess, readStart, versionsOf, when, whoCanChange } from './drive/model'
+import { extractText, formatBytes, fullWhen, generalAccessLabel, generalAccessOf, inheritedPeople, kindFromFile, kindNames, peopleWithAccess, versionsOf, when, whoCanChange } from './drive/model'
 
 export default function FilePreviewScreen() {
   return (
@@ -153,6 +153,7 @@ function Body({ u }: { u: DriveUpload }) {
         </div>
       ) : <NoPreview u={u} onDownload={() => toast('Downloads aren’t part of the demo.')} />
     default:
+      if (u.size === '0 bytes') return <NoPreview u={u} title="This file is empty" body="It was uploaded with nothing in it, so there’s nothing to show." />
       return u.previewText ? (
         <>
           <article className="w-full max-w-[640px] rounded-sm bg-surface px-6 py-7 shadow-card sm:px-10">
@@ -166,13 +167,13 @@ function Body({ u }: { u: DriveUpload }) {
 
 const Caption = ({ children }: { children: ReactNode }) => <p className="text-center text-xs text-muted">{children}</p>
 
-function NoPreview({ u, onDownload }: { u: DriveUpload; onDownload: () => void }) {
+function NoPreview({ u, onDownload, title = 'No preview for this file type', body = 'You can still share it, move it or keep versions of it here.' }: { u: DriveUpload; onDownload?: () => void; title?: string; body?: string }) {
   return (
     <div className="flex w-full max-w-md flex-col items-center gap-3 rounded-2xl bg-surface px-6 py-10 text-center shadow-card">
       <KindIcon kind={u.kind} size="lg" />
-      <p className="font-display text-lg font-semibold">No preview for this file type</p>
-      <p className="text-sm text-muted">You can still share it, move it or keep versions of it here.</p>
-      <Button icon={<Download size={15} />} onClick={onDownload}>Download</Button>
+      <p className="font-display text-lg font-semibold">{title}</p>
+      <p className="text-sm text-muted">{body}</p>
+      {onDownload && <Button icon={<Download size={15} />} onClick={onDownload}>Download</Button>}
     </div>
   )
 }
@@ -221,8 +222,9 @@ function Details({ u }: { u: DriveUpload }) {
   const actions = useDriveActions()
   const entry = { kind: u.kind, item: u }
   const path = folderPath(state.folders, u.folderId)
-  const access = accessOf(state.folders, u)
-  const people = peopleWithAccess(entry).map(p => p.personId)
+  const access = generalAccessOf(state, u)
+  const inherited = inheritedPeople(state, entry)
+  const people = [...peopleWithAccess(entry).map(p => p.personId), ...inherited.map(p => p.personId)]
   const conv = u.fromConversationId ? state.conversations.find(c => c.id === u.fromConversationId) : undefined
   const ext = u.title.includes('.') ? u.title.split('.').pop()!.toUpperCase() : undefined
   const rows: [string, ReactNode][] = [
@@ -278,7 +280,7 @@ function Details({ u }: { u: DriveUpload }) {
         </div>
         <p className="mt-1 flex items-center gap-1.5 text-xs text-muted">
           {access === 'restricted' && <Lock size={12} aria-hidden />}
-          {access === 'restricted' ? 'Restricted to the people named on it' : people.length > 1 ? `Plus ${people.length - 1} named ${people.length - 1 === 1 ? 'person' : 'people'}` : `Owned by ${u.ownerId === ME ? 'you' : personName(u.ownerId)}`}
+          {access === 'restricted' ? (inherited.length ? `Restricted to the people named on it and on ${inherited[0].folder.title}` : 'Restricted to the people named on it') : people.length > 1 ? `Plus ${people.length - 1} named ${people.length - 1 === 1 ? 'person' : 'people'}` : `Owned by ${u.ownerId === ME ? 'you' : personName(u.ownerId)}`}
         </p>
         <Button size="sm" className="mt-2.5" icon={<UserPlus size={14} />} onClick={() => actions.share(u.id)}>{canEdit(u) ? 'Manage access' : 'See who has access'}</Button>
       </section>
@@ -294,7 +296,7 @@ function Details({ u }: { u: DriveUpload }) {
             </span>
             <ArrowRight size={16} className="shrink-0 text-muted" aria-hidden />
           </button>
-          <p className="mt-1.5 text-xs text-muted">Everyone in {conversationLabel(conv)} can open it. It’s listed in the chat’s shared files.</p>
+          <p className="mt-1.5 text-xs text-muted">Everyone in {conversationLabel(conv)} can open it.</p>
         </section>
       )}
 
@@ -333,7 +335,7 @@ function Versions({ u }: { u: DriveUpload }) {
     if (kind === 'image' || kind === 'video' || kind === 'audio') {
       try { url = URL.createObjectURL(f) } catch { url = undefined }
     }
-    const previewText = isTextFile(f) ? (await readStart(f)) || undefined : undefined
+    const previewText = await extractText(f)
     const v: FileVersion = { id: newId('fv'), ts: state.clock, by: ME, name: f.name, size: formatBytes(f.size), url, previewText }
     patchItem(u.id, { versions: [v, ...versions], size: v.size, url, previewText, updatedAt: state.clock, updatedBy: ME })
     toast('New version uploaded. The previous one is kept below.')

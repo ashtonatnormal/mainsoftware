@@ -3,7 +3,7 @@
 // Share, Download and Move to trash.
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertTriangle, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Folder as FolderIcon, FolderInput, HardDrive, Pencil, Star, Trash2, UserPlus } from 'lucide-react'
+import { AlertTriangle, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Folder as FolderIcon, FolderInput, HardDrive, Pencil, RotateCcw, Star, Trash2, UserPlus } from 'lucide-react'
 import type { Deck, Doc, Folder, Sheet as SheetDoc } from '../../types'
 import { newId, useStore } from '../../store'
 import { canEdit, findEntry, folderPath, isInMyDrive, routeFor, type DriveEntry } from '../../drive'
@@ -11,7 +11,7 @@ import { ME } from '../../data/people'
 import { Button, cx, Sheet } from '../../ui'
 import { ShareDialog } from '../../ui/share'
 import { KindIcon } from './art'
-import { canAddTo, canOpen, isEditableKind, modifiedLabel, teamFolders, whoCanChange, type DriveState } from './model'
+import { canAddTo, canOpen, isEditableKind, modifiedLabel, personName, teamFolders, whoCanChange, type DriveState } from './model'
 import { focusSoon, useWide } from './hooks'
 
 interface DriveActions {
@@ -35,13 +35,22 @@ type Dialog = { kind: 'share' | 'rename' | 'move'; id: string }
 export function DriveActionsProvider({ children }: { children: ReactNode }) {
   const [menu, setMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null)
   const [dialog, setDialog] = useState<Dialog | null>(null)
-  const api = useMemo<DriveActions>(() => ({
-    menu: (id, anchor) => setMenu({ id, anchor }),
-    share: id => setDialog({ kind: 'share', id }),
-    rename: id => setDialog({ kind: 'rename', id }),
-    move: id => setDialog({ kind: 'move', id }),
-  }), [])
-  const close = useCallback(() => setDialog(null), [])
+  // The control that opened the menu or dialog gets focus back when it closes.
+  const opener = useRef<HTMLElement | null>(null)
+  const api = useMemo<DriveActions>(() => {
+    const open = (d: Dialog) => { opener.current = document.activeElement as HTMLElement | null; setDialog(d) }
+    return {
+      menu: (id, anchor) => { opener.current = anchor; setMenu({ id, anchor }) },
+      share: id => open({ kind: 'share', id }),
+      rename: id => open({ kind: 'rename', id }),
+      move: id => open({ kind: 'move', id }),
+    }
+  }, [])
+  const close = useCallback(() => {
+    setDialog(null)
+    const el = opener.current
+    if (el?.isConnected) window.setTimeout(() => el.focus(), 0)
+  }, [])
   const closeMenu = useCallback(() => setMenu(null), [])
   return (
     <Ctx.Provider value={api}>
@@ -103,8 +112,9 @@ function useMenuItems(e: DriveEntry, onDialog: (d: Dialog) => void, close: () =>
   const trash = useTrash()
   const editable = canEdit(e.item as Doc)
   const id = e.item.id
+  const here = JSON.stringify(store.state.route) === JSON.stringify(routeFor(e))
   const items: MenuItem[] = [
-    { key: 'open', label: e.kind === 'folder' ? 'Open folder' : 'Open', icon: <ExternalLink size={17} />, run: () => { close(); store.openItem(id) } },
+    ...(here ? [] : [{ key: 'open', label: e.kind === 'folder' ? 'Open folder' : 'Open', icon: <ExternalLink size={17} />, run: () => { close(); store.openItem(id) } }]),
     { key: 'share', label: 'Share', icon: <UserPlus size={17} />, run: () => onDialog({ kind: 'share', id }) },
     { key: 'star', label: e.item.starred ? 'Remove from Starred' : 'Add to Starred', icon: <Star size={17} fill={e.item.starred ? 'currentColor' : 'none'} />, run: () => { close(); store.toggleStar(id); store.toast(e.item.starred ? 'Removed from Starred' : 'Added to Starred') } },
     { key: 'rename', label: 'Rename', icon: <Pencil size={17} />, run: () => onDialog({ kind: 'rename', id }), disabled: !editable, reason: editable ? undefined : `Only ${whoCanChange(e)} can rename it` },
@@ -112,11 +122,19 @@ function useMenuItems(e: DriveEntry, onDialog: (d: Dialog) => void, close: () =>
   ]
   if (isEditableKind(e.kind)) items.push({ key: 'copy', label: 'Make a copy', icon: <Copy size={17} />, run: () => { close(); copy(e) } })
   items.push({ key: 'download', label: 'Download', icon: <Download size={17} />, run: () => { close(); store.toast('Downloads aren’t part of the demo. In Hearth this saves the file to your device.') } })
-  items.push({
-    key: 'trash', label: 'Move to trash', icon: <Trash2 size={17} />, danger: true, divider: true,
-    run: () => { close(); trash(e) },
-    disabled: !editable, reason: editable ? undefined : `Only ${whoCanChange(e)} can move it to trash`,
-  })
+  if (e.item.trashed) {
+    items.push({
+      key: 'restore', label: 'Restore from trash', icon: <RotateCcw size={17} />, divider: true,
+      run: () => { close(); store.restoreItem(id); store.toast(`Restored “${e.item.title}”`) },
+      disabled: !editable, reason: editable ? undefined : `Only ${whoCanChange(e)} can restore it`,
+    })
+  } else {
+    items.push({
+      key: 'trash', label: 'Move to trash', icon: <Trash2 size={17} />, danger: true, divider: true,
+      run: () => { close(); trash(e) },
+      disabled: !editable, reason: editable ? undefined : `Only ${whoCanChange(e)} can move it to trash`,
+    })
+  }
   return items
 }
 
@@ -172,7 +190,7 @@ function MenuSheet({ entry, onClose, onDialog }: { entry: DriveEntry; onClose: (
       open
       onClose={onClose}
       title={
-        <span className="flex min-w-0 items-center gap-3">
+        <span className="flex min-w-0 items-center gap-3 [contain:inline-size]">
           <KindIcon kind={entry.kind} color={(entry.item as Folder).color} size="md" />
           <span className="min-w-0">
             <span className="block truncate text-base">{entry.item.title}</span>
@@ -206,6 +224,7 @@ export function Popover({ anchor, onClose, label, children, width = 264, align =
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.preventDefault(); onClose(); return }
+      if (e.key === 'Tab') { onClose(); return }
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
       const items = [...(ref.current?.querySelectorAll<HTMLElement>('[role=menuitem]:not([disabled])') ?? [])]
       if (!items.length) return
@@ -236,7 +255,7 @@ export function Popover({ anchor, onClose, label, children, width = 264, align =
 
 // ── Rename ───────────────────────────────────────────────────────────────────
 function RenameDialog({ id, onClose }: { id: string; onClose: () => void }) {
-  const { state, renameItem, toast } = useStore()
+  const { state, renameItem, patchItem, toast } = useStore()
   const entry = findEntry(state, id)
   const [name, setName] = useState(entry?.item.title ?? '')
   const input = useRef<HTMLInputElement>(null)
@@ -251,6 +270,7 @@ function RenameDialog({ id, onClose }: { id: string; onClose: () => void }) {
     ev?.preventDefault()
     if (!clean || clean === entry.item.title) return onClose()
     renameItem(id, clean)
+    if (entry.kind === 'folder') for (const d of state.docs) if (d.folderId === id) patchItem(d.id, { space: clean })
     toast(`Renamed to “${clean}”`)
     onClose()
   }
@@ -290,7 +310,12 @@ function MoveDialog({ id, onClose }: { id: string; onClose: () => void }) {
   const here = spot === 'root' ? 'Drive' : spot === null ? 'My Drive' : path[path.length - 1]?.title ?? 'Folder'
   const target = spot === 'root' ? undefined : spot
   const allowed = target !== undefined && canAddTo(s, target)
-  const reason = spot === 'root' ? 'Pick a folder' : target === current ? `Already in ${here}` : !allowed ? `You can only view ${here}` : null
+  const notMine = target === null && entry.item.ownerId !== ME
+  const reason = spot === 'root' ? 'Pick a folder'
+    : target === current ? `Already in ${here}`
+      : !allowed ? `You can only view ${here}`
+        : notMine ? `It’s ${personName(entry.item.ownerId)}’s, so pick a folder for it`
+          : null
 
   const enter = (f: Folder) => {
     if (f.id === id) {
@@ -314,10 +339,10 @@ function MoveDialog({ id, onClose }: { id: string; onClose: () => void }) {
     <Sheet
       open
       onClose={onClose}
-      title={<span className="block truncate">Move “{entry.item.title}”</span>}
+      title={<span className="block truncate [contain:inline-size]">Move “{entry.item.title}”</span>}
       footer={
-        <div className="flex w-full items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-xs text-muted">{reason ?? `Move to ${here}`}</span>
+        <div className="flex w-full flex-wrap items-center justify-end gap-2">
+          <span className="min-w-0 basis-full text-xs text-muted sm:flex-1 sm:basis-auto">{reason ?? `Move to ${here}`}</span>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" disabled={!!reason} onClick={doMove}>Move here</Button>
         </div>

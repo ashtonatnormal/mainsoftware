@@ -5,11 +5,11 @@ import type { ReactNode } from 'react'
 import { Building2, ChevronRight, Clock, Cloud, HardDrive, Home, LayoutGrid, List, Lock, Plus, Search, Star, Trash2, UserPlus, Users, X } from 'lucide-react'
 import type { DriveView, Folder } from '../../types'
 import { useStore } from '../../store'
-import { accessOf, canEdit, folderPath } from '../../drive'
+import { canEdit, folderPath } from '../../drive'
 import { AvatarStack, cx, IconButton } from '../../ui'
 import { NewMenu } from './create'
 import { useDriveActions } from './actions'
-import { childrenOf, folderDot, generalAccessLabel, peopleWithAccess, rootLabel, rootViewOf, sortLabels, storage, teamFolders, trashTop, typeFilters, when, type SortKey, type TypeFilter } from './model'
+import { childrenOf, folderDot, generalAccessLabel, generalAccessOf, inheritedPeople, peopleWithAccess, rootLabel, rootViewOf, sortLabels, storage, teamFolders, trashTop, typeFilters, when, type SortKey, type TypeFilter } from './model'
 import type { Layout } from './list'
 
 export const views: { value: DriveView; label: string; short: string; icon: typeof Home }[] = [
@@ -191,17 +191,22 @@ export function Breadcrumbs({ folderId, compact }: { folderId: string; compact?:
     { label: rootLabel[rootView], go: () => navigate({ name: 'drive', view: rootView }) },
     ...path.map(f => ({ label: f.title, go: () => navigate({ name: 'drive', folderId: f.id }) })),
   ]
-  const shown = compact && crumbs.length > 2 ? [{ label: '…', go: crumbs[crumbs.length - 2].go }, crumbs[crumbs.length - 1]] : crumbs
+  // Deep paths fold the middle into "…" (it goes up a level): two crumbs on phones, four on a computer.
+  const n = crumbs.length
+  const shown = compact && n > 2 ? [{ label: '…', go: crumbs[n - 2].go }, crumbs[n - 1]]
+    : !compact && n > 3 ? [crumbs[0], { label: '…', go: crumbs[n - 3].go }, crumbs[n - 2], crumbs[n - 1]]
+      : crumbs
   return (
     <nav aria-label="Folder path" className="flex min-w-0 items-center gap-0.5">
       {shown.map((c, i) => {
         const last = i === shown.length - 1
         return (
-          <span key={i} className={cx('flex items-center gap-0.5', last ? 'min-w-0' : 'shrink-0')}>
+          // The folder you're in keeps most of the room; the crumbs above it shrink first.
+          <span key={i} className={cx('flex min-w-0 items-center gap-0.5', last ? 'shrink' : 'min-w-[2.75rem] shrink-[4]')}>
             {last ? (
-              <h1 className={cx('truncate font-display font-semibold', compact ? 'text-lg' : 'text-2xl')} aria-current="page">{c.label}</h1>
+              <h1 title={c.label} className={cx('min-w-0 truncate font-display font-semibold', compact ? 'text-lg' : 'text-2xl')} aria-current="page">{c.label}</h1>
             ) : (
-              <button onClick={c.go} className={cx('max-w-[12rem] truncate rounded-full px-2 py-1 text-muted transition hover:bg-surface-2 hover:text-fg', compact ? 'text-sm' : 'text-lg')}>{c.label}</button>
+              <button onClick={c.go} title={c.label} className={cx('max-w-[12rem] min-w-0 truncate rounded-full px-2 py-1 text-muted transition hover:bg-surface-2 hover:text-fg', compact ? 'text-sm' : 'text-lg')}>{c.label}</button>
             )}
             {!last && <ChevronRight size={compact ? 14 : 18} className="shrink-0 text-muted" aria-hidden />}
           </span>
@@ -216,12 +221,12 @@ export function FolderInfo({ folder }: { folder: Folder }) {
   const { state } = useStore()
   const actions = useDriveActions()
   const entry = { kind: 'folder' as const, item: folder }
-  const access = accessOf(state.folders, folder)
-  const named = peopleWithAccess(entry).map(p => p.personId)
+  const access = generalAccessOf(state, folder)
+  const named = [...peopleWithAccess(entry), ...inheritedPeople(state, entry)].map(p => p.personId)
   const count = childrenOf(state, folder.id).length
   const AccessIcon = access === 'org' ? Building2 : access === 'team' ? Users : Lock
   const who = access === 'restricted'
-    ? named.length > 1 ? `Only the ${named.length} people named on it` : 'Only you'
+    ? named.length > 1 ? `Only ${named.length} people` : 'Only you'
     : generalAccessLabel(state, folder, access)
   return (
     <section aria-label="Folder details" className="flex flex-col gap-3 rounded-2xl border border-line bg-surface px-4 py-3.5 sm:flex-row sm:items-center">

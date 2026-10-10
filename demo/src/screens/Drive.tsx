@@ -3,9 +3,9 @@
 // folders; list or grid; search over names and the text inside files; New
 // (folders, docs from templates, sheets, slides, uploads); and per-item
 // actions (share, move, rename, copy, star, trash).
-import { useMemo, useState, type DragEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { ArrowLeft, Clock, FolderOpen, HardDrive, Plus, RotateCcw, Search, Star, Trash2, Upload, Users } from 'lucide-react'
-import type { DriveView, Folder } from '../types'
+import type { DriveView, Folder, Route } from '../types'
 import { useStore } from '../store'
 import { folderPath, isTrashed, type DriveEntry } from '../drive'
 import { isToday } from '../time'
@@ -20,6 +20,9 @@ import { canAddTo, childrenOf, filterByQuery, liveEntries, matchesType, myDriveR
 // Remembered for this visit (and in this browser where storage works).
 let layoutPref: Layout = readPref('layout', ['list', 'grid'] as const, 'list')
 let sortPref: SortKey = readPref('sort', ['name', 'modified', 'owner'] as const, 'modified')
+// Search and type filter you left behind. Back brings the very same route object out of
+// history, so coming back (and only coming back) to it restores your results.
+let left: { route: Route; q: string; type: TypeFilter | null } | null = null
 
 export default function DriveScreen() {
   return (
@@ -41,7 +44,7 @@ function DriveBody() {
   return (
     <div className="flex h-full min-h-0">
       <Sidebar view={view} folderId={folderId} />
-      {/* Search and filters reset when you move to another view or folder. */}
+      {/* Search and filters reset when you move to another view or folder (Back restores them). */}
       <Main key={folderId ?? view} view={view} folderId={folderId} layout={layout} setLayout={setLayout} sort={sort} setSort={setSort} />
     </div>
   )
@@ -50,8 +53,13 @@ function DriveBody() {
 function Main({ view, folderId, layout, setLayout, sort, setSort }: { view: DriveView; folderId?: string; layout: Layout; setLayout: (l: Layout) => void; sort: SortKey; setSort: (s: SortKey) => void }) {
   const store = useStore()
   const { state, navigate } = store
-  const [q, setQ] = useState('')
-  const [type, setType] = useState<TypeFilter | null>(null)
+  const resume = left?.route === state.route ? left : null
+  const [q, setQ] = useState(resume?.q ?? '')
+  const [type, setType] = useState<TypeFilter | null>(resume?.type ?? null)
+  const clearType = () => setType(null)
+  const latest = useRef({ route: state.route, q, type })
+  latest.current = { route: state.route, q, type }
+  useEffect(() => () => { const l = latest.current; left = l.q.trim() || l.type ? l : null }, [])
   const [drag, setDrag] = useState(false)
   const upload = useUploader()
   const folder = folderId ? state.folders.find(f => f.id === folderId) : undefined
@@ -99,7 +107,7 @@ function Main({ view, folderId, layout, setLayout, sort, setSort }: { view: Driv
             ) : (
               <h1 className="hidden min-w-0 flex-1 truncate font-display text-2xl font-semibold md:block">{title}</h1>
             )}
-            <SearchField value={q} onChange={setQ} className="w-full md:w-52 md:shrink-0 lg:w-72 xl:w-96" />
+            <SearchField value={q} onChange={setQ} className="w-full lg:w-72 lg:shrink-0 xl:w-96" />
           </div>
           {!folderId && <ViewChips view={view} />}
           {view !== 'trash' && <TypeChips value={type} onChange={setType} />}
@@ -107,15 +115,15 @@ function Main({ view, folderId, layout, setLayout, sort, setSort }: { view: Driv
 
         <div className="px-4 pb-28 md:px-6 md:pb-10">
           {q.trim() ? (
-            <SearchResults q={q} type={type} layout={layout} setLayout={setLayout} />
+            <SearchResults q={q} type={type} clearType={clearType} layout={layout} setLayout={setLayout} />
           ) : folderId ? (
-            folder ? <FolderView folder={folder} type={type} layout={layout} setLayout={setLayout} sort={sort} setSort={setSort} /> : <MissingFolder />
+            folder ? <FolderView folder={folder} type={type} clearType={clearType} layout={layout} setLayout={setLayout} sort={sort} setSort={setSort} /> : <MissingFolder />
           ) : view === 'home' ? (
-            <HomeView type={type} layout={layout} setLayout={setLayout} />
+            <HomeView type={type} clearType={clearType} layout={layout} setLayout={setLayout} />
           ) : view === 'trash' ? (
             <TrashView />
           ) : (
-            <ListView view={view} type={type} layout={layout} setLayout={setLayout} sort={sort} setSort={setSort} />
+            <ListView view={view} type={type} clearType={clearType} layout={layout} setLayout={setLayout} sort={sort} setSort={setSort} />
           )}
         </div>
       </div>
@@ -149,17 +157,20 @@ function Main({ view, folderId, layout, setLayout, sort, setSort }: { view: Driv
   )
 }
 
-interface ListProps { type: TypeFilter | null; layout: Layout; setLayout: (l: Layout) => void; sort?: SortKey; setSort?: (s: SortKey) => void }
+interface ListProps { type: TypeFilter | null; clearType: () => void; layout: Layout; setLayout: (l: Layout) => void; sort?: SortKey; setSort?: (s: SortKey) => void }
 
-const typeName = (t: TypeFilter | null) => (t ? typeFilters.find(x => x.value === t)!.label.toLowerCase() : 'items')
+const typeName = (t: TypeFilter | null) => {
+  const label = t ? typeFilters.find(x => x.value === t)!.label : 'items'
+  return label === 'PDFs' ? label : label.toLowerCase()
+}
 
 // ── Home ─────────────────────────────────────────────────────────────────────
-function HomeView({ type, layout, setLayout }: ListProps) {
+function HomeView({ type, clearType, layout, setLayout }: ListProps) {
   const { state, navigate } = useStore()
   const sugg = suggested(state).filter(e => matchesType(e, type))
   const teams = type && type !== 'folder' ? [] : teamFolders(state)
   const rec = recent(state).filter(e => matchesType(e, type)).slice(0, 8)
-  if (!sugg.length && !teams.length && !rec.length) return <NothingOfType type={type} />
+  if (!sugg.length && !teams.length && !rec.length) return <NothingOfType type={type} onClear={clearType} />
   return (
     <div className="flex flex-col gap-7 pt-2">
       {sugg.length > 0 && (
@@ -206,12 +217,12 @@ const emptyCopy: Record<Exclude<DriveView, 'home' | 'trash'>, { icon: ReactNode;
   starred: { icon: <Star size={30} />, title: 'No starred files', body: 'Tap the star on any file or folder to keep it here.' },
 }
 
-function ListView({ view, type, layout, setLayout, sort, setSort }: ListProps & { view: Exclude<DriveView, 'home' | 'trash'> }) {
+function ListView({ view, type, clearType, layout, setLayout, sort, setSort }: ListProps & { view: Exclude<DriveView, 'home' | 'trash'> }) {
   const { state } = useStore()
   const base = view === 'my' ? myDriveRoot(state) : view === 'shared' ? sharedWithMe(state) : view === 'recent' ? recent(state) : starred(state)
   const list = base.filter(e => matchesType(e, type))
   if (!base.length) return <EmptyState {...emptyCopy[view]} />
-  if (!list.length) return <NothingOfType type={type} />
+  if (!list.length) return <NothingOfType type={type} onClear={clearType} />
 
   if (view === 'recent') {
     // Grouped by when you last opened or changed them.
@@ -243,12 +254,12 @@ function ListView({ view, type, layout, setLayout, sort, setSort }: ListProps & 
   )
 }
 
-function NothingOfType({ type }: { type: TypeFilter | null }) {
-  return <EmptyState icon={<Search size={28} />} title={`No ${typeName(type)} here`} body="Clear the filter to see everything." />
+function NothingOfType({ type, onClear }: { type: TypeFilter | null; onClear: () => void }) {
+  return <EmptyState icon={<Search size={28} />} title={`No ${typeName(type)} here`} body="Clear the filter to see everything." action={<Button onClick={onClear}>Clear filter</Button>} />
 }
 
 // ── A folder ─────────────────────────────────────────────────────────────────
-function FolderView({ folder, type, layout, setLayout, sort, setSort }: ListProps & { folder: Folder }) {
+function FolderView({ folder, type, clearType, layout, setLayout, sort, setSort }: ListProps & { folder: Folder }) {
   const { state, restoreItem, toast } = useStore()
   const trashed = isTrashed(state.folders, folder)
   const all = childrenOf(state, folder.id)
@@ -266,7 +277,7 @@ function FolderView({ folder, type, layout, setLayout, sort, setSort }: ListProp
       {all.length === 0 ? (
         <EmptyState icon={<FolderOpen size={30} />} title="This folder is empty" body="Use New to add a doc, a sheet, slides or a folder here, or upload files. On a computer you can drop files straight onto this page." />
       ) : list.length === 0 ? (
-        <NothingOfType type={type} />
+        <NothingOfType type={type} onClear={clearType} />
       ) : (
         <div>
           <Toolbar label={`${list.length} ${list.length === 1 ? 'item' : 'items'}`} sort={sort} onSort={setSort} layout={layout} onLayout={setLayout} />
@@ -308,8 +319,8 @@ function TrashView() {
     <div className="flex flex-col gap-4 pt-1">
       <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-surface-2 px-4 py-3 text-sm">
         <Trash2 size={16} className="shrink-0 text-muted" aria-hidden />
-        <span className="min-w-0 flex-1 text-muted">Items in the trash are deleted forever after 30 days. Restore them before then to keep them.</span>
-        {items.length > 0 && !confirm && <Button size="sm" variant="ghost" className="text-rec" onClick={() => setConfirm(true)}>Empty trash</Button>}
+        <span className="min-w-[13rem] flex-1 text-muted">Items in the trash are deleted forever after 30 days. Restore them before then to keep them.</span>
+        {items.length > 0 && !confirm && <Button size="sm" variant="ghost" className="ml-auto text-rec" onClick={() => setConfirm(true)}>Empty trash</Button>}
       </div>
       {confirm && (
         <div role="alertdialog" aria-labelledby="empty-trash-q" className="anim-in flex flex-wrap items-center gap-3 rounded-2xl border border-rec bg-rec-soft px-4 py-3 text-sm">
@@ -328,15 +339,20 @@ function TrashView() {
 }
 
 // ── Search ───────────────────────────────────────────────────────────────────
-function SearchResults({ q, type, layout, setLayout }: ListProps & { q: string }) {
+function SearchResults({ q, type, clearType, layout, setLayout }: ListProps & { q: string }) {
   const { state } = useStore()
-  const results = useMemo(() => filterByQuery(liveEntries(state), q).filter(r => matchesType(r.entry, type)), [state, q, type])
+  const all = useMemo(() => filterByQuery(liveEntries(state), q), [state, q])
+  const results = all.filter(r => matchesType(r.entry, type))
   const snippets = Object.fromEntries(results.map(r => [r.entry.item.id, r.snippet]))
   return (
     <div className="pt-1">
       <Toolbar label={`${results.length} ${results.length === 1 ? 'result' : 'results'} in your Drive`} layout={layout} onLayout={setLayout} />
       {results.length === 0 ? (
-        <EmptyState icon={<Search size={28} />} title={`Nothing matches “${q.trim()}”`} body="Search looks at names and the text inside docs, sheets, slides and files you can open." />
+        all.length ? (
+          <EmptyState icon={<Search size={28} />} title={`No ${typeName(type)} match “${q.trim()}”`} body={`${all.length} ${all.length === 1 ? 'item' : 'items'} of other types ${all.length === 1 ? 'matches' : 'match'}.`} action={<Button onClick={clearType}>Clear filter</Button>} />
+        ) : (
+          <EmptyState icon={<Search size={28} />} title={`Nothing matches “${q.trim()}”`} body="Search looks at names and the text inside docs, sheets, slides and files you can open." />
+        )
       ) : (
         <EntryList entries={results.map(r => r.entry)} layout={layout} mode="search" q={q} snippets={snippets} />
       )}

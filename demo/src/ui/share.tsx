@@ -3,24 +3,30 @@
 // whole organisation), a copyable link, and the rule that search and the
 // assistant only show the item to people who can open it. Read-only for
 // people who can't change sharing. Every editor's Share button opens this.
-import { useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useId, useMemo, useRef, useState } from 'react'
 import { Building2, Check, Link2, Lock, ShieldCheck, Users, X } from 'lucide-react'
 import type { AccessRole, Doc, DriveMeta, GeneralAccess, PersonId } from '../types'
 import { useStore } from '../store'
-import { accessOf, canEdit, findEntry, teamFolderOf, type DriveEntry } from '../drive'
+import { canEdit, findEntry, type DriveEntry } from '../drive'
 import { humans, ME, ORG_NAME, personById } from '../data/people'
-import { Avatar, Button, cx, IconButton, Sheet } from './index'
+import { accessSource, generalAccessOf, inheritedPeople, teamNameOf } from '../screens/drive/model'
+import { Avatar, AvatarStack, Button, cx, IconButton, Sheet } from './index'
 
 export function ShareDialog({ itemId, open, onClose }: { itemId: string; open: boolean; onClose: () => void }) {
   const { state } = useStore()
   const entry = findEntry(state, itemId)
+  // Sheet re-focuses itself whenever onClose changes; keep it stable so a caller's
+  // inline arrow doesn't pull focus out of the search field on every store update.
+  const latest = useRef(onClose)
+  latest.current = onClose
+  const close = useCallback(() => latest.current(), [])
   if (!open) return null
   return (
     <Sheet
       open={open}
-      onClose={onClose}
-      title={<span className="block truncate">{entry ? `Share “${entry.item.title}”` : 'Share'}</span>}
-      footer={<Button variant="primary" onClick={onClose}>Done</Button>}
+      onClose={close}
+      title={<span className="block truncate [contain:inline-size]">{entry ? `Share “${entry.item.title}”` : 'Share'}</span>}
+      footer={<Button variant="primary" onClick={close}>Done</Button>}
     >
       {entry ? <ShareBody entry={entry} /> : <p className="pb-4 text-sm text-muted">This item isn’t in the Drive any more.</p>}
     </Sheet>
@@ -48,9 +54,11 @@ function ShareBody({ entry }: { entry: DriveEntry }) {
   const editableKind = 'editors' in item
   const mayChange = canEdit(item as DriveMeta & { editors?: PersonId[] })
   const people = named(entry)
-  const access = accessOf(state.folders, item)
-  const teamFolder = teamFolderOf(state.folders, item)
-  const team = teamFolder?.team ?? personById[item.ownerId]?.team ?? 'the team'
+  const access = generalAccessOf(state, item)
+  const source = accessSource(state, item)
+  const inheritedFrom = source && source.id !== item.id ? source : undefined
+  const team = teamNameOf(state, item)
+  const inherited = inheritedPeople(state, entry)
   const owner = personById[item.ownerId]?.name ?? 'The owner'
   const commenters = editableKind ? (item as Doc).commenters : undefined
 
@@ -196,6 +204,14 @@ function ShareBody({ entry }: { entry: DriveEntry }) {
             )
           })}
         </ul>
+        {inherited.length > 0 && (
+          <div className="mt-1 flex items-center gap-3 border-t border-line pt-2.5">
+            <AvatarStack ids={inherited.map(p => p.personId)} max={3} size="sm" />
+            <p className="min-w-0 flex-1 text-xs text-muted">
+              Also {inherited.map(p => (p.personId === ME ? 'you' : personById[p.personId]?.name ?? 'someone')).join(', ')}, through the {inherited[0].folder.title} folder
+            </p>
+          </div>
+        )}
       </section>
 
       <section aria-labelledby={`${uid}-general`}>
@@ -210,7 +226,7 @@ function ShareBody({ entry }: { entry: DriveEntry }) {
                 value={access}
                 disabled={!mayChange}
                 onChange={e => setAccess(e.target.value as GeneralAccess)}
-                className="h-9 max-w-full min-w-0 rounded-lg border border-line bg-surface px-2 text-sm font-medium outline-none focus:ring-2 focus:ring-accent disabled:border-transparent disabled:bg-transparent disabled:px-0 disabled:opacity-100"
+                className="h-9 max-w-full min-w-0 rounded-lg border border-line bg-surface px-2 text-sm font-medium outline-none focus:ring-2 focus:ring-accent disabled:appearance-none disabled:border-transparent disabled:bg-transparent disabled:px-0 disabled:opacity-100"
               >
                 <option value="restricted">Restricted</option>
                 <option value="team">Everyone in {team}</option>
@@ -224,7 +240,7 @@ function ShareBody({ entry }: { entry: DriveEntry }) {
                     value={commenters === 'none' ? 'viewer' : 'commenter'}
                     disabled={!mayChange}
                     onChange={e => setGeneralRole(e.target.value as 'viewer' | 'commenter')}
-                    className="h-9 rounded-lg border border-line bg-surface px-2 text-sm outline-none focus:ring-2 focus:ring-accent disabled:border-transparent disabled:bg-transparent disabled:px-0 disabled:opacity-100"
+                    className="h-9 rounded-lg border border-line bg-surface px-2 text-sm outline-none focus:ring-2 focus:ring-accent disabled:appearance-none disabled:border-transparent disabled:bg-transparent disabled:px-0 disabled:opacity-100"
                   >
                     <option value="viewer">can view</option>
                     <option value="commenter">can comment</option>
@@ -234,8 +250,8 @@ function ShareBody({ entry }: { entry: DriveEntry }) {
             </div>
             <p className="mt-0.5 text-xs text-muted">
               {generalHint}
-              {!item.access && teamFolder && ` · from the ${teamFolder.title} team folder`}
-              {entry.kind === 'folder' && ' · this applies to everything inside'}
+              {inheritedFrom && ` · set on the ${inheritedFrom.title} folder`}
+              {entry.kind === 'folder' && ' · things inside follow this unless they have their own setting'}
             </p>
           </div>
         </div>

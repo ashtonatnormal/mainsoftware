@@ -11,7 +11,7 @@ import { Button, cx, Sheet } from '../../ui'
 import { DocLines } from './art'
 import { Popover } from './actions'
 import { focusSoon, useWide } from './hooks'
-import { canAddTo, formatBytes, isTextFile, kindFromFile, readStart, type DriveState } from './model'
+import { canAddTo, extractText, formatBytes, kindFromFile, type DriveState } from './model'
 
 /** Where new things go: the folder you're in if you can add to it, else My Drive. */
 export function destinationFor(s: DriveState, folderId: string | undefined) {
@@ -32,7 +32,7 @@ export function useUploader() {
       if (kind === 'image' || kind === 'video' || kind === 'audio') {
         try { url = URL.createObjectURL(f) } catch { url = undefined }
       }
-      const previewText = isTextFile(f) ? (await readStart(f)) || undefined : undefined
+      const previewText = await extractText(f)
       const upload: Omit<DriveUpload, 'id' | 'ownerId' | 'updatedAt' | 'updatedBy'> = { kind, title: f.name || 'Untitled file', size: formatBytes(f.size), folderId: dest.folderId, url, previewText }
       return upload
     }))
@@ -66,13 +66,20 @@ const pick = (id: string) => document.getElementById(id)?.click()
 type NewDialog = 'folder' | 'template' | null
 
 /** The New menu plus its dialogs. `trigger` renders the button that opens it. */
-export function NewMenu({ folderId, trigger }: { folderId?: string; trigger: (open: (el: HTMLElement) => void) => ReactNode }) {
+export function NewMenu({ folderId, trigger: renderTrigger }: { folderId?: string; trigger: (open: (el: HTMLElement) => void) => ReactNode }) {
   const store = useStore()
   const wide = useWide()
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const [dialog, setDialog] = useState<NewDialog>(null)
   const dest = destinationFor(store.state, folderId)
-  const close = () => setAnchor(null)
+  // Stable callbacks: Sheet re-focuses itself whenever onClose changes, which would
+  // pull focus out of the name field on every store update (the clock ticks).
+  const trigger = useRef<HTMLElement | null>(null)
+  const openMenu = useCallback((el: HTMLElement) => { trigger.current = el; setAnchor(el) }, [])
+  const close = useCallback(() => setAnchor(null), [])
+  const refocus = useCallback(() => { if (trigger.current?.isConnected) trigger.current.focus() }, [])
+  const dismiss = useCallback(() => { setAnchor(null); refocus() }, [refocus])
+  const closeDialog = useCallback(() => { setDialog(null); refocus() }, [refocus])
   const items: { key: string; label: string; icon: ReactNode; run: () => void; phoneOnly?: boolean; divider?: boolean }[] = [
     { key: 'folder', label: 'New folder', icon: <FolderPlus size={18} />, run: () => { close(); setDialog('folder') } },
     { key: 'doc', label: 'Doc', icon: <FileText size={18} className="text-accent-ink" />, run: () => { close(); setDialog('template') }, divider: true },
@@ -99,15 +106,15 @@ export function NewMenu({ folderId, trigger }: { folderId?: string; trigger: (op
   ))
   return (
     <>
-      {trigger(setAnchor)}
-      {anchor && wide && <Popover anchor={anchor} onClose={close} label="New" width={248} align="start">{where}{rows(false)}</Popover>}
+      {renderTrigger(openMenu)}
+      {anchor && wide && <Popover anchor={anchor} onClose={dismiss} label="New" width={248} align="start">{where}{rows(false)}</Popover>}
       {anchor && !wide && (
-        <Sheet open onClose={close} title="New">
+        <Sheet open onClose={dismiss} title="New">
           <div role="menu" aria-label="New" className="-mx-5 -mt-2">{where}{rows(true)}</div>
         </Sheet>
       )}
-      {dialog === 'folder' && <NewFolderDialog dest={dest} onClose={() => setDialog(null)} />}
-      {dialog === 'template' && <TemplatePicker dest={dest} onClose={() => setDialog(null)} />}
+      {dialog === 'folder' && <NewFolderDialog dest={dest} onClose={closeDialog} />}
+      {dialog === 'template' && <TemplatePicker dest={dest} onClose={closeDialog} />}
     </>
   )
 }
@@ -173,7 +180,7 @@ function TemplatePicker({ dest, onClose }: { dest: { folderId: string | null; na
                 <span className="flex min-w-0 items-start gap-2 px-3 py-2.5">
                   <span className="text-lg leading-none" aria-hidden>{t.emoji}</span>
                   <span className="min-w-0">
-                    <span className="block truncate text-sm font-semibold">{t.name}</span>
+                    <span className="line-clamp-2 text-sm leading-snug font-semibold">{t.name}</span>
                     <span className="line-clamp-2 text-xs text-muted">{t.blurb}</span>
                   </span>
                 </span>

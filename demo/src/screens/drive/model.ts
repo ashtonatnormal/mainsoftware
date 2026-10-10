@@ -32,9 +32,34 @@ export function inTeam(team: string, conversations: Conversation[], person: Pers
   return personById[person]?.team === team || conversations.some(c => c.name === team && c.members.includes(person))
 }
 
-/** The team that "team" access refers to: the team folder's team, else the owner's team. */
+/** The item itself, or the nearest folder above it, that sets its general access. */
+export function accessSource(s: DriveSource, item: DriveMeta): DriveMeta | undefined {
+  if (item.access) return item
+  return [...folderPath(s.folders, item.folderId)].reverse().find(f => f.access)
+}
+
+/** General access as people get it: set on the item, else on the nearest folder above it (sharing a folder shares what's inside). */
+export function generalAccessOf(s: DriveSource, item: DriveMeta): GeneralAccess {
+  return accessSource(s, item)?.access ?? accessOf(s.folders, item)
+}
+
+/** The team that "team" access refers to: the team folder's team, else the team of whoever owns the item or folder that sets it. */
 export function teamNameOf(s: DriveSource, item: DriveMeta) {
-  return teamFolderOf(s.folders, item)?.team ?? personById[item.ownerId]?.team ?? 'the team'
+  const src = accessSource(s, item) ?? item
+  return teamFolderOf(s.folders, src)?.team ?? personById[src.ownerId]?.team ?? 'the team'
+}
+
+/** People who can open an item because they own or are named on a folder above it, minus those named on the item. */
+export function inheritedPeople(s: DriveSource, e: DriveEntry): { personId: PersonId; folder: Folder }[] {
+  const named = new Set(peopleWithAccess(e).map(p => p.personId))
+  const out: { personId: PersonId; folder: Folder }[] = []
+  for (const f of [...folderPath(s.folders, e.item.folderId)].reverse()) {
+    for (const id of [f.ownerId, ...(f.sharedWith ?? []).map(g => g.personId)]) {
+      if (named.has(id) || out.some(o => o.personId === id)) continue
+      out.push({ personId: id, folder: f })
+    }
+  }
+  return out
 }
 
 export function canOpen(s: DriveState, e: DriveEntry, person: PersonId = ME): boolean {
@@ -43,7 +68,7 @@ export function canOpen(s: DriveState, e: DriveEntry, person: PersonId = ME): bo
   if (it.sharedWith?.some(g => g.personId === person)) return true
   // Named on a folder above it.
   if (folderPath(s.folders, it.folderId).some(f => f.ownerId === person || f.sharedWith?.some(g => g.personId === person))) return true
-  const access = accessOf(s.folders, it)
+  const access = generalAccessOf(s, it)
   if (access === 'org') return true
   if (access === 'team' && inTeam(teamNameOf(s, it), s.conversations, person)) return true
   // FILE-08: shared in a chat you're in.
@@ -69,7 +94,7 @@ export function whoCanChange(e: DriveEntry) {
   return isEditableKind(e.kind) ? `${owner} and editors` : owner
 }
 
-export function generalAccessLabel(s: DriveSource, item: DriveMeta, a: GeneralAccess = accessOf(s.folders, item)) {
+export function generalAccessLabel(s: DriveSource, item: DriveMeta, a: GeneralAccess = generalAccessOf(s, item)) {
   if (a === 'org') return `Everyone at ${ORG_NAME}`
   if (a === 'team') return `Everyone in ${teamNameOf(s, item)}`
   return 'Restricted'
@@ -85,7 +110,7 @@ export function peopleWithAccess(e: DriveEntry): { personId: PersonId; role: 'ow
 
 /** Shared beyond its owner: general access isn't restricted, or other people are named on it. */
 export function isShared(s: DriveSource, e: DriveEntry) {
-  return accessOf(s.folders, e.item) !== 'restricted' || peopleWithAccess(e).length > 1
+  return generalAccessOf(s, e.item) !== 'restricted' || peopleWithAccess(e).length > 1
 }
 
 // ── Views ────────────────────────────────────────────────────────────────────
@@ -290,6 +315,18 @@ export function readStart(file: File, chars = 2000): Promise<string> {
       resolve('')
     }
   })
+}
+
+/**
+ * The text to index for an uploaded file (FILE-06): text files by type or name, plus
+ * files the browser can't type (e.g. a README with no extension) when they read as text.
+ */
+export async function extractText(file: File): Promise<string | undefined> {
+  if (isTextFile(file)) return (await readStart(file)) || undefined
+  if (file.type || kindFromFile(file) !== 'file' || file.size === 0) return undefined
+  const text = await readStart(file)
+  const odd = (text.match(/[\u0000-\u0008\u000E-\u001F\uFFFD]/g) ?? []).length
+  return text.trim() && odd <= text.length * 0.01 ? text : undefined
 }
 
 // FILE-07: your quota. The seeded figure stands in for files from before the demo.

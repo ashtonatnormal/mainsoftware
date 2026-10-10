@@ -8,8 +8,8 @@ import type { SourceRef } from '../types'
 import { askFallback, askSuggestions } from '../data/work'
 import { ASSISTANT, people } from '../data/people'
 import { AgentBadge, AIMarker, Avatar, CitedText, cx, Feedback, IconButton, Pill, SectionTitle, SourceChips } from '../ui'
-import { conversationLabel, directConversation, search, termRegex, termsOf, type ResultGroup, type ResultIcon, type SearchResult } from './ask/search'
-import { driveEntries, isTrashed } from '../drive'
+import { conversationLabel, directConversation, driveLocation, search, termRegex, termsOf, type ResultGroup, type ResultIcon, type SearchResult } from './ask/search'
+import { driveEntries, isTrashed, kindLabel } from '../drive'
 import { canOpen } from './drive/model'
 import { KindIcon } from './drive/art'
 
@@ -289,7 +289,7 @@ function JumpTo({ q, onAsk }: { q: string; onAsk: () => void }) {
     // Drive files and folders you can open, by name.
     for (const e of driveEntries(state)) {
       if (!re.test(e.item.title) || isTrashed(state.folders, e.item) || !canOpen(state, e)) continue
-      const sub = e.kind === 'doc' ? e.item.space : e.kind === 'folder' ? 'Folder' : e.kind === 'sheet' ? 'Sheet' : e.kind === 'slides' ? 'Slides' : 'File'
+      const sub = `${kindLabel[e.kind]} · ${driveLocation(state, e)}`
       out.push({ key: e.item.id, label: e.item.title, sub, icon: <KindIcon kind={e.kind} size="sm" />, go: () => openItem(e.item.id) })
     }
     return out.slice(0, 5)
