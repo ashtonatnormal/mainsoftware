@@ -213,7 +213,14 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 
 - All model calls go through one internal **model layer** so providers can be swapped (D4). v1 uses cloud model APIs under business terms with **zero data retention** and **no training on our data**.
 - Different features may use different models (e.g. a cheaper model for summaries, a stronger one for Ask).
-- Speech-to-text is a cloud provider with speaker attribution.
+- **Speech-to-text is OpenAI** (D30), English only (D29):
+  - **`gpt-transcribe`** produces the permanent transcript of every session and transcribes voice messages.
+  - **`gpt-live-transcribe`** powers live captions (ROOM-10). It costs about 3.8× more per minute, so captions are switched on per session rather than always on.
+  - **Don't build on older OpenAI speech models.** `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe` and `gpt-4o-transcribe-diarize` were deprecated on 2026-08-26 and shut down on 2027-02-26.
+  - **Speaker attribution** comes from each participant's separate audio track, not from the model guessing who spoke.
+  - **Timestamps** come from Hearth's own speech detection on each track, because the current OpenAI models return none. That gives timestamps per spoken passage, not per word.
+  - **Only actual speech is sent to OpenAI**, never silence. This cuts cost by about 80% and stops the model inventing text on silent tracks.
+  - Transcription details and setup conditions are in Appendix B.5.
 - AI and transcription spend is tracked per feature, per agent, and per user, with org-level caps.
 
 ## 8. Functional requirements
@@ -246,7 +253,7 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 | CHAT-04 | **Unified chat list** (WhatsApp-style): all conversations in one list sorted by recent activity, with unread badges, pin-to-top, mute, and filters (Unread, Channels, People, Agents). | P0 |
 | CHAT-05 | Messages support text with simple formatting, emoji, @mentions (people, agents, @channel/@here), links with previews, replies/quotes, edit, and delete. | P0 |
 | CHAT-06 | **Attachments**: images, video, documents; inline previews; files are stored in Files and inherit the conversation's permissions. | P0 |
-| CHAT-07 | **Voice messages**: hold-to-record, waveform, playback speed (1×/1.5×/2×), and **automatic transcript** shown under the message (D17). | P0 |
+| CHAT-07 | **Voice messages**: hold-to-record, waveform, playback speed (1×/1.5×/2×), and an **automatic transcript** under the message that appears within seconds (D17). Maximum length 10 minutes. | P0 |
 | CHAT-08 | **Reactions** and quick-reply suggestions. | P0 |
 | CHAT-09 | **Read receipts**: WhatsApp-style ticks in DMs and group DMs; "seen by" list in channels up to 50 members. Admin can disable org-wide. | P1 |
 | CHAT-10 | **Presence**: online, away, in a room (shows which), do not disturb; custom status with expiry. | P0 |
@@ -275,7 +282,7 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 | ROOM-07 | **DM and group-DM calls**: one tap to call from a conversation; these are sessions too. | P0 |
 | ROOM-08 | **Push-to-talk** option and noise suppression. | P1 |
 | ROOM-09 | Join from a phone browser with a lock-screen/background audio experience as good as the platform allows. | P0 |
-| ROOM-10 | **Live captions** in the side panel. | P1 |
+| ROOM-10 | **Live captions** in the side panel. Any participant can switch them on for the current session, and admins can set rooms to start with captions on. Captions are display-only; the permanent transcript always comes from REC-10. Captions cost about 3.8× more per minute than the transcript (§9.6). | P1 |
 | ROOM-11 | **Agents in rooms**: agents can be invited to a room; they show cards in the side panel (related docs, answers when addressed in the room text panel) but **never speak aloud unprompted** (D7 guardrail). | P1 |
 | ROOM-12 | Agents and the assistant that **speak in real time** in rooms. | P2 |
 
@@ -296,15 +303,16 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 
 | ID | Requirement | Pri |
 |---|---|---|
-| REC-10 | **Speaker-attributed transcripts** for every session, available within 5 minutes of the session ending. | P0 |
+| REC-10 | **Speaker-attributed transcripts** for every session, available within 5 minutes of the session ending (typically under 1 minute, because speech is transcribed while the session is still running). Each spoken passage carries its start and end time. Word-by-word timestamps are not in v1. | P0 |
 | REC-11 | **Meeting notes** are generated for sessions that are substantive: ≥5 minutes long, **or** containing a detected decision or action item (D27). Shorter sessions are transcribed and searchable but post nothing. | P0 |
 | REC-12 | Notes include: a short summary, **decisions**, **action items** (owner, due date if stated), open questions, and links to transcript timestamps. | P0 |
 | REC-13 | Notes are **posted to the session's thread** in its channel (or to the meeting's thread for scheduled meetings, or to the DM for calls). | P0 |
 | REC-14 | Action items become **suggested tasks** for their owners, who accept, edit, or dismiss them (TASK-06). | P0 |
-| REC-15 | Participants can **correct notes** (edits are versioned and attributed). | P1 |
+| REC-15 | Participants can **correct notes and transcripts** (edits are versioned and attributed). Corrected names and terms can be added to the org vocabulary (REC-19) with one tap. | P1 |
 | REC-16 | **Playback** page: audio/video player synced with the transcript; click a line to jump; search within the transcript. | P0 |
 | REC-17 | **Ask this meeting**: ask questions about a session from its page (answers cite timestamps). | P1 |
 | REC-18 | **Transcript redaction**: Compliance Officers can redact a passage (e.g. an accidentally spoken password); redactions are audited and propagate to notes and the Org Brain. | P1 |
+| REC-19 | **Org vocabulary**: transcription is given the names and terms likely to come up: participants' names, the channel and meeting title, recent transcript lines, and an admin-maintained glossary (people, products, projects, places, acronyms). This is how Hearth gets names and internal jargon right. | P0 |
 
 #### Access and retention
 
@@ -522,8 +530,8 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 | App load to usable on 4G phone, p75 | < 3 s |
 | Keyword search, p95 | < 1 s |
 | AI answer: first words, p95 | < 3 s |
-| Transcript + notes after session ends | < 5 min |
-| Live caption latency (P1) | < 2 s |
+| Transcript + notes after session ends | < 5 min (transcript typically < 1 min) |
+| Live caption latency, speech to on-screen text, p95 (P1) | < 2 s, measured from the org's location |
 | Access revocation effective in AI | < 60 s |
 
 ### 9.3 Reliability
@@ -547,12 +555,25 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 - WCAG 2.2 AA. Captions and transcripts double as accessibility features.
 - **English only** for v1 (D29): the UI, transcription, captions, meeting notes, and the AI. UI strings are still externalized so translation stays possible later.
 - Transcription must handle the accents and the mix of names and internal terms used in the org; see the org vocabulary requirement (REC-19).
+- **Transcription quality gate:** no public accuracy figures exist for the org's accents. During the M2 pilot, build a test set of 1–2 hours of real org audio (recorded with consent) covering its accents, names and jargon. Measure word error rate, accuracy on names and terms, and invented words. Set pass thresholds from the pilot and re-run the set before org-wide launch and whenever OpenAI changes models.
 
 ### 9.6 Cost
 
 - Track AI and speech-to-text spend per feature, agent, and user (§7.5).
-- Transcribe only speech (voice activity detection) to keep cost proportional to talking time, not session length.
-- An org-level monthly budget (Q5) with alerts at 50/80/100%.
+- Transcribe only speech, so cost follows talking time rather than how long people sit in a room.
+- An org-level monthly budget with alerts at 50/80/100%. No transcription budget was set (D30); the estimate below is the planning baseline. The budget for AI notes, the assistant and agents is still open (Q5).
+
+**Transcription cost estimate** (OpenAI list prices as of October 2026: `gpt-transcribe` $0.0045/min, `gpt-live-transcribe` $0.017/min):
+
+| | Per user per month | 500 users | 1,000 users |
+|---|---|---|---|
+| Permanent session transcripts + voice messages | ≈ $2.70 (range $2.10–$3.30) | ≈ $1,340 | ≈ $2,670 |
+| Live captions, if on in 25% of sessions | + ≈ $2.25 | + ≈ $1,120 | + ≈ $2,240 |
+| Live captions, if on in every session | + ≈ $9.00 | + ≈ $4,490 | + ≈ $8,980 |
+
+*Assumptions:* each person spends 2 hours a day in voice sessions, 4 people per session on average, 22 workdays a month, someone speaking about 80% of session time, and 3 minutes of voice messages per person per day. The range covers quieter or chattier rooms.
+
+*What changes it:* sending whole tracks including silence would multiply the transcript cost by about 5, so speech-only sending is a hard requirement. Using OpenAI's data-residency endpoints adds 10%. OpenAI offers no bulk discount for transcription. The figures exclude AI notes and assistant costs, storage, and media servers.
 
 ## 10. Success metrics
 
@@ -600,13 +621,14 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | R2 | **Universal recording**: legal exposure (consent and workplace-monitoring laws vary) and people self-censoring | Medium | High | Legal review before M2 pilot (Q3); policy acknowledgment (ACC-12); always-visible indicator; "viewed by" transparency (REC-21); restricted rooms; recording policy configurable for future customers. |
 | R3 | **AI permission leak** | Medium | Critical | Rules 1–8 enforced in one shared retrieval layer, not per feature; live permission re-check; provenance on derived content; "view as" testing; leak tests in CI; zero-leak launch gate; kill switch. |
 | R4 | **Agents speaking unprompted annoy people** | Medium | Medium | Suggest cards before full Active mode; confidence threshold and per-channel caps; feedback raises the threshold; channel admins can turn it down. |
-| R5 | **AI and transcription cost** grows with universal recording | Medium | Medium | Voice-activity-based transcription; cheaper models for routine summaries; per-feature budgets and alerts. |
+| R5 | **AI and transcription cost** grows with universal recording | Medium | Medium | Send only speech to OpenAI (about 5× cheaper than whole tracks); captions on per session, not always on; transcripts ≈ $2.70/user/month (§9.6); cheaper models for routine summaries; per-feature budgets and alerts. |
 | R6 | **Adoption**: people stay on WhatsApp | Medium | High | WhatsApp-level simplicity; installable app with push; voice notes; pilot champions; leadership sets a WhatsApp-for-work sunset date at launch. |
 | R7 | **SMS sign-in security and delivery cost** | Medium | Medium | Device PIN/passkey; OTP rate limits; reputable SMS provider with fallback. |
 | R8 | **Real-time doc editing is hard to get right** | Medium | Medium | Use a mature conflict-free sync library; heavy automated testing of merge cases. |
 | R9 | **Dependency on alpha projects** (OpenDots is alpha and needs CopilotKit Intelligence for conversation storage) | Medium | Medium | Reuse OpenDots' patterns and MIT-licensed code, not its runtime dependency; store agent conversations in Hearth's own database. |
 | R10 | **Bus factor of one** | High | High | This PRD, architecture notes, and tests kept in the repo; admin runbooks; consider a second maintainer before org-wide launch. |
 | R11 | **iOS web app limitations** (background audio, push reliability) hurt mobile rooms | Medium | Medium | Test early in M2 on real devices; prioritize native apps immediately post-v1 if gaps are severe. |
+| R12 | **Depending on OpenAI for transcription**: models get retired (four were retired in Aug 2026 with six months' notice), features differ between models, and accuracy on the org's accents and names is unproven | Medium | Medium | Model names live in configuration behind the model layer; timestamps and speaker labels come from Hearth's own pipeline, not the model; transcription quality gate (§9.5) re-run on every model change; org vocabulary (REC-19); editable transcripts (REC-15). |
 
 ## 13. Open questions
 
@@ -690,7 +712,8 @@ Two options were considered:
 | Voice/video | **LiveKit** (open-source WebRTC media server) with its Egress service for recording | Rooms, screen share, recording; per-participant audio tracks make speaker-attributed transcripts straightforward. |
 | Co-editing | **Yjs** (CRDT sync) with a TipTap/ProseMirror editor and a Yjs sync server | Mature real-time co-editing and snapshots for version history. |
 | Files and recordings | S3-compatible object storage | Durable, cheap, lifecycle rules for retention. |
-| AI | Internal model layer → cloud model APIs (e.g. Claude); speech-to-text provider with speaker attribution | D4; swappable. |
+| AI | Internal model layer → cloud model APIs (e.g. Claude) | D4; swappable. |
+| Speech-to-text | OpenAI `gpt-transcribe` (transcripts, voice messages) and `gpt-live-transcribe` (captions), plus Hearth's own speech detection on each track (e.g. Silero VAD) | D30; see B.5. |
 | Agent UI streaming | Consider **AG-UI** (the protocol OpenDots uses) for streaming agent output and approval cards | Proven pattern for approve/decline cards. |
 | SMS | Established SMS OTP provider | ACC-01. |
 | Background jobs | A Postgres-backed job queue | Transcription, notes, indexing, agent schedules. |
@@ -708,6 +731,45 @@ Do **not** take on its runtime dependency on CopilotKit Intelligence for convers
 ### B.4 The single most important technical rule
 
 All AI features — Ask, the assistant, agents, summaries — must retrieve content through **one shared, permission-enforcing retrieval layer** that implements Rules 1–8. No feature may query the index directly. This is what makes the zero-leak target testable.
+
+### B.5 Transcription pipeline (OpenAI)
+
+Based on OpenAI's API as of October 2026 (SDK and official documentation). Re-check these facts during the M2 spike.
+
+**Shared speech detector.** For every participant track, a speech detector runs in or next to the media server. It marks where each spoken passage starts and stops on the session clock, with about 300 ms of padding, and drops passages shorter than about 300 ms. Each passage becomes `{session, speaker, start, end, audio}`. Every feature below uses these passages, which is why speaker and timestamps never depend on the model.
+
+**1. Permanent transcripts (REC-10).**
+- Send each passage (or a few consecutive passages, never more than about 10 minutes of audio) to `/v1/audio/transcriptions` with model `gpt-transcribe`, `languages: ["en"]`, `keywords` from the org vocabulary (REC-19), and the meeting title plus the last few transcript lines as `prompt`.
+- Transcribe passages as they finish, during the session, so the transcript is complete within about a minute of the session ending.
+- Store `{session, speaker, start, end, text, model, model_version}` and merge all tracks in time order.
+- On failure, retry, then mark the passage "not transcribed" so it can be re-run while the audio is still kept (90 days).
+- Keywords must be single-line plain text; one invalid keyword rejects the whole request, so clean the list first. Test for keywords being inserted where they weren't spoken.
+- Upload limit is 25 MB per request; send Opus audio (ogg/webm) with the correct file extension.
+
+**2. Live captions (ROOM-10, P1).**
+- While captions are on, stream each speaking participant's audio (24 kHz, 16-bit mono) to its own OpenAI Realtime transcription session with model `gpt-live-transcribe`, `languages: ["en"]`, keywords, and the `delay` setting at `low`.
+- This model has no built-in turn detection, so Hearth's speech detector ends each passage by sending `input_audio_buffer.commit`.
+- Show partial text as it arrives and replace it with the final text for each passage.
+- Realtime sessions end after 60 minutes, so open a new session before then and switch at a passage boundary.
+
+**3. Voice messages (CHAT-07).** Upload the recorded clip to `gpt-transcribe` with `languages: ["en"]` and keywords from the sender, recipients, and channel. `stream: true` shows text as it is produced.
+
+**Set up before the M2 pilot:**
+- Run transcription in its own OpenAI API project, with "share data for training" off.
+- Sign OpenAI's Data Processing Agreement.
+- Apply for Zero Data Retention or Modified Abuse Monitoring. Approval comes through OpenAI sales and isn't self-serve. Without it, OpenAI may keep Realtime caption audio for up to 30 days for abuse monitoring.
+- Reach usage tier 2 or higher. Sending each passage as its own request means roughly 550 requests per minute on average at 1,000 users, and 1,100–1,700 at peak. Tier 1 allows 500.
+
+**Verify in the spike:**
+- Whether very short requests have a minimum billable duration.
+- Whether silence streamed to a Realtime session is billed.
+- Caption latency (p95) from the org's location.
+- Whether ZDR and data residency cover `gpt-transcribe` and `gpt-live-transcribe`.
+- Concurrency limits for Realtime sessions.
+
+**Data location.** OpenAI can store data in Singapore and several other Asia-Pacific regions, but it processes requests only in the US, EU, or UAE. Sending audio to OpenAI is therefore an overseas transfer under PDPA, covered by the DPA (see §8.16). Hearth's own storage of recordings and transcripts can stay in the org's chosen region.
+
+**If word-by-word timestamps are ever needed:** OpenAI's only models that return them shut down on 2027-02-26. Use a self-hosted forced aligner instead (e.g. the approach WhisperX uses), which runs locally and sends no data out.
 
 ## Appendix C — What we take from each reference product
 
