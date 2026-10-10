@@ -1,5 +1,5 @@
 import { useState, type ComponentType } from 'react'
-import { BarChart3, Calendar, CheckSquare, FileText, Flame, Home, LayoutGrid, MessageCircle, Mic, Search, Settings, Sparkles } from 'lucide-react'
+import { BarChart3, Calendar, CheckSquare, Flame, HardDrive, Home, LayoutGrid, MessageCircle, Mic, Search, Settings, Sparkles } from 'lucide-react'
 import { StoreProvider, useStore } from './store'
 import type { Route, RouteName } from './types'
 import { ME, ORG_NAME } from './data/people'
@@ -11,6 +11,10 @@ import SessionScreen from './screens/Session'
 import TasksScreen from './screens/Tasks'
 import CalendarScreen from './screens/Calendar'
 import DocsScreen from './screens/Docs'
+import DriveScreen from './screens/Drive'
+import SheetsScreen from './screens/Sheets'
+import SlidesScreen from './screens/Slides'
+import FilePreviewScreen from './screens/FilePreview'
 import InsightsScreen from './screens/Insights'
 import AskScreen from './screens/Ask'
 import SettingsScreen from './screens/Settings'
@@ -23,7 +27,11 @@ const screens: Record<RouteName, ComponentType> = {
   session: SessionScreen,
   tasks: TasksScreen,
   calendar: CalendarScreen,
+  drive: DriveScreen,
   docs: DocsScreen,
+  sheets: SheetsScreen,
+  slides: SlidesScreen,
+  file: FilePreviewScreen,
   insights: InsightsScreen,
   ask: AskScreen,
   settings: SettingsScreen,
@@ -38,7 +46,7 @@ const mainNav: NavItem[] = [
 ]
 const moreNav: NavItem[] = [
   { name: 'calendar', label: 'Calendar', icon: Calendar, route: { name: 'calendar' } },
-  { name: 'docs', label: 'Docs', icon: FileText, route: { name: 'docs' } },
+  { name: 'drive', label: 'Drive', icon: HardDrive, route: { name: 'drive' } },
   { name: 'insights', label: 'People insights', icon: BarChart3, route: { name: 'insights' } },
   { name: 'ask', label: 'Ask', icon: Sparkles, route: { name: 'ask' } },
   { name: 'settings', label: 'Settings', icon: Settings, route: { name: 'settings' } },
@@ -47,6 +55,14 @@ const moreNav: NavItem[] = [
 /** Detail views take over the whole phone screen (no top bar or tabs). */
 function isImmersive(r: Route) {
   return (r.name === 'chats' && !!r.conversationId) || (r.name === 'rooms' && !!r.roomId) || r.name === 'session' || (r.name === 'docs' && !!r.docId) || (r.name === 'calendar' && !!r.eventId)
+    || r.name === 'sheets' || r.name === 'slides' || r.name === 'file'
+}
+
+/** Which nav item a route belongs to (a doc, sheet, deck or file lives in the Drive). */
+function navGroup(r: Route): RouteName {
+  if (r.name === 'session') return 'rooms'
+  if (r.name === 'docs' || r.name === 'sheets' || r.name === 'slides' || r.name === 'file') return 'drive'
+  return r.name
 }
 
 function useBadges() {
@@ -60,7 +76,7 @@ function Rail() {
   const { state, navigate } = useStore()
   const badges = useBadges()
   const item = (n: NavItem) => {
-    const active = state.route.name === n.name || (n.name === 'rooms' && state.route.name === 'session')
+    const active = navGroup(state.route) === n.name
     return (
       <button
         key={n.name}
@@ -93,7 +109,7 @@ function Rail() {
 function TopBar({ immersive }: { immersive: boolean }) {
   const { state, navigate } = useStore()
   const [q, setQ] = useState('')
-  const title = [...mainNav, ...moreNav].find(n => n.name === state.route.name)?.label ?? 'Hearth'
+  const title = [...mainNav, ...moreNav].find(n => n.name === navGroup(state.route))?.label ?? 'Hearth'
   return (
     <header className={cx('items-center gap-3 border-b border-line bg-surface px-3 py-2 md:flex md:px-5', immersive ? 'hidden' : 'flex')}>
       <div className="flex min-w-0 items-center gap-2 md:hidden">
@@ -128,10 +144,10 @@ function TabBar({ hidden }: { hidden: boolean }) {
   const { state, navigate } = useStore()
   const badges = useBadges()
   const [more, setMore] = useState(false)
-  const moreActive = moreNav.some(n => n.name === state.route.name)
+  const moreActive = moreNav.some(n => n.name === navGroup(state.route))
   if (hidden) return null
   const tab = (n: NavItem) => {
-    const active = state.route.name === n.name
+    const active = navGroup(state.route) === n.name
     return (
       <button key={n.name} onClick={() => navigate(n.route)} aria-current={active ? 'page' : undefined} className={cx('relative flex flex-1 flex-col items-center gap-0.5 pt-2 pb-1.5 text-[11px] font-medium', active ? 'text-accent-ink' : 'text-muted')}>
         <span className={cx('grid h-7 w-12 place-items-center rounded-full', active && 'bg-accent-soft')}><n.icon size={20} /></span>

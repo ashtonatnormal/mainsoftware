@@ -3,7 +3,7 @@
 // accent, accent-soft, accent-ink, agent, agent-soft, rec, rec-soft, ok, ok-soft,
 // warn, warn-soft, wall) so both themes stay correct.
 import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
-import { ArrowLeft, Bot, Calendar, CheckSquare, FileText, MessageSquare, Mic, Sparkles, ThumbsDown, ThumbsUp, User, X } from 'lucide-react'
+import { ArrowLeft, Bot, Calendar, CheckSquare, FileText, MessageSquare, Mic, Paperclip, Presentation, Sheet as SheetIcon, Sparkles, ThumbsDown, ThumbsUp, User, X } from 'lucide-react'
 import type { PersonId, SourceRef } from '../types'
 import { personById } from '../data/people'
 import { useStore } from '../store'
@@ -156,7 +156,7 @@ export function UnreadBadge({ count, muted }: { count: number; muted?: boolean }
   )
 }
 
-const sourceIcons = { doc: FileText, message: MessageSquare, session: Mic, task: CheckSquare, event: Calendar, person: User }
+const sourceIcons = { doc: FileText, message: MessageSquare, session: Mic, task: CheckSquare, event: Calendar, person: User, sheet: SheetIcon, slides: Presentation, file: Paperclip }
 
 /** Principle 5: every AI answer links to what it was based on. */
 export function SourceChips({ sources, numbered = true }: { sources: SourceRef[]; numbered?: boolean }) {

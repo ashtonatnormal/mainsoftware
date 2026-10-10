@@ -5,6 +5,7 @@ import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import { BookOpen, Check, CheckCircle2, ChevronRight, Eye, FileText, History, Lock, MessageSquare, MessageSquareText, Pencil, RotateCcw, Rocket, Send, Shield, Sparkles, Users } from 'lucide-react'
 import type { Doc, DocBlock, DocComment, DocVersion, SourceRef } from '../types'
 import { newId, useStore } from '../store'
+import DriveScreen from './Drive'
 import { ME, personById } from '../data/people'
 import { AIMarker, Avatar, AvatarStack, Button, Card, cx, EmptyState, IconButton, personName, personShort, Pill, ScreenHeader, Segmented, SectionTitle, Sheet, SourceChips } from '../ui'
 import { clock, listStamp, shortDay } from '../time'
@@ -32,7 +33,8 @@ export default function DocsScreen() {
   const { state } = useStore()
   const docId = state.route.name === 'docs' ? state.route.docId : undefined
   const doc = state.docs.find(d => d.id === docId)
-  return doc ? <DocView key={doc.id} doc={doc} /> : <DocsHome />
+  // Without a doc, the Docs route shows the Drive (FILE-01).
+  return doc ? <DocView key={doc.id} doc={doc} /> : <DriveScreen />
 }
 
 // ── Home ──────────────────────────────────────────────────────────────────────

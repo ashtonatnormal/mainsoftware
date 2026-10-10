@@ -134,6 +134,8 @@ export const events: CalendarEvent[] = [
     prep: {
       related: [
         { label: 'Q4 Launch Proposal (updated Fri)', kind: 'doc', route: { name: 'docs', docId: 'd_q4' } },
+        { label: 'Q4 launch review deck (Daniel, Sun)', kind: 'slides', route: { name: 'slides', deckId: 'dk_q4' } },
+        { label: 'Q4 pallet forecast · peaks at 109% in week 8', kind: 'sheet', route: { name: 'sheets', sheetId: 'sh_forecast' } },
         { label: 'Q4 launch crew: “Meridian lines up with week 2”', kind: 'message', route: { name: 'chats', conversationId: 'g_q4' } },
         { label: 'Q3 pricing review notes', kind: 'session', route: { name: 'session', sessionId: 's_pricing' } },
       ],

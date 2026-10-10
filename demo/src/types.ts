@@ -55,7 +55,7 @@ export interface VoiceNote {
 
 export interface SourceRef {
   label: string // e.g. "Leave Policy (HR wiki)"
-  kind: 'doc' | 'message' | 'session' | 'task' | 'event' | 'person'
+  kind: 'doc' | 'message' | 'session' | 'task' | 'event' | 'person' | 'sheet' | 'slides' | 'file'
   route: Route
 }
 
@@ -213,20 +213,115 @@ export interface DocBlock {
   done?: boolean
 }
 
-export interface Doc {
+// ── Drive (FILE-01..08) ───────────────────────────────────────────────────────
+// Docs, sheets, slide decks, uploaded files and folders all live in one Drive.
+// Each kind keeps its own content type; DriveMeta is what they share.
+
+export type DriveKind = 'folder' | 'doc' | 'sheet' | 'slides' | 'pdf' | 'image' | 'video' | 'audio' | 'file'
+export type UploadKind = 'pdf' | 'image' | 'video' | 'audio' | 'file'
+export type AccessRole = 'viewer' | 'commenter' | 'editor'
+/** Who else can open an item, beyond the people named on it (FILE-03, DOC-03). */
+export type GeneralAccess = 'restricted' | 'team' | 'org'
+export type DriveView = 'home' | 'my' | 'shared' | 'recent' | 'starred' | 'trash'
+
+export interface DriveMeta {
   id: string
   title: string
-  space: string // wiki space or "My docs"
   ownerId: PersonId
-  editors: PersonId[] // restricted editing (DOC-03)
-  commenters: 'team' | 'org' | 'none'
   updatedAt: number
+  updatedBy?: PersonId
+  folderId: string | null // null = the owner's My Drive root
+  starred?: boolean // starred by you
+  trashed?: boolean
+  trashedAt?: number
+  lastOpenedAt?: number // by you, for Recent
+  access?: GeneralAccess // default: 'team' inside a team folder, else 'restricted'
+  sharedWith?: { personId: PersonId; role: AccessRole }[] // named people besides the owner and editors
+}
+
+/** Content kinds that people edit (docs, sheets, slides) share these. */
+export interface Editable extends DriveMeta {
+  editors: PersonId[] // restricted editing (DOC-03): only these people (and the owner) can edit
+  commenters: 'team' | 'org' | 'none'
+  presence: PersonId[] // currently viewing/editing
+}
+
+export interface Doc extends Editable {
+  space: string // folder name shown as context, e.g. "HR wiki" or "My Drive"
   blocks: DocBlock[]
   versions: DocVersion[]
   comments: DocComment[]
-  presence: PersonId[] // currently viewing/editing
   emoji?: string
 }
+
+export interface Folder extends DriveMeta {
+  team?: string // a team folder (FILE-01): everyone in this team can open it
+  color?: 'ember' | 'teal' | 'green' | 'amber' | 'slate' | 'rose'
+  description?: string
+}
+
+/** A file someone uploaded (FILE-02/04/06). */
+export interface DriveUpload extends DriveMeta {
+  kind: UploadKind
+  size: string // display label, e.g. "84 KB"
+  pages?: number // PDFs
+  durationSec?: number // audio/video
+  previewText?: string // text extracted for preview and search (FILE-06)
+  url?: string // blob: URL for a file added in this browser session (image previews)
+  hue?: number // seeded images: colour of the generated preview
+  fromConversationId?: ConversationId // FILE-08: shared in this chat
+}
+
+// Sheets (DOC-12)
+export interface SheetCell {
+  v: string // what the person typed; starts with "=" for a formula
+  b?: boolean // bold
+  i?: boolean // italic
+  align?: 'left' | 'center' | 'right'
+  fmt?: 'number' | 'currency' | 'percent' | 'integer' | 'text'
+  fill?: 'accent' | 'agent' | 'ok' | 'warn' | 'rec' | 'muted'
+}
+
+export interface SheetTab {
+  id: string
+  name: string
+  rows: number
+  cols: number
+  cells: Record<string, SheetCell> // keyed by A1 address, e.g. "B3"
+  colWidths?: Record<string, number> // px by column letter
+  frozenRows?: number
+}
+
+export interface Sheet extends Editable {
+  tabs: SheetTab[]
+  cursors?: Record<PersonId, string> // where collaborators are, e.g. { u_priya: "C4" }
+  versions?: DocVersion[]
+}
+
+// Slides (DOC-13)
+export type SlideLayout = 'title' | 'section' | 'bullets' | 'two-column' | 'big-number' | 'quote' | 'image'
+
+export interface Slide {
+  id: string
+  layout: SlideLayout
+  title: string
+  subtitle?: string // title/section slides, quote attribution, image caption
+  bullets?: string[] // bullets layout
+  left?: { heading?: string; bullets: string[] } // two-column layout
+  right?: { heading?: string; bullets: string[] }
+  stat?: string // big-number layout, e.g. "1,200"
+  statLabel?: string
+  imageHue?: number // image layout: generated placeholder colour
+  notes?: string // speaker notes
+}
+
+export interface Deck extends Editable {
+  slides: Slide[]
+  theme: 'ember' | 'slate' | 'teal'
+  versions?: DocVersion[]
+}
+
+export type DocTemplateId = 'blank' | 'meeting-notes' | 'project-brief' | 'policy' | 'onboarding'
 
 export interface Actionable {
   id: string
@@ -279,7 +374,11 @@ export type Route =
   | { name: 'session'; sessionId: SessionId; t?: number }
   | { name: 'tasks' }
   | { name: 'calendar'; eventId?: string }
-  | { name: 'docs'; docId?: string }
+  | { name: 'drive'; view?: DriveView; folderId?: string }
+  | { name: 'docs'; docId?: string } // without docId this shows the Drive
+  | { name: 'sheets'; sheetId: string }
+  | { name: 'slides'; deckId: string }
+  | { name: 'file'; fileId: string } // preview of an uploaded file
   | { name: 'insights' }
   | { name: 'ask'; q?: string }
   | { name: 'settings'; section?: 'memory' | 'privacy' | 'notifications' | 'devices' }

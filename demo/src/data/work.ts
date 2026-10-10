@@ -127,7 +127,7 @@ export const askSuggestions = [
 
 export const docs: Doc[] = [
   {
-    id: 'd_q4', title: 'Q4 Launch Proposal', space: 'Q4 launch', ownerId: 'u_priya', editors: ['u_priya', 'u_ashton'], commenters: 'team', updatedAt: at('2026-10-09T15:28'), emoji: '🚀',
+    id: 'd_q4', title: 'Q4 Launch Proposal', space: 'Q4 launch', folderId: 'f_q4', starred: true, lastOpenedAt: at('2026-10-11T21:05'), ownerId: 'u_priya', editors: ['u_priya', 'u_ashton'], commenters: 'team', updatedAt: at('2026-10-09T15:28'), emoji: '🚀',
     presence: ['u_priya', 'u_daniel'],
     blocks: [
       { type: 'h1', text: 'Q4 Launch Proposal' },
@@ -155,7 +155,7 @@ export const docs: Doc[] = [
     ],
   },
   {
-    id: 'd_leave', title: 'Leave Policy', space: 'HR wiki', ownerId: 'u_huimin', editors: ['u_huimin'], commenters: 'org', updatedAt: at('2026-10-09T16:55'), emoji: '🌴', presence: [],
+    id: 'd_leave', title: 'Leave Policy', space: 'HR wiki', folderId: 'f_hr', access: 'org', ownerId: 'u_huimin', editors: ['u_huimin'], commenters: 'org', updatedAt: at('2026-10-09T16:55'), emoji: '🌴', presence: [],
     blocks: [
       { type: 'h1', text: 'Leave Policy' },
       { type: 'p', text: 'This policy applies to all permanent staff from 1 Nov 2026.' },
@@ -174,7 +174,7 @@ export const docs: Doc[] = [
     comments: [],
   },
   {
-    id: 'd_runbook', title: 'Woodlands DC safety runbook', space: 'Ops wiki', ownerId: 'u_marcus', editors: ['u_marcus', 'u_priya', 'u_farah'], commenters: 'org', updatedAt: at('2026-09-28T14:20'), emoji: '🦺', presence: [],
+    id: 'd_runbook', title: 'Woodlands DC safety runbook', space: 'Ops wiki', folderId: 'f_ops', access: 'org', ownerId: 'u_marcus', editors: ['u_marcus', 'u_priya', 'u_farah'], commenters: 'org', updatedAt: at('2026-09-28T14:20'), emoji: '🦺', presence: [],
     blocks: [
       { type: 'h1', text: 'Woodlands DC safety runbook' },
       { type: 'h2', text: 'Forklifts' },
@@ -187,7 +187,7 @@ export const docs: Doc[] = [
     comments: [],
   },
   {
-    id: 'd_checklist', title: 'Day-one checklist', space: 'People', ownerId: 'u_huimin', editors: ['u_huimin'], commenters: 'org', updatedAt: minutesAgo(50), emoji: '✅', presence: ['u_nadia'],
+    id: 'd_checklist', title: 'Day-one checklist', space: 'People', folderId: 'f_people', access: 'org', ownerId: 'u_huimin', editors: ['u_huimin'], commenters: 'org', updatedAt: minutesAgo(50), emoji: '✅', presence: ['u_nadia'],
     blocks: [
       { type: 'h1', text: 'Day-one checklist' },
       { type: 'todo', text: 'Sign in to Hearth with your phone number and set your PIN', done: true },

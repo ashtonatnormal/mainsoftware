@@ -1,8 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
-import type { Actionable, CalendarEvent, Conversation, ConversationId, Doc, Memory, Message, Room, RoomId, Route, Session, SourceRef, SuggestedTask, Task, TaskStatus } from './types'
+import type { Actionable, CalendarEvent, Conversation, ConversationId, Deck, Doc, DocTemplateId, DriveMeta, DriveUpload, Folder, Memory, Message, PersonId, Room, RoomId, Route, Session, Sheet, SheetTab, Slide, SourceRef, SuggestedTask, Task, TaskStatus } from './types'
 import { conversations as seedConversations, messages as seedMessages } from './data/chat'
 import { events as seedEvents, opsStandupScript, rooms as seedRooms, sessions as seedSessions } from './data/meetings'
 import { actionables as seedActionables, askAnswers, askFallback, docs as seedDocs, memories as seedMemories, suggestedTasks as seedSuggested, tasks as seedTasks } from './data/work'
+import { decks as seedDecks, docTemplates, folders as seedFolders, myDocs, sheets as seedSheets, uploads as seedUploads } from './data/drive'
+import { findEntry, folderPath, routeFor } from './drive'
 import { ASSISTANT, ME } from './data/people'
 import { NOW, shortDay } from './time'
 
@@ -30,6 +32,10 @@ export interface State {
   actionables: Actionable[]
   events: CalendarEvent[]
   docs: Doc[]
+  folders: Folder[]
+  uploads: DriveUpload[]
+  sheets: Sheet[]
+  decks: Deck[]
   memories: Memory[]
   memoryOn: boolean
   toasts: Toast[]
@@ -60,6 +66,11 @@ type Action =
   | { type: 'addActionable'; item: Actionable }
   | { type: 'rsvp'; eventId: string; rsvp: CalendarEvent['rsvp'] }
   | { type: 'updateDoc'; doc: Doc }
+  | { type: 'addItem'; item: AnyItem; into: 'folders' | 'docs' | 'sheets' | 'decks' | 'uploads' }
+  | { type: 'patchItem'; id: string; patch: ItemPatch }
+  | { type: 'deleteItem'; id: string }
+  | { type: 'updateSheet'; sheet: Sheet }
+  | { type: 'updateDeck'; deck: Deck }
   | { type: 'deleteMemory'; id: string }
   | { type: 'editMemory'; id: string; text: string }
   | { type: 'memoryOn'; on: boolean }
@@ -68,6 +79,18 @@ type Action =
   | { type: 'dismissToast'; id: number }
   | { type: 'theme'; theme: ThemeChoice }
   | { type: 'tick' }
+
+type AnyItem = Folder | Doc | Sheet | Deck | DriveUpload
+/** Fields any Drive item can change in place: rename, move, star, trash, share. */
+export type ItemPatch = Partial<Pick<DriveMeta, 'title' | 'folderId' | 'starred' | 'trashed' | 'trashedAt' | 'lastOpenedAt' | 'access' | 'sharedWith' | 'updatedAt' | 'updatedBy'>> & {
+  editors?: PersonId[]
+  commenters?: 'team' | 'org' | 'none'
+  space?: string
+}
+
+function patchIn<T extends { id: string }>(arr: T[], id: string, patch: ItemPatch): T[] {
+  return arr.some(x => x.id === id) ? arr.map(x => (x.id === id ? { ...x, ...patch } : x)) : arr
+}
 
 const initial: State = {
   onboarded: false,
@@ -83,7 +106,11 @@ const initial: State = {
   suggested: seedSuggested,
   actionables: seedActionables,
   events: seedEvents,
-  docs: seedDocs,
+  docs: [...seedDocs, ...myDocs],
+  folders: seedFolders,
+  uploads: seedUploads,
+  sheets: seedSheets,
+  decks: seedDecks,
   memories: seedMemories,
   memoryOn: true,
   toasts: [],
@@ -176,6 +203,31 @@ function reducer(s: State, a: Action): State {
       return { ...s, events: s.events.map(e => (e.id === a.eventId ? { ...e, rsvp: a.rsvp } : e)) }
     case 'updateDoc':
       return { ...s, docs: s.docs.map(d => (d.id === a.doc.id ? a.doc : d)) }
+    case 'addItem':
+      return { ...s, [a.into]: [...(s[a.into] as AnyItem[]), a.item] }
+    case 'patchItem':
+      return {
+        ...s,
+        folders: patchIn(s.folders, a.id, a.patch),
+        docs: patchIn(s.docs, a.id, a.patch),
+        sheets: patchIn(s.sheets, a.id, a.patch),
+        decks: patchIn(s.decks, a.id, a.patch),
+        uploads: patchIn(s.uploads, a.id, a.patch),
+      }
+    case 'deleteItem': {
+      // Deleting a folder deletes everything inside it.
+      const gone = new Set([a.id])
+      for (let grew = true; grew; ) {
+        grew = false
+        for (const f of s.folders) if (f.folderId && gone.has(f.folderId) && !gone.has(f.id)) { gone.add(f.id); grew = true }
+      }
+      const keep = <T extends { id: string; folderId: string | null }>(arr: T[]) => arr.filter(x => !gone.has(x.id) && !(x.folderId && gone.has(x.folderId)))
+      return { ...s, folders: keep(s.folders), docs: keep(s.docs), sheets: keep(s.sheets), decks: keep(s.decks), uploads: keep(s.uploads) }
+    }
+    case 'updateSheet':
+      return { ...s, sheets: s.sheets.map(x => (x.id === a.sheet.id ? a.sheet : x)) }
+    case 'updateDeck':
+      return { ...s, decks: s.decks.map(x => (x.id === a.deck.id ? a.deck : x)) }
     case 'deleteMemory':
       return withMemoryDrafts({ ...s, memories: s.memories.filter(m => m.id !== a.id) })
     case 'editMemory':
@@ -427,6 +479,24 @@ interface Api {
   useDraft: (actionableId: string) => void
   rsvp: (eventId: string, rsvp: CalendarEvent['rsvp']) => void
   updateDoc: (doc: Doc) => void
+  // Drive (FILE-01..05). create* return the new id and open the item unless open: false.
+  createDoc: (opts?: { folderId?: string | null; template?: DocTemplateId; title?: string; open?: boolean }) => string
+  createSheet: (opts?: { folderId?: string | null; title?: string; tabs?: SheetTab[]; open?: boolean }) => string
+  createDeck: (opts?: { folderId?: string | null; title?: string; slides?: Slide[]; open?: boolean }) => string
+  createFolder: (title: string, parentId: string | null) => string
+  addUpload: (file: Omit<DriveUpload, 'id' | 'ownerId' | 'updatedAt' | 'updatedBy'>) => string
+  patchItem: (id: string, patch: ItemPatch) => void
+  renameItem: (id: string, title: string) => void
+  /** Returns false (and changes nothing) if the move would put a folder inside itself. */
+  moveItem: (id: string, folderId: string | null) => boolean
+  toggleStar: (id: string) => void
+  trashItem: (id: string) => void
+  restoreItem: (id: string) => void
+  deleteForever: (id: string) => void
+  /** Opens any Drive item in its editor or preview and marks it as recently opened. */
+  openItem: (id: string) => void
+  updateSheet: (sheet: Sheet) => void
+  updateDeck: (deck: Deck) => void
   deleteMemory: (id: string) => void
   editMemory: (id: string, text: string) => void
   setMemoryOn: (on: boolean) => void
@@ -443,7 +513,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     try {
       const saved = JSON.parse(localStorage.getItem('hearth-demo') ?? '{}')
       const tab = window.location.hash.slice(1)
-      const tabs = ['today', 'chats', 'rooms', 'tasks', 'calendar', 'docs', 'insights', 'ask', 'settings']
+      const tabs = ['today', 'chats', 'rooms', 'tasks', 'calendar', 'drive', 'docs', 'insights', 'ask', 'settings']
       const route = tabs.includes(tab) ? ({ name: tab } as Route) : init.route
       return withMemoryDrafts({ ...init, route, onboarded: !!saved.onboarded || tabs.includes(tab), theme: saved.theme ?? 'system' })
     } catch {
@@ -624,6 +694,81 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     },
     rsvp: (eventId, rsvp) => dispatch({ type: 'rsvp', eventId, rsvp }),
     updateDoc: doc => dispatch({ type: 'updateDoc', doc }),
+    createDoc: ({ folderId = null, template = 'blank', title, open = true } = {}) => {
+      const s = stateRef.current
+      const tpl = docTemplates.find(t => t.id === template) ?? docTemplates[0]
+      const name = title ?? (template === 'blank' ? 'Untitled document' : template === 'meeting-notes' ? `Meeting notes · ${shortDay(s.clock)}` : tpl.name)
+      const folder = folderId ? s.folders.find(f => f.id === folderId) : undefined
+      const id = newId('d')
+      const doc: Doc = {
+        id, title: name, space: folder?.title ?? 'My Drive', folderId, ownerId: ME, editors: [ME], commenters: 'none',
+        updatedAt: s.clock, updatedBy: ME, lastOpenedAt: s.clock, presence: [], emoji: tpl.emoji,
+        blocks: tpl.blocks(name, shortDay(s.clock)), comments: [],
+        versions: [{ id: newId('v'), authorId: ME, ts: s.clock, summary: template === 'blank' ? 'Created' : `Created from ${tpl.name}` }],
+      }
+      dispatch({ type: 'addItem', into: 'docs', item: doc })
+      if (open) dispatch({ type: 'navigate', route: { name: 'docs', docId: id } })
+      return id
+    },
+    createSheet: ({ folderId = null, title, tabs, open = true } = {}) => {
+      const s = stateRef.current
+      const id = newId('sh')
+      const sheet: Sheet = {
+        id, title: title ?? 'Untitled sheet', folderId, ownerId: ME, editors: [ME], commenters: 'none', updatedAt: s.clock, updatedBy: ME, lastOpenedAt: s.clock, presence: [],
+        tabs: tabs ?? [{ id: newId('tab'), name: 'Sheet1', rows: 50, cols: 12, cells: {} }],
+      }
+      dispatch({ type: 'addItem', into: 'sheets', item: sheet })
+      if (open) dispatch({ type: 'navigate', route: { name: 'sheets', sheetId: id } })
+      return id
+    },
+    createDeck: ({ folderId = null, title, slides, open = true } = {}) => {
+      const s = stateRef.current
+      const id = newId('dk')
+      const name = title ?? 'Untitled presentation'
+      const deck: Deck = {
+        id, title: name, folderId, ownerId: ME, editors: [ME], commenters: 'none', updatedAt: s.clock, updatedBy: ME, lastOpenedAt: s.clock, presence: [], theme: 'ember',
+        slides: slides ?? [{ id: newId('sl'), layout: 'title', title: name, subtitle: '' }],
+      }
+      dispatch({ type: 'addItem', into: 'decks', item: deck })
+      if (open) dispatch({ type: 'navigate', route: { name: 'slides', deckId: id } })
+      return id
+    },
+    createFolder: (title, parentId) => {
+      const id = newId('f')
+      dispatch({ type: 'addItem', into: 'folders', item: { id, title, folderId: parentId, ownerId: ME, updatedAt: stateRef.current.clock, updatedBy: ME } })
+      return id
+    },
+    addUpload: file => {
+      const id = newId('up')
+      dispatch({ type: 'addItem', into: 'uploads', item: { ...file, id, ownerId: ME, updatedAt: stateRef.current.clock, updatedBy: ME } })
+      return id
+    },
+    patchItem: (id, patch) => dispatch({ type: 'patchItem', id, patch }),
+    renameItem: (id, title) => dispatch({ type: 'patchItem', id, patch: { title, updatedAt: stateRef.current.clock, updatedBy: ME } }),
+    moveItem: (id, folderId) => {
+      const s = stateRef.current
+      if (folderId && folderPath(s.folders, folderId).some(f => f.id === id)) return false
+      const folder = folderId ? s.folders.find(f => f.id === folderId) : undefined
+      const patch: ItemPatch = { folderId, updatedAt: s.clock, updatedBy: ME }
+      if (s.docs.some(d => d.id === id)) patch.space = folder?.title ?? 'My Drive'
+      dispatch({ type: 'patchItem', id, patch })
+      return true
+    },
+    toggleStar: id => {
+      const e = findEntry(stateRef.current, id)
+      if (e) dispatch({ type: 'patchItem', id, patch: { starred: !e.item.starred } })
+    },
+    trashItem: id => dispatch({ type: 'patchItem', id, patch: { trashed: true, trashedAt: stateRef.current.clock } }),
+    restoreItem: id => dispatch({ type: 'patchItem', id, patch: { trashed: false, trashedAt: undefined } }),
+    deleteForever: id => dispatch({ type: 'deleteItem', id }),
+    openItem: id => {
+      const e = findEntry(stateRef.current, id)
+      if (!e) return
+      if (e.kind !== 'folder') dispatch({ type: 'patchItem', id, patch: { lastOpenedAt: stateRef.current.clock } })
+      dispatch({ type: 'navigate', route: routeFor(e) })
+    },
+    updateSheet: sheet => dispatch({ type: 'updateSheet', sheet }),
+    updateDeck: deck => dispatch({ type: 'updateDeck', deck }),
     deleteMemory: id => dispatch({ type: 'deleteMemory', id }),
     editMemory: (id, text) => dispatch({ type: 'editMemory', id, text }),
     setMemoryOn: on => dispatch({ type: 'memoryOn', on }),
