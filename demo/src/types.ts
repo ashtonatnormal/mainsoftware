@@ -234,7 +234,10 @@ export interface Actionable {
   title: string
   detail: string
   route: Route
-  draft?: { conversationId: ConversationId; text: string } // PA-08: drafts go into the composer
+  // PA-08: drafts go into the composer. A draft shaped by a memory (PA-10) names it in
+  // memoryId and carries withoutMemory, the draft written without that memory, which is
+  // used while memory is off or that memory is deleted or changed.
+  draft?: { conversationId: ConversationId; text: string; memoryId?: string; withoutMemory?: string }
   sources?: SourceRef[]
 }
 

@@ -177,11 +177,11 @@ function reducer(s: State, a: Action): State {
     case 'updateDoc':
       return { ...s, docs: s.docs.map(d => (d.id === a.doc.id ? a.doc : d)) }
     case 'deleteMemory':
-      return { ...s, memories: s.memories.filter(m => m.id !== a.id) }
+      return withMemoryDrafts({ ...s, memories: s.memories.filter(m => m.id !== a.id) })
     case 'editMemory':
-      return { ...s, memories: s.memories.map(m => (m.id === a.id ? { ...m, text: a.text } : m)) }
+      return withMemoryDrafts({ ...s, memories: s.memories.map(m => (m.id === a.id ? { ...m, text: a.text } : m)) })
     case 'memoryOn':
-      return { ...s, memoryOn: a.on }
+      return withMemoryDrafts({ ...s, memoryOn: a.on })
     case 'addMemory':
       return { ...s, memories: [...s.memories, a.memory] }
     case 'toast':
@@ -355,6 +355,31 @@ const sameFact = (a: string, b: string) => {
 }
 const sentence = (t: string) => (/[.!?]$/.test(t.trim()) ? t.trim() : `${t.trim()}.`)
 
+// Today's drafts (PA-04/PA-08) use a memory only while memory is on and that memory is
+// still there as it was: deleting or rewording "You prefer short replies…" means the demo
+// can't honestly claim the short draft follows it, so the draft without it is used. A draft
+// that uses a memory cites it, so you can see why it reads the way it does.
+const seedActionableById = Object.fromEntries(seedActionables.map(a => [a.id, a]))
+const seedMemoryById = Object.fromEntries(seedMemories.map(m => [m.id, m]))
+
+function withMemoryDrafts(s: State): State {
+  return {
+    ...s,
+    actionables: s.actionables.map(a => {
+      const seed = seedActionableById[a.id]
+      const d = seed?.draft
+      if (!a.draft || !d?.memoryId || d.withoutMemory === undefined) return a
+      const memory = s.memoryOn ? s.memories.find(m => m.id === d.memoryId) : undefined
+      const used = memory && sameFact(memory.text, seedMemoryById[d.memoryId]?.text ?? '') ? memory : undefined
+      const text = used ? d.text : d.withoutMemory
+      const sources = used ? [...(seed.sources ?? []), memoryUsed(used)] : seed.sources
+      return a.draft.text === text && a.sources === sources ? a : { ...a, draft: { ...a.draft, text }, sources }
+    }),
+  }
+}
+
+const memoryUsed = (m: Memory): SourceRef => ({ label: `Your memory: ${m.text.charAt(0).toLowerCase()}${m.text.slice(1)}`, kind: 'person', route: { name: 'settings', section: 'memory' } })
+
 /** ask()'s answer when the question is about the assistant's memory, or null. */
 function memoryAnswer(q: string, s: Pick<State, 'memoryOn' | 'memories'>): { answer: string; sources: SourceRef[] } | null {
   const work = workAnswer(q)
@@ -418,9 +443,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const tab = window.location.hash.slice(1)
       const tabs = ['today', 'chats', 'rooms', 'tasks', 'calendar', 'docs', 'insights', 'ask', 'settings']
       const route = tabs.includes(tab) ? ({ name: tab } as Route) : init.route
-      return { ...init, route, onboarded: !!saved.onboarded || tabs.includes(tab), theme: saved.theme ?? 'system' }
+      return withMemoryDrafts({ ...init, route, onboarded: !!saved.onboarded || tabs.includes(tab), theme: saved.theme ?? 'system' })
     } catch {
-      return init
+      return withMemoryDrafts(init)
     }
   })
   const stateRef = useRef(state)

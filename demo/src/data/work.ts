@@ -24,7 +24,12 @@ export const actionables: Actionable[] = [
     title: 'Priya is waiting on the movers decision',
     detail: 'She asked on Fri: Kranji Movers at S$18,400 vs S$21,000 now. She needs an answer by Tue to give notice.',
     route: { name: 'chats', conversationId: 'dm_priya' },
-    draft: { conversationId: 'dm_priya', text: 'Thanks Priya. Let’s go with Kranji Movers if they can match our current insurance cover. Can you confirm that with them on tomorrow’s call?' },
+    draft: {
+      conversationId: 'dm_priya',
+      text: 'Thanks Priya. Let’s go with Kranji Movers if they can match our current insurance cover. Can you confirm that with them on tomorrow’s call?',
+      memoryId: 'mem1', // "You prefer short replies that end with a clear decision."
+      withoutMemory: 'Hi Priya, thanks for getting a second quote. Kranji Movers at S$18,400 against S$21,000 for the same scope looks like a good saving. Do you know if they can match our current insurance cover? It would be good to talk it through before we decide.',
+    },
     sources: [{ label: 'DM with Priya · Fri 7:20 pm', kind: 'message', route: { name: 'chats', conversationId: 'dm_priya' } }],
   },
   {
@@ -32,7 +37,12 @@ export const actionables: Actionable[] = [
     title: 'Approve the Saturday overtime roster by 12 pm',
     detail: 'Your action item from Friday’s Ops standup. Marcus sent the roster (11 people) and a voice note this morning.',
     route: { name: 'tasks' },
-    draft: { conversationId: 'dm_marcus', text: 'Approved, Marcus. Go ahead and tell the crew. Thanks for sorting it out so quickly.' },
+    draft: {
+      conversationId: 'dm_marcus',
+      text: 'Approved, Marcus. Go ahead and tell the crew. Thanks for sorting it out so quickly.',
+      memoryId: 'mem1',
+      withoutMemory: 'Hi Marcus, thanks for sending the Saturday roster and the voice note. I’ve gone through the 11 names and everything looks fine, so I’m happy to approve the overtime. Could you let the crew know, and tell me if anything changes before Saturday?',
+    },
     sources: [
       { label: 'Ops standup notes · Fri 9 Oct', kind: 'session', route: { name: 'session', sessionId: 's_standup_fri' } },
       { label: 'Voice note from Marcus · 7:40 am', kind: 'message', route: { name: 'chats', conversationId: 'dm_marcus' } },

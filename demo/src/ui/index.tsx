@@ -163,7 +163,7 @@ export function SourceChips({ sources, numbered = true }: { sources: SourceRef[]
   const { navigate } = useStore()
   if (!sources.length) return null
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="flex min-w-0 max-w-full flex-wrap gap-1.5">
       {sources.map((s, i) => {
         const Icon = sourceIcons[s.kind]
         return (
