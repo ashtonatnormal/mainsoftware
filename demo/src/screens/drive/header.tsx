@@ -10,7 +10,7 @@ import { ME } from '../../data/people'
 import { Button, cx, IconButton } from '../../ui'
 import { isShared } from './model'
 
-/** "Drive › Q4 launch › Contract and pricing · <trailing>". Phones shorten the middle to "…". */
+/** "Drive › Q4 launch › Contract and pricing · <trailing>". Phones show just the folder it's in. */
 export function FileCrumbs({ item, compact, trailing }: { item: DriveMeta; compact?: boolean; trailing?: ReactNode }) {
   const { state, navigate } = useStore()
   const path = folderPath(state.folders, item.folderId)
@@ -20,18 +20,19 @@ export function FileCrumbs({ item, compact, trailing }: { item: DriveMeta; compa
       ? path.map(f => ({ label: f.title, route: { name: 'drive', folderId: f.id } as Route }))
       : [{ label: item.ownerId === ME ? 'My Drive' : 'Shared with me', route: { name: 'drive', view: item.ownerId === ME ? 'my' : 'shared' } as Route }]),
   ]
-  const shown = compact && crumbs.length > 2 ? [crumbs[0], { label: '…', route: crumbs[crumbs.length - 2].route }, crumbs[crumbs.length - 1]] : crumbs
+  const shown = compact ? crumbs.slice(-1) : crumbs
   return (
     <nav aria-label="Location" className="flex min-w-0 items-center gap-1 text-xs text-muted">
-      {/* Clipped sideways only, so the crumbs' taller tap area isn't cut off. */}
-      <span className="flex min-w-0 items-center gap-1 overflow-x-clip whitespace-nowrap">
+      {/* The folder keeps its room before the status line does. Clipped sideways only,
+          so the crumbs' taller tap area isn't cut off. */}
+      <span className={cx('flex min-w-0 items-center gap-1 overflow-x-clip whitespace-nowrap', !!trailing && 'max-w-[65%] shrink-0')}>
         {shown.map((c, i) => (
           <span key={i} className={cx('flex items-center gap-1', i === shown.length - 1 ? 'min-w-0' : 'shrink-0')}>
             {i > 0 && <span aria-hidden>›</span>}
             <button
               onClick={() => navigate(c.route)}
               className="-my-1 truncate rounded py-1 hover:text-fg hover:underline"
-              title={c.label === '…' ? crumbs.slice(1, -1).map(x => x.label).join(' › ') : undefined}
+              title={compact ? crumbs.map(x => x.label).join(' › ') : undefined}
             >
               {c.label}
             </button>
@@ -39,7 +40,7 @@ export function FileCrumbs({ item, compact, trailing }: { item: DriveMeta; compa
         ))}
       </span>
       {trailing && <span aria-hidden>·</span>}
-      {trailing}
+      {trailing && <span className="flex min-w-0 items-center gap-1 whitespace-nowrap">{trailing}</span>}
     </nav>
   )
 }

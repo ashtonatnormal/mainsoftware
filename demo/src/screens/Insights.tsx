@@ -122,7 +122,8 @@ export default function InsightsScreen() {
       </div>
       <p className="mb-6 text-[12px] text-muted">{rangeInfo.label} · {rangeInfo.caption} · Example data{range !== 'last' ? ', scaled from last week' : ''}</p>
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
+      {/* The side column joins the table only from 1280px, so the 8-column table keeps its room at 1024. */}
+      <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0">
           {/* Phone: ranked list for the chosen metric */}
           <section className="lg:hidden" aria-label={`Ranked by ${metricLabel}`}>
@@ -162,7 +163,7 @@ export default function InsightsScreen() {
                   {columns.map(c => {
                     const active = sort.col === c.key
                     return (
-                      <th key={c.key} scope="col" aria-sort={active ? (sort.desc ? 'descending' : 'ascending') : 'none'} className="w-[12%] py-2 text-right font-medium whitespace-nowrap">
+                      <th key={c.key} scope="col" aria-sort={active ? (sort.desc ? 'descending' : 'ascending') : 'none'} className="w-[12%] py-2 pl-3 text-right font-medium whitespace-nowrap">
                         <button
                           onClick={() => setSort(s => ({ col: c.key, desc: s.col === c.key ? !s.desc : true }))}
                           className={cx('inline-flex items-center gap-1 rounded px-1 py-0.5 hover:text-fg', active && 'text-fg')}

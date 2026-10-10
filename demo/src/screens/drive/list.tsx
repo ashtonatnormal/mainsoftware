@@ -101,14 +101,15 @@ export function ItemRow({ entry, mode = 'default', snippet, q }: { entry: DriveE
             <span className="truncate font-medium"><Highlight text={it.title} q={q} /></span>
             {shared && <Users size={13} className="shrink-0 text-muted" aria-label="Shared" />}
           </span>
-          <span className={cx('block truncate text-xs text-muted', mode !== 'shared' && mode !== 'search' && 'lg:hidden')}>
+          <span className={cx('block truncate text-xs text-muted', mode !== 'shared' && mode !== 'search' && 'xl:hidden')}>
             {mode === 'shared' ? <SharedFrom entry={entry} /> : mode === 'search' ? <Location entry={entry} /> : phoneSub}
           </span>
           {snippet && <span className="mt-0.5 line-clamp-2 text-xs text-muted"><Highlight text={snippet} q={q} /></span>}
         </span>
-        <span className="hidden w-40 shrink-0 truncate text-sm text-muted lg:block">{ownerLabel(it.ownerId)}</span>
-        <span className="hidden w-40 shrink-0 truncate text-sm text-muted lg:block">{modifiedCell(it, mode, state.clock)}</span>
-        <span className="hidden w-20 shrink-0 text-right text-sm text-muted tabular lg:block">{size ?? '—'}</span>
+        {/* The extra columns need about 550px beside the name, so they start at 1280px. */}
+        <span className="hidden w-40 shrink-0 truncate text-sm text-muted xl:block">{ownerLabel(it.ownerId)}</span>
+        <span className="hidden w-40 shrink-0 truncate text-sm text-muted xl:block">{modifiedCell(it, mode, state.clock)}</span>
+        <span className="hidden w-20 shrink-0 text-right text-sm text-muted tabular xl:block">{size ?? '—'}</span>
       </button>
       {trash ? (
         <div className={cx('flex shrink-0 items-center justify-end gap-1', TRASH_W)}>
@@ -147,7 +148,7 @@ export function ListHeader({ sort, onSort, mode }: { sort?: SortKey; onSort?: (s
     ) : <span className={className}>{label}</span>
   }
   return (
-    <div className="hidden items-center gap-x-1 border-b border-line pr-1 pb-2 text-xs font-semibold text-muted lg:flex">
+    <div className="hidden items-center gap-x-1 border-b border-line pr-1 pb-2 text-xs font-semibold text-muted xl:flex">
       <div className="flex min-w-0 flex-1 items-center gap-3 pl-1">
         <span className="w-10 shrink-0" aria-hidden />
         {col('name', 'Name', 'min-w-0 flex-1')}

@@ -23,8 +23,10 @@ const canJoin = (e: CalendarEvent, now: number, sessions: Session[]) => !!e.room
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 const isLeave = (e: CalendarEvent) => e.kind === 'leave'
 
+// The week grid needs room for five days beside the 380px detail pane, so tablets
+// (768–1023px) get the phone agenda and event view.
 function useWide() {
-  const q = '(min-width: 768px)'
+  const q = '(min-width: 1024px)'
   const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches)
   useEffect(() => {
     const mq = window.matchMedia(q)
@@ -59,7 +61,7 @@ export default function CalendarScreen() {
         <WeekHeader onFindTime={() => setFindOpen(true)} />
         <WeekGrid selectedId={event?.id} />
       </div>
-      <aside className="flex w-[380px] shrink-0 flex-col border-l border-line bg-surface lg:w-[420px]">
+      <aside className="flex w-[380px] shrink-0 flex-col border-l border-line bg-surface xl:w-[420px]">
         {event ? <EventDetail event={event} onFindTime={() => setFindOpen(true)} /> : <Agenda compact onFindTime={() => setFindOpen(true)} />}
       </aside>
       <FindTimeSheet open={findOpen} onClose={closeFind} attendees={event?.attendees} />
@@ -76,10 +78,10 @@ function useNewEvent() {
 function WeekHeader({ onFindTime }: { onFindTime: () => void }) {
   const newEvent = useNewEvent()
   return (
-    <div className="flex items-center gap-3 border-b border-line px-6 py-4">
+    <div className="flex flex-wrap items-center gap-3 border-b border-line px-6 py-4">
       <div className="min-w-0 flex-1">
         <h1 className="font-display text-2xl font-semibold">Calendar</h1>
-        <p className="text-sm text-muted">This week · 12 – 16 October</p>
+        <p className="text-sm whitespace-nowrap text-muted">This week · 12 – 16 October</p>
       </div>
       <Button size="sm" variant="secondary" icon={<CalendarSearch size={15} />} onClick={onFindTime}>Find a time</Button>
       <Button size="sm" variant="primary" icon={<Plus size={15} />} onClick={newEvent}>New event</Button>
@@ -95,7 +97,7 @@ function WeekGrid({ selectedId }: { selectedId?: string }) {
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
-      <div className="min-w-[640px] px-4 pb-6">
+      <div className="min-w-[560px] px-4 pb-6">
         {/* day headers + all-day row */}
         <div className="sticky top-0 z-10 grid grid-cols-[52px_repeat(5,minmax(0,1fr))] bg-bg pt-3">
           <div />

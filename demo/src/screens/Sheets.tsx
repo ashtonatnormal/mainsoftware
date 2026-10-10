@@ -929,7 +929,7 @@ function TabsBar({ sheet, activeId, editable, onSwitch, onAdd, onRename, onDelet
                   aria-expanded={menuFor === t.id}
                   ref={el => { if (on) menuAnchor.current = el }}
                   onClick={() => setMenuFor(menuFor === t.id ? null : t.id)}
-                  className="mr-1 grid size-6 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-fg"
+                  className="relative mr-1 grid size-6 place-items-center rounded-md text-muted after:absolute after:-inset-2 after:content-[''] hover:bg-surface-2 hover:text-fg"
                 >
                   <MoreVertical size={14} />
                 </button>

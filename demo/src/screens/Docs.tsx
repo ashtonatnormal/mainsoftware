@@ -426,13 +426,13 @@ function DocHeader(p: {
   const { toggleStar } = useStore()
   const titleRef = useRef<HTMLInputElement>(null)
   const saveState = p.trashed ? (
-    <span className="inline-flex shrink-0 items-center gap-1 text-rec"><Trash2 size={12} aria-hidden />In trash</span>
+    <span className="inline-flex min-w-0 items-center gap-1 text-rec"><Trash2 size={12} className="shrink-0" aria-hidden /><span className="truncate">In trash</span></span>
   ) : !editable ? (
-    <span className="inline-flex shrink-0 items-center gap-1"><Eye size={12} aria-hidden />View only</span>
+    <span className="inline-flex min-w-0 items-center gap-1"><Eye size={12} className="shrink-0" aria-hidden /><span className="truncate">View only</span></span>
   ) : draft.saving ? (
-    <span className="inline-flex shrink-0 items-center gap-1" aria-live="polite"><CloudUpload size={13} className="anim-pulse" aria-hidden />Saving…</span>
+    <span className="inline-flex min-w-0 items-center gap-1" aria-live="polite"><CloudUpload size={13} className="anim-pulse shrink-0" aria-hidden /><span className="truncate">Saving…</span></span>
   ) : (
-    <span className="inline-flex shrink-0 items-center gap-1" aria-live="polite"><CloudCheck size={13} aria-hidden />Saved to Drive</span>
+    <span className="inline-flex min-w-0 items-center gap-1" aria-live="polite"><CloudCheck size={13} className="shrink-0" aria-hidden /><span className="truncate">Saved to Drive</span></span>
   )
   const titleEl = editable ? (
     <>
@@ -453,7 +453,7 @@ function DocHeader(p: {
           if (next) draft.focus({ key: next.key, caret: 0 })
           else titleRef.current?.blur()
         }}
-        className={cx('-ml-1.5 max-w-full min-w-0 truncate rounded-md bg-transparent px-1.5 py-0.5 font-display font-semibold outline-none [field-sizing:content] placeholder:text-muted hover:bg-surface-2 focus:bg-surface-2 focus:ring-2 focus:ring-accent', desktop ? 'text-lg' : 'w-full text-[17px]')}
+        className={cx('-ml-1.5 max-w-full min-w-0 truncate rounded-md bg-transparent px-1.5 font-display leading-tight font-semibold outline-none [field-sizing:content] placeholder:text-muted hover:bg-surface-2 focus:bg-surface-2 focus:ring-2 focus:ring-accent', desktop ? 'text-lg' : 'w-full text-[17px]')}
       />
     </>
   ) : (
@@ -544,7 +544,7 @@ function MetaBar({ doc, editable, trashed, commentable, here, onPermissions, unt
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-line bg-surface px-3.5 py-2.5">
           <Eye size={16} className="shrink-0 text-muted" aria-hidden />
           <div className="min-w-0 flex-1 basis-48">
-            <button onClick={onPermissions} className="text-left text-sm font-medium hover:underline">View only · {cap(nameList(editorIds(doc)))} can edit</button>
+            <button onClick={onPermissions} className="-my-2.5 py-2.5 text-left text-sm font-medium hover:underline">View only · {cap(nameList(editorIds(doc)))} can edit</button>
             <p className="text-xs text-muted">{commentable ? 'You can read and comment.' : 'You can read this doc.'}</p>
           </div>
           <Button
@@ -568,7 +568,7 @@ function MetaBar({ doc, editable, trashed, commentable, here, onPermissions, unt
   return (
     <div className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line pb-4 text-xs text-muted">
       {presence}
-      <button onClick={onPermissions} className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 font-medium text-fg transition hover:bg-line">
+      <button onClick={onPermissions} className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full bg-surface-2 px-2.5 py-2 font-medium text-fg transition hover:bg-line sm:py-1">
         {editable ? <Pencil size={12} className="shrink-0" aria-hidden /> : <Lock size={12} className="shrink-0" aria-hidden />}
         <span className="truncate">{permissionLine(doc)}</span>
       </button>
