@@ -311,7 +311,10 @@ function Details({ u }: { u: DriveUpload }) {
 }
 
 // ── Versions (FILE-05) ───────────────────────────────────────────────────────
-const article = (w: string) => (/^[AEIOU]/i.test(w) ? `an ${w.toLowerCase()}` : `a ${w.toLowerCase()}`)
+const article = (w: string) => {
+  const word = w.startsWith('PDF') ? w : w.toLowerCase()
+  return /^[AEIOU]/i.test(w) ? `an ${word}` : `a ${word}`
+}
 
 function Versions({ u }: { u: DriveUpload }) {
   const { state, patchItem, toast } = useStore()

@@ -268,7 +268,8 @@ function RenameDialog({ id, onClose }: { id: string; onClose: () => void }) {
   const clean = name.trim()
   const submit = (ev?: FormEvent) => {
     ev?.preventDefault()
-    if (!clean || clean === entry.item.title) return onClose()
+    if (!clean) return
+    if (clean === entry.item.title) return onClose()
     renameItem(id, clean)
     if (entry.kind === 'folder') for (const d of state.docs) if (d.folderId === id) patchItem(d.id, { space: clean })
     toast(`Renamed to “${clean}”`)
