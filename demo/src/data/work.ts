@@ -26,7 +26,7 @@ export const actionables: Actionable[] = [
     route: { name: 'chats', conversationId: 'dm_priya' },
     draft: {
       conversationId: 'dm_priya',
-      text: 'Thanks Priya. Let’s go with Kranji Movers if they can match our current insurance cover. Can you confirm that with them on tomorrow’s call?',
+      text: 'Thanks Priya. Can you check on tomorrow’s call that Kranji Movers can match our insurance cover? If they can, let’s go with them.',
       memoryId: 'mem1', // "You prefer short replies that end with a clear decision."
       withoutMemory: 'Hi Priya, thanks for getting a second quote. Kranji Movers at S$18,400 against S$21,000 for the same scope looks like a good saving. Do you know if they can match our current insurance cover? Could you check on tomorrow’s call, and we can decide once we know?',
     },
@@ -39,7 +39,7 @@ export const actionables: Actionable[] = [
     route: { name: 'tasks' },
     draft: {
       conversationId: 'dm_marcus',
-      text: 'Approved, Marcus. Go ahead and tell the crew. Thanks for sorting it out so quickly.',
+      text: 'Thanks for sorting it out so quickly, Marcus. Approved, go ahead and tell the crew.',
       memoryId: 'mem1',
       withoutMemory: 'Hi Marcus, thanks for sending the Saturday roster and the voice note. I’m happy to approve the overtime for the 11 people on it. Could you let the crew know, and tell me if anything changes before Saturday?',
     },

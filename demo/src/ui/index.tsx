@@ -170,11 +170,12 @@ export function SourceChips({ sources, numbered = true }: { sources: SourceRef[]
           <button
             key={i}
             onClick={() => navigate(s.route)}
-            className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-xs text-fg transition hover:border-agent hover:text-agent"
+            title={s.label}
+            className="inline-flex max-w-full items-start gap-1.5 rounded-2xl border border-line bg-surface px-2.5 py-1 text-left text-xs text-fg transition hover:border-agent hover:text-agent"
           >
             {numbered && <span className="font-bold text-agent tabular">{i + 1}</span>}
-            <Icon size={12} className="shrink-0 text-muted" aria-hidden />
-            <span className="truncate">{s.label}</span>
+            <Icon size={12} className="mt-0.5 shrink-0 text-muted" aria-hidden />
+            <span className="line-clamp-2 min-w-0 [overflow-wrap:anywhere]">{s.label}</span>
           </button>
         )
       })}

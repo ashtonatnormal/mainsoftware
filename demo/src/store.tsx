@@ -207,7 +207,7 @@ function withoutMe(r: Room, clock: number): Room {
 // ── Scripted replies so conversations feel alive ──────────────────────────────
 const scriptedReplies: Record<string, { from: string; text: string }> = {
   // Fits either Today draft to Priya (with or without memory, PA-10).
-  dm_priya: { from: 'u_priya', text: 'Thanks! I’ll check the insurance cover with Kranji on tomorrow’s call and let you know before Tuesday. 👍' },
+  dm_priya: { from: 'u_priya', text: 'Thanks! I’ll check the insurance cover with Kranji on tomorrow’s call and let you know straight after, so we can still give notice on Tuesday. 👍' },
   dm_marcus: { from: 'u_marcus', text: 'Thanks boss, telling the crew now 👍' },
   g_q4: { from: 'u_daniel', text: 'Thanks! I’ll walk everyone through v3 at the 3 pm review.' },
   ag_it: { from: 'a_it', text: 'I’ve noted that. For anything urgent, Arjun is on #it-help until 6 pm.' },
