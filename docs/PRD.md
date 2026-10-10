@@ -545,8 +545,8 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 ### 9.5 Accessibility and language
 
 - WCAG 2.2 AA. Captions and transcripts double as accessibility features.
-- UI in English for v1, with all strings externalized for translation.
-- Supported transcription languages: see Q2.
+- **English only** for v1 (D29): the UI, transcription, captions, meeting notes, and the AI. UI strings are still externalized so translation stays possible later.
+- Transcription must handle the accents and the mix of names and internal terms used in the org; see the org vocabulary requirement (REC-19).
 
 ### 9.6 Cost
 
@@ -658,6 +658,9 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | D25 | **Warm and familiar feel** | WhatsApp-like; the "cool" comes from rooms and AI, not visual complexity. |
 | D26 | **Recording policy is an org setting** | Our org: all sessions, no exceptions. Keeps D1 open. |
 | D27 | **Notes only for substantive sessions** | ≥5 min or contains a decision/action item; avoids flooding channels with notes from short drop-ins. |
+| D28 | **Every member agrees to the PDPA terms before joining** | Resolves the former recording-consent question. Captured in onboarding (ACC-12); the product supports the org's remaining PDPA obligations (§8.16). |
+| D29 | **English only** | UI, transcription, captions, notes, and AI. Resolves the former language question. |
+| D30 | **OpenAI for transcription** | Archive transcripts, live captions, and voice messages (§7.5). No fixed AI budget set; §9.6 gives an estimate and the caps admins can set. |
 
 ## Appendix B — Build approach and suggested building blocks
 
