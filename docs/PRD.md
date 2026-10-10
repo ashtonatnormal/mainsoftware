@@ -704,6 +704,7 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | Q11 | Default storage quotas for files. | M5 |
 | Q12 | Does leadership commit to a date to stop using WhatsApp for work? | M6 |
 | Q13 | Remaining retention periods (PDPA-09 proposals). Session recordings (120 days) and voice-message audio (360 days) are decided (D36). | Before M1 pilot |
+| Q15 | Do Sheets (DOC-12) and Slides (DOC-13) move from P2 into v1, now that the demo includes them (D38)? | M0 |
 | Q14 | ~~Who is the Data Protection Officer?~~ Resolved: Ashton Teo (D35). Their business contact still has to be published outside Hearth (PDPA-13); the PDPC also encourages registering the DPO on ACRA BizFile+. | M0 |
 
 ---
@@ -733,7 +734,7 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | D19 | **Docs like Google Docs** | Restricted editing and viewable version history. |
 | D20 | **Phone-number sign-in** | Hardened with device PIN/passkey and admin-only roster. |
 | D21 | **Mix of desk and mobile workers** | Phone experience is P0. |
-| D22 | **Docs now, Sheets and Slides later** | |
+| D22 | **Docs now, Sheets and Slides later** | See D38: the demo now includes both. |
 | D23 | **No fixed date** | Milestone sequencing in §11. |
 | D24 | **Built by the founder with AI coding tools** | Shapes Appendix B and risk R1/R10. |
 | D25 | **Warm and familiar feel** | WhatsApp-like; the "cool" comes from rooms and AI, not visual complexity. |
@@ -749,6 +750,7 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | D35 | **The DPO is Ashton Teo** | Founder; holds the DPO role (ACC-10, PDPA-13). |
 | D36 | **Session recordings kept 120 days; voice-message audio 360 days** | Replaces the earlier 90-day proposal. Transcripts and notes follow their own periods (PDPA-09). |
 | D37 | **Host on AWS Singapore (ap-southeast-1)** | Chosen after the cloud research in B.6. Recommended alongside it: LiveKit Cloud for rooms with Hearth's own recorder bot, and Claude through Amazon Bedrock in Singapore. |
+| D38 | **Docs works like a Drive; Sheets and Slides are in the demo** | Docs, sheets, slide decks, uploaded files and folders live in one Drive (FILE-01..05) with My Drive, Shared with me, team folders, Recent, Starred and Trash, and anyone can create a doc, sheet or deck from it. The demo includes working Sheets (DOC-12) and Slides (DOC-13). Whether they move into v1 is Q15. |
 
 ## Appendix B — Build approach and suggested building blocks
 
