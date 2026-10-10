@@ -230,7 +230,7 @@ function MemorySection() {
     <>
       <Group>
         <Row title={<label htmlFor="mem-on">Memory</label>} body={state.memoryOn ? 'Your assistant remembers useful things to help you.' : 'Off. Your assistant won’t remember anything new or use what’s below.'}>
-          <Switch id="mem-on" label="Assistant memory" checked={state.memoryOn} onChange={on => { setMemoryOn(on); toast(on ? 'Memory is on' : 'Memory is off') }} />
+          <Switch id="mem-on" label="Assistant memory" checked={state.memoryOn} onChange={on => { setMemoryOn(on); toast(on ? 'Memory is on. Your assistant can use and save memories again.' : 'Memory is off. Your assistant won’t use or save memories.') }} />
         </Row>
       </Group>
       <div className="mb-2 flex items-center justify-between gap-2">
