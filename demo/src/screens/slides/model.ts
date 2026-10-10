@@ -77,34 +77,49 @@ export const layoutSamples: Record<SlideLayout, Slide> = {
   image: { id: 'x7', layout: 'image', title: 'Picture', subtitle: 'A short caption', imageHue: 200 },
 }
 
-/** Change a slide's layout, carrying its text across where it fits. */
+/**
+ * Change a slide's layout, carrying its text across where it fits. Nothing is
+ * dropped: fields the new layout doesn't show stay on the slide, so switching
+ * back restores them.
+ */
 export function convertLayout(s: Slide, layout: SlideLayout): Slide {
   if (s.layout === layout) return s
-  const points = [
-    ...(s.bullets ?? []),
-    ...(s.left?.bullets ?? []),
-    ...(s.right?.bullets ?? []),
-  ].filter(Boolean)
-  const lead = s.layout === 'big-number' ? [s.stat, s.statLabel].filter(Boolean).join(' ') : s.subtitle ?? ''
-  const all = points.length ? points : lead ? [lead] : []
-  const base: Slide = { id: s.id, layout, title: s.title, notes: s.notes }
+  const points = (s.bullets?.length ? s.bullets : [...(s.left?.bullets ?? []), ...(s.right?.bullets ?? [])]).filter(Boolean)
+  const lead = s.subtitle || (s.layout === 'big-number' ? [s.stat, s.statLabel].filter(Boolean).join(' ') : '')
+  const next: Slide = { ...s, layout }
   switch (layout) {
     case 'title':
     case 'section':
     case 'quote':
-      return { ...base, subtitle: lead || points[0] || '' }
     case 'image':
-      return { ...base, subtitle: lead || points[0] || '', imageHue: s.imageHue ?? 200, imageUrl: s.imageUrl }
+      if (!next.subtitle) next.subtitle = lead || points[0] || ''
+      if (layout === 'image' && next.imageHue === undefined) next.imageHue = 200
+      return next
     case 'bullets':
-      return { ...base, bullets: all.length ? all : [''] }
+      if (!next.bullets?.some(Boolean)) next.bullets = points.length ? points : lead ? [lead] : ['']
+      return next
     case 'two-column': {
-      if (s.left || s.right) return { ...base, left: s.left, right: s.right }
+      if (next.left || next.right) return next
+      const all = points.length ? points : lead ? [lead] : []
       const half = Math.ceil(all.length / 2)
-      return { ...base, left: { heading: '', bullets: all.slice(0, half).length ? all.slice(0, half) : [''] }, right: { heading: '', bullets: all.slice(half).length ? all.slice(half) : [''] } }
+      next.left = { heading: '', bullets: all.slice(0, half).length ? all.slice(0, half) : [''] }
+      next.right = { heading: '', bullets: all.slice(half).length ? all.slice(half) : [''] }
+      return next
     }
     case 'big-number': {
-      const m = all.join(' ').match(/(S\$\s?)?\d[\d,.]*%?/)
-      return { ...base, stat: m?.[0] ?? '', statLabel: lead && s.layout !== 'big-number' ? lead : points[0] ?? '' }
+      if (next.stat) return next
+      // A number that stands on its own ("1,200", "30%", "S$4.8M"), not one inside a word like "Q4".
+      for (const text of [...points, s.title]) {
+        const m = text.match(/(?<![\w$])(S?\$\s?\d[\d,.]*[MKmk]?|\d[\d,.]*%?)(?!\w)/)
+        if (m) {
+          next.stat = m[0]
+          if (!next.statLabel) next.statLabel = text.replace(m[0], '').replace(/\s{2,}/g, ' ').replace(/^[\s,:;-]+|[\s,:;-]+$/g, '')
+          return next
+        }
+      }
+      next.stat = ''
+      if (!next.statLabel) next.statLabel = points[0] ?? ''
+      return next
     }
   }
 }

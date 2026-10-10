@@ -50,10 +50,12 @@ export const layoutOrder: SlideLayout[] = ['title', 'section', 'bullets', 'two-c
 /** Plain-text summary of a slide, for labels, notes and search. */
 export function slideText(s: Slide): string[] {
   const out = [s.title]
-  if (s.layout === 'big-number') out.push([s.stat, s.statLabel].filter(Boolean).join(' '))
-  if (s.subtitle) out.push(s.subtitle)
-  if (s.bullets) out.push(...s.bullets)
-  for (const col of [s.left, s.right]) if (col) out.push(...[col.heading ?? '', ...col.bullets])
+  switch (s.layout) {
+    case 'big-number': out.push([s.stat, s.statLabel].filter(Boolean).join(' ')); break
+    case 'bullets': out.push(...(s.bullets ?? [])); break
+    case 'two-column': for (const col of [s.left, s.right]) if (col) out.push(col.heading ?? '', ...col.bullets); break
+    default: out.push(s.subtitle ?? '')
+  }
   return out.map(t => t.trim()).filter(Boolean)
 }
 
@@ -78,6 +80,8 @@ function Text({ field, value, edit, placeholder, className, style, list, as: Tag
   field: Field; value: string; edit?: SlideEditor; placeholder: string; className?: string; style?: CSSProperties; list?: boolean; as?: 'div' | 'li' | 'p' | 'h1' | 'h2'; label: string
 }) {
   const ref = useRef<HTMLElement | null>(null)
+  const latest = useRef(value)
+  latest.current = value
   useLayoutEffect(() => {
     const el = ref.current
     if (el && document.activeElement !== el && el.textContent !== value) el.textContent = value
@@ -87,8 +91,8 @@ function Text({ field, value, edit, placeholder, className, style, list, as: Tag
     return <Tag className={className} style={style}>{value}</Tag>
   }
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
+    if (e.key === 'Enter') {
+      e.preventDefault() // fields are single-line, Shift+Enter included
       if (list) edit.insertAfter(field)
       else e.currentTarget.blur()
     } else if (e.key === 'Backspace' && list && !e.currentTarget.textContent) {
@@ -120,14 +124,34 @@ function Text({ field, value, edit, placeholder, className, style, list, as: Tag
       onInput={e => {
         const el = e.currentTarget
         if (!el.textContent && el.innerHTML) el.innerHTML = '' // drop the stray <br>, so the placeholder shows
+        const text = el.textContent ?? ''
+        if (/[\r\n]/.test(text)) el.textContent = text.replace(/[\r\n]+/g, ' ')
         edit.set(field, el.textContent ?? '')
       }}
       onKeyDown={onKeyDown}
+      // A list item can shift under a focused field (Backspace removes the one before
+      // it); once focus leaves, show what the store holds.
+      onBlur={e => { if (e.currentTarget.textContent !== latest.current) e.currentTarget.textContent = latest.current }}
     />
   )
 }
 
 // ── Slide body ───────────────────────────────────────────────────────────────
+/**
+ * Pick a bullet size that keeps the list on the slide: a rough count of the
+ * lines the list takes at each size (wider columns hold more per line).
+ */
+function fitSize(items: string[], sizes: number[], squeeze = 1) {
+  for (const size of sizes) {
+    const perLine = (1100 / squeeze) / (size * 0.52)
+    const lines = items.reduce((n, b) => n + Math.max(1, Math.ceil(b.length / perLine)), 0)
+    const height = lines * size * 1.3 + Math.max(0, items.length - 1) * size * 0.62
+    if (height <= (squeeze > 1.5 ? 330 : 440)) return size
+  }
+  return sizes[sizes.length - 1]
+}
+const statSize = (len: number) => (len <= 6 ? 210 : len <= 9 ? 160 : len <= 12 ? 120 : 92)
+
 const display = 'var(--font-display)'
 const sans = 'var(--font-sans)'
 
@@ -190,8 +214,7 @@ function SlideBody({ slide: s, t, edit }: { slide: Slide; t: SlideTheme; edit?: 
         </div>
       )
     case 'bullets': {
-      const n = Math.max(1, s.bullets?.length ?? 0)
-      const size = n > 6 ? 26 : n > 4 ? 32 : 38
+      const size = fitSize(s.bullets ?? [], [38, 32, 28, 24, 20], s.title.length > 40 ? 1.25 : 1)
       return (
         <div className="absolute inset-0 flex flex-col" style={{ background: t.bg, color: t.fg, padding: `${pad - 16}px ${pad}px` }}>
           <Text as="h2" field="title" value={s.title} edit={edit} label="Slide title" placeholder="Add a title" className="[overflow-wrap:anywhere]" style={{ ...titleStyle(60, t.fg), marginBottom: 52 }} />
@@ -200,8 +223,8 @@ function SlideBody({ slide: s, t, edit }: { slide: Slide; t: SlideTheme; edit?: 
       )
     }
     case 'two-column': {
-      const n = Math.max(s.left?.bullets.length ?? 0, s.right?.bullets.length ?? 0)
-      const size = n > 5 ? 24 : 30
+      const longest = [s.left?.bullets ?? [], s.right?.bullets ?? []].sort((a, b) => b.join('').length + b.length * 30 - a.join('').length - a.length * 30)[0]
+      const size = fitSize(longest, [30, 26, 22, 19, 17], 2.1)
       const col = (side: 'left' | 'right') => {
         const c = s[side] ?? { bullets: [] }
         return (
@@ -222,7 +245,7 @@ function SlideBody({ slide: s, t, edit }: { slide: Slide; t: SlideTheme; edit?: 
       return (
         <div className="absolute inset-0 flex flex-col justify-center" style={{ background: t.bg, color: t.fg, padding: `0 ${pad + 16}px` }}>
           <Text field="title" value={s.title} edit={edit} label="Slide title" placeholder="What the number is about" className="[overflow-wrap:anywhere]" style={{ fontFamily: sans, fontSize: 34, fontWeight: 600, color: t.muted, letterSpacing: '0.01em' }} />
-          <Text field="stat" value={s.stat ?? ''} edit={edit} label="Big number" placeholder="0" className="tabular [overflow-wrap:anywhere]" style={{ fontFamily: display, fontSize: (s.stat ?? '').length > 7 ? 150 : 210, fontWeight: 800, lineHeight: 1, color: t.accent, margin: '24px 0 28px', letterSpacing: '-0.03em' }} />
+          <Text field="stat" value={s.stat ?? ''} edit={edit} label="Big number" placeholder="0" className="tabular whitespace-nowrap" style={{ fontFamily: display, fontSize: statSize((s.stat ?? '').length), fontWeight: 800, lineHeight: 1, color: t.accent, margin: '24px 0 28px', letterSpacing: '-0.03em' }} />
           <Text field="statLabel" value={s.statLabel ?? ''} edit={edit} label="What the number means" placeholder="What the number means" className="[overflow-wrap:anywhere]" style={{ fontFamily: sans, fontSize: 40, lineHeight: 1.3, color: t.fg, maxWidth: 1000 }} />
         </div>
       )
@@ -274,10 +297,22 @@ function useWidth<T extends HTMLElement>() {
  * A slide scaled to the width of its box (16:9). `edit` turns on direct
  * editing; `overlay` renders on top in screen pixels (e.g. a "Replace image" button).
  */
-export function SlideFrame({ slide, theme, edit, overlay, className, rounded = true, label }: {
+export function SlideFrame({ slide, theme, edit, overlay, className, rounded = true, label, onOverflow }: {
   slide: Slide; theme: ThemeId; edit?: SlideEditor; overlay?: ReactNode; className?: string; rounded?: boolean; label?: string
+  /** Called with true when some text runs past the slide's edge. */
+  onOverflow?: (over: boolean) => void
 }) {
   const [ref, w] = useWidth<HTMLDivElement>()
+  useLayoutEffect(() => {
+    const root = ref.current
+    if (!onOverflow || !root || !w) return
+    const box = root.getBoundingClientRect()
+    const over = [...root.querySelectorAll<HTMLElement>('[data-field], li')].some(el => {
+      const r = el.getBoundingClientRect()
+      return r.height > 0 && (r.bottom > box.bottom + 1 || r.right > box.right + 1)
+    })
+    onOverflow(over)
+  })
   const t = themes[theme] ?? themes.ember
   return (
     <div

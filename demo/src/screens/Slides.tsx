@@ -3,7 +3,7 @@
 // who can open the deck can view and present it. AI help (D16) only suggests.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import {
-  ArrowDown, ArrowLeft, ArrowUp, Check, ChevronDown, ChevronRight, Copy, ImageUp, LayoutTemplate, NotebookText, Palette, Play, Plus, Presentation, Share2, Sparkles, Star, Trash2, Undo2,
+  ArrowDown, ArrowLeft, ArrowUp, Check, TriangleAlert, ChevronDown, ChevronRight, Copy, ImageUp, LayoutTemplate, NotebookText, Palette, Play, Plus, Presentation, Share2, Sparkles, Star, Trash2, Undo2,
 } from 'lucide-react'
 import type { Deck, Doc, Slide, SlideLayout } from '../types'
 import { useStore } from '../store'
@@ -19,7 +19,8 @@ import { Present } from './slides/Present'
 import { focusField, imageBox, layoutLabels, layoutOrder, SlideFrame, slideText, themes, type SlideEditor } from './slides/render'
 
 // ── Small hooks ──────────────────────────────────────────────────────────────
-const wideQuery = '(min-width: 768px)'
+// Phones in landscape are short: they keep the phone layout, where everything scrolls.
+const wideQuery = '(min-width: 768px) and (min-height: 540px)'
 function useWide() {
   return useSyncExternalStore(
     cb => { const m = window.matchMedia(wideQuery); m.addEventListener('change', cb); return () => m.removeEventListener('change', cb) },
@@ -88,6 +89,8 @@ function DeckEditor({ deck }: { deck: Deck }) {
   const [notesOpen, setNotesOpen] = useState(false)
   const [suggestion, setSuggestion] = useState<{ slideId: string; text: string } | null>(null)
   const [saved, setSaved] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const [deleted, setDeleted] = useState<{ slide: Slide; at: number } | null>(null)
+  const [overflow, setOverflow] = useState(false)
   const canvasRef = useRef<HTMLDivElement>(null)
   const saveTimer = useRef<number | undefined>(undefined)
 
@@ -136,7 +139,7 @@ function DeckEditor({ deck }: { deck: Deck }) {
         if (!old) return
         // On a new deck the first slide's title names the deck too, until they differ.
         const d = deckRef.current
-        const rename = field === 'title' && idx === 0 && old.layout === 'title' && value.trim() && (d.title === old.title || d.title === 'Untitled presentation')
+        const rename = field === 'title' && idx === 0 && old.layout === 'title' && value.trim() && (d.title.trim() === old.title.trim() || d.title === 'Untitled presentation')
         replaceSlide(idx, setField(old, field, value), rename ? { title: value.trim() } : undefined)
       },
       insertAfter: field => {
@@ -160,7 +163,7 @@ function DeckEditor({ deck }: { deck: Deck }) {
     const at = slides.length ? idx + 1 : 0
     setSlides(list => [...list.slice(0, at), s, ...list.slice(at)])
     select(at)
-    focusSoon(() => canvasRef.current, layout === 'two-column' ? 'title' : 'title')
+    focusSoon(() => canvasRef.current, 'title')
   }
   const duplicate = () => {
     if (!slide) return
@@ -178,16 +181,30 @@ function DeckEditor({ deck }: { deck: Deck }) {
     setSel(to)
   }, [idx, setSlides])
   const remove = () => {
+    if (!slide) return
+    setDeleted({ slide, at: idx })
     setSlides(list => list.filter((_, j) => j !== idx))
     setSel(Math.max(0, idx - 1))
     setConfirmDelete(false)
-    api.toast(`Slide ${idx + 1} deleted`)
   }
+  const undoDelete = () => {
+    if (!deleted) return
+    const { slide: s, at } = deleted
+    setSlides(list => [...list.slice(0, at), s, ...list.slice(at)])
+    setSel(at)
+    setDeleted(null)
+  }
+  // The undo offer stays until the next edit of the slide list, or 8 seconds.
+  useEffect(() => {
+    if (!deleted) return
+    const t = window.setTimeout(() => setDeleted(null), 8000)
+    return () => window.clearTimeout(t)
+  }, [deleted])
   const changeLayout = (l: SlideLayout) => slide && replaceSlide(idx, convertLayout(slide, l))
-  const addFromDoc = (drafted: Slide[], doc: Doc) => {
+  const addFromDoc = (drafted: Slide[], doc: Doc, title: string) => {
     const d = deckRef.current
     if (isFreshDeck(d.slides, d.title)) {
-      commit({ slides: drafted, title: d.title === 'Untitled presentation' ? doc.title : d.title })
+      commit({ slides: drafted, title: d.title === 'Untitled presentation' ? title : d.title })
       select(0)
     } else {
       const at = idx + 1
@@ -258,7 +275,13 @@ function DeckEditor({ deck }: { deck: Deck }) {
 
   const canvas = slide ? (
     <div ref={canvasRef} className="w-full">
-      <SlideFrame key={slide.id} slide={slide} theme={deck.theme} edit={edit} overlay={imageOverlay} className="shadow-card ring-1 ring-line" />
+      <SlideFrame key={slide.id} slide={slide} theme={deck.theme} edit={edit} overlay={imageOverlay} className="shadow-card ring-1 ring-line" onOverflow={editable ? setOverflow : undefined} />
+      {editable && overflow && (
+        <p className="mt-2 flex items-center gap-1.5 text-xs text-warn" role="status">
+          <TriangleAlert size={13} className="shrink-0" aria-hidden />
+          Some text runs off the slide. Shorten it, or split it across two slides.
+        </p>
+      )}
     </div>
   ) : null
 
@@ -339,12 +362,18 @@ function DeckEditor({ deck }: { deck: Deck }) {
         </div>
       )}
       {toolbar}
+      {deleted && !confirmDelete && (
+        <div className="anim-in flex shrink-0 items-center gap-2 border-b border-line bg-surface-2 px-3 py-1.5 sm:px-4" role="status">
+          <span className="min-w-0 flex-1 truncate text-sm">Slide {deleted.at + 1} deleted</span>
+          <Button size="sm" variant="ghost" icon={<Undo2 size={14} />} onClick={undoDelete}>Undo</Button>
+        </div>
+      )}
 
       {wide ? (
         <div className="flex min-h-0 flex-1">
           <aside className="w-48 shrink-0 overflow-y-auto border-r border-line bg-surface lg:w-56" aria-label="Slides">{filmstrip}</aside>
           <div className="min-w-0 flex-1 overflow-y-auto">
-            <div className="mx-auto flex w-full flex-col gap-4 px-6 py-6" style={{ maxWidth: 'max(560px, min(1100px, calc((100dvh - 330px) * 16 / 9)))' }}>
+            <div className="mx-auto flex w-full flex-col gap-4 px-6 py-6" style={{ maxWidth: 'max(420px, min(1100px, calc((100dvh - 330px) * 16 / 9)))' }}>
               {canvas}
               {emptyDeck}
               {freshOffer}
@@ -390,7 +419,7 @@ function Header({ deck, editable, wide, saved, onShare, onPresent }: { deck: Dec
   const status =
     saved === 'saving' ? 'Saving…'
     : saved === 'saved' ? 'Saved'
-    : `Edited ${listStamp(deck.updatedAt)}${deck.updatedBy ? ` by ${deck.updatedBy === ME ? 'you' : personShort(deck.updatedBy)}` : ''}`
+    : `Edited ${listStamp(deck.updatedAt).replace(/^(Yesterday|Today)/, w => w.toLowerCase())}${deck.updatedBy ? ` by ${deck.updatedBy === ME ? 'you' : personShort(deck.updatedBy)}` : ''}`
   const others = deck.presence.filter(p => p !== ME)
 
   const crumbs = (
@@ -473,9 +502,9 @@ function Toolbar(p: {
   const n = deck.slides.length
   if (!p.editable) {
     return (
-      <div className="flex shrink-0 items-center gap-2 border-b border-line bg-surface px-4 py-2 text-sm text-muted">
-        <Presentation size={15} className="shrink-0" aria-hidden />
-        <span className="min-w-0 flex-1 truncate">You can view and present this deck. Ask {deck.ownerId === ME ? 'an editor' : personShort(deck.ownerId)} if you need to edit it.</span>
+      <div className="flex shrink-0 items-start gap-2 border-b border-line bg-surface px-4 py-2 text-sm text-muted">
+        <Presentation size={15} className="mt-0.5 shrink-0" aria-hidden />
+        <span className="min-w-0 flex-1">You can view and present this deck. Ask {deck.ownerId === ME ? 'an editor' : personShort(deck.ownerId)} if you need to edit it.</span>
       </div>
     )
   }
@@ -489,7 +518,7 @@ function Toolbar(p: {
       </div>
     )
   }
-  const tb = 'size-9'
+  const tb = 'size-9 disabled:opacity-35 disabled:pointer-events-none'
   return (
     <div className="flex shrink-0 items-center gap-0.5 border-b border-line bg-surface px-1.5 py-1 sm:px-3" role="toolbar" aria-label="Slide tools">
       {wide ? (
@@ -511,8 +540,8 @@ function Toolbar(p: {
       <span className="flex-1" />
       {wide ? (
         <>
-          <Button size="sm" variant="agent" icon={<Sparkles size={14} />} onClick={p.onDraft}>Draft from a doc</Button>
-          <Button size="sm" variant="agent" icon={<NotebookText size={14} />} onClick={p.onNotes} disabled={!slide} className="ml-1.5">Write speaker notes</Button>
+          <Button size="sm" variant="agent" icon={<Sparkles size={14} />} onClick={p.onDraft} aria-label="Draft slides from a doc" title="Draft slides from a doc"><span className="hidden lg:inline">Draft from a doc</span></Button>
+          <Button size="sm" variant="agent" icon={<NotebookText size={14} />} onClick={p.onNotes} disabled={!slide} className="ml-1.5" aria-label="Write speaker notes" title="Write speaker notes"><span className="hidden lg:inline">Write speaker notes</span></Button>
         </>
       ) : (
         <IconButton label="Help me write" className={cx(tb, 'bg-agent-soft text-agent hover:bg-agent-soft')} onClick={p.onAI}><Sparkles size={17} /></IconButton>
@@ -645,8 +674,10 @@ function NotesPanel(p: {
           <span className="shrink-0 text-[13px] font-semibold whitespace-nowrap">Speaker notes</span>
           {!p.open && <span className="min-w-0 truncate text-xs text-muted">{slide.notes?.trim() ? `· ${slide.notes}` : '· none yet'}</span>}
         </button>
-      ) : (
+      ) : p.editable ? (
         <label htmlFor={id} className="flex-1 text-[13px] font-semibold">Speaker notes <span className="font-normal text-muted">· slide {index + 1}</span></label>
+      ) : (
+        <h2 className="flex-1 text-[13px] font-semibold">Speaker notes <span className="font-normal text-muted">· slide {index + 1}</span></h2>
       )}
       {p.editable && p.open && !p.suggestion && (
         <Button size="sm" variant="ghost" icon={<Sparkles size={14} className="text-agent" />} onClick={p.onWrite} className="text-agent">Write for me</Button>
@@ -658,7 +689,7 @@ function NotesPanel(p: {
       {head}
       {p.open && (
         <div className="mt-2 flex flex-col gap-3">
-          {p.collapsible && <label htmlFor={id} className="sr-only">Speaker notes for slide {index + 1}</label>}
+          {p.collapsible && p.editable && <label htmlFor={id} className="sr-only">Speaker notes for slide {index + 1}</label>}
           {p.editable ? (
             <textarea
               id={id}

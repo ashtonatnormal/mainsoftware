@@ -12,6 +12,17 @@ export function Present({ deck, start, onClose }: { deck: Deck; start: number; o
   const [i, setI] = useState(Math.min(start, Math.max(0, total - 1)))
   const [notes, setNotes] = useState(false)
   const root = useRef<HTMLDivElement>(null)
+  const stage = useRef<HTMLDivElement>(null)
+  const [box, setBox] = useState({ w: 0, h: 0 })
+  // Fit the slide to whatever room the stage has (it shrinks when notes show).
+  useEffect(() => {
+    const el = stage.current
+    if (!el) return
+    const ro = new ResizeObserver(([e]) => setBox({ w: e.contentRect.width, h: e.contentRect.height }))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const slideW = Math.max(0, Math.min(box.w, (box.h * 16) / 9))
   const atEnd = i >= total
   const slide = deck.slides[Math.min(i, total - 1)]
 
@@ -27,6 +38,18 @@ export function Present({ deck, start, onClose }: { deck: Deck; start: number; o
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return
       const k = e.key
+      // Enter and Space press a focused button; they only advance from the stage.
+      if ((k === 'Enter' || k === ' ') && (e.target as HTMLElement).closest?.('button')) return
+      if (k === 'Tab') {
+        // Keep focus inside the overlay.
+        const items = [...(root.current?.querySelectorAll<HTMLElement>('button:not([disabled])') ?? [])]
+        if (!items.length) return
+        const at = items.indexOf(document.activeElement as HTMLElement)
+        const to = e.shiftKey ? (at <= 0 ? items.length - 1 : at - 1) : (at + 1) % items.length
+        items[to].focus()
+        e.preventDefault()
+        return
+      }
       if (k === 'ArrowRight' || k === 'ArrowDown' || k === ' ' || k === 'PageDown' || k === 'Enter') next()
       else if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp' || k === 'Backspace') prev()
       else if (k === 'Home') setI(0)
@@ -53,7 +76,12 @@ export function Present({ deck, start, onClose }: { deck: Deck; start: number; o
     return () => document.removeEventListener('fullscreenchange', onChange)
   }, [i, total, onClose])
 
-  useEffect(() => { root.current?.focus() }, [])
+  // Focus the overlay, and give focus back to where it was (the Present button) on exit.
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null
+    root.current?.focus()
+    return () => { if (before?.isConnected) before.focus() }
+  }, [])
 
   // Tap halves and swipe
   const touch = useRef<{ x: number; y: number } | null>(null)
@@ -72,9 +100,9 @@ export function Present({ deck, start, onClose }: { deck: Deck; start: number; o
   }
   const onStageClick = (e: React.MouseEvent) => {
     if (swiped.current) { swiped.current = false; return }
-    if (atEnd) { close(); return }
     const r = e.currentTarget.getBoundingClientRect()
     if (e.clientX - r.left < r.width / 2) prev()
+    else if (atEnd) close()
     else next()
   }
 
@@ -90,7 +118,8 @@ export function Present({ deck, start, onClose }: { deck: Deck; start: number; o
       style={{ padding: 'env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px)' }}
     >
       <div
-        className="relative flex min-h-0 flex-1 items-center justify-center p-2 sm:p-6"
+        ref={stage}
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-2 sm:p-6"
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
         onClick={onStageClick}
@@ -99,10 +128,10 @@ export function Present({ deck, start, onClose }: { deck: Deck; start: number; o
         {atEnd ? (
           <div className="text-center">
             <p className="font-display text-2xl font-semibold">End of slides</p>
-            <p className="mt-2 text-sm text-white/70">Tap or press Esc to leave</p>
+            <p className="mt-2 text-sm text-white/70">Esc or the right side leaves. The left side goes back.</p>
           </div>
         ) : (
-          <div className="w-full" style={{ maxWidth: 'min(100%, calc((100dvh - 8rem) * 16 / 9))' }} aria-live="polite">
+          <div style={{ width: slideW ? slideW - 1 : '100%', maxWidth: '100%' }}>
             <SlideFrame key={slide.id} slide={slide} theme={deck.theme} rounded={false} className="anim-in shadow-2xl" label={`Slide ${i + 1} of ${total}`} />
           </div>
         )}

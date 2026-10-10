@@ -60,8 +60,22 @@ export function ThemeSheet({ open, onClose, theme, sample, onPick }: { open: boo
   )
 }
 
+const plural = (n: number, one: string, many: (n: number) => string) => (n === 1 ? one : many(n))
+
+function summary(c: { bullets: number; numbers: number; quotes: number }) {
+  const parts = [
+    'a title slide',
+    c.bullets && plural(c.bullets, '1 bullet slide', n => `${n} bullet slides`),
+    c.numbers && plural(c.numbers, '1 big-number slide', n => `${n} big-number slides`),
+    c.quotes && plural(c.quotes, '1 quote', n => `${n} quotes`),
+  ].filter(Boolean) as string[]
+  const text = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0]
+  const out = text[0].toUpperCase() + text.slice(1) + '.'
+  return parts.length === 1 ? `${out} The doc has no lists or paragraphs to turn into more.` : out
+}
+
 /** "Draft slides from a doc": pick a doc, preview the slides, then add or discard. */
-export function DraftSheet({ open, onClose, theme, onAdd }: { open: boolean; onClose: () => void; theme: ThemeId; onAdd: (slides: Slide[], doc: Doc) => void }) {
+export function DraftSheet({ open, onClose, theme, onAdd }: { open: boolean; onClose: () => void; theme: ThemeId; onAdd: (slides: Slide[], doc: Doc, title: string) => void }) {
   const { state } = useStore()
   const docs = useMemo(() => openableDocs(state.docs, state.folders), [state.docs, state.folders])
   const [docId, setDocId] = useState<string | null>(null)
@@ -77,7 +91,7 @@ export function DraftSheet({ open, onClose, theme, onAdd }: { open: boolean; onC
       footer={doc && draft ? (
         <>
           <Button variant="ghost" onClick={close}>Discard</Button>
-          <Button variant="primary" onClick={() => { onAdd(draft.slides, doc); setDocId(null); onClose() }}>Add {draft.slides.length} slides</Button>
+          <Button variant="primary" onClick={() => { onAdd(draft.slides, doc, draft.title); setDocId(null); onClose() }}>{plural(draft.slides.length, 'Add 1 slide', n => `Add ${n} slides`)}</Button>
         </>
       ) : undefined}
     >
@@ -107,11 +121,7 @@ export function DraftSheet({ open, onClose, theme, onAdd }: { open: boolean; onC
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <AIMarker label="Suggested" />
-            <span className="text-sm text-muted">
-              A title slide, {draft.counts.bullets} bullet {draft.counts.bullets === 1 ? 'slide' : 'slides'}
-              {draft.counts.numbers ? `, ${draft.counts.numbers} big-number ${draft.counts.numbers === 1 ? 'slide' : 'slides'}` : ''}
-              {draft.slides.some(s => s.layout === 'quote') ? ' and a quote' : ''}.
-            </span>
+            <span className="text-sm text-muted">{summary(draft.counts)}</span>
           </div>
           <ol className="-mx-5 flex snap-x scroll-px-5 gap-3 overflow-x-auto px-5 pb-2" aria-label="Preview of the suggested slides">
             {draft.slides.map((s, i) => (
