@@ -2,13 +2,16 @@
 // from the personal assistant, followed by plain keyword results. Everything
 // here is limited to what the signed-in user can open (Rule 1).
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react'
-import { ArrowUp, Calendar, CheckSquare, ChevronRight, FileText, Hash, Lock, MessageSquare, Mic, Paperclip, RotateCcw, Search, ShieldCheck, Sparkles, X } from 'lucide-react'
+import { ArrowUp, Calendar, CheckSquare, ChevronRight, File as FileIcon, FileText, Film, Folder, Hash, Image as ImageIcon, Lock, MessageSquare, Mic, Music, Paperclip, Presentation, RotateCcw, Search, Sheet as SheetIcon, ShieldCheck, Sparkles, X } from 'lucide-react'
 import { useStore } from '../store'
 import type { SourceRef } from '../types'
 import { askFallback, askSuggestions } from '../data/work'
 import { ASSISTANT, people } from '../data/people'
 import { AgentBadge, AIMarker, Avatar, CitedText, cx, Feedback, IconButton, Pill, SectionTitle, SourceChips } from '../ui'
-import { conversationLabel, directConversation, search, termRegex, termsOf, type ResultGroup, type ResultIcon, type SearchResult } from './ask/search'
+import { conversationLabel, directConversation, driveLocation, search, termRegex, termsOf, type ResultGroup, type ResultIcon, type SearchResult } from './ask/search'
+import { driveEntries, isTrashed, kindLabel } from '../drive'
+import { canOpen } from './drive/model'
+import { KindIcon } from './drive/art'
 
 interface Entry {
   id: number
@@ -31,13 +34,13 @@ type Filter = 'all' | ResultGroup
 const filters: { value: Filter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'messages', label: 'Messages' },
-  { value: 'docs', label: 'Docs' },
+  { value: 'docs', label: 'Files' },
   { value: 'meetings', label: 'Meetings' },
   { value: 'tasks', label: 'Tasks' },
   { value: 'people', label: 'People' },
 ]
 const groupOrder: ResultGroup[] = ['messages', 'meetings', 'docs', 'tasks', 'people']
-const groupLabel: Record<ResultGroup, string> = { messages: 'Messages', meetings: 'Meetings', docs: 'Docs', tasks: 'Tasks', people: 'People' }
+const groupLabel: Record<ResultGroup, string> = { messages: 'Messages', meetings: 'Meetings', docs: 'Files', tasks: 'Tasks', people: 'People' }
 const resultIcons: Record<Exclude<ResultIcon, 'person'>, typeof MessageSquare> = {
   message: MessageSquare,
   voice: Mic,
@@ -46,6 +49,25 @@ const resultIcons: Record<Exclude<ResultIcon, 'person'>, typeof MessageSquare> =
   session: Mic,
   event: Calendar,
   task: CheckSquare,
+  folder: Folder,
+  sheet: SheetIcon,
+  slides: Presentation,
+  pdf: FileText,
+  image: ImageIcon,
+  video: Film,
+  audio: Music,
+  upload: FileIcon,
+}
+// Drive results use the Drive's kind colours (doc ember, sheet green, slides amber, PDF red, media teal).
+const resultTone: Partial<Record<ResultIcon, string>> = {
+  session: 'bg-accent-soft text-accent-ink',
+  doc: 'bg-accent-soft text-accent-ink',
+  sheet: 'bg-ok-soft text-ok',
+  slides: 'bg-warn-soft text-warn',
+  pdf: 'bg-rec-soft text-rec',
+  image: 'bg-agent-soft text-agent',
+  video: 'bg-agent-soft text-agent',
+  audio: 'bg-agent-soft text-agent',
 }
 
 function prefersReducedMotion() {
@@ -238,7 +260,7 @@ function Idle({ onAsk }: { onAsk: (q: string) => void }) {
         <div className="min-w-0">
           <p className="font-semibold">Only what you can open</p>
           <p className="mt-0.5 text-muted">
-            Answers and results come from messages, meeting transcripts, docs, tasks and people you already have access to. Every claim links to its source. Restricted rooms, like HR and performance 1:1s, are never searched.
+            Answers and results come from messages, meeting transcripts, docs and files, tasks and people you already have access to. Every claim links to its source. Restricted rooms, like HR and performance 1:1s, are never searched.
           </p>
         </div>
       </section>
@@ -248,7 +270,7 @@ function Idle({ onAsk }: { onAsk: (q: string) => void }) {
 
 // ── Jump to (SRCH-06) ────────────────────────────────────────────────────────
 function JumpTo({ q, onAsk }: { q: string; onAsk: () => void }) {
-  const { state, navigate } = useStore()
+  const { state, navigate, openItem } = useStore()
   const matches = useMemo(() => {
     const terms = termsOf(q)
     const re = termRegex(terms.length ? terms : [norm(q).toLowerCase()], 'i')
@@ -264,11 +286,14 @@ function JumpTo({ q, onAsk }: { q: string; onAsk: () => void }) {
       if (!conv) continue
       out.push({ key: p.id, label: p.name, sub: p.kind === 'agent' ? 'Agent' : p.title, icon: <Avatar id={p.id} size="xs" />, go: () => navigate({ name: 'chats', conversationId: conv.id }) })
     }
-    for (const d of state.docs) {
-      if (re.test(d.title)) out.push({ key: d.id, label: d.title, sub: d.space, icon: <FileText size={16} />, go: () => navigate({ name: 'docs', docId: d.id }) })
+    // Drive files and folders you can open, by name.
+    for (const e of driveEntries(state)) {
+      if (!re.test(e.item.title) || isTrashed(state.folders, e.item) || !canOpen(state, e)) continue
+      const sub = `${kindLabel[e.kind]} · ${driveLocation(state, e)}`
+      out.push({ key: e.item.id, label: e.item.title, sub, icon: <KindIcon kind={e.kind} size="sm" />, go: () => openItem(e.item.id) })
     }
     return out.slice(0, 5)
-  }, [q, state.conversations, state.docs, navigate])
+  }, [q, state, navigate, openItem])
 
   // Keep focus in the input while clicking an option.
   const keep = (e: MouseEvent) => e.preventDefault()
@@ -434,7 +459,7 @@ function Results({ results, re, filter, setFilter, q }: { results: SearchResult[
 
       {results.length === 0 ? (
         <p className="rounded-2xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted">
-          No messages, docs, meetings, tasks or people match “{q}”.
+          No messages, files, meetings, tasks or people match “{q}”.
         </p>
       ) : (
         <div className="flex flex-col gap-5">
@@ -470,7 +495,7 @@ function Results({ results, re, filter, setFilter, q }: { results: SearchResult[
 }
 
 function ResultRow({ r, re }: { r: SearchResult; re: RegExp | null }) {
-  const { navigate } = useStore()
+  const { navigate, openItem } = useStore()
   const Icon = r.icon === 'person' ? null : resultIcons[r.icon]
   // Messages are short ("Rachel · #sales · 8:15 am"), so they fit on one line.
   // Longer titles get their context on a line of its own.
@@ -483,7 +508,7 @@ function ResultRow({ r, re }: { r: SearchResult; re: RegExp | null }) {
         <Avatar id={r.personId} size="md" className="mt-0.5" />
       ) : (
         Icon && (
-          <span className={cx('mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl', r.icon === 'session' ? 'bg-accent-soft text-accent-ink' : 'bg-surface-2 text-muted')}>
+          <span className={cx('mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl', resultTone[r.icon] ?? 'bg-surface-2 text-muted')}>
             <Icon size={17} aria-hidden />
           </span>
         )
@@ -508,7 +533,7 @@ function ResultRow({ r, re }: { r: SearchResult; re: RegExp | null }) {
   )
   if (!r.route) return <div className="flex gap-3 px-4 py-3">{body}</div>
   return (
-    <button onClick={() => navigate(r.route!)} className="flex w-full gap-3 px-4 py-3 text-left transition hover:bg-surface-2">
+    <button onClick={() => (r.driveId ? openItem(r.driveId) : navigate(r.route!))} className="flex w-full gap-3 px-4 py-3 text-left transition hover:bg-surface-2">
       {body}
     </button>
   )
