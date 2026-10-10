@@ -704,8 +704,8 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | Q11 | Default storage quotas for files. | M5 |
 | Q12 | Does leadership commit to a date to stop using WhatsApp for work? | M6 |
 | Q13 | Remaining retention periods (PDPA-09 proposals). Session recordings (120 days) and voice-message audio (360 days) are decided (D36). | Before M1 pilot |
-| Q15 | Do Sheets (DOC-12) and Slides (DOC-13) move from P2 into v1, now that the demo includes them (D38)? | M0 |
 | Q14 | ~~Who is the Data Protection Officer?~~ Resolved: Ashton Teo (D35). Their business contact still has to be published outside Hearth (PDPA-13); the PDPC also encourages registering the DPO on ACRA BizFile+. | M0 |
+| Q15 | Do Sheets (DOC-12) and Slides (DOC-13) move from P2 into v1, now that the demo includes them (D38)? | M0 |
 
 ---
 
