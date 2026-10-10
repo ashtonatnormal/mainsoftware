@@ -303,7 +303,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (conv?.kind === 'assistant') {
       const res = ask(text)
       dispatch({ type: 'typing', conversationId, personId: ASSISTANT })
-      later(1400, () => dispatch({ type: 'addMessage', message: { id: newId('m'), conversationId, authorId: ASSISTANT, kind: 'text', text: res.answer, ts: stateRef.current.clock } }))
+      later(1400, () => dispatch({ type: 'addMessage', message: { id: newId('m'), conversationId, authorId: ASSISTANT, kind: 'text', text: res.answer, sources: res.sources, ts: stateRef.current.clock } }))
       return
     }
     const reply = scriptedReplies[conversationId]

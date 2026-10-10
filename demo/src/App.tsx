@@ -163,20 +163,20 @@ function TabBar({ hidden }: { hidden: boolean }) {
   )
 }
 
-/** While you're in a room, a pill keeps you connected from anywhere (like a call banner). */
+/** While you're in a room, a slim banner (like a phone's call bar) keeps you connected from anywhere.
+    It sits in the layout flow, so it never covers a composer or the last item in a list. */
 function InRoomBar() {
   const { state, navigate, leaveRoom } = useStore()
   const room = state.rooms.find(r => r.id === state.myRoomId)
   if (!room || (state.route.name === 'rooms' && state.route.roomId === room.id)) return null
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-20 z-40 flex justify-center px-4 md:bottom-6">
-      <div className="pointer-events-auto flex items-center gap-3 rounded-full bg-fg py-1.5 pr-1.5 pl-4 text-bg shadow-card">
-        <button onClick={() => navigate({ name: 'rooms', roomId: room.id })} className="flex items-center gap-2 text-sm font-medium">
-          <span className="size-2 rounded-full bg-rec anim-pulse" />
-          {room.name} · {room.participants.length} in room
-        </button>
-        <button onClick={leaveRoom} className="rounded-full bg-rec px-3 py-1.5 text-xs font-semibold text-white">Leave</button>
-      </div>
+    <div className="flex items-center gap-2 bg-fg px-3 py-1.5 text-bg sm:px-5">
+      <button onClick={() => navigate({ name: 'rooms', roomId: room.id })} className="flex min-w-0 flex-1 items-center gap-2 text-left text-[13px] font-medium">
+        <span className="size-2 shrink-0 rounded-full bg-rec anim-pulse" aria-hidden />
+        <span className="truncate">{room.name} · {room.participants.length} in room · recording</span>
+        <span className="ml-auto shrink-0 font-semibold text-accent">Return</span>
+      </button>
+      <button onClick={leaveRoom} className="shrink-0 rounded-full bg-rec px-3 py-1 text-xs font-semibold text-white">Leave</button>
     </div>
   )
 }
@@ -209,12 +209,12 @@ function Shell() {
       <Rail />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar immersive={immersive} />
+        <InRoomBar />
         <main className="relative min-h-0 flex-1 overflow-hidden">
           <Screen />
         </main>
         <TabBar hidden={immersive} />
       </div>
-      <InRoomBar />
       <Toasts />
       <span className="sr-only">{state.myRoomId && <RecordingIndicator />}</span>
     </div>

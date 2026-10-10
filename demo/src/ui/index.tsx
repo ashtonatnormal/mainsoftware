@@ -56,7 +56,7 @@ export function Avatar({ id, size = 'md', speaking, status, className }: { id: P
 export function AvatarStack({ ids, max = 4, size = 'sm' }: { ids: PersonId[]; max?: number; size?: keyof typeof sizes }) {
   const shown = ids.slice(0, max)
   return (
-    <span className="inline-flex items-center -space-x-1.5">
+    <span className={cx('inline-flex items-center', size === 'xs' ? '-space-x-1' : '-space-x-1.5')}>
       {shown.map(id => (
         <Avatar key={id} id={id} size={size} className="ring-2 ring-surface rounded-full" />
       ))}

@@ -83,6 +83,7 @@ function ConversationView({ c }: { c: Conv }) {
   // Sources behind AI messages: seeded ones, or what the assistant cited for your question.
   const sourcesFor = (m: Message, idx: number): SourceRef[] | undefined => {
     if (!isAI(m.authorId) || m.kind !== 'text') return undefined
+    if (m.sources) return m.sources
     if (seedSources[m.id]) return seedSources[m.id]
     if (c.kind === 'assistant') {
       const q = [...msgs.slice(0, idx)].reverse().find(x => x.authorId === ME && x.kind === 'text')
@@ -126,8 +127,6 @@ function ConversationView({ c }: { c: Conv }) {
   }, [toBottom])
 
   const multi = isMulti(c)
-  // While you're in a room, the shell shows a floating pill near the bottom of the screen.
-  const inRoomBar = !!state.myRoomId
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -141,7 +140,7 @@ function ConversationView({ c }: { c: Conv }) {
           atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
         }}
       >
-        <div ref={content} className={cx('mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end px-3 pt-2 sm:px-6', inRoomBar ? 'pb-20 md:pb-4' : 'pb-4')}>
+        <div ref={content} className={'mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end px-3 pt-2 pb-4 sm:px-6'}>
           <Intro c={c} />
           {days.map(day => (
             <section key={day.key} aria-label={dayLabel(day.ts)}>
@@ -179,8 +178,6 @@ function ConversationView({ c }: { c: Conv }) {
       </div>
 
       <Composer key={c.id} c={c} />
-      {/* The shell's "in a room" pill floats at the bottom on desktop; give it its own band so it never covers the composer. */}
-      {inRoomBar && <div className="hidden h-[76px] shrink-0 bg-surface md:block" aria-hidden />}
 
       <InfoSheet c={c} open={infoOpen} onClose={() => setInfoOpen(false)} />
       <ThreadSheet

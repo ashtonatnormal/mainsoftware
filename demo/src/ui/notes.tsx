@@ -4,7 +4,7 @@
 import { useState } from 'react'
 import { CheckCircle2, ChevronDown, ChevronUp, CircleHelp, Gavel, Lock, Mic, PlayCircle } from 'lucide-react'
 import { useStore } from '../store'
-import { AIMarker, Avatar, AvatarStack, Button, cx, personShort, Pill } from './index'
+import { AIMarker, Avatar, Button, cx, personShort, Pill } from './index'
 import { clock, minutesLabel, shortDay } from '../time'
 import { ME } from '../data/people'
 
@@ -26,11 +26,14 @@ export function NotesCard({ sessionId, compact }: { sessionId: string; compact?:
             <AIMarker />
             {session.restricted && <Pill tone="warn" icon={<Lock size={10} />}>Restricted</Pill>}
           </div>
-          <p className="text-xs text-muted">
-            {shortDay(session.startedAt)}, {clock(session.startedAt)} · {minutesLabel(session.durationSec)} · {session.participants.length} people
+          <p className="flex flex-wrap gap-x-1.5 text-xs text-muted">
+            <span>{shortDay(session.startedAt)}, {clock(session.startedAt)}</span>
+            <span aria-hidden>·</span>
+            <span>{minutesLabel(session.durationSec)}</span>
+            <span aria-hidden>·</span>
+            <span>{session.participants.length} people</span>
           </p>
         </div>
-        <AvatarStack ids={session.participants} max={3} size="xs" />
       </div>
 
       {!notes ? (
@@ -88,10 +91,10 @@ export function NotesCard({ sessionId, compact }: { sessionId: string; compact?:
       )}
 
       <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2">
-        <Button size="sm" variant="ghost" icon={<PlayCircle size={16} />} onClick={() => toSession()}>Transcript & recording</Button>
+        <Button size="sm" variant="ghost" icon={<PlayCircle size={16} />} onClick={() => toSession()}>{compact ? 'Transcript' : 'Transcript & recording'}</Button>
         {compact && notes && (
           <Button size="sm" variant="ghost" icon={open ? <ChevronUp size={16} /> : <ChevronDown size={16} />} onClick={() => setOpen(o => !o)}>
-            {open ? 'Less' : 'Decisions & action items'}
+            {open ? 'Less' : 'Decisions & actions'}
           </Button>
         )}
       </div>

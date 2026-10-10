@@ -79,6 +79,7 @@ export interface Message {
   sessionId?: SessionId // kind 'notes'
   suggestion?: AgentSuggestion // kind 'suggest'
   file?: { name: string; size: string; type: 'pdf' | 'image' | 'doc' | 'sheet' }
+  sources?: SourceRef[] // assistant answers keep the sources they cite
   reactions?: Reaction[]
   threadCount?: number
   threadPreview?: PersonId[]

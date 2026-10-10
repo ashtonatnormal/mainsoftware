@@ -92,8 +92,7 @@ export function ChatList({ activeId }: { activeId?: string }) {
         </div>
       </div>
 
-      {/* Extra room at the end on phones so the shell's "in a room" pill never hides the last chat. */}
-      <div className={cx('min-h-0 flex-1 overflow-y-auto', state.myRoomId ? 'pb-20' : 'pb-4')}>
+      <div className="min-h-0 flex-1 overflow-y-auto pb-4">
         {list.length === 0 ? (
           query ? (
             <EmptyState
