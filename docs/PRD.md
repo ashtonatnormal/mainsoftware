@@ -1,6 +1,6 @@
 # Hearth — Product Requirements Document
 
-> **Hearth** is a working codename. Rename freely; nothing in this document depends on it.
+> **Hearth** is the product's name (D33): a hearth is where people gather.
 
 | | |
 |---|---|
@@ -678,7 +678,7 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 
 | # | Question | Needed by |
 |---|---|---|
-| Q1 | Final product name, and naming for the assistant and agents. | M6 |
+| Q1 | Naming for the personal assistant and the specialist agents. (Product name resolved: Hearth, D33.) | M6 |
 | Q2 | ~~Languages~~ — resolved: English only (D29). | — |
 | Q3 | DPO and counsel confirm the legal basis for each purpose in the processing register (PDPA-01), especially org-wide AI indexing of transcripts and the recording of casual drop-in rooms. | Before M2 pilot |
 | Q4 | Who is on the central AI team, and how much of their time is committed? | M6 |
@@ -731,6 +731,7 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | D30 | **OpenAI for transcription** | Session transcripts and voice messages, using `gpt-transcribe` (§7.5). No fixed AI budget set; §9.6 gives an estimate and the caps admins can set. |
 | D31 | **No live captions** | Live transcription isn't needed. Removes the real-time model, its cost, and OpenAI's 30-day retention of real-time audio. ROOM-10 and AMB-04 removed. |
 | D32 | **Singapore's PDPA applies** | Data protection requirements in §8.16. |
+| D33 | **The product is called Hearth** | Started as a placeholder; kept. |
 
 ## Appendix B — Build approach and suggested building blocks
 
