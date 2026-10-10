@@ -102,6 +102,7 @@ Building the whole suite in one product means all context — messages, meetings
 | Personal assistant acting on the user's behalf | By design, not just v1 (D16). |
 | Importing WhatsApp history | Fresh start (D17). |
 | Multi-org hosting, billing, self-serve sign-up | Post-v1, but the data model is org-scoped from day one (D1). |
+| Scoring or ranking individual employees from transcripts, and voiceprint speaker recognition | Not planned. Speakers are identified from their own audio tracks. People-scoring raises PDPA and trust risks (§8.16). |
 
 ## 4. Users and personas
 
@@ -147,7 +148,7 @@ A single **Search & Ask** bar sits at the top everywhere: type to search, or ask
 
 **J2 — Drop-in room.** A designer sees two teammates in the *Design* room and taps in. The room shows a recording indicator; a short notice says "This room is recorded and transcribed." They share their screen, sort out a layout question in four minutes, and leave. Because it was short and had no decisions, nothing is posted — the transcript is stored and searchable.
 
-**J3 — Scheduled meeting → notes → tasks.** A team lead schedules "Q4 launch review" from Calendar; it gets its own meeting room. Before the meeting, each attendee's assistant shows a prep brief (agenda, related threads, open action items from last time). The meeting is recorded; live captions run in the side panel. Within five minutes of ending, notes with a summary, decisions, and action items are posted to the meeting's thread. Each owner sees their action items as suggested tasks in *Tasks* and accepts them with one tap.
+**J3 — Scheduled meeting → notes → tasks.** A team lead schedules "Q4 launch review" from Calendar; it gets its own meeting room. Before the meeting, each attendee's assistant shows a prep brief (agenda, related threads, open action items from last time). The meeting is recorded and transcribed. Within five minutes of ending, notes with a summary, decisions, and action items are posted to the meeting's thread. Each owner sees their action items as suggested tasks in *Tasks* and accepts them with one tap.
 
 **J4 — Asking the org.** A new joiner types "who owns the vendor onboarding process and what's the latest?" into Search & Ask. The assistant answers with the owner's name, a summary of last week's discussion, and the current wiki page — each claim linked to its source — using only content the new joiner can access.
 
@@ -164,7 +165,7 @@ This section is the heart of the product. Module requirements in §8 depend on i
 | Layer | What it is | Whose access it uses | Examples |
 |---|---|---|---|
 | **0. Org Brain** | Index and knowledge graph of messages, transcripts, notes, docs, tasks, events, files, and the people directory. Every item keeps its source permissions. | Always filtered by whoever is asking | "Project Atlas" linked to its channel, decisions, owner, docs |
-| **1. Built-in AI** | Features with no persona | The viewer's | Catch-up, meeting notes, live captions, voice-note transcripts, smart search |
+| **1. Built-in AI** | Features with no persona | The viewer's | Catch-up, meeting notes, voice-note transcripts, smart search |
 | **2. Personal assistant** | One per person, private, suggest-only (D16) | Exactly that person's | Today view, Ask, drafts, meeting prep |
 | **3. Specialist agents** | Named agents built only by the central AI team (D6) | Agent's granted scope ∩ the asker's access ∩ the audience of the space it answers in | HR Policy, IT Helpdesk, Onboarding Buddy, Weekly Digest |
 
@@ -214,8 +215,8 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 - All model calls go through one internal **model layer** so providers can be swapped (D4). v1 uses cloud model APIs under business terms with **zero data retention** and **no training on our data**.
 - Different features may use different models (e.g. a cheaper model for summaries, a stronger one for Ask).
 - **Speech-to-text is OpenAI** (D30), English only (D29):
-  - **`gpt-transcribe`** produces the permanent transcript of every session and transcribes voice messages.
-  - **`gpt-live-transcribe`** powers live captions (ROOM-10). It costs about 3.8× more per minute, so captions are switched on per session rather than always on.
+  - **`gpt-transcribe`** produces the transcript of every session and transcribes voice messages.
+  - **No live captions** (D31), so no real-time transcription model is used.
   - **Don't build on older OpenAI speech models.** `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe` and `gpt-4o-transcribe-diarize` were deprecated on 2026-08-26 and shut down on 2027-02-26.
   - **Speaker attribution** comes from each participant's separate audio track, not from the model guessing who spoke.
   - **Timestamps** come from Hearth's own speech detection on each track, because the current OpenAI models return none. That gives timestamps per spoken passage, not per word.
@@ -238,9 +239,9 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 | ACC-07 | **Org structure:** departments and teams (a person can be in several teams); each team can own channels, rooms, wiki spaces, and task lists. | P0 |
 | ACC-08 | **Profiles:** name, photo, title, team(s), manager, working hours, time zone, custom status. | P0 |
 | ACC-09 | **People directory** with org chart view. | P1 |
-| ACC-10 | **Roles:** Owner, Admin, AI Admin (central AI team), Compliance Officer, Team Admin, Member. | P0 |
+| ACC-10 | **Roles:** Owner, Admin, AI Admin (central AI team), Data Protection Officer (PDPA-13), Compliance Officer, Team Admin, Member. One person may hold several roles. | P0 |
 | ACC-11 | Every record in the data model belongs to an **organization** (tenant), even though v1 runs a single org (D1). | P0 |
-| ACC-12 | First sign-in includes **acknowledging the recording and AI policy**; acknowledgment is stored with a timestamp and policy version. | P0 |
+| ACC-12 | First sign-in includes **agreeing to the PDPA terms (D28) and acknowledging the privacy and recording notice** (PDPA-02, PDPA-03); stored with a timestamp and notice version. | P0 |
 | ACC-13 | Email-based sign-in and single sign-on with external identity providers. | P2 |
 
 ### 8.2 Chat
@@ -282,7 +283,7 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 | ROOM-07 | **DM and group-DM calls**: one tap to call from a conversation; these are sessions too. | P0 |
 | ROOM-08 | **Push-to-talk** option and noise suppression. | P1 |
 | ROOM-09 | Join from a phone browser with a lock-screen/background audio experience as good as the platform allows. | P0 |
-| ROOM-10 | **Live captions** in the side panel. Any participant can switch them on for the current session, and admins can set rooms to start with captions on. Captions are display-only; the permanent transcript always comes from REC-10. Captions cost about 3.8× more per minute than the transcript (§9.6). | P1 |
+| ROOM-10 | ~~Live captions~~ — **removed** (D31). If ever wanted, a running transcript a few seconds behind the conversation can be shown at no extra cost, because speech is already transcribed passage by passage during the session (REC-10). | — |
 | ROOM-11 | **Agents in rooms**: agents can be invited to a room; they show cards in the side panel (related docs, answers when addressed in the room text panel) but **never speak aloud unprompted** (D7 guardrail). | P1 |
 | ROOM-12 | Agents and the assistant that **speak in real time** in rooms. | P2 |
 
@@ -308,7 +309,7 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 | REC-12 | Notes include: a short summary, **decisions**, **action items** (owner, due date if stated), open questions, and links to transcript timestamps. | P0 |
 | REC-13 | Notes are **posted to the session's thread** in its channel (or to the meeting's thread for scheduled meetings, or to the DM for calls). | P0 |
 | REC-14 | Action items become **suggested tasks** for their owners, who accept, edit, or dismiss them (TASK-06). | P0 |
-| REC-15 | Participants can **correct notes and transcripts** (edits are versioned and attributed). Corrected names and terms can be added to the org vocabulary (REC-19) with one tap. | P1 |
+| REC-15 | Participants can **correct notes and transcripts** (edits are versioned and attributed; the original machine output is kept, PDPA-07). Corrected names and terms can be added to the org vocabulary (REC-19) with one tap. | P0 |
 | REC-16 | **Playback** page: audio/video player synced with the transcript; click a line to jump; search within the transcript. | P0 |
 | REC-17 | **Ask this meeting**: ask questions about a session from its page (answers cite timestamps). | P1 |
 | REC-18 | **Transcript redaction**: Compliance Officers can redact a passage (e.g. an accidentally spoken password); redactions are audited and propagate to notes and the Org Brain. | P1 |
@@ -320,7 +321,7 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 |---|---|---|
 | REC-20 | Default **audience of a session's recording, transcript, and notes**: room session → members of the room's channel (public channel = whole org); scheduled meeting → invitees + participants; DM/group call → participants; restricted room → participants only. | P0 |
 | REC-21 | **Access log**: every view of a recording, transcript, or notes is logged. Participants can see a **"viewed by"** list for sessions they were in. | P1 |
-| REC-22 | **Retention** (D12): audio/video kept **90 days** by default (admin-adjustable); transcripts and notes kept per org retention policy (default: indefinitely). Legal hold overrides deletion (ADM-08). | P0 |
+| REC-22 | **Retention** (D12): audio/video kept **90 days** by default (admin-adjustable); transcripts and notes kept for a finite, admin-set period (proposed 3 years, PDPA-09). Legal hold overrides deletion (ADM-08). | P0 |
 | REC-23 | Participants cannot delete recordings or transcripts. | P0 |
 
 ### 8.4 Calendar
@@ -415,7 +416,7 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 | AMB-01 | **Catch me up** on any channel, thread, or doc since the user last looked. | P0 |
 | AMB-02 | Meeting notes and action items (REC-11 – REC-14). | P0 |
 | AMB-03 | Voice-message transcripts (CHAT-07). | P0 |
-| AMB-04 | Live captions (ROOM-10). | P1 |
+| AMB-04 | ~~Live captions~~ — removed (D31). | — |
 | AMB-05 | **Translate** a message or doc for the reader. | P1 |
 | AMB-06 | Every AI output shows an "AI" marker, its sources, and 👍/👎 feedback. | P0 |
 
@@ -490,7 +491,7 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 | ADM-04 | **Recording policy** setting (REC-03) and **restricted room** designation (REC-07). | P0 |
 | ADM-05 | **AI settings**: default participation level, enable/disable AI features, model provider configuration, spend caps and alerts. | P0 |
 | ADM-06 | **Audit log**: admin actions, sign-ins, permission changes, recording/transcript access, agent actions, compliance access. Exportable. | P0 |
-| ADM-07 | **Retention policies** per content type (messages, transcripts/notes, audio/video, files, docs). | P0 |
+| ADM-07 | **Retention policies** per content type, using the retention engine (PDPA-09). | P0 |
 | ADM-08 | **Legal hold** on users, channels, or rooms, overriding retention. | P1 |
 | ADM-09 | **Data export**: per user and whole org, in open formats. | P1 |
 | ADM-10 | **AI kill switch**: disable one agent, all agents, or all AI features instantly. | P0 |
@@ -506,6 +507,52 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 | NOTIF-02 | Defaults: DMs, @mentions, thread replies, meeting starting, task assigned/due, assistant nudges. Channels default to badge only. | P0 |
 | NOTIF-03 | Per-conversation settings (all / mentions / off), **do not disturb**, and **quiet hours** tied to working hours. | P0 |
 | NOTIF-04 | Smart batching: low-priority notifications grouped into the assistant's digest instead of separate pushes. | P1 |
+
+### 8.16 Data protection (Singapore PDPA)
+
+Singapore's Personal Data Protection Act (PDPA) applies (D32). Everyone agrees to the PDPA terms before joining (D28), and Hearth records that agreement (ACC-12). The agreement is necessary but not sufficient on its own. The requirements below give the org the tools for its other PDPA obligations. This section sets product requirements and is not legal advice: the org's Data Protection Officer (DPO) and counsel decide the legal positions that Hearth records.
+
+**Why agreeing at onboarding isn't the whole answer.** Anything done on the basis of *consent* can be withdrawn at any time on reasonable notice (PDPA s16). If recording relied on consent alone, a single withdrawal would break the no-exceptions recording policy (D11). Recording and transcribing work meetings more likely rests on the PDPA exception for managing the employment relationship. That exception needs no consent, but people must still be told the purposes. Purposes that go further, such as making transcripts searchable through the org-wide AI or recording casual drop-in rooms, may need the *legitimate interests* exception, which requires a documented assessment. So Hearth records a legal basis **per purpose**, and onboarding presents a specific notice to acknowledge rather than a single blanket "I agree."
+
+**PDPA obligations this design relies on**
+
+| Obligation | What the PDPA requires (summary) | Where Hearth handles it |
+|---|---|---|
+| Notification | Tell people the purposes on or before collecting their data, even when no consent is needed. | PDPA-02, PDPA-03 |
+| Withdrawal (s16) | People may withdraw consent on reasonable notice; the org must explain the consequences and stop consent-based processing. | PDPA-04 |
+| Access (s21) | On request, provide a person's data and how it was used or disclosed in the past year. If this will take more than 30 days, tell them in writing within 30 days when they will get it. | PDPA-05, PDPA-06 |
+| Correction (s22) | Correct personal data on request, or annotate it if not corrected. | PDPA-07 |
+| Accuracy (s23) | Make reasonable efforts to keep data accurate where it is used for decisions about a person. | PDPA-08 |
+| Protection (s24) | Make reasonable security arrangements. | §9.4, PDPA-12 |
+| Retention (s25) | Stop keeping data once it no longer serves its purpose. There is no fixed period, and keeping data indefinitely needs a reason. | PDPA-09 |
+| Transfer (s26) | Data sent overseas must keep protection comparable to the PDPA, e.g. through a contract with the recipient. | PDPA-10 |
+| Breach notification (s26A–26E) | Assess a suspected breach quickly (the regulator expects within 30 days). A breach is notifiable if it is likely to cause significant harm or affects **500 or more people**. Notify the PDPC within **3 calendar days** of deciding it is notifiable, and tell affected people where significant harm is likely. | PDPA-11 |
+| Accountability (s11–12) | Appoint a DPO and publish their business contact; have policies and a complaints process. | PDPA-13 |
+
+Maximum financial penalties are 10% of annual Singapore turnover (for organizations with turnover above S$10 million) or S$1 million. With 500 or more employees, a breach of the transcript store would be notifiable on scale alone, whatever it contained.
+
+| ID | Requirement | Pri |
+|---|---|---|
+| PDPA-01 | **Processing register.** An admin page listing every purpose for which Hearth processes personal data: recording sessions, transcribing them, AI meeting notes, Org Brain indexing, the personal assistant, specialist agents, voice-message transcription, and each overseas transfer. Each entry records its legal basis (employment exception, legitimate interests, business improvement, consent, or deemed consent), any assessment document (e.g. a legitimate-interests assessment), retention period, and the providers involved. Pre-filled with Hearth's purposes; maintained by the DPO. | P0 |
+| PDPA-02 | **Privacy and recording notice.** A versioned, plain-language notice generated from the register. It lists each purpose separately and covers: what is recorded (every session with 2+ people, including DM calls and drop-in rooms); what the AI does with it and who can ask about what; which AI providers receive data and in which countries they process it; retention for each data type; that providers do not train on the org's data; and the DPO's contact. Shown at onboarding and always available in Settings. | P0 |
+| PDPA-03 | **Acknowledgment** (extends ACC-12). Nobody can use Hearth until they acknowledge the current notice. Hearth records who acknowledged, which version, when, and how. A change of purposes creates a new version, which everyone must acknowledge again. Records are exportable. | P0 |
+| PDPA-04 | **Withdrawal and objection requests.** A self-service request form routed to a DPO queue with a 10-business-day target (configurable). The register determines which purposes stop (consent-based) and which continue (exception-based), and Hearth drafts the reply explaining the consequences. | P0 |
+| PDPA-04a | **Per-person processing switches**, available to the DPO to carry out a withdrawal: exclude a person's content from the Org Brain, and stop transcribing their audio track. | P1 |
+| PDPA-05 | **Access requests.** A DPO console that verifies the requester's identity and finds everything Hearth holds about that person: messages, files, docs, tasks, events, voice messages, sessions they spoke in, AI notes that mention them, their assistant conversations, and audit entries. The person's own speech is exported from recordings and transcripts using their audio track, so other speakers are excluded. Exports are machine-readable (JSON/CSV plus media). A 30-day timer includes a template letter for when more time is needed. | P0 |
+| PDPA-05a | **Redaction tools** for other people's data mixed into exported text and audio. | P1 |
+| PDPA-06 | **Use and disclosure record.** For each person, what happened to their data in the past 12 months (exports, shares, transfers to providers, AI retrievals), drawn from the audit log, to answer the "how was my data used" part of an access request. | P1 |
+| PDPA-07 | **Corrections.** Transcripts and AI notes keep the original machine output alongside any corrections. When a correction is refused, an annotation records what was requested. Corrections flow to notes and the Org Brain (Rule 7). Makes REC-15 a P0. | P0 |
+| PDPA-08 | **Machine-generated labels and human review.** Transcripts and AI notes are labelled as machine-generated, with the model and version. An org policy, on by default, requires human review before a transcript or AI note is used in an HR or disciplinary decision, and logs that use. | P1 |
+| PDPA-09 | **Retention engine.** A finite, configurable retention period for each data type: audio/video, transcripts, notes, messages, voice messages, files, docs, assistant conversations, search indexes, and backups. "Keep indefinitely" requires a written justification and sends the DPO an annual review reminder. Legal holds and access-request holds pause deletion. Deletion cascades to derived content (notes, indexes, embeddings, caches); backups expire on a documented schedule; every deletion is logged. **Proposed defaults (DPO to confirm, Q13):** audio/video 90 days (D12); transcripts, AI notes, messages, and voice messages 3 years; assistant conversations 1 year; docs and files reviewed annually. | P0 |
+| PDPA-10 | **Transfer register.** Lists every provider that receives personal data (OpenAI for transcription, the AI model provider, the SMS provider, the cloud host) with: data types, processing and storage countries, the safeguard used (e.g. a signed data processing agreement with comparable-protection terms), how long the provider keeps data, and a review date. It feeds the notice (PDPA-02). Before go-live, sign data processing agreements with OpenAI and the AI model provider and confirm that their training-on-data settings are off. | P0 |
+| PDPA-11 | **Breach response.** An incident record with a timeline (first aware, assessment, decision), clocks for the 30-day assessment and the 3-day PDPC deadline, notification templates for the PDPC and affected people, and a breach register. | P1 |
+| PDPA-11a | **Breach scoping.** Using audit logs and access lists, count the people and data types affected by an incident (500 or more makes it notifiable on scale). | P0 |
+| PDPA-12 | **Limit the blast radius.** Storage and encryption keys are separated by team or space; no single service credential can read every transcript; bulk exports and unusual access raise alerts. | P1 |
+| PDPA-13 | **DPO role and contact.** A DPO role (ACC-10) with access to the registers, request queues, incidents, retention settings, and audit logs. DPO access to content is logged in the same way as compliance access (ADM-12). The DPO's business contact appears in the notice, the help menu, and the AI info card. A question-and-complaint form routes to the DPO with tracking. | P0 |
+| PDPA-14 | **AI info card.** A single page for the assistant and agents covering: what they read and under whose permissions, which providers and countries are involved, how long prompts and answers are kept, known limitations (transcription and AI errors), how to report wrong personal data, and the DPO's contact. | P1 |
+| PDPA-15 | **AI conversations are personal data.** Assistant and agent conversations have a retention period (PDPA-09) and are included in access requests (PDPA-05). | P0 |
+| PDPA-16 | **No training on org data.** Hearth never trains or fine-tunes models on org data. Provider settings that would allow training stay off, are checked automatically, and are shown in the admin console. Any future use of org data to improve AI requires a new, specific notice first. | P0 |
+| PDPA-17 | **Sensitive data warnings.** Warn people who post an NRIC number, a password, or similar in chat. Flag such content in transcripts so it can be redacted (REC-18). | P1 |
 
 ## 9. Non-functional requirements
 
@@ -531,7 +578,6 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 | Keyword search, p95 | < 1 s |
 | AI answer: first words, p95 | < 3 s |
 | Transcript + notes after session ends | < 5 min (transcript typically < 1 min) |
-| Live caption latency, speech to on-screen text, p95 (P1) | < 2 s, measured from the org's location |
 | Access revocation effective in AI | < 60 s |
 
 ### 9.3 Reliability
@@ -552,8 +598,8 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 
 ### 9.5 Accessibility and language
 
-- WCAG 2.2 AA. Captions and transcripts double as accessibility features.
-- **English only** for v1 (D29): the UI, transcription, captions, meeting notes, and the AI. UI strings are still externalized so translation stays possible later.
+- WCAG 2.2 AA. Session transcripts and voice-message transcripts double as accessibility features.
+- **English only** for v1 (D29): the UI, transcription, meeting notes, and the AI. UI strings are still externalized so translation stays possible later.
 - Transcription must handle the accents and the mix of names and internal terms used in the org; see the org vocabulary requirement (REC-19).
 - **Transcription quality gate:** no public accuracy figures exist for the org's accents. During the M2 pilot, build a test set of 1–2 hours of real org audio (recorded with consent) covering its accents, names and jargon. Measure word error rate, accuracy on names and terms, and invented words. Set pass thresholds from the pilot and re-run the set before org-wide launch and whenever OpenAI changes models.
 
@@ -563,17 +609,15 @@ Allowed sources = `AgentScope ∩ Access(asker) ∩ Access(every member of S)`.
 - Transcribe only speech, so cost follows talking time rather than how long people sit in a room.
 - An org-level monthly budget with alerts at 50/80/100%. No transcription budget was set (D30); the estimate below is the planning baseline. The budget for AI notes, the assistant and agents is still open (Q5).
 
-**Transcription cost estimate** (OpenAI list prices as of October 2026: `gpt-transcribe` $0.0045/min, `gpt-live-transcribe` $0.017/min):
+**Transcription cost estimate** (OpenAI list price as of October 2026: `gpt-transcribe` $0.0045 per minute of audio):
 
 | | Per user per month | 500 users | 1,000 users |
 |---|---|---|---|
-| Permanent session transcripts + voice messages | ≈ $2.70 (range $2.10–$3.30) | ≈ $1,340 | ≈ $2,670 |
-| Live captions, if on in 25% of sessions | + ≈ $2.25 | + ≈ $1,120 | + ≈ $2,240 |
-| Live captions, if on in every session | + ≈ $9.00 | + ≈ $4,490 | + ≈ $8,980 |
+| Session transcripts + voice messages | ≈ $3.00 (range $2.30–$3.70) | ≈ $1,500 | ≈ $3,000 |
 
-*Assumptions:* each person spends 2 hours a day in voice sessions, 4 people per session on average, 22 workdays a month, someone speaking about 80% of session time, and 3 minutes of voice messages per person per day. The range covers quieter or chattier rooms.
+*Assumptions:* each person spends 2 hours a day in voice sessions, 4 people per session on average, 22 workdays a month, someone speaking about 80% of session time, and 3 minutes of voice messages per person per day. About 15% is added for the padding around each spoken passage and per-request rounding. The range covers quieter or chattier rooms.
 
-*What changes it:* sending whole tracks including silence would multiply the transcript cost by about 5, so speech-only sending is a hard requirement. Using OpenAI's data-residency endpoints adds 10%. OpenAI offers no bulk discount for transcription. The figures exclude AI notes and assistant costs, storage, and media servers.
+*What changes it:* sending whole tracks including silence would multiply the cost by about 5, so speech-only sending is a hard requirement. Using an OpenAI data-residency project adds 10%. OpenAI offers no bulk discount for transcription. The figures exclude AI notes and assistant costs, storage, and media servers.
 
 ## 10. Success metrics
 
@@ -603,13 +647,13 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 
 | Milestone | Contents | Pilot |
 |---|---|---|
-| **M0 — Foundations** | Org/tenant data model, phone sign-in + PIN, roles, teams, permission model, audit log, admin console shell, design system, installable web app shell, push notifications | Builder only |
+| **M0 — Foundations** | Org/tenant data model, phone sign-in + PIN, roles (incl. DPO), teams, permission model, audit log, admin console shell, privacy notice and acknowledgment (PDPA-01 – PDPA-03, PDPA-13), design system, installable web app shell, push notifications | Builder only |
 | **M1 — Chat** | CHAT P0s, voice messages with transcripts, files in chat, keyword search, notifications | One team (10–20 people) moves its WhatsApp group over |
-| **M2 — Rooms and meetings** | ROOM and REC P0s: drop-in rooms, calls, universal recording, transcripts, notes, restricted rooms, retention | Same team plus one more |
+| **M2 — Rooms and meetings** | ROOM and REC P0s: drop-in rooms, calls, universal recording, transcripts, notes, restricted rooms; retention engine (PDPA-09) and transfer register (PDPA-10); data processing agreement with OpenAI signed before the first recorded pilot session | Same team plus one more |
 | **M3 — Org Brain and assistant** | BRAIN P0s, SRCH-03 Ask, PA P0s (Today, actionables, catch-up, drafts, nudges, memory), access-rule test suite | 3–5 teams (~100 people) |
 | **M4 — Calendar and tasks** | CAL and TASK P0s, scheduled meetings with their own rooms, meeting prep briefs, suggested tasks from meetings | Same |
 | **M5 — Docs, wiki, files** | DOC and FILE P0s: co-editing, permissions, version history, wiki spaces, drive | Same, plus HR and IT (to seed policy content for agents) |
-| **M6 — Agents and hardening** | AGT and STU P0s, the launch agent set, compliance (legal hold, export), pen test, AI red-team, scale tests | **v1 org-wide launch**; set a date to stop using WhatsApp for work |
+| **M6 — Agents and hardening** | AGT and STU P0s, the launch agent set, compliance (legal hold, export, access-request console PDPA-05, breach scoping PDPA-11a), pen test, AI red-team, scale tests | **v1 org-wide launch**; set a date to stop using WhatsApp for work |
 
 **Post-v1 roadmap (in rough order):** native mobile apps → P1 leftovers → spreadsheets → agents speaking in rooms → agent computers and external connectors → slides → guests and external consent → readiness for selling to other orgs (multi-org hosting, billing, self-serve onboarding, per-customer recording policies).
 
@@ -618,10 +662,10 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
 | R1 | **Scope vs. a solo builder**: seven modules plus AI plus real-time voice is a very large surface | High | High | Assemble proven open-source building blocks rather than building low-level pieces (Appendix B); strict P0 discipline; ship milestone by milestone to real pilots; requirement IDs plus tests make AI coding tools effective. |
-| R2 | **Universal recording**: legal exposure (consent and workplace-monitoring laws vary) and people self-censoring | Medium | High | Legal review before M2 pilot (Q3); policy acknowledgment (ACC-12); always-visible indicator; "viewed by" transparency (REC-21); restricted rooms; recording policy configurable for future customers. |
+| R2 | **Universal recording**: PDPA exposure (relying on withdrawable consent alone, keeping data indefinitely, overseas transfers) and people self-censoring | Medium | High | A legal basis for each purpose (PDPA-01), confirmed by the DPO and counsel (Q3); a specific notice and acknowledgment (PDPA-02/03); finite retention (PDPA-09); data processing agreements for overseas transfers (PDPA-10); always-visible indicator; "viewed by" transparency (REC-21); restricted rooms; recording policy configurable for future customers. |
 | R3 | **AI permission leak** | Medium | Critical | Rules 1–8 enforced in one shared retrieval layer, not per feature; live permission re-check; provenance on derived content; "view as" testing; leak tests in CI; zero-leak launch gate; kill switch. |
 | R4 | **Agents speaking unprompted annoy people** | Medium | Medium | Suggest cards before full Active mode; confidence threshold and per-channel caps; feedback raises the threshold; channel admins can turn it down. |
-| R5 | **AI and transcription cost** grows with universal recording | Medium | Medium | Send only speech to OpenAI (about 5× cheaper than whole tracks); captions on per session, not always on; transcripts ≈ $2.70/user/month (§9.6); cheaper models for routine summaries; per-feature budgets and alerts. |
+| R5 | **AI and transcription cost** grows with universal recording | Medium | Medium | Send only speech to OpenAI (about 5× cheaper than whole tracks); no live captions (D31); transcripts ≈ $3/user/month (§9.6); cheaper models for routine summaries; per-feature budgets and alerts. |
 | R6 | **Adoption**: people stay on WhatsApp | Medium | High | WhatsApp-level simplicity; installable app with push; voice notes; pilot champions; leadership sets a WhatsApp-for-work sunset date at launch. |
 | R7 | **SMS sign-in security and delivery cost** | Medium | Medium | Device PIN/passkey; OTP rate limits; reputable SMS provider with fallback. |
 | R8 | **Real-time doc editing is hard to get right** | Medium | Medium | Use a mature conflict-free sync library; heavy automated testing of merge cases. |
@@ -635,10 +679,10 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | # | Question | Needed by |
 |---|---|---|
 | Q1 | Final product name, and naming for the assistant and agents. | M6 |
-| Q2 | Which languages are spoken in meetings and written in chat? Is code-switching common (several languages in one conversation)? Affects transcription provider choice. | M2 |
-| Q3 | Legal review of universal recording for every jurisdiction where employees work. | Before M2 pilot |
+| Q2 | ~~Languages~~ — resolved: English only (D29). | — |
+| Q3 | DPO and counsel confirm the legal basis for each purpose in the processing register (PDPA-01), especially org-wide AI indexing of transcripts and the recording of casual drop-in rooms. | Before M2 pilot |
 | Q4 | Who is on the central AI team, and how much of their time is committed? | M6 |
-| Q5 | Monthly AI and transcription budget per user. | M2 |
+| Q5 | Monthly budget for AI notes, the assistant and agents. (Transcription is estimated at ≈ $3/user/month, §9.6.) | M3 |
 | Q6 | Cloud provider and data region. | M0 |
 | Q7 | Final launch agent set (§8.12 proposal). | M5 |
 | Q8 | Is whole-org visibility of public-room transcripts acceptable (REC-20 default), or should public-room transcripts be limited to participants? | M2 |
@@ -646,6 +690,8 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | Q10 | When compliance accesses a restricted session, are the participants notified? | M2 |
 | Q11 | Default storage quotas for files. | M5 |
 | Q12 | Does leadership commit to a date to stop using WhatsApp for work? | M6 |
+| Q13 | Retention periods for each data type (PDPA-09 proposals). | M2 |
+| Q14 | Who is the Data Protection Officer? (The PDPA requires one, with published contact details.) | M0 |
 
 ---
 
@@ -664,7 +710,7 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | D9 | **All meetings recorded, transcribed, with notes** | Added mid-discovery. |
 | D10 | **Every session with 2+ people is recorded** | Includes casual drop-ins and DM calls. |
 | D11 | **No recording exceptions** | Sensitive conversations protected by access (restricted rooms), not by skipping recording. |
-| D12 | **Audio/video kept short, transcripts/notes kept long** | 90-day default for audio/video. |
+| D12 | **Audio/video kept short, transcripts/notes kept long** | 90-day default for audio/video. Transcripts and notes are kept for a finite period, proposed as 3 years, not indefinitely, because PDPA retention limits apply (PDPA-09, D32). |
 | D13 | **A new suite from scratch** | Supersedes an earlier "Google Workspace" answer. No dependency on another suite. |
 | D14 | **Web only for v1** | Specified as phone-friendly and installable with push. |
 | D15 | **Internal only for v1** | No guests or shared channels. |
@@ -681,8 +727,10 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | D26 | **Recording policy is an org setting** | Our org: all sessions, no exceptions. Keeps D1 open. |
 | D27 | **Notes only for substantive sessions** | ≥5 min or contains a decision/action item; avoids flooding channels with notes from short drop-ins. |
 | D28 | **Every member agrees to the PDPA terms before joining** | Resolves the former recording-consent question. Captured in onboarding (ACC-12); the product supports the org's remaining PDPA obligations (§8.16). |
-| D29 | **English only** | UI, transcription, captions, notes, and AI. Resolves the former language question. |
-| D30 | **OpenAI for transcription** | Archive transcripts, live captions, and voice messages (§7.5). No fixed AI budget set; §9.6 gives an estimate and the caps admins can set. |
+| D29 | **English only** | UI, transcription, notes, and AI. Resolves the former language question. |
+| D30 | **OpenAI for transcription** | Session transcripts and voice messages, using `gpt-transcribe` (§7.5). No fixed AI budget set; §9.6 gives an estimate and the caps admins can set. |
+| D31 | **No live captions** | Live transcription isn't needed. Removes the real-time model, its cost, and OpenAI's 30-day retention of real-time audio. ROOM-10 and AMB-04 removed. |
+| D32 | **Singapore's PDPA applies** | Data protection requirements in §8.16. |
 
 ## Appendix B — Build approach and suggested building blocks
 
@@ -713,7 +761,7 @@ Two options were considered:
 | Co-editing | **Yjs** (CRDT sync) with a TipTap/ProseMirror editor and a Yjs sync server | Mature real-time co-editing and snapshots for version history. |
 | Files and recordings | S3-compatible object storage | Durable, cheap, lifecycle rules for retention. |
 | AI | Internal model layer → cloud model APIs (e.g. Claude) | D4; swappable. |
-| Speech-to-text | OpenAI `gpt-transcribe` (transcripts, voice messages) and `gpt-live-transcribe` (captions), plus Hearth's own speech detection on each track (e.g. Silero VAD) | D30; see B.5. |
+| Speech-to-text | OpenAI `gpt-transcribe` (session transcripts, voice messages), plus Hearth's own speech detection on each track (e.g. Silero VAD) | D30; see B.5. |
 | Agent UI streaming | Consider **AG-UI** (the protocol OpenDots uses) for streaming agent output and approval cards | Proven pattern for approve/decline cards. |
 | SMS | Established SMS OTP provider | ACC-01. |
 | Background jobs | A Postgres-backed job queue | Transcription, notes, indexing, agent schedules. |
@@ -734,11 +782,11 @@ All AI features — Ask, the assistant, agents, summaries — must retrieve cont
 
 ### B.5 Transcription pipeline (OpenAI)
 
-Based on OpenAI's API as of October 2026 (SDK and official documentation). Re-check these facts during the M2 spike.
+Based on OpenAI's API as of October 2026 (its SDK source and documentation). Re-check these facts during the M2 spike.
 
-**Shared speech detector.** For every participant track, a speech detector runs in or next to the media server. It marks where each spoken passage starts and stops on the session clock, with about 300 ms of padding, and drops passages shorter than about 300 ms. Each passage becomes `{session, speaker, start, end, audio}`. Every feature below uses these passages, which is why speaker and timestamps never depend on the model.
+**Shared speech detector.** For every participant track, a speech detector runs in or next to the media server. It marks where each spoken passage starts and stops on the session clock, with about 300 ms of padding, and drops passages shorter than about 300 ms. Each passage becomes `{session, speaker, start, end, audio}`. Speaker and timestamps therefore never depend on the model.
 
-**1. Permanent transcripts (REC-10).**
+**1. Session transcripts (REC-10).**
 - Send each passage (or a few consecutive passages, never more than about 10 minutes of audio) to `/v1/audio/transcriptions` with model `gpt-transcribe`, `languages: ["en"]`, `keywords` from the org vocabulary (REC-19), and the meeting title plus the last few transcript lines as `prompt`.
 - Transcribe passages as they finish, during the session, so the transcript is complete within about a minute of the session ending.
 - Store `{session, speaker, start, end, text, model, model_version}` and merge all tracks in time order.
@@ -746,28 +794,20 @@ Based on OpenAI's API as of October 2026 (SDK and official documentation). Re-ch
 - Keywords must be single-line plain text; one invalid keyword rejects the whole request, so clean the list first. Test for keywords being inserted where they weren't spoken.
 - Upload limit is 25 MB per request; send Opus audio (ogg/webm) with the correct file extension.
 
-**2. Live captions (ROOM-10, P1).**
-- While captions are on, stream each speaking participant's audio (24 kHz, 16-bit mono) to its own OpenAI Realtime transcription session with model `gpt-live-transcribe`, `languages: ["en"]`, keywords, and the `delay` setting at `low`.
-- This model has no built-in turn detection, so Hearth's speech detector ends each passage by sending `input_audio_buffer.commit`.
-- Show partial text as it arrives and replace it with the final text for each passage.
-- Realtime sessions end after 60 minutes, so open a new session before then and switch at a passage boundary.
-
-**3. Voice messages (CHAT-07).** Upload the recorded clip to `gpt-transcribe` with `languages: ["en"]` and keywords from the sender, recipients, and channel. `stream: true` shows text as it is produced.
+**2. Voice messages (CHAT-07).** Upload the recorded clip to `gpt-transcribe` with `languages: ["en"]` and keywords from the sender, recipients, and channel. `stream: true` shows text as it is produced.
 
 **Set up before the M2 pilot:**
 - Run transcription in its own OpenAI API project, with "share data for training" off.
-- Sign OpenAI's Data Processing Agreement.
-- Apply for Zero Data Retention or Modified Abuse Monitoring. Approval comes through OpenAI sales and isn't self-serve. Without it, OpenAI may keep Realtime caption audio for up to 30 days for abuse monitoring.
-- Reach usage tier 2 or higher. Sending each passage as its own request means roughly 550 requests per minute on average at 1,000 users, and 1,100–1,700 at peak. Tier 1 allows 500.
+- Sign OpenAI's Data Processing Agreement (required for the overseas transfer, PDPA-10).
+- Apply for Zero Data Retention. The transcription endpoint is listed as eligible, but approval comes through OpenAI and isn't self-serve.
+- Confirm the org's OpenAI rate limit covers about 550 requests per minute on average and 1,100–1,700 at peak at 1,000 users, since each passage is its own request. OpenAI reorganized its usage tiers on 2026-10-06.
 
 **Verify in the spike:**
-- Whether very short requests have a minimum billable duration.
-- Whether silence streamed to a Realtime session is billed.
-- Caption latency (p95) from the org's location.
-- Whether ZDR and data residency cover `gpt-transcribe` and `gpt-live-transcribe`.
-- Concurrency limits for Realtime sessions.
+- Whether very short requests have a minimum billable duration (affects the cost estimate).
+- Accuracy on the org's accents, names and jargon (the quality gate in §9.5).
+- Whether Zero Data Retention and data residency cover `gpt-transcribe`.
 
-**Data location.** OpenAI can store data in Singapore and several other Asia-Pacific regions, but it processes requests only in the US, EU, or UAE. Sending audio to OpenAI is therefore an overseas transfer under PDPA, covered by the DPA (see §8.16). Hearth's own storage of recordings and transcripts can stay in the org's chosen region.
+**Data location.** OpenAI can store data in Singapore, but it processes requests only in the US, EU, or UAE. Sending audio to OpenAI is therefore an overseas transfer under the PDPA, covered by the DPA (PDPA-10). Hearth's own storage of recordings and transcripts can stay in Singapore.
 
 **If word-by-word timestamps are ever needed:** OpenAI's only models that return them shut down on 2027-02-26. Use a self-hosted forced aligner instead (e.g. the approach WhisperX uses), which runs locally and sends no data out.
 
