@@ -114,8 +114,16 @@ eq('nested', one('=ROUND(AVERAGE(A1,A2)*100,0)&"%"', nums), '150%')
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 eq('#DIV/0!', one('=1/0'), { error: '#DIV/0!' })
-eq('#REF! out of bounds', calc({ A1: '=Z99' }, 'A1', { rows: 10, cols: 5 }), { error: '#REF!' })
-eq('#REF! range', calc({ A1: '=SUM(A2:A20)' }, 'A1', { rows: 10, cols: 5 }), { error: '#REF!' })
+eq('past the grid is empty', calc({ A1: '=Z99' }, 'A1', { rows: 10, cols: 5 }), 0)
+eq('range past the grid is clipped', calc({ A1: '=SUM(A2:A20)', A3: '4' }, 'A1', { rows: 10, cols: 5 }), 4)
+eq('#REF! from a reference moved off the grid', one(shiftFormula('=A1+1', -1, 0)), { error: '#REF!' })
+eq('empty ref shows 0', one('=A40'), 0)
+eq('0^-1', one('=0^-1'), { error: '#DIV/0!' })
+eq('COUNT over itself is a cycle', calc({ A2: '=COUNT(A1:A3)' }, 'A2'), { error: '#CYCLE!' })
+eq('apostrophe keeps text', calc({ A1: "'0012" }, 'A1'), '0012')
+eq('integer rounds half away from zero', formatValue(-2.5, 'integer'), '-3')
+eq('literal thousands implies number format', parseLiteral('1,200'), { value: 1200, fmt: 'number' })
+eq('literal scientific', parseLiteral('1e5'), { value: 100000 })
 eq('#NAME? unknown function', one('=VLOOKUP(1)'), { error: '#NAME?' })
 eq('#NAME? bare word', one('=hello'), { error: '#NAME?' })
 eq('#VALUE! text maths', one('="abc"+1'), { error: '#VALUE!' })
@@ -175,6 +183,13 @@ eq('TSV from a spreadsheet', fromTSV('1\t2\r\n3\t4\r\n'), [['1', '2'], ['3', '4'
   eq('ask forecast refs', fc.refs.map(r => r.label), ['A8:G8', 'A9:G9'])
   eq('ask movers saving', /save S\$3,800\.00 \(17\.1%\)/.test(ans('sh_movers', 'How much do we save with Kranji?').text), true)
   eq('ask unknown column', ans('sh_movers', 'What is the weather?').ok, false)
+  const mk = (cells: Record<string, string>) => ({ id: 't', name: 'Sheet1', rows: 50, cols: 12, cells: Object.fromEntries(Object.entries(cells).map(([k, v]) => [k, { v }])) })
+  const fresh = { ...sheet('sh_movers'), id: 'new', tabs: [mk({ A1: 'Item', B1: 'Cost', A2: 'A', B2: '10', A3: 'B', B3: '20', A4: 'C', B4: '30', B5: '=SUM(B2:B4)' })] }
+  eq('ask ignores a total row', A.answerQuestion(fresh, fresh.tabs[0], 'What is the total cost?').text, 'The total for Cost is 60, across 3 rows.')
+  eq('ask highest skips total', A.answerQuestion(fresh, fresh.tabs[0], 'Which row has the highest cost?').text, 'C has the highest Cost: 30.')
+  eq('ask refuses an unknown count', A.answerQuestion(sheet('sh_forecast'), sheet('sh_forecast').tabs[0], 'How many forklift drivers?').ok, false)
+  eq('ask counts a group', /There are 3 rows where Role is “Forklift driver”/.test(ans('sh_ot', 'How many forklift drivers?').text), true)
+  eq('ask summary lists headings', /under 7 headings: Week, Starts, Meridian pallets, Existing pallets, Total and 2 more/.test(ans('sh_forecast', 'Summarise this tab').text), true)
   const ot0 = sheet('sh_ot').tabs[0]
   const cells = { ...ot0.cells }; delete cells.F14
   const sug = A.suggestFormula({ ...ot0, cells }, { r: 13, c: 5 })

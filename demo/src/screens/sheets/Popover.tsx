@@ -26,7 +26,15 @@ export function Popover({ anchor, open, onClose, children, align = 'left', label
 
   useEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); anchor?.focus() } }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose(); anchor?.focus(); return }
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+      const items = [...(ref.current?.querySelectorAll<HTMLElement>('button:not([disabled])') ?? [])]
+      if (!items.length) return
+      e.preventDefault()
+      const i = items.indexOf(document.activeElement as HTMLElement)
+      items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus()
+    }
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node
       if (!ref.current?.contains(t) && !anchor?.contains(t)) onClose()

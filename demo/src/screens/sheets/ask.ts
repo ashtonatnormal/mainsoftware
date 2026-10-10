@@ -34,10 +34,19 @@ export function tableOf(tab: SheetTab): Table | null {
   if (headerRow < 0) return null
   const first = headerRow + 1
   let last = first - 1
+  // Data stops at a blank row or a summary row (a total, average and so on).
+  const summary = (r: number) => {
+    for (let c = 0; c < tab.cols; c++) {
+      if (/^=\s*(SUM|AVERAGE|MIN|MAX|COUNTA?)\(/i.test(tab.cells[addrOf({ r, c })]?.v ?? '')) return true
+      const v = at(r, c)
+      if (typeof v === 'string' && v) return /^(total|grand total|subtotal|sum|average|mean|peak|max|min|budget)\b/i.test(v.trim())
+    }
+    return false
+  }
   for (let r = first; r < tab.rows; r++) {
     let any = false
     for (let c = 0; c < tab.cols; c++) if (at(r, c) !== null && at(r, c) !== '') any = true
-    if (!any) break
+    if (!any || summary(r)) break
     last = r
   }
   if (last < first) return null
@@ -89,23 +98,21 @@ function genericAnswer(tab: SheetTab, q: string): SheetAnswer {
     const filled = Object.values(tab.cells).filter(c => c.v !== '').length
     return {
       ok: false, refs: [],
-      text: filled ? `I couldn't find a table with a header row in “${tab.name}”. Put labels in the first row and numbers under them, then ask again.` : `“${tab.name}” is empty. Add a header row and some numbers, then ask again.`,
+      text: filled ? `I couldn’t find a table with a header row in “${tab.name}”. Put labels in the first row and numbers under them, then ask again.` : `“${tab.name}” is empty. Add a header row and some numbers, then ask again.`,
     }
   }
   const numeric = t.cols.filter(c => c.numeric)
   const labelCol = t.cols.find(c => !c.numeric)
-  const rowName = (r: number) => (labelCol ? show(r, labelCol.c) : `Row ${r + 1}`)
+  const rowName = (r: number) => (labelCol && show(r, labelCol.c)) || `Row ${r + 1}`
   const dataRange = (c: number): Range => ({ r0: t.first, c0: c, r1: t.last, c1: c })
   const rows = t.last - t.first + 1
 
   if (/summar|overview|what.*in this/.test(lq) || !numeric.length) {
-    const parts = numeric.slice(0, 4).map(col => {
-      const ns = rowsOf(t).map(r => num(at(r, col.c))).filter((n): n is number => n !== null)
-      return `${col.name} adds up to ${fmtLike(tab, col.c, t.first, ns.reduce((a, b) => a + b, 0))}`
-    })
+    const names = t.cols.map(c => c.name)
+    const shown = names.length > 6 ? [...names.slice(0, 5), `${names.length - 5} more`] : names
     return {
       ok: true,
-      text: `“${tab.name}” has ${rows} row${rows === 1 ? '' : 's'} of data under ${t.cols.length} headings (${list(t.cols.slice(0, 6).map(c => c.name))}).${parts.length ? ` ${parts.join('; ')}.` : ''}`,
+      text: `“${tab.name}” has ${rows} row${rows === 1 ? '' : 's'} of data under ${names.length} heading${names.length === 1 ? '' : 's'}: ${list(shown)}.${numeric.length ? ` Columns with numbers: ${list(numeric.map(c => c.name))}. Ask me for a total, an average, the highest or the lowest of one of them.` : ' None of the columns hold numbers yet.'}`,
       refs: [ref(tab, { r0: t.headerRow, c0: t.cols[0].c, r1: t.last, c1: t.cols[t.cols.length - 1].c })],
     }
   }
@@ -125,6 +132,9 @@ function genericAnswer(tab: SheetTab, q: string): SheetAnswer {
   }
   const kind = /average|mean/.test(lq) ? 'avg' : /highest|most|max|peak|largest|biggest|top/.test(lq) ? 'max' : /lowest|least|min|smallest/.test(lq) ? 'min' : /how many|count|number of/.test(lq) && !col ? 'count' : /total|sum|how much|how many|add/.test(lq) ? 'sum' : null
 
+  if (kind === 'count' && !filter && qw.some(w => !/^(rows?|entries|entry|items?|lines?)$/.test(w))) {
+    return { ok: false, refs: [], text: `I can’t tell what to count from “${q.trim()}”. I can count rows, or rows where a column has a value that appears in this tab, like “${firstText(t, at) ?? 'a name'}”.` }
+  }
   if (kind === 'count') {
     const rs = rowsOf(t).filter(r => !filter || at(r, filter.c) === filter.value)
     return { ok: true, text: `There ${rs.length === 1 ? 'is' : 'are'} ${rs.length} row${rs.length === 1 ? '' : 's'}${filter ? ` where ${t.cols.find(c => c.c === filter!.c)?.name} is “${filter.value}”` : ''} in “${tab.name}”.`, refs: [ref(tab, { r0: t.first, c0: t.cols[0].c, r1: t.last, c1: t.cols[0].c })] }
@@ -155,6 +165,10 @@ function genericAnswer(tab: SheetTab, q: string): SheetAnswer {
   }
 }
 
+function firstText(t: Table, at: (r: number, c: number) => Value): string | null {
+  for (const col of t.cols.filter(c => !c.numeric)) { const v = at(t.first, col.c); if (typeof v === 'string' && v) return v }
+  return null
+}
 const countWord = (n: number) => ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'][n] ?? String(n)
 const rowsOf = (t: Table) => Array.from({ length: t.last - t.first + 1 }, (_, i) => t.first + i)
 function fmtLike(tab: SheetTab, c: number, r: number, n: number) {
@@ -195,13 +209,13 @@ function specialAnswer(sheet: Sheet, tab: SheetTab, q: string): SheetAnswer | nu
     const totalR = label(/^total/), budgetR = label(/^budget/)
     if (!payCol || totalR < 0 || budgetR < 0) return null
     const total = num(at(totalR, payCol.c)), budget = num(at(budgetR, payCol.c))
-    if (total === null || budget === null) return { ok: false, refs: [ref(tab, cellRange(totalR, payCol.c))], text: `The total cell shows ${show(totalR, payCol.c)}, so I can't compare it with the budget yet.` }
+    if (total === null || budget === null) return { ok: false, refs: [ref(tab, cellRange(totalR, payCol.c))], text: `The total cell shows ${show(totalR, payCol.c)}, so I can’t compare it with the budget yet.` }
     const people = rowsOf(t).filter(r => num(at(r, payCol.c)) !== null && r < totalR).length
     const left = budget - total
     const money = (n: number) => formatValue(n, 'currency')
     return {
       ok: true,
-      text: `Total OT pay is ${money(total)} for ${people} people${hoursCol ? ` (${show(totalR, hoursCol.c)} hours)` : ''}. ${left >= 0 ? `That's within the ${money(budget)} budget, with ${money(left)} left (${formatValue(total / budget, 'percent')} used).` : `That's ${money(-left)} over the ${money(budget)} budget.`}`,
+      text: `Total OT pay is ${money(total)} for ${people} people${hoursCol ? ` (${show(totalR, hoursCol.c)} hours)` : ''}. ${left >= 0 ? `That’s within the ${money(budget)} budget, with ${money(left)} left (${formatValue(total / budget, 'percent')} used).` : `That’s ${money(-left)} over the ${money(budget)} budget.`}`,
       refs: [ref(tab, { r0: t.first, c0: payCol.c, r1: t.last, c1: payCol.c }), ref(tab, cellRange(totalR, payCol.c)), ref(tab, cellRange(budgetR, payCol.c))],
     }
   }
@@ -224,7 +238,7 @@ function specialAnswer(sheet: Sheet, tab: SheetTab, q: string): SheetAnswer | nu
     const diff = Math.abs(a - b)
     return {
       ok: true,
-      text: `${name(cheap)} costs ${show(totalR, cheap)} against ${name(dear)}'s ${show(totalR, dear)}, so you save ${formatValue(diff, 'currency')} (${formatValue(diff / Math.max(a, b), 'percent')}).${extra.length ? ` ${name(dear)} ${extra.join(' and ')}.` : ''}`,
+      text: `${name(cheap)} costs ${show(totalR, cheap)} against ${name(dear)}’s ${show(totalR, dear)}, so you save ${formatValue(diff, 'currency')} (${formatValue(diff / Math.max(a, b), 'percent')}).${extra.length ? ` ${name(dear)} ${extra.join(' and ')}.` : ''}`,
       refs: [ref(tab, { r0: totalR, c0: 1, r1: totalR, c1: 2 }), ...(insR >= 0 ? [ref(tab, { r0: insR, c0: 1, r1: insR, c1: 2 })] : [])],
     }
   }

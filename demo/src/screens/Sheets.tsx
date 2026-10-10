@@ -90,6 +90,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   const moreRef = useRef<HTMLButtonElement>(null)
   const [cursors, setCursors] = useState<Record<PersonId, string>>(() => ({ ...(sheet.cursors ?? {}) }))
   const gridRef = useRef<HTMLDivElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const titleRef = useRef<HTMLInputElement>(null)
   const barRef = useRef<HTMLInputElement>(null)
@@ -138,25 +139,34 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   }, [sel.f.r, sel.f.c, tab.id])
 
   // ── Changes (all go through here so undo and "Saved" work) ─────────────
+  // Several changes can land in one event (commit an edit, then apply a style),
+  // so they build on the latest sheet in sheetRef, not on this render's props.
+  const sheetRef = useRef(sheet)
+  sheetRef.current = sheet
+  const curTab = () => sheetRef.current.tabs.find(t => t.id === tab.id) ?? sheetRef.current.tabs[0]
   const saveTimer = useRef<number | undefined>(undefined)
-  const commitTabs = useCallback((tabs: SheetTab[], opts: { record?: boolean } = {}) => {
+  const commitTabs = (tabs: SheetTab[], opts: { record?: boolean } = {}) => {
+    const prev = sheetRef.current
     if (opts.record !== false) {
-      history.undo.push(sheet.tabs)
+      history.undo.push(prev.tabs)
       if (history.undo.length > 100) history.undo.shift()
       history.redo = []
     }
-    updateSheet({ ...sheet, tabs, updatedAt: state.clock, updatedBy: ME })
+    const next = { ...prev, tabs, updatedAt: state.clock, updatedBy: ME }
+    sheetRef.current = next
+    updateSheet(next)
     setSaving(true)
     window.clearTimeout(saveTimer.current)
     saveTimer.current = window.setTimeout(() => setSaving(false), 700)
-  }, [sheet, history, updateSheet, state.clock])
+  }
   useEffect(() => () => window.clearTimeout(saveTimer.current), [])
 
-  const patchTab = (patch: Partial<SheetTab>, id = tab.id) => commitTabs(sheet.tabs.map(t => (t.id === id ? { ...t, ...patch } : t)))
+  const patchTab = (patch: Partial<SheetTab>, id = tab.id) => commitTabs(sheetRef.current.tabs.map(t => (t.id === id ? { ...t, ...patch } : t)))
 
   /** Writes cells; null clears a cell's value (formatting stays). */
   const writeCells = (changes: Record<string, Partial<SheetCell> | null>, grow?: { rows: number; cols: number }) => {
-    const cells = { ...tab.cells }
+    const t = curTab()
+    const cells = { ...t.cells }
     for (const [addr, ch] of Object.entries(changes)) {
       const prev = cells[addr]
       const next: SheetCell = ch === null ? { ...(prev ?? { v: '' }), v: '' } : { ...(prev ?? { v: '' }), ...ch }
@@ -164,23 +174,30 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
       if (!next.v && !styled) delete cells[addr]
       else cells[addr] = next
     }
-    patchTab({ cells, ...(grow ? { rows: Math.max(tab.rows, grow.rows), cols: Math.max(tab.cols, grow.cols) } : {}) })
+    patchTab({ cells, ...(grow ? { rows: Math.max(t.rows, grow.rows), cols: Math.max(t.cols, grow.cols) } : {}) })
   }
 
+  // After undo/redo the tab may be gone or smaller, so keep the selection inside it.
+  const afterHistory = (tabs: SheetTab[]) => {
+    const t = tabs.find(x => x.id === tab.id) ?? tabs[0]
+    if (t.id !== tab.id) setTabId(t.id)
+    const fit = (p: Pos): Pos => ({ r: Math.min(p.r, t.rows - 1), c: Math.min(p.c, t.cols - 1) })
+    setSel(s => ({ a: fit(s.a), f: fit(s.f) }))
+  }
   const undo = () => {
     const prev = history.undo.pop()
     if (!prev) return
-    history.redo.push(sheet.tabs)
+    history.redo.push(sheetRef.current.tabs)
     commitTabs(prev, { record: false })
-    if (!prev.some(t => t.id === tab.id)) setTabId(prev[0].id)
+    afterHistory(prev)
     bump(n => n + 1)
   }
   const redo = () => {
     const next = history.redo.pop()
     if (!next) return
-    history.undo.push(sheet.tabs)
+    history.undo.push(sheetRef.current.tabs)
     commitTabs(next, { record: false })
-    if (!next.some(t => t.id === tab.id)) setTabId(next[0].id)
+    afterHistory(next)
     bump(n => n + 1)
   }
 
@@ -191,7 +208,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = document.activeElement
-      if (el && el !== document.body) return
+      if (el && el !== document.body && (el.tagName !== 'BUTTON' || !rootRef.current?.contains(el))) return
       const k = e.key.toLowerCase()
       if (!(e.ctrlKey || e.metaKey) || (k !== 'z' && k !== 'y')) return
       e.preventDefault()
@@ -226,9 +243,9 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
     setEdit(null)
     refInsert.current = null
     const prev = activeCell?.v ?? ''
-    if (e.value !== prev) {
+    if (e.value !== prev && !(e.value.trim() === '' && prev === '')) {
       const lit: { fmt?: SheetCell['fmt'] } = e.value.startsWith('=') ? {} : parseLiteral(e.value)
-      writeCells({ [activeAddr]: e.value === '' ? null : { v: e.value, ...(lit.fmt && !activeCell?.fmt ? { fmt: lit.fmt } : {}) } })
+      writeCells({ [activeAddr]: e.value.trim() === '' ? null : { v: e.value, ...(lit.fmt && !activeCell?.fmt ? { fmt: lit.fmt } : {}) } })
     }
     if (dr || dc) select({ r: active.r + dr, c: active.c + dc })
     focusGrid()
@@ -254,19 +271,35 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   }
 
   const dragging = useRef(false)
+  // On touch the editor blurs before the tap on another cell arrives. While a
+  // formula is waiting for a reference, hold the commit briefly so the tap can
+  // insert the reference instead.
+  const blurTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(blurTimer.current), [])
+  const onEditorBlur = () => {
+    if (!editRef.current) return
+    if (refMode()) {
+      window.clearTimeout(blurTimer.current)
+      blurTimer.current = window.setTimeout(() => {
+        const a = document.activeElement
+        if (editRef.current && a !== inputRef.current && a !== barRef.current) commitEdit()
+      }, 400)
+      return
+    }
+    commitEdit()
+  }
   const onCellPointerDown = (p: Pos, e: ReactPointerEvent) => {
+    const up = () => { dragging.current = false; window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointerup', up)
+    dragging.current = true
     if (editRef.current && refMode()) {
       e.preventDefault()
       insertRef(p)
-      dragging.current = true
       return
     }
     if (editRef.current) commitEdit()
-    dragging.current = true
     if (e.shiftKey) setSel(s => ({ a: s.a, f: clamp(p) }))
     else select(p)
-    const up = () => { dragging.current = false; window.removeEventListener('pointerup', up) }
-    window.addEventListener('pointerup', up)
     if (document.activeElement !== gridRef.current) { e.preventDefault(); focusGrid() }
   }
   const onCellPointerEnter = (p: Pos) => {
@@ -275,6 +308,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
     if (!editRef.current) setSel(s => ({ a: s.a, f: clamp(p) }))
   }
   const onCellTap = (p: Pos) => {
+    window.clearTimeout(blurTimer.current)
     if (editRef.current && refMode()) { insertRef(p); return }
     const same = p.r === active.r && p.c === active.c && range.r0 === range.r1 && range.c0 === range.c1
     if (editRef.current) commitEdit()
@@ -296,7 +330,8 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
 
   const clearRange = () => {
     const ch: Record<string, null> = {}
-    for (const p of cellsIn(range)) if (tab.cells[addrOf(p)]?.v) ch[addrOf(p)] = null
+    const cur = curTab().cells
+    for (const p of cellsIn(range)) if (cur[addrOf(p)]?.v) ch[addrOf(p)] = null
     if (Object.keys(ch).length) writeCells(ch)
   }
 
@@ -306,7 +341,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
     const ch: Record<string, Partial<SheetCell>> = {}
     for (const p of cellsIn(range)) ch[addrOf(p)] = patch
     // Undefined values clear a style.
-    const cells = { ...tab.cells }
+    const cells = { ...curTab().cells }
     for (const [addr, pt] of Object.entries(ch)) {
       const next: SheetCell = { ...(cells[addr] ?? { v: '' }), ...pt }
       for (const k of Object.keys(pt) as (keyof SheetCell)[]) if (pt[k] === undefined) delete next[k]
@@ -431,7 +466,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
     const onCut = (e: ClipboardEvent) => copy(e, true)
     const onPaste = (e: ClipboardEvent) => {
       if (!ours()) return
-      const { range: g, tab: t, editable: canWrite, writeCells: write } = clipRef.current
+      const { range: g, editable: canWrite, writeCells: write } = clipRef.current
       e.preventDefault()
       if (!canWrite) { toast('This sheet is view only'); return }
       const text = e.clipboardData?.getData('text/plain') ?? ''
@@ -440,15 +475,16 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
       const grid = internal ? internal.raw : fromTSV(text)
       const dr = g.r0 - (internal?.origin.r ?? 0), dc = g.c0 - (internal?.origin.c ?? 0)
       const ch: Record<string, Partial<SheetCell> | null> = {}
+      const MAX_COLS = 52, MAX_ROWS = 2000
       grid.forEach((row, i) => row.forEach((v, j) => {
+        if (g.c0 + j >= MAX_COLS || g.r0 + i >= MAX_ROWS) return
         const a = addrOf({ r: g.r0 + i, c: g.c0 + j })
         const val = internal ? shiftFormula(v, dr, dc) : v
         ch[a] = val === '' ? null : { v: val }
       }))
-      const rows = g.r0 + grid.length, cols = g.c0 + Math.max(...grid.map(r => r.length))
-      write(ch, { rows, cols: Math.min(cols, 52) })
+      const rows = Math.min(g.r0 + grid.length, MAX_ROWS), cols = Math.min(g.c0 + Math.max(...grid.map(r => r.length)), MAX_COLS)
+      write(ch, { rows, cols })
       setSel({ a: { r: g.r0, c: g.c0 }, f: { r: rows - 1, c: cols - 1 } })
-      void t
     }
     document.addEventListener('copy', onCopy)
     document.addEventListener('cut', onCut)
@@ -464,21 +500,23 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
     setWidths({})
   }
   const addTab = () => {
+    if (editRef.current) commitEdit()
     let n = sheet.tabs.length + 1
     while (sheet.tabs.some(t => t.name === `Sheet${n}`)) n++
     const t: SheetTab = { id: newId('tab'), name: `Sheet${n}`, rows: 50, cols: 12, cells: {} }
-    commitTabs([...sheet.tabs, t])
+    commitTabs([...sheetRef.current.tabs, t])
     setTabId(t.id)
     setSel({ a: { r: 0, c: 0 }, f: { r: 0, c: 0 } })
   }
   const renameTab = (id: string, name: string) => {
     const n = name.trim()
     if (!n || sheet.tabs.find(t => t.id === id)?.name === n) return
+    if (sheet.tabs.some(t => t.id !== id && t.name.toLowerCase() === n.toLowerCase())) { toast(`There’s already a tab called “${n}”`); return }
     patchTab({ name: n }, id)
   }
   const deleteTab = (id: string) => {
     const i = sheet.tabs.findIndex(t => t.id === id)
-    const rest = sheet.tabs.filter(t => t.id !== id)
+    const rest = sheetRef.current.tabs.filter(t => t.id !== id)
     if (!rest.length) return
     commitTabs(rest)
     if (id === tab.id) switchTab(rest[Math.max(0, i - 1)].id)
@@ -505,11 +543,22 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   // ── Title ──────────────────────────────────────────────────────────────
   const [title, setTitle] = useState(sheet.title)
   useEffect(() => setTitle(sheet.title), [sheet.title])
+  const titleKey = useRef<'enter' | 'escape' | null>(null)
   const saveTitle = () => {
+    const how = titleKey.current
+    titleKey.current = null
     const t = title.trim()
-    if (!t) setTitle(sheet.title)
-    else if (t !== sheet.title) { renameItem(sheet.id, t); setSaving(true); window.clearTimeout(saveTimer.current); saveTimer.current = window.setTimeout(() => setSaving(false), 700) }
-    if (isNew.current) { isNew.current = false; select({ r: 0, c: 0 }); window.requestAnimationFrame(focusGrid) }
+    if (how === 'escape' || !t) setTitle(sheet.title)
+    else if (t !== sheet.title) {
+      renameItem(sheet.id, t)
+      sheetRef.current = { ...sheetRef.current, title: t }
+      setSaving(true); window.clearTimeout(saveTimer.current); saveTimer.current = window.setTimeout(() => setSaving(false), 700)
+    }
+    // New sheet: Enter (or Escape) moves on to A1; clicking somewhere else goes there instead.
+    if (isNew.current) {
+      isNew.current = false
+      if (how) { select({ r: 0, c: 0 }); window.requestAnimationFrame(focusGrid) }
+    }
   }
 
   // ── More menu ──────────────────────────────────────────────────────────
@@ -591,7 +640,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
               value={title}
               onChange={e => setTitle(e.target.value)}
               onBlur={saveTitle}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur() } if (e.key === 'Escape') { setTitle(sheet.title); e.currentTarget.blur() } }}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); titleKey.current = 'enter'; e.currentTarget.blur() } if (e.key === 'Escape') { titleKey.current = 'escape'; e.currentTarget.blur() } }}
               className="-ml-1 w-full min-w-0 truncate rounded-md bg-transparent px-1 font-display text-[17px] leading-tight font-semibold outline-none hover:bg-surface-2 focus:bg-surface-2 md:text-lg"
             />
           </>
@@ -619,7 +668,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
         </div>
       </div>
       {others.length > 0 && (
-        <span className="hidden items-center sm:flex" title={`${others.map(personShort).join(', ')} ${others.length === 1 ? 'is' : 'are'} here`}>
+        <span className="flex items-center" title={`${others.map(personShort).join(', ')} ${others.length === 1 ? 'is' : 'are'} here`}>
           <AvatarStack ids={others} size="sm" />
         </span>
       )}
@@ -635,7 +684,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   )
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg">
+    <div ref={rootRef} className="flex h-full min-h-0 flex-col bg-bg">
       {header}
       <Popover label="More" anchor={moreRef.current} open={moreOpen} onClose={() => setMoreOpen(false)} align="right">
         <div className="md:hidden">
@@ -694,7 +743,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
             else if (e.key === 'Tab') { e.preventDefault(); commitEdit(0, e.shiftKey ? -1 : 1) }
             else if (e.key === 'Escape') { e.preventDefault(); cancelEdit() }
           }}
-          onBlur={() => { if (editRef.current?.mode === 'bar' && !refInsert.current) commitEdit() }}
+          onBlur={() => { if (editRef.current?.mode === 'bar') onEditorBlur() }}
           spellCheck={false}
           autoComplete="off"
           className="h-8 min-w-0 flex-1 rounded-md bg-transparent px-1.5 font-mono text-base md:text-[13px] outline-none placeholder:font-sans placeholder:text-muted focus:bg-surface-2"
@@ -725,12 +774,12 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
             onHeaderSelect={onHeaderSelect}
             onEditChange={v => setEdit({ value: v, mode: editRef.current?.mode ?? 'inplace' })}
             onEditKeyDown={onEditKeyDown}
-            onEditBlur={() => { if (editRef.current && editRef.current.mode !== 'bar' && !(refInsert.current && dragging.current)) commitEdit() }}
+            onEditBlur={() => { if (editRef.current && editRef.current.mode !== 'bar') onEditorBlur() }}
             onResize={(col, w, done) => {
               setWidths(ws => ({ ...ws, [col]: w }))
               if (done) { patchTab({ colWidths: { ...(tab.colWidths ?? {}), [col]: w } }); setWidths({}) }
             }}
-            onAddRows={() => patchTab({ rows: tab.rows + 20 })}
+            onAddRows={() => { if (editRef.current) commitEdit(); patchTab({ rows: curTab().rows + 20 }) }}
           />
         </div>
         {wide && askOpen && (
@@ -769,7 +818,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
             <Sparkles size={13} aria-hidden /> Suggest a formula for {activeAddr}
           </button>
         ) : highlight ? (
-          <span className="flex min-w-0 items-center gap-1.5 truncate"><span className="size-3 shrink-0 rounded-sm bg-warn-soft ring-1 ring-warn" aria-hidden />Amber: over the cold-room capacity</span>
+          <span className="flex min-w-0 items-center gap-1.5 pl-0.5"><span className="size-3 shrink-0 rounded-sm bg-warn-soft ring-1 ring-warn" aria-hidden /><span className="truncate">Amber: over the cold-room capacity</span></span>
         ) : (
           <span className="truncate">{editable ? (desktop ? 'Shift-click or drag to select a range' : 'Tap a cell to select it, tap again to edit') : 'Tap a cell to see its formula'}</span>
         )}
@@ -883,9 +932,11 @@ function TabsBar({ sheet, activeId, editable, onSwitch, onAdd, onRename, onDelet
         }
       >
         <p className="text-sm">
-          {confirmTab && Object.keys(confirmTab.cells).length ? `Its ${Object.values(confirmTab.cells).filter(c => c.v).length} filled cells go with it.` : 'It’s empty.'} You can bring it back with Undo while this page is open.
+          {confirmTab && Object.keys(confirmTab.cells).length ? `${filledLabel(Object.values(confirmTab.cells).filter(c => c.v).length)} go${Object.values(confirmTab.cells).filter(c => c.v).length === 1 ? 'es' : ''} with it.` : 'It’s empty.'} You can bring it back with Undo while this page is open.
         </p>
       </Dialog>
     </div>
   )
 }
+
+const filledLabel = (n: number) => (n === 1 ? 'Its 1 filled cell' : `Its ${n} filled cells`)

@@ -57,6 +57,7 @@ const err = (error: ErrorCode): ErrorValue => ({ error })
 
 /** What a typed number looks like: "1200", "1,200.5", "-3", ".5", "S$1,234", "12%". */
 const NUMBER_RE = /^(-)?(S?\$)?((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(%)?$/
+const SCI_RE = /^-?(\d+\.?\d*|\.\d+)[eE][+-]?\d+$/
 
 /** Reads a typed literal. Returns the value and a format it implies (S$ → currency, % → percent). */
 export function parseLiteral(raw: string): { value: Value; fmt?: SheetCell['fmt'] } {
@@ -67,8 +68,9 @@ export function parseLiteral(raw: string): { value: Value; fmt?: SheetCell['fmt'
     let n = Number(m[3].replace(/,/g, ''))
     if (m[1]) n = -n
     if (m[4]) return { value: n / 100, fmt: m[2] ? undefined : 'percent' }
-    return { value: n, fmt: m[2] ? 'currency' : undefined }
+    return { value: n, fmt: m[2] ? 'currency' : m[3].includes(',') ? 'number' : undefined }
   }
+  if (SCI_RE.test(t)) return { value: Number(t) }
   const u = t.toUpperCase()
   if (u === 'TRUE') return { value: true }
   if (u === 'FALSE') return { value: false }
@@ -115,6 +117,7 @@ function tokenize(src: string): Tok[] {
     if (name) { out.push({ t: 'name', v: name[0].toUpperCase() }); i += name[0].length; continue }
     const two = src.slice(i, i + 2)
     if (two === '<>' || two === '<=' || two === '>=') { out.push({ t: 'op', v: two }); i += 2; continue }
+    if (src.startsWith('#REF!', i)) { out.push({ t: 'name', v: '#REF!' }); i += 5; continue }
     if ('+-*/^&=<>%'.includes(ch)) { out.push({ t: 'op', v: ch }); i++; continue }
     if (ch === '(' || ch === ')' || ch === ',' || ch === ':') { out.push({ t: ch } as Tok); i++; continue }
     throw new ParseError(`Unexpected ${ch}`)
@@ -134,6 +137,7 @@ export type Node =
   | { k: 'neg'; e: Node }
   | { k: 'pct'; e: Node }
   | { k: 'name'; v: string }
+  | { k: 'refErr' } // a reference that was moved off the grid
 
 export function parseFormula(src: string): Node {
   const toks = tokenize(src)
@@ -174,6 +178,7 @@ export function parseFormula(src: string): Node {
           return { k: 'fn', name: t.v, args }
         }
         if (t.v === 'TRUE' || t.v === 'FALSE') return { k: 'bool', v: t.v === 'TRUE' }
+        if (t.v === '#REF!') return { k: 'refErr' }
         return { k: 'name', v: t.v }
       case '(': { const e = compare(); expect(')'); return e }
       default: throw new ParseError('Unexpected token')
@@ -344,27 +349,32 @@ export function computeTab(cells: Cells, bounds: Bounds): Map<string, Value> {
         parsed.set(addr, node)
       }
       v = isError(node) ? node : evalNode(node)
+      if (v === null) v = 0 // =A9 on an empty cell shows 0, as in other spreadsheets
       visiting.delete(addr)
       // A cell that sits on a cycle reports the cycle, whatever operator wrapped it.
       if (isError(v) && v.error === '#CYCLE!') v = err('#CYCLE!')
-    } else if (cell.fmt === 'text') v = cell.v
+    } else if (cell.v.startsWith("'")) v = cell.v.slice(1) // a leading apostrophe keeps text as typed
+    else if (cell.fmt === 'text') v = cell.v
     else v = parseLiteral(cell.v).value
     done.set(addr, v)
     return v
   }
 
+  // Cells past the tab's current size are simply empty (adding rows fills them in).
   const refValue = (a: string): Value => {
     const p = parseAddr(a)
-    if (!p || !inBounds(p)) return err('#REF!')
-    return valueAt(addrOf(p))
+    if (!p) return err('#REF!')
+    return inBounds(p) ? valueAt(addrOf(p)) : null
   }
 
   const evalArg = (n: Node): Arg => {
     if (n.k === 'range') {
       const a = parseAddr(n.a), b = parseAddr(n.b)
-      if (!a || !b || !inBounds(a) || !inBounds(b)) return err('#REF!')
+      if (!a || !b) return err('#REF!')
+      const g = rangeOf(a, b)
       const out: Value[] = []
-      for (const p of cellsIn(rangeOf(a, b))) out.push(valueAt(addrOf(p)))
+      const clipped = { r0: g.r0, c0: g.c0, r1: Math.min(g.r1, bounds.rows - 1), c1: Math.min(g.c1, bounds.cols - 1) }
+      if (clipped.r0 <= clipped.r1 && clipped.c0 <= clipped.c1) for (const p of cellsIn(clipped)) out.push(valueAt(addrOf(p)))
       return { range: out }
     }
     return evalNode(n)
@@ -376,6 +386,7 @@ export function computeTab(cells: Cells, bounds: Bounds): Map<string, Value> {
       case 'str': return n.v
       case 'bool': return n.v
       case 'name': return err('#NAME?')
+      case 'refErr': return err('#REF!')
       case 'ref': return refValue(n.a)
       case 'range': {
         const a = evalArg(n)
@@ -387,8 +398,8 @@ export function computeTab(cells: Cells, bounds: Bounds): Map<string, Value> {
         if (!(FUNCTIONS as readonly string[]).includes(n.name)) return err('#NAME?')
         const args = n.args.map(evalArg)
         // IF only evaluates the branch it takes, but errors in the condition still show.
-        const bad = args.find(a => !isRange(a) && isError(a) && a.error === '#CYCLE!')
-        if (bad) return bad as ErrorValue
+        const cyc = (v: Value) => isError(v) && v.error === '#CYCLE!'
+        if (args.some(a => (isRange(a) ? a.range.some(cyc) : cyc(a)))) return err('#CYCLE!')
         return callFn(n.name, args)
       }
       case 'bin': {
@@ -408,7 +419,7 @@ export function computeTab(cells: Cells, bounds: Bounds): Map<string, Value> {
           case '-': return x - y
           case '*': return x * y
           case '/': return y === 0 ? err('#DIV/0!') : x / y
-          case '^': { const v = x ** y; return Number.isFinite(v) ? v : err('#VALUE!') }
+          case '^': { if (x === 0 && y < 0) return err('#DIV/0!'); const v = x ** y; return Number.isFinite(v) ? v : err('#VALUE!') }
         }
         return err('#ERROR!')
       }
@@ -444,7 +455,7 @@ export function formatValue(v: Value, fmt?: SheetCell['fmt']): string {
   switch (fmt) {
     case 'currency': return `${v < 0 ? '-' : ''}S$${group(Math.abs(v), 2)}`
     case 'percent': return `${(v * 100).toFixed(1)}%`
-    case 'integer': return group(Math.round(v), 0)
+    case 'integer': return group(round(v, 0), 0)
     case 'number': return n2(v)
     case 'text': return formatAuto(v)
     default: return formatAuto(v)
