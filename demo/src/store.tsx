@@ -217,56 +217,133 @@ const scriptedReplies: Record<string, { from: string; text: string }> = {
 // memory is on, and it only uses what it remembered while memory is on. Turning
 // memory off keeps the list (you can still see, edit and delete it in Settings)
 // but stops both. It never changes the setting or deletes memories itself (PA-03).
-const MEMORY_SOURCE: SourceRef = { label: 'Your assistant memory', kind: 'person', route: { name: 'settings', section: 'memory' } }
+// Memory phrasing never hides the answer to a work question: anything that isn't
+// clearly about memory falls through to the normal answers.
+// Every memory reply links to where you see and control memory.
+const MEMORY_SOURCE: SourceRef = { label: 'Settings › Assistant memory', kind: 'person', route: { name: 'settings', section: 'memory' } }
 const MEMORY_OFF = 'Memory is off, so I’m not using anything I remembered about you and I’m not saving anything new. You can turn it back on in Settings › Assistant memory.'
 const MEMORY_OFF_SAVE = 'Memory is off, so I won’t remember that. Turn it on in Settings › Assistant memory if you’d like me to.'
+const MEMORY_ASK_WHAT = 'What would you like me to remember? Start with “Remember that…”, for example “Remember that I’m off on Fridays.”'
+const MEMORY_REMINDER = 'That sounds like a reminder. I can’t set those, but you can add it as a task in Tasks and it’ll show on Today.'
+const MEMORY_SETTINGS = 'I can’t change memory settings or delete what I remember myself. You can turn memory off, or edit and delete anything I remember, in Settings › Assistant memory.'
 
-// Figures of speech about the user's own memory are ordinary questions, not about the assistant's.
-const MEMORY_IDIOM = /\b(?:refresh|jog)\s+(?:my|your)\s+memory\b|\bif (?:my|your) memory serves\b|\bfrom memory\b/i
-// "Turn off your memory", "Delete my memories", "Forget that…": the assistant can't do these itself.
-const MEMORY_COMMAND = /\b(?:turn|switch)\b[^?]*\bmemor(?:y|ies)\b|\b(?:disable|enable|pause|stop|delete|remove|clear|erase|wipe|reset|forget)\b[^?]*\bmemor(?:y|ies)\b|^\s*(?:(?:please|can you|could you)\s+)?forget\b/i
-// "What do you remember about me?", "Tell me what you know about me", "What's in your memory?"
-const RECALL = /\b(?:remember(?:ed)?|know|learn(?:ed|t)?)\b[^.!?]*\babout me\b|\bwhat(?:['’]s| is) in (?:your|my) memory\b|\b(?:show|list|see|read)\b[^.!?]*\b(?:your|my) memor(?:y|ies)\b/i
+/** The scripted answer a work question matches, if any. A leading "never mind" clause
+ *  ("Forget about the movers, what's the forklift status?") isn't part of the question. */
+const workAnswer = (q: string) => {
+  const lower = q.replace(/^\s*(?:(?:ok|okay|please|pls|plz)\s+)?(?:forget (?:it|that|about [^,.;:?]+)|never ?mind|nvm)\s*[,.;:–—-]+\s*(?=\S)/i, '').toLowerCase()
+  return askAnswers.find(a => a.keywords.some(k => lower.includes(k)))
+}
+
+const YOU = '(?:you|u)'
+const YOUR = '(?:your|ur)'
+const EMOJI = '[\\s\\p{Extended_Pictographic}\\u200d\\ufe0f]*'
+// "Turn off your memory", "Delete my memories", "Don’t remember that": the assistant can't do these itself.
+const MEMORY_COMMAND = /\b(?:turn|switch)\b[^?]*\bmemor(?:y|ies)\b|\b(?:disable|enable|pause|stop|delete|remove|clear|erase|wipe|reset|forget)\b[^?]*\bmemor(?:y|ies)\b|^\s*(?:(?:please|pls|plz)\s+)?(?:don['’]?t|do not|stop)\s+remember(?:ing)?\b/i
+// "Forget that I prefer…" is a command too, but "Forget it, what about pricing?" means "never mind".
+const FORGET = /^\s*(?:(?:please|pls|plz|can you|can u|could you|could u)\s+)?forget\b/i
+// Figures of speech about the user's own memory are ordinary questions.
+const MEMORY_IDIOM = /\b(?:refresh|jog)\s+(?:my|your)\s+memory\b|\bif (?:my|your) memory serves\b|\b(?:from|to) (?:my )?memory\b/i
+// "What do you remember about me?", "What's in your memory?", a bare "What do you remember?"
+const RECALL = new RegExp([
+  '\\b(?:remember(?:ed)?|know|learn(?:ed|t)?)\\b[^.!?]*\\b(?:about|abt) me\\b',
+  `\\bwhat(?:['’]?s| is) in ${YOUR} memory\\b`,
+  `\\b(?:show|list|see|read)\\b[^.!?]*\\b(?:${YOUR}|my) memor(?:y|ies)\\b`,
+  `\\bwhat are ${YOUR} memories\\b`,
+  `\\bwhat did i (?:ask|tell) ${YOU} to remember\\b`,
+  `\\bwhat ${YOU} remember(?:ed)?\\s*[?.!]*\\s*$`,
+  `^\\s*what (?:do|did|have) ${YOU} (?:remember(?:ed)?|know|saved?)\\s*[?.!]*\\s*$`,
+  `^\\s*do ${YOU} remember anything\\s*[?.!]*\\s*$`,
+].join('|'), 'i')
 // Anything else about the memory itself: "How does your memory work?", "Is my memory on?"
-const MEMORY_TOPIC = /\b(?:your|my|assistant(?:['’]s)?) memor(?:y|ies)\b/i
+const MEMORY_TOPIC = /\b(?:your|ur|my|assistant(?:['’]s)?) memor(?:y|ies)\b/i
+
+type RememberRequest =
+  | { kind: 'fact'; fact: string; then?: string } // then: a question asked after the fact, answered too
+  | { kind: 'empty' } // "Remember that" with nothing to save
+  | { kind: 'reminder' } // "remember to call Priya"
+
+const OPENER = '(?:hey|hi|hello|hearth|ok|okay|also|and|oh|so|btw|assistant|please|pls|plz|can you|can u|could you|could u|would you|would u|will you|will u)'
+const REMEMBER_RE = new RegExp(`^\\s*(?:${OPENER}\\b[\\s,!.]*)*remember\\b(\\s*[:;–—-])?[\\s,]*(.*)$`, 'is')
+const PERSONAL_START = /^(?:i|i['’]m|im|i['’]ve|i['’]ll|i['’]d|my|we|our|you|your)\b/i
+const ABOUT_ME = /\b(?:i|i['’]m|im|i['’]ve|i['’]ll|i['’]d|my|me|mine|myself)\b/i
+const NOT_A_FACT = /^(?:what|when|where|who|whom|whose|which|why|how|if|whether|anything|everything|something)\b/i
+const REMINDER = /^(?:to|2)\b|^(?:call|email|e-mail|send|book|check|ask|tell|buy|pay|submit|reply|ring|text|message|follow up|pick up|bring|meet|update|review|approve|sign|file|chase|confirm|remind)\b/i
+const QUESTION = new RegExp(`\\?${EMOJI}$`, 'u')
+
+/** Trailing punctuation, emoji and pleasantries ("…, thanks 🙏") are not part of the fact. */
+function cleanFact(t: string) {
+  let prev: string
+  do {
+    prev = t
+    t = t.replace(new RegExp(`[\\s.!?,;:\\p{Extended_Pictographic}\\u200d\\ufe0f]+$`, 'u'), '').replace(/[\s,]+(?:thanks|thank you|thank u|thx|ty|tq|cheers|please|pls|plz)$/i, '')
+  } while (t !== prev)
+  return t.trim()
+}
 
 /**
- * "Remember that I'm off on Fridays" → { fact: "You’re off on Fridays." }.
- * A bare "Remember that" → { fact: null } (nothing to save). Not a save request → null:
- * reminders ("remember to…"), questions ("Remember the Kranji quote?", "remember what…").
+ * Reads a "remember" message. Saves need a clear signal: "Remember that…" or
+ * "Remember: …", or a fact about you ("remember my manager is Wei Ling").
+ * "Remember the Kranji quote" and "remember what we decided" are questions about
+ * work, so they return null and get the normal answer.
  */
-function parseRemember(text: string): { fact: string | null } | null {
-  const m = /^\s*(?:(?:hey|hi|ok|okay|also|and|oh|so|assistant|please|can you|could you|would you|will you)\b[\s,]*)*remember\b[\s,:;–—-]*(.*)$/is.exec(text)
+function parseRemember(text: string): RememberRequest | null {
+  const m = REMEMBER_RE.exec(text)
   if (!m) return null
-  let rest = m[1].trim()
-  const explicit = /^that\b/i.test(rest)
-  if (explicit) rest = rest.replace(/^that\b[\s,:]*/i, '')
-  else if (/^(?:to|what|when|where|who|whom|whose|which|why|how|if|whether|anything|everything|something)\b/i.test(rest)) return null
-  if (!explicit && /\?\s*$/.test(text)) return null
-  rest = rest.replace(/[\s,]+(?:thanks|thank you|thx|cheers|please)[\s.!]*$/i, '').replace(/[.!?\s]+$/, '')
-  if (!rest || /^(?:that|this|it|so|them|me|everything)$/i.test(rest)) return { fact: null }
-  return { fact: aboutYou(rest) }
+  let rest = m[2].trim()
+  let marker: 'that' | 'colon' | null = m[1] ? 'colon' : null
+  const lead = /^(that|this)\b\s*([:;–—-])?\s*/i.exec(rest)
+  // "that" marks a fact ("Remember that I…"); "this" only with a colon ("remember this: …").
+  if (lead && (lead[1].toLowerCase() === 'that' || lead[2])) {
+    marker = lead[1].toLowerCase() === 'that' ? 'that' : 'colon'
+    rest = rest.slice(lead[0].length)
+  }
+  const parts = rest.split(/(?<=[.!?])\s+|\s*\n+\s*/).filter(Boolean)
+  let factParts: string[]
+  let then: string[] = []
+  if (parts.length && QUESTION.test(parts[0])) {
+    // The request itself is a question. "Remember that Kranji quote?" asks about work;
+    // only a marked fact about you, "Could you remember that I like agendas early?", saves.
+    if (!(marker && ABOUT_ME.test(parts[0]))) return null
+    factParts = [parts[0]]
+    then = parts.slice(1)
+  } else {
+    const q = parts.findIndex(p => QUESTION.test(p))
+    factParts = q === -1 ? parts : parts.slice(0, q)
+    then = q === -1 ? [] : parts.slice(q)
+  }
+  const body = cleanFact(factParts.map(p => (/[.!?]$/.test(p) ? p : `${p}.`)).join(' '))
+  if (!body || /^(?:that|this|it|so|them|me|everything|please|pls|plz)$/i.test(body)) return { kind: 'empty' }
+  if (REMINDER.test(body)) return { kind: 'reminder' }
+  if (!marker && !PERSONAL_START.test(body)) return null
+  if (marker !== 'that' && NOT_A_FACT.test(body)) return null
+  return { kind: 'fact', fact: aboutYou(body), then: then.join(' ') || undefined }
 }
 
 // The assistant writes memories to you, so swap the speaker: your "I/my" become "you/your",
 // and "you/your" (meaning the assistant) become "I/my".
 const SWAP: Record<string, string> = {
-  'i am': 'you are', 'i’m': 'you’re', 'i was': 'you were', 'i wasn’t': 'you weren’t', 'i’ve': 'you’ve', 'i’ll': 'you’ll', 'i’d': 'you’d',
+  'i am': 'you are', 'i’m': 'you’re', im: 'you’re', 'i was': 'you were', 'i wasn’t': 'you weren’t', 'i’ve': 'you’ve', 'i’ll': 'you’ll', 'i’d': 'you’d',
   i: 'you', me: 'you', my: 'your', mine: 'yours', myself: 'yourself',
-  'you are': 'I am', 'you’re': 'I’m', 'you were': 'I was', 'you weren’t': 'I wasn’t', 'you’ve': 'I’ve', 'you’ll': 'I’ll', 'you’d': 'I’d',
+  'you are': 'I am', 'you’re': 'I’m', 'you aren’t': 'I’m not', 'you were': 'I was', 'you weren’t': 'I wasn’t', 'you’ve': 'I’ve', 'you’ll': 'I’ll', 'you’d': 'I’d',
   your: 'my', yours: 'mine', yourself: 'myself',
 }
-const PRONOUN = /\b(?:i am|i['’]m|i was|i wasn['’]t|i['’]ve|i['’]ll|i['’]d|you are|you['’]re|you were|you weren['’]t|you['’]ve|you['’]ll|you['’]d|myself|yourself|mine|yours|my|your|me|i(?!\.\w)|you)\b/gi
+const PRONOUN = /\b(?:i am|i['’]m|im|i was|i wasn['’]t|i['’]ve|i['’]ll|i['’]d|you are|you['’]re|you aren['’]t|you were|you weren['’]t|you['’]ve|you['’]ll|you['’]d|myself|yourself|mine|yours|my|your|me|i(?!\.\w)|you)\b/gi
+// A bare "you" is the subject ("I") before a verb or at the start of a clause, otherwise the object ("me").
+const SUBJECT_NEXT = /^\s+(?:can|could|should|shall|will|would|must|may|might|need|needs|have|had|do|did|don['’]t|didn['’]t|always|never|only|just|also|usually|often|write|draft|send|make|prepare|book|reply|use|keep|remind|get|give|take|tell|call|ask|check|summarise|summarize|schedule|start|stop|help|find|flag|post|share|add|put|cc|copy|read|answer)\b/i
+const CLAUSE_START = /(?:^|[,;:]\s*|\b(?:and|but|or|that|when|whenever|if|so|because|then|while|unless|before|after|once|until)\s+)$/i
+const ABBREVIATION = /(?:\b[a-z]\.[a-z]\.|\b(?:e\.g|i\.e|etc|vs|approx|incl|no|dr|mr|mrs|ms|st)\.)$/i
 
-/** "I was promoted in March" → "You were promoted in March."; "you should call me Ash" → "I should call you Ash." */
+/** "I was promoted in March" → "You were promoted in March."; "the summaries you write for me" → "the summaries I write for you". */
 function aboutYou(text: string) {
   const swapped = text.replace(PRONOUN, (w: string, at: number, all: string) => {
     const key = w.toLowerCase().replace(/'/g, '’')
-    // A bare "you" is the subject ("I") at the start of a clause, otherwise the object ("me").
-    if (key === 'you') return /(?:^|[,;:]\s*|\b(?:and|but|or|that|when|if|so|because|then|while|unless)\s+)$/i.test(all.slice(0, at)) ? 'I' : 'me'
-    return SWAP[key]
+    if (key !== 'you') return SWAP[key]
+    return SUBJECT_NEXT.test(all.slice(at + w.length)) || CLAUSE_START.test(all.slice(0, at)) ? 'I' : 'me'
   })
-  return `${swapped.replace(/(^|[.!?]\s+)([a-z])/g, (_, p: string, c: string) => p + c.toUpperCase())}.`
+  // Capitalise each sentence, but not the word after "a.m." or "e.g.".
+  const capped = swapped.replace(/(^|[.!?]\s+)([a-z])/g, (m: string, p: string, c: string, at: number, all: string) =>
+    p && ABBREVIATION.test(all.slice(0, at + 1)) ? m : p + c.toUpperCase())
+  return `${capped}.`
 }
 
 const sameFact = (a: string, b: string) => {
@@ -280,18 +357,21 @@ const sentence = (t: string) => (/[.!?]$/.test(t.trim()) ? t.trim() : `${t.trim(
 
 /** ask()'s answer when the question is about the assistant's memory, or null. */
 function memoryAnswer(q: string, s: Pick<State, 'memoryOn' | 'memories'>): { answer: string; sources: SourceRef[] } | null {
+  const work = workAnswer(q)
+  if (MEMORY_COMMAND.test(q) || (FORGET.test(q) && !work && !q.includes('?'))) return { answer: MEMORY_SETTINGS, sources: [MEMORY_SOURCE] }
   if (MEMORY_IDIOM.test(q)) return null
-  if (MEMORY_COMMAND.test(q)) return { answer: 'I can’t change memory settings or delete what I remember myself. You can turn memory off, or edit and delete anything I remember, in Settings › Assistant memory.', sources: [MEMORY_SOURCE] }
-  if (parseRemember(q)) return s.memoryOn ? { answer: 'To have me remember something, tell me in your Assistant chat, starting with “Remember that…”.', sources: [] } : { answer: MEMORY_OFF_SAVE, sources: [] }
+  const req = parseRemember(q)
+  if (req?.kind === 'reminder') return { answer: MEMORY_REMINDER, sources: [] }
+  if (req) return s.memoryOn ? { answer: 'To have me remember something, tell me in your Assistant chat, starting with “Remember that…”.', sources: [MEMORY_SOURCE] } : { answer: MEMORY_OFF_SAVE, sources: [MEMORY_SOURCE] }
   if (RECALL.test(q)) {
-    if (!s.memoryOn) return { answer: MEMORY_OFF, sources: [] }
-    if (!s.memories.length) return { answer: 'I don’t remember anything about you yet. Tell me “Remember that…” in your Assistant chat and I’ll save it where you can see it, in Settings › Assistant memory.', sources: [] }
+    if (!s.memoryOn) return { answer: MEMORY_OFF, sources: [MEMORY_SOURCE] }
+    if (!s.memories.length) return { answer: 'I don’t remember anything about you yet. Tell me “Remember that…” in your Assistant chat and I’ll save it where you can see it, in Settings › Assistant memory.', sources: [MEMORY_SOURCE] }
     return { answer: `Here’s what I remember about you: ${s.memories.map(m => sentence(m.text)).join(' ')} You can edit or delete any of it in Settings › Assistant memory.`, sources: [MEMORY_SOURCE] }
   }
-  if (MEMORY_TOPIC.test(q)) {
+  if (MEMORY_TOPIC.test(q) && !work) {
     return s.memoryOn
       ? { answer: 'Memory is on. When you tell me “Remember that…” in your Assistant chat, I save it, and you can ask me what I remember. You can see, edit or delete it all, or turn memory off, in Settings › Assistant memory.', sources: [MEMORY_SOURCE] }
-      : { answer: MEMORY_OFF, sources: [] }
+      : { answer: MEMORY_OFF, sources: [MEMORY_SOURCE] }
   }
   return null
 }
@@ -390,10 +470,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [later])
 
   const ask = useCallback((q: string) => {
-    const lower = q.toLowerCase()
     const mem = memoryAnswer(q, stateRef.current)
     if (mem) return { ...mem, matched: true }
-    const hit = askAnswers.find(a => a.keywords.some(k => lower.includes(k)))
+    const hit = workAnswer(q)
     return hit ? { answer: hit.answer, sources: hit.sources, matched: true } : { answer: askFallback, sources: [], matched: false }
   }, [])
 
@@ -409,14 +488,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const now = stateRef.current
         const req = parseRemember(text)
         let answer: string
-        let sources: SourceRef[] | undefined
+        let sources: SourceRef[] = []
         if (!req) ({ answer, sources } = ask(text))
-        else if (!now.memoryOn) answer = MEMORY_OFF_SAVE
-        else if (!req.fact) answer = 'What would you like me to remember? Start with “Remember that…”, for example “Remember that I’m off on Fridays.”'
-        else if (now.memories.some(m => sameFact(m.text, req.fact!))) answer = `I already remember that: “${req.fact}”`
+        else if (req.kind === 'reminder') answer = MEMORY_REMINDER
         else {
-          dispatch({ type: 'addMemory', memory: { id: newId('mem'), text: req.fact, learnedFrom: `You told me on ${shortDay(now.clock).split(' ').slice(1).join(' ')}` } })
-          answer = `Got it. I’ll remember: “${req.fact}” You can edit or delete it in Settings › Assistant memory.`
+          sources = [MEMORY_SOURCE]
+          if (!now.memoryOn) answer = MEMORY_OFF_SAVE
+          else if (req.kind === 'empty') answer = MEMORY_ASK_WHAT
+          else if (now.memories.some(m => sameFact(m.text, req.fact))) answer = `I already remember that: “${req.fact}”`
+          else {
+            dispatch({ type: 'addMemory', memory: { id: newId('mem'), text: req.fact, learnedFrom: `You told me on ${shortDay(now.clock).split(' ').slice(1).join(' ')}` } })
+            answer = `Got it. I’ll remember: “${req.fact}” You can edit or delete it in Settings › Assistant memory.`
+          }
+        }
+        // "Remember that I prefer email. What did we decide on pricing?" answers the question too.
+        if (req?.kind === 'fact' && req.then) {
+          const more = ask(req.then)
+          answer = `${answer}\n\n${more.answer}`
+          sources = more.sources
         }
         dispatch({ type: 'addMessage', message: { id: newId('m'), conversationId, authorId: ASSISTANT, kind: 'text', text: answer, sources, ts: now.clock } })
       })
