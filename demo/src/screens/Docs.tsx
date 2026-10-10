@@ -4,7 +4,7 @@
 import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import { BookOpen, Check, CheckCircle2, ChevronRight, Eye, FileText, History, Lock, MessageSquare, MessageSquareText, Pencil, RotateCcw, Rocket, Send, Shield, Sparkles, Users } from 'lucide-react'
 import type { Doc, DocBlock, DocComment, DocVersion, SourceRef } from '../types'
-import { useStore } from '../store'
+import { newId, useStore } from '../store'
 import { ME, personById } from '../data/people'
 import { AIMarker, Avatar, AvatarStack, Button, Card, cx, EmptyState, IconButton, personName, personShort, Pill, ScreenHeader, Segmented, SectionTitle, Sheet, SourceChips } from '../ui'
 import { clock, listStamp, shortDay } from '../time'
@@ -204,13 +204,14 @@ function DocView({ doc }: { doc: Doc }) {
 
 function permissionLine(doc: Doc) {
   const editors = doc.editors
-  const who = editors.includes(ME) ? `${names(editors.filter(id => id !== ME))}${editors.length > 1 ? ' and you' : 'you'}` : names(editors)
+  const who = names(editors.includes(ME) ? [...editors.filter(id => id !== ME), ME] : editors)
   const comment = doc.commenters === 'team' ? 'team can comment' : doc.commenters === 'org' ? 'everyone can comment' : 'no comments'
   return `Only ${who} can edit · ${comment}`
 }
 
 function MetaBar({ doc, canEdit, onPermissions }: { doc: Doc; canEdit: boolean; onPermissions: () => void }) {
   const here = doc.presence.filter(id => id !== ME)
+  const editedBy = doc.versions[0]?.authorId ?? doc.ownerId
   return (
     <div className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line pb-4 text-xs text-muted">
       {here.length > 0 && (
@@ -223,7 +224,7 @@ function MetaBar({ doc, canEdit, onPermissions }: { doc: Doc; canEdit: boolean; 
         {canEdit ? <Pencil size={12} className="shrink-0" aria-hidden /> : <Lock size={12} className="shrink-0" aria-hidden />}
         <span className="truncate">{permissionLine(doc)}</span>
       </button>
-      <span>Edited {stamp(doc.updatedAt)} by {personName(doc.versions[0]?.authorId ?? doc.ownerId)}</span>
+      <span>Edited {stamp(doc.updatedAt)} by {editedBy === ME ? 'you' : personName(editedBy)}</span>
     </div>
   )
 }
@@ -321,7 +322,7 @@ function renderBlock(b: DocBlock, i: number, content: ReactNode, canEdit: boolea
 
 // ── AI draft (DOC-09) ─────────────────────────────────────────────────────────
 function AIDraft({ doc }: { doc: Doc }) {
-  const { updateDoc, toast } = useStore()
+  const { state: store, updateDoc, toast } = useStore()
   const [state, setState] = useState<'idle' | 'thinking' | 'shown'>('idle')
   const draft = aiDrafts[doc.id]
   useEffect(() => {
@@ -358,7 +359,12 @@ function AIDraft({ doc }: { doc: Doc }) {
       <div className="flex flex-wrap gap-2">
         {draft && (
           <Button size="sm" variant="primary" icon={<Check size={14} />} onClick={() => {
-            updateDoc({ ...doc, updatedAt: doc.updatedAt, blocks: [...doc.blocks, { type: 'p', text: draft.text }] })
+            updateDoc({
+              ...doc,
+              updatedAt: store.clock,
+              blocks: [...doc.blocks, { type: 'p', text: draft.text }],
+              versions: [{ id: newId('v'), authorId: ME, ts: store.clock, summary: 'Added a paragraph drafted with AI', added: [draft.text] }, ...doc.versions],
+            })
             setState('idle')
             toast('Paragraph inserted at the end of the doc')
           }}>Insert</Button>

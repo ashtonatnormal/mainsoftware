@@ -10,12 +10,29 @@ import { AIMarker, Avatar, AvatarStack, Button, cx, EmptyState, personName, pers
 
 type Group = 'today' | 'week' | 'later'
 
-// The demo week runs Mon 12 – Sun 18 Oct; due labels are display strings.
+// The demo week runs Mon 12 – Sun 18 Oct 2026; due labels are display strings
+// ("Today 12:00 pm", "Tue 13 Oct"), so dates are compared as month * 100 + day.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const WEEK_START = 9 * 100 + 12
+const WEEK_END = 9 * 100 + 18
+
+function dueOrdinal(due: string) {
+  const m = due.match(/(\d{1,2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)/)
+  return m ? MONTHS.indexOf(m[2].slice(0, 3)) * 100 + Number(m[1]) : undefined
+}
+
+function isOverdue(t: Task) {
+  if (t.status === 'done' || !t.due) return false
+  if (t.overdue || t.due.startsWith('Yesterday')) return true
+  const d = dueOrdinal(t.due)
+  return d !== undefined && d < WEEK_START
+}
+
 function groupOf(t: Task): Group {
   if (!t.due) return 'later'
-  if (t.due.startsWith('Today')) return 'today'
-  const m = t.due.match(/(\d{1,2}) Oct/)
-  if (m && Number(m[1]) <= 18) return 'week'
+  if (isOverdue(t) || t.due.startsWith('Today')) return 'today'
+  const d = dueOrdinal(t.due)
+  if (d !== undefined && d <= WEEK_END) return 'week'
   return 'later'
 }
 
@@ -227,7 +244,7 @@ function Checkbox({ task }: { task: Task }) {
 function DueLabel({ task }: { task: Task }) {
   if (!task.due) return null
   if (task.status === 'done') return <span>{task.due}</span>
-  if (task.overdue) return <span className="inline-flex items-center gap-1 font-semibold text-rec"><AlertCircle size={12} aria-hidden />Overdue · {task.due}</span>
+  if (isOverdue(task)) return <span className="inline-flex items-center gap-1 font-semibold text-rec"><AlertCircle size={12} aria-hidden />Overdue · {task.due}</span>
   if (task.due.startsWith('Today')) return <span className="font-semibold text-accent-ink">{task.due}</span>
   return <span>{task.due}</span>
 }

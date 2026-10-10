@@ -1,7 +1,7 @@
 // Calendar (CAL-01..10): an agenda for the demo week, a 5-day grid on desktop,
 // event details with the assistant's prep brief (PA-06), join rules for the
 // meeting room, and a static "Find a time" helper (CAL-04).
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { CalendarClock, CalendarSearch, Check, Clock, DoorOpen, HelpCircle, ListChecks, MapPin, Mic, Palmtree, PlayCircle, Plus, Users, X } from 'lucide-react'
 import type { CalendarEvent } from '../types'
 import { useStore } from '../store'
@@ -36,6 +36,8 @@ export default function CalendarScreen() {
   const { state } = useStore()
   const wide = useWide()
   const [findOpen, setFindOpen] = useState(false)
+  // Stable, so the Sheet's focus effect doesn't rerun on every clock tick.
+  const closeFind = useCallback(() => setFindOpen(false), [])
   const eventId = state.route.name === 'calendar' ? state.route.eventId : undefined
   const event = state.events.find(e => e.id === eventId)
 
@@ -43,7 +45,7 @@ export default function CalendarScreen() {
     return (
       <>
         {event ? <EventDetail event={event} onFindTime={() => setFindOpen(true)} /> : <Agenda onFindTime={() => setFindOpen(true)} />}
-        <FindTimeSheet open={findOpen} onClose={() => setFindOpen(false)} attendees={event?.attendees} />
+        <FindTimeSheet open={findOpen} onClose={closeFind} attendees={event?.attendees} />
       </>
     )
   }
@@ -57,7 +59,7 @@ export default function CalendarScreen() {
       <aside className="flex w-[380px] shrink-0 flex-col border-l border-line bg-surface lg:w-[420px]">
         {event ? <EventDetail event={event} onFindTime={() => setFindOpen(true)} /> : <Agenda compact onFindTime={() => setFindOpen(true)} />}
       </aside>
-      <FindTimeSheet open={findOpen} onClose={() => setFindOpen(false)} attendees={event?.attendees} />
+      <FindTimeSheet open={findOpen} onClose={closeFind} attendees={event?.attendees} />
     </div>
   )
 }
@@ -86,7 +88,6 @@ function WeekGrid({ selectedId }: { selectedId?: string }) {
   const { state, navigate } = useStore()
   const now = state.clock
   const hours = Array.from({ length: GRID_END - GRID_START }, (_, i) => GRID_START + i)
-  const nowTop = ((now - at('2026-10-12T00:00')) / 3_600_000 - GRID_START) * HOUR_PX
   const leaves = state.events.filter(isLeave)
 
   return (
@@ -126,6 +127,7 @@ function WeekGrid({ selectedId }: { selectedId?: string }) {
           </div>
           {DAYS.map(d => {
             const today = sameDay(d, now)
+            const nowTop = ((now - d) / 3_600_000 - GRID_START) * HOUR_PX
             const dayEvents = state.events.filter(e => !isLeave(e) && sameDay(e.start, d))
             return (
               <div key={d} className={cx('relative border-l border-line', today && 'bg-accent-soft/30')}>
@@ -257,7 +259,7 @@ function AgendaRow({ event: e }: { event: CalendarEvent }) {
           </div>
         )}
       </div>
-      {live && e.roomId && (
+      {canJoin(e, now) && (
         <Button size="sm" variant="danger" icon={<Mic size={14} />} onClick={() => { joinRoom(e.roomId!); navigate({ name: 'rooms', roomId: e.roomId }) }}>Join</Button>
       )}
     </li>
