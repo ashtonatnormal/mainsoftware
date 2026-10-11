@@ -22,6 +22,7 @@
     }
   },
   "enabledPlugins": {
+    "savvy-flow@claude-kit": true,
     "savvy-progress@claude-kit": true
   }
 }
