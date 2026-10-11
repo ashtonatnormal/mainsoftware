@@ -8,7 +8,7 @@
   "source": "Repository, commit, path and pinned raw URL. fetch.py re-downloads from raw_url and checks sha256.",
   "licence": "SPDX id (LicenseRef-PublicDomain-USGov = US federal work, 17 U.S.C. 105), the evidence, and the licence texts in LICENSES/.",
   "attribution": "Credit line the licence or publisher asks for; also in NOTICE.md.",
-  "application, app_version, excel_saved, sheets, hidden_sheets, cells, formulas, formulas_with_cached_value, array_formulas, shared_formulas, cross_sheet_formulas, defined_names, sheet08_functions_used, functions_outside_sheet08, function_counts, lookup_calls, volatile_functions, features": "From analyse_xlsx.py run over files/. 'cells' counts <c> elements, including styled empty cells. Function counts are per formula text, so a shared formula counts once, not once per cell. The analyser folds newer names into SHEET-08 names (STDEV.S, VAR.S, RANK.EQ, CEILING.MATH, FLOOR.MATH, NETWORKDAYS.INTL, WORKDAY.INTL).",
+  "application, app_version, excel_saved, sheets, hidden_sheets, cells, formulas, formulas_with_cached_value, array_formulas, shared_formulas, cross_sheet_formulas, defined_names, sheet08_functions_used, functions_outside_sheet08, function_counts, lookup_calls, volatile_functions, features": "From analyse_xlsx.py run over files/. 'cells' counts <c> elements, including styled empty cells. Function counts are per formula text, so a shared formula counts once, not once per cell. The analyser counts Excel's newer names for the same function as the SHEET-08 function (STDEV.S, VAR.S, RANK.EQ, CEILING.MATH, FLOOR.MATH); NETWORKDAYS.INTL and WORKDAY.INTL are kept separate.",
   "sheet08_functions_exact_names": "SHEET-08 functions whose own name appears (no folding).",
   "non_empty_cells, max_row, max_col, excel_build, features_exact": "From the selector's read-only zip/XML scan of the same bytes (same sha256). features_exact corrects the analyser's double counts (pivot tables, external links) and adds hidden and very hidden sheets, chart sheets, notes, threaded comments, hyperlinks, dynamic-array cells, form controls, rich data and the 1904 flag.",
   "features_present": "Readable list built from features_exact.",
@@ -16,9 +16,9 @@
   "notes": "Corrections and cautions from the licence and provenance checks."
  },
  "analyser": {
-  "name": "analyse_xlsx.py",
-  "sha256": "85d90cf3a1a6c7a5e1a37c1c17da97a355e9f23dce236ea565bf71e2ddd06730",
-  "command": "python3 -I analyse_xlsx.py OUT.json files/",
+  "name": "tools/analyse_xlsx.py",
+  "sha256": "542bdbabf8bf86189011a89c98692a0a8470888ee044bdf8ebd4915784369e32",
+  "command": "python3 -I tools/analyse_xlsx.py OUT.json files/",
   "note": "Static: unzips and reads XML only; nothing in a workbook is executed. Numeric fields come from it unless the field list says otherwise.",
   "known_limits": [
    "Counts pivot-table and external-link relationship parts as well as the parts themselves, so it reports about double (use features_exact).",
@@ -28,9 +28,9 @@
    "Misses values written as <v xml:space=\"preserve\">.",
    "Does not count x14 conditional-formatting or validation rules, or cross-sheet references inside them (F03 has 12 x14 blocks; F01 has one).",
    "Does not detect Power Query mashups (P03 customXml/item1.xml), sensitivity-label parts (docMetadata/LabelInfo.xml in E01, E12) or add-in parts (xl/webextensions in O04, E06, X02).",
-   "Treats docProps <Application> alone as proof of an Excel save; the selector also checked workbook.xml rupBuild/calcId (excel_build).",
-   "Folds NETWORKDAYS.INTL and WORKDAY.INTL into NETWORKDAYS and WORKDAY, which are different functions."
-  ]
+   "Treats docProps <Application> alone as proof of an Excel save; the selector also checked workbook.xml rupBuild/calcId (excel_build)."
+  ],
+  "history": "The first build used an earlier copy (sha256 85d90cf3…) with the 110-function list and NETWORKDAYS.INTL folded into NETWORKDAYS. The committed version fixes both; the SHEET-08 fields here were regenerated with it. All other numeric fields are unchanged between the two versions."
  },
  "totals": {
   "files": 27,
@@ -50,24 +50,10 @@
  },
  "coverage": {
   "sheet08": {
-   "covered_by_analyser": 98,
-   "missing_by_analyser": [
-    "DATEDIF",
-    "DATEVALUE",
-    "DAYS",
-    "EDATE",
-    "ISEVEN",
-    "ISODD",
-    "MROUND",
-    "PROPER",
-    "SWITCH",
-    "TEXTJOIN",
-    "WEEKNUM",
-    "XOR"
-   ],
-   "covered_same_function_only": 97,
-   "same_function_note": "Counts a SHEET-08 function only when its own name, or Excel's newer name for the same function (STDEV.S, VAR.S, RANK.EQ), appears. NETWORKDAYS is then missing: only NETWORKDAYS.INTL (O03) appears, and the analyser folds it into NETWORKDAYS.",
-   "missing_same_function_only": [
+   "list": "SHEET-08 in the finished PRD v0.4: 109 functions (RAND and RANDBETWEEN moved to post-v1; HYPERLINK added).",
+   "rule": "A SHEET-08 function counts when its own name, or Excel's newer name for the same function (STDEV.S, VAR.S, RANK.EQ, CEILING.MATH, FLOOR.MATH), appears in a formula. NETWORKDAYS.INTL and WORKDAY.INTL are different functions and do not count. The README uses the same rule.",
+   "covered": 96,
+   "missing": [
     "DATEDIF",
     "DATEVALUE",
     "DAYS",
@@ -83,6 +69,20 @@
     "XOR"
    ],
    "only_in_one_file": {
+    "E02": [
+     "ISOWEEKNUM"
+    ],
+    "E08": [
+     "IFS"
+    ],
+    "E10": [
+     "WORKDAY"
+    ],
+    "F06": [
+     "COUNTIFS",
+     "IFNA",
+     "XMATCH"
+    ],
     "O01": [
      "CEILING",
      "CLEAN",
@@ -116,7 +116,6 @@
      "YEAR"
     ],
     "O03": [
-     "NETWORKDAYS",
      "RANK"
     ],
     "O04": [
@@ -126,19 +125,6 @@
      "AVERAGEIF",
      "AVERAGEIFS",
      "MAXIFS"
-    ],
-    "F06": [
-     "COUNTIFS",
-     "IFNA",
-     "RAND",
-     "RANDBETWEEN",
-     "XMATCH"
-    ],
-    "E02": [
-     "ISOWEEKNUM"
-    ],
-    "E08": [
-     "IFS"
     ]
    },
    "ironcalc_suite": {
@@ -149,13 +135,11 @@
     "excel_saved": 249,
     "formulas": 74590,
     "formulas_with_cached_value": 74407,
-    "covered": 107,
+    "covered": 108,
     "missing": [
-     "RAND",
-     "RANDBETWEEN",
      "WEEKNUM"
     ],
-    "covered_with_corpus": 109,
+    "covered_with_corpus": 108,
     "missing_with_corpus": [
      "WEEKNUM"
     ],
@@ -546,6 +530,7 @@
     "FLOOR",
     "HLOOKUP",
     "HOUR",
+    "HYPERLINK",
     "IF",
     "INDEX",
     "INT",
@@ -601,7 +586,7 @@
     "VLOOKUP",
     "YEAR"
    ],
-   "sheet08_functions_count": 75,
+   "sheet08_functions_count": 76,
    "sheet08_functions_exact_names": [
     "ABS",
     "AND",
@@ -624,6 +609,7 @@
     "FLOOR",
     "HLOOKUP",
     "HOUR",
+    "HYPERLINK",
     "IF",
     "INDEX",
     "INT",
@@ -703,7 +689,6 @@
     "EXP",
     "FACT",
     "FV",
-    "HYPERLINK",
     "INDIRECT",
     "IRR",
     "ISNONTEXT",
@@ -1122,19 +1107,20 @@
    "defined_names": 0,
    "sheet08_functions_used": [
     "AND",
-    "NETWORKDAYS",
     "RANK",
     "ROUND",
     "STDEV",
     "SUBTOTAL",
-    "VAR",
-    "WORKDAY"
+    "VAR"
    ],
-   "sheet08_functions_count": 8,
+   "sheet08_functions_count": 6,
    "sheet08_functions_exact_names": [
     "AND",
+    "RANK.EQ",
     "ROUND",
-    "SUBTOTAL"
+    "STDEV.S",
+    "SUBTOTAL",
+    "VAR.S"
    ],
    "functions_outside_sheet08": [
     "AGGREGATE",
@@ -1171,6 +1157,7 @@
     "MODE.MULT",
     "MODE.SNGL",
     "NEGBINOM.DIST",
+    "NETWORKDAYS.INTL",
     "NORM.DIST",
     "NORM.INV",
     "NORM.S.DIST",
@@ -1191,6 +1178,7 @@
     "T.TEST",
     "VAR.P",
     "WEIBULL.DIST",
+    "WORKDAY.INTL",
     "Z.TEST"
    ],
    "function_counts": {
@@ -2044,8 +2032,6 @@
     "IFNA",
     "INDEX",
     "MATCH",
-    "RAND",
-    "RANDBETWEEN",
     "SUM",
     "SUMIF",
     "SUMIFS",
@@ -2053,15 +2039,13 @@
     "XLOOKUP",
     "XMATCH"
    ],
-   "sheet08_functions_count": 13,
+   "sheet08_functions_count": 11,
    "sheet08_functions_exact_names": [
     "COUNTIFS",
     "EOMONTH",
     "IFNA",
     "INDEX",
     "MATCH",
-    "RAND",
-    "RANDBETWEEN",
     "SUM",
     "SUMIF",
     "SUMIFS",
@@ -2074,7 +2058,9 @@
     "IPMT",
     "PMT",
     "PPMT",
+    "RAND",
     "RANDARRAY",
+    "RANDBETWEEN",
     "SEQUENCE",
     "SORTBY",
     "UNIQUE"
@@ -4020,12 +4006,14 @@
    "shared_formulas": 0,
    "cross_sheet_formulas": 4,
    "defined_names": 1,
-   "sheet08_functions_used": [],
-   "sheet08_functions_count": 0,
-   "sheet08_functions_exact_names": [],
-   "functions_outside_sheet08": [
+   "sheet08_functions_used": [
     "HYPERLINK"
    ],
+   "sheet08_functions_count": 1,
+   "sheet08_functions_exact_names": [
+    "HYPERLINK"
+   ],
+   "functions_outside_sheet08": [],
    "function_counts": {
     "HYPERLINK": 5
    },
@@ -4222,8 +4210,8 @@
  "gaps": [
   {
    "gap": "SHEET-08 functions",
-   "detail": "The 27 files cover 98 of 110 by the analyser's count. Missing: DATEDIF, DATEVALUE, DAYS, EDATE, ISEVEN, ISODD, MROUND, PROPER, SWITCH, TEXTJOIN, WEEKNUM, XOR. Counting only a function's own name (or Excel's newer name for the same function, such as STDEV.S), plain NETWORKDAYS is also missing: only NETWORKDAYS.INTL appears (O03).",
-   "close": "Run IronCalc's xlsx/tests suite (commit c88f07f0, 259 files, 74,590 formulas) alongside the corpus: together they cover 109 of 110, all but WEEKNUM. Those suite files are IronCalc's own, so add independent checks: Apache POI's atp.xlsx (ISEVEN, ISODD, MROUND; Apache-2.0, not yet licence-checked file by file) and a small workbook authored in Excel for WEEKNUM, DATEDIF, DATEVALUE, DAYS, EDATE, PROPER, SWITCH, TEXTJOIN, XOR and plain NETWORKDAYS with Singapore public holidays."
+   "detail": "The 27 files cover 96 of the 109 SHEET-08 functions (finished PRD v0.4; same counting rule as coverage.sheet08). Missing: DATEDIF, DATEVALUE, DAYS, EDATE, ISEVEN, ISODD, MROUND, NETWORKDAYS, PROPER, SWITCH, TEXTJOIN, WEEKNUM, XOR. Only NETWORKDAYS.INTL appears (O03), which is a different function.",
+   "close": "Run IronCalc's xlsx/tests suite (commit c88f07f0, 259 files, 74,590 formulas) alongside the corpus: together they cover 108 of 109, all but WEEKNUM. Those suite files are IronCalc's own, so add independent checks: Apache POI's atp.xlsx (ISEVEN, ISODD, MROUND; Apache-2.0, not yet licence-checked file by file) and a small workbook authored in Excel for WEEKNUM, DATEDIF, DATEVALUE, DAYS, EDATE, PROPER, SWITCH, TEXTJOIN, XOR and plain NETWORKDAYS with Singapore public holidays."
   },
   {
    "gap": "IronCalc self-bias",

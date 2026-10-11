@@ -61,7 +61,7 @@ Ids: O = oracle (function tests), F = feature, E = everyday, P = performance, X 
 
 ## Coverage
 
-**SHEET-08 functions: 97 of 109** (the finished PRD v0.4 dropped RAND and RANDBETWEEN to post-v1 and added HYPERLINK). Missing: DATEDIF, DATEVALUE, DAYS, EDATE, ISEVEN, ISODD, MROUND, PROPER, SWITCH, TEXTJOIN, WEEKNUM, XOR. Strictly it is 96: plain NETWORKDAYS appears nowhere, only NETWORKDAYS.INTL (O03), which the analyser counts as NETWORKDAYS. Many functions sit in a single file (O01 alone carries 30 of them), so a bad file would hide a lot. `manifest.json`'s coverage fields were computed against the earlier 110-function list.
+**SHEET-08 functions: 96 of 109** (the finished PRD v0.4 moved RAND and RANDBETWEEN to post-v1 and added HYPERLINK). A function counts when its own name, or Excel's newer name for the same function (STDEV.S, VAR.S, RANK.EQ), appears; NETWORKDAYS.INTL does not count as NETWORKDAYS. `manifest.json` uses the same rule. Missing: DATEDIF, DATEVALUE, DAYS, EDATE, ISEVEN, ISODD, MROUND, NETWORKDAYS, PROPER, SWITCH, TEXTJOIN, WEEKNUM, XOR. Many functions sit in a single file (O01 alone carries 30 of them), so a bad file would hide a lot.
 
 IronCalc's own test suite (259 workbooks, 74,590 formulas, at the same commit) covers 108 of the 109. Run it alongside this corpus; only WEEKNUM is in neither.
 
@@ -98,6 +98,8 @@ Licences: MIT or Apache-2.0 (9 files), MIT (5), Apache-2.0 (4), MPL-2.0 (3), US 
 ## Rebuilding from source
 
 `fetch.py` (Python standard library only) downloads every workbook again from its pinned URL and keeps it only if the sha256 matches `manifest.json`. It never opens the files.
+
+`tools/analyse_xlsx.py` (also standard library only, and static: it unzips and reads XML, never runs anything) reproduces the analyser figures in `manifest.json`: `python3 -I tools/analyse_xlsx.py OUT.json files/`.
 
 ```
 python3 -I fetch.py NEW_FOLDER               # all 27 workbooks
