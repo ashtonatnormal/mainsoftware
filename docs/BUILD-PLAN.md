@@ -1000,7 +1000,7 @@ Internal work suite (chat, voice rooms, meetings, calendar, tasks, Drive with do
 
 ## Build order
 - Core first, AI second. Stages C0–C6 make NO model calls: no LLMs, no speech-to-text, no embeddings, no AI-generated content. Check the stage of a requirement in BUILD-PLAN Part 2 before building it.
-- Build the seams in BUILD-PLAN Part 1D instead, so AI plugs in later without migrations: every content write appends an outbox event with an ACL snapshot; principals have a kind (human, agent, system); messages can carry an author kind and sources; transcript fields exist, nullable, with a status; AI feature flags exist and are off.
+- Build the seams in BUILD-PLAN Part 1D instead, so AI plugs in later without migrations: every content write appends an outbox event with an ACL snapshot; principals have a kind (human, agent, assistant, system); messages can carry an author kind and sources; transcript fields exist, nullable, with a status; AI feature flags exist and are off.
 
 ## Rules that never bend
 - Every table has org_id (ACC-11). Never write a query without it.

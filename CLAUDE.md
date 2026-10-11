@@ -8,7 +8,7 @@ Hearth is an internal work suite (chat, drop-in voice rooms, meetings, calendar,
 
 ## Build order
 - Core first, AI second (D41). Stages C0–C6 make no model calls: no LLMs, no speech-to-text, no embeddings, no local ML models such as speech detection or noise suppression, and no AI-generated content. Check a requirement's stage in `docs/BUILD-PLAN.md` Part 2 before building it.
-- Build the seams in `docs/BUILD-PLAN.md` Part 1D instead, so AI plugs in later without migrations: every content write appends an outbox event with an ACL snapshot; principals have a kind (human, agent, system); messages can carry an author kind and sources; transcript fields exist, nullable, with a status; AI feature flags exist and are off.
+- Build the seams in `docs/BUILD-PLAN.md` Part 1D instead, so AI plugs in later without migrations: every content write appends an outbox event with an ACL snapshot; principals have a kind (human, agent, assistant, system); messages can carry an author kind and sources; transcript fields exist, nullable, with a status; AI feature flags exist and are off.
 
 ## Product rules that never bend
 - Never leak (Principle 1). Every access check goes through `packages/access`; no screen or endpoint checks access its own way. Every AI feature retrieves through the one permission-enforcing retrieval layer (B.4) and never queries the index directly.
