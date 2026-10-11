@@ -1423,12 +1423,12 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 
 | ID | From | To | Why |
 |---|---|---|---|
-| ADM-12 | P0 | C1 | Real personal data, including DMs, flows from the C1 pilot; without a sealed Rule 9 path the founder would query prod directly (PRD-101). |
-| TASK-01 | P0 | C2 | Tasks core needs only chat, notifications and the scheduler; it gives the pilot new value during the rooms build and a non-AI home for meeting action items. |
-| TASK-02 | P0 | C2 | Part of the same cheap tasks core. |
-| TASK-03 | P0 (list) / P1 (board) | C2 | The list view is part of tasks core; the board is a P1 extra. |
-| TASK-04 | P0 | C2 | Task-from-message is the stand-in for meeting action items, so it must exist when recording starts. |
-| TASK-05 | P0 | C2 | Due and overdue notifications ship with tasks core and give Today its 'Due today' provider. |
+| ADM-12 | C2 | C1 | Real personal data, including DMs, flows from the C1 pilot; without a sealed Rule 9 path the founder would query prod directly (PRD-101). |
+| TASK-01 | C3 | C2 | Tasks core needs only chat, notifications and the scheduler; it gives the pilot new value during the rooms build and a non-AI home for meeting action items. |
+| TASK-02 | C3 | C2 | Part of the same cheap tasks core. |
+| TASK-03 | C3 | C2 | The list view is part of tasks core; the board is a P1 extra. |
+| TASK-04 | C3 | C2 | Task-from-message is the stand-in for meeting action items, so it must exist when recording starts. |
+| TASK-05 | C3 | C2 | Due and overdue notifications ship with tasks core and give Today its 'Due today' provider. |
 
 ## Part 3 — 360° review of the demo and the PRD
 
