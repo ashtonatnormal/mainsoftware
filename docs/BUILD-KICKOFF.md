@@ -11,6 +11,7 @@ Prepared Sunday 11 Oct 2026 for an **11:00 SGT** start. The full list of finding
 3. **Kick off the long-lead external items in §3 today.** They gate the M1 pilot, not M0 code, but several take days to weeks (SMS sender ID, OpenAI agreement and zero retention, Bedrock quota, DPO contact published).
 4. **Day-1 build order (§5):** repo and CI → local stack → tenant and identity schema → permission core with the access-rule test suite → auth (SMS code, PIN, passkey, devices) → web shell ported from the demo.
 5. **The demo stays as the reference UI.** Carry over the tokens, UI kit, ARIA grid, slide renderer and formula tests. Don't carry over `store.tsx` or any scripted AI logic (§7).
+6. **Eight owner decisions are listed in [REVIEW-360 Part D2](REVIEW-360.md#d2-decisions-for-the-owner-before-or-during-m0).** None blocks M0 code. The biggest, whether Sheets and Slides gate the WhatsApp-replacement launch, changes the plan after M5, not today.
 
 ---
 
@@ -20,7 +21,7 @@ Prepared Sunday 11 Oct 2026 for an **11:00 SGT** start. The full list of finding
 |---|---|
 | PRD | v0.4 work in progress (`e8e9f32`, "Sheets and Slides move into v1"). 204 P0, 72 P1, 18 P2 requirements. Sheets and Slides alone add 55 P0s (34 + 21), more than any other module. |
 | Technical spec | Doesn't exist yet. B.2 says the building blocks are "non-binding; confirm in the technical spec". §2 below is the minimum for M0. |
-| Demo | ~19,000 lines of React 19 + TypeScript, scripted data only, no server. Typecheck and build pass; see REVIEW-360 Part A for the state of each area. |
+| Demo | ~19,000 lines of React 19 + TypeScript, scripted data only, no server. Typecheck and build pass; 129 formula tests pass. The review found 412 items: mostly scripted state that drifts, access logic duplicated per screen, and shared-kit accessibility. REVIEW-360 Part D1 lists the 15 to fix before the next demo. |
 | Repo hygiene | No `CLAUDE.md`, no CI, no linter, no `test` script (the Sheets formula tests exist but nothing runs them). Fix these in step 1 of §5. |
 
 ---
@@ -112,13 +113,13 @@ Time boxes assume an 11:00 start with AI coding tools. Each step ends green (typ
 
 ### Step 4 — Access core and the access-rules suite (15:00–16:30)
 
-> In `packages/access`, implement the permission model the whole product will use (PRD §7.2, B.4): principals (user, team, org, role), resources (channel, room, conversation, Drive item and folder, session, event, task), grants with roles (Viewer, Commenter, Editor, Owner per DOC-03 and FILE-03), folder inheritance, and three functions: `can(user, action, resource)`, `listAccessible(user, kind)`, and `audienceOf(space)` (the members whose access bounds an AI post under Rule 2). Then create `packages/access/rules.test.ts` with one named test per case in Rules 1–9, including the examples in §7.2 (the CFO in #general vs a DM), restricted sessions (Rule 5), revocation (Rule 6) and privileged access never feeding AI (Rule 9). Implement what M0 can; mark the rest `test.todo` with the requirement ID in the name.
+> In `packages/access`, implement the permission model the whole product will use (PRD §7.2, B.4): principals (user, team, org, role), resources (channel, room, conversation, Drive item and folder, session, event, task), grants with roles (Viewer, Commenter, Editor, Owner per DOC-03 and FILE-03), folder inheritance, and three functions: `can(user, action, resource)`, `listAccessible(user, kind)`, and `audienceOf(space)` (whose access bounds an AI post under Rule 2: current members plus anyone who can join plus people who will see the record later; see REVIEW-360 PRD-35). Then create `packages/access/rules.test.ts` with one named test per case in Rules 1–9, including the examples in §7.2 (the CFO in #general vs a DM), restricted sessions (Rule 5), revocation (Rule 6) and privileged access never feeding AI (Rule 9). Implement what M0 can; mark the rest `test.todo` with the requirement ID in the name.
 
 **Done when:** the suite runs in CI and lists every rule; implemented cases pass.
 
 ### Step 5 — Sign-in (16:30–18:30)
 
-> Implement ACC-01, ACC-02, ACC-04, ACC-05 (deactivation part) and ACC-06 rate limits on the server: request and verify an SMS code (a log-only provider in dev behind an `SmsProvider` interface), first-time PIN set and verify (argon2id, attempt limits with lockout), optional passkey registration and sign-in with SimpleWebAuthn, a new device needing SMS plus PIN or passkey, server-side sessions with opaque tokens, a device list with sign-out, and admin deactivation that revokes every session and closes live sockets within 60 seconds. Only roster numbers may sign in (ACC-03). Write an audit event for every sign-in, failure, lockout and sign-out.
+> Implement ACC-01, ACC-02, ACC-04, ACC-05 (deactivation part) and ACC-06 rate limits on the server (use the numbers in REVIEW-360 PRD-53: PIN 5 failures → 15-minute lock, 10 → admin reset; OTP ≤3 per 10 minutes and ≤10 per day per number, 5-minute expiry, identical response for non-roster numbers): request and verify an SMS code (a log-only provider in dev behind an `SmsProvider` interface), first-time PIN set and verify (argon2id, attempt limits with lockout), optional passkey registration and sign-in with SimpleWebAuthn, a new device needing SMS plus PIN or passkey, server-side sessions with opaque tokens, a device list with sign-out, and admin deactivation that revokes every session and closes live sockets within 60 seconds. Only roster numbers may sign in (ACC-03). Write an audit event for every sign-in, failure, lockout and sign-out.
 
 **Done when:** an integration test signs a roster user in, rejects a non-roster number, locks after too many PIN attempts, and shows a deactivated user's socket closed.
 
@@ -151,6 +152,8 @@ M0 is done when each row works on a phone and a desktop, against the deployed no
 | App shell | NFR-01, NFR-02, NFR-03, NOTIF-01 | Installable on iOS and Android; a test push arrives; phone and desktop layouts. |
 | First run | ACC-14 | The whole flow on a real iPhone and Android phone. |
 | Access core | §7.2, B.4 | `packages/access` with the named Rule 1–9 suite in CI. |
+| Privileged roles | ACC-10, Rule 9 | Granting Owner, DPO or Compliance Officer needs a second approver and alerts the DPO (REVIEW-360 PRD-85). |
+| Production access | §9.4 | Separate non-prod and prod AWS accounts; break-glass access to prod is logged and reviewed (PRD-101). |
 
 ---
 
@@ -158,11 +161,11 @@ M0 is done when each row works on a phone and a desktop, against the deployed no
 
 | Carry over | From | Notes |
 |---|---|---|
-| Colour tokens, light and dark | `demo/src/index.css` | Already pass 4.5:1 in light mode; re-check dark (REVIEW-360). |
-| UI kit | `demo/src/ui/index.tsx`, `demo/src/ui/notes.tsx`, `demo/src/ui/share.tsx` | Fix the kit-level issues REVIEW-360 lists first, so they don't spread. |
+| Colour tokens, light and dark | `demo/src/index.css` | Light passes 4.5:1; dark fails on filled colours (REVIEW-360 SHL-35, SHL-36): add `--rec-fg`, `--agent-fg` and an inverse-accent token. |
+| UI kit | `demo/src/ui/index.tsx`, `demo/src/ui/notes.tsx`, `demo/src/ui/share.tsx` | Fix the kit-level issues first (REVIEW-360 A0: X5 toasts, X7 targets, X8 dark contrast, X10 `Segmented` and menus, X16 headings) so they don't spread. |
 | Copy and tone | the whole demo | British spelling, short, active voice, honest about what happened. |
 | Screen designs | every screen | Treat each as the design spec for its milestone. |
-| ARIA grid | `demo/src/screens/sheets/Grid.tsx` | B.2 names it as the starting point; add virtualisation in M5b. |
+| ARIA grid | `demo/src/screens/sheets/Grid.tsx` | B.2 names it as the starting point, but its ARIA structure is broken (REVIEW-360 SHT-36); budget a rework along with virtualisation in M5b. |
 | Slide renderer | `demo/src/screens/slides/render.tsx` | B.2 names it as the one renderer; B.7 moves slides to positioned elements. |
 | Formula tests | `demo/src/screens/sheets/formula.test.ts` | Seed cases for the SHEET-08 suite against IronCalc. |
 | Screenshot harness | `demo/scripts/screenshots.mjs` | Becomes visual regression in `apps/web`. |
