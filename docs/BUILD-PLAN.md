@@ -5,7 +5,7 @@
 | **Date** | Sunday 11 Oct 2026, for an 11:00 SGT start |
 | **Covers** | `docs/PRD.md` v0.4 (work in progress, `e8e9f32`) and the clickable demo in `demo/` at the same commit |
 | **Replaces** | `docs/BUILD-KICKOFF.md` and `docs/REVIEW-360.md` (both merged into this document) |
-| **Rule for the build** | **Core first, AI second (D41).** Build the whole suite without any model calls, AI context or assistants, and leave seams so the AI layer plugs in later without rework. Launch org-wide and sunset WhatsApp for work on the core, before any AI (D42). |
+| **Rule for the build** | **Core first, AI second (D41).** Build the whole suite without any model calls, AI context or assistants, and leave seams so the AI layer plugs in later without rework. Launch org-wide and sunset WhatsApp for work on the core, Sheets and Slides included, before any AI (D42, D43). |
 
 ## Contents
 
@@ -25,13 +25,13 @@
 ### Summary
 
 1. **Today starts C0 exactly as planned.** The five day-1 prompts in Part 1E.4 (repo and CI → local stack → tenant, principals and audit schema → access core and rule suite → sign-in) are the first five steps of C0.
-2. **Build order: C0 → C1 → C2 → C3 → C4 → C6 → C5 → A0 → A1 → A2 → A3 → A4 → A5 → A6.** The seven C-stages build the whole suite with no model calls. C6 is the core launch, where the org sunsets WhatsApp for work (D42). C5 adds Sheets and Slides. The six A-stages then add transcription, the Org Brain, built-in AI, the assistant and agents, ending in the full v1 launch.
+2. **Build order: C0 → C1 → C2 → C3 → C4 → C5 → C6 → A0 → A1 → A2 → A3 → A4 → A5 → A6.** The seven C-stages build the whole suite with no model calls. C5 adds Sheets and Slides, and C6 hardens the whole suite for the core launch, where the org sunsets WhatsApp for work (D42, D43). The six A-stages then add transcription, the Org Brain, built-in AI, the assistant and agents, ending in the full v1 launch.
 3. **No AI in the core, enforced from the first commit.** C0.1 adds a CI guard that fails the build on any model SDK, speech-recognition or ML package, and the egress rules leave no route to a model provider. What counts as AI is defined below.
 4. **Space for AI is built in, not bolted on.** The core builds 57 seams (Part 1D), among them an outbox event with an ACL snapshot on every write, principals that can be agents or Hearth itself, nullable transcript and notes slots with a status, AI flags that exist and are off, and recordings stored so A1 can transcribe them later.
 5. **Every PRD row has a stage.** Of the 299 rows, 164 are pure core, 50 are core with a seam (the non-AI part ships in the core, the AI part later), 81 are AI and 4 are retired. Part 2 lists each one.
-6. **Rough size for one founder:** the core takes about 49–65 weeks (the core launch comes after about 39–51 weeks, because C5 follows it), and the AI layer about 33–42 weeks more. A second maintainer is recommended before the shared sync server goes live in C4.
+6. **Rough size for one founder:** the core, ending in the core launch, takes about 49–65 weeks, and the AI layer about 33–42 weeks more. Because Sheets and Slides now gate the core launch (D43), C5 sits on the launch's critical path; the C5a/C5b split and a pre-agreed P0 cut list in Part 1B are the fallback if it overruns. A second maintainer is recommended before the shared sync server goes live in C4.
 7. **Paperwork changes too.** The core needs the SMS sender ID, AWS, domain, DPO contact, LiveKit and PDPA items. The OpenAI and Bedrock paperwork no longer gates any pilot (Part 1E.2).
-8. **Two decisions are made and recorded in the PRD:** core first, AI second (D41), and the org-wide launch and WhatsApp-for-work sunset on the non-AI suite, before any AI (D42). The PRD's §11 now shows this stage plan with its two launches. The other 19 decisions are in Part 1D; the next one that matters is whether Sheets and Slides join the core launch (decision 3, PRD Q21).
+8. **Four decisions are made and recorded in the PRD:** core first, AI second (D41); the org-wide launch and WhatsApp-for-work sunset on the non-AI suite, before any AI (D42); Sheets and Slides are part of that core launch (D43); and transcription may later process recordings made before it existed, with safeguards (D44). The PRD's §11 shows this stage plan with its two launches. The other 17 decisions are in Part 1D; the formula engine for Sheets (PRD Q23) is settled by the spike in C3.
 
 ### Sequencing rules
 
@@ -57,7 +57,7 @@
 flowchart TB
   subgraph CORE["Core suite, no AI"]
     direction LR
-    C0["C0 Foundations"] --> C1["C1 Chat"] --> C2["C2 Tasks, rooms, recording"] --> C3["C3 Calendar"] --> C4["C4 Drive and Docs"] --> C6["C6 Core launch (D42)"] --> C5["C5 Sheets and Slides"]
+    C0["C0 Foundations"] --> C1["C1 Chat"] --> C2["C2 Tasks, rooms, recording"] --> C3["C3 Calendar"] --> C4["C4 Drive and Docs"] --> C5["C5 Sheets and Slides"] --> C6["C6 Core launch (D42)"]
   end
   subgraph AI["AI layer"]
     direction LR
@@ -75,8 +75,8 @@ flowchart TB
 | **C2** Tasks, rooms, recording | Tasks core; LiveKit rooms and calls; per-track recording with no transcription; session pages; restricted rooms; viewed-by; retention and holds; Rule 9 for sessions | C1 | Plus a call-heavy team | XL, 8–10 weeks |
 | **C3** Calendar | Meetings with their own rooms, event pages and threads, RSVP, find-a-time, recurrence; the Sheets spike | C2 | 3–5 teams (~100 people) | M, 5–7 weeks |
 | **C4** Drive and Docs | Drive, sharing, previews, sandboxed text extraction; Yjs sync server; docs with comments and history; wiki spaces; templates; export | C1–C3 | Plus HR and IT | XL, 7–9 weeks |
-| **C6** Core launch | DPO consoles, scale and chaos tests, pen test, DR drill, accessibility audit, rollout waves, WhatsApp sunset, then people insights | C1–C4 | The whole org | L, 5–7 weeks plus rollout |
-| **C5** Sheets and Slides | Calc worker, accessible grid, co-editing, slides, present mode, presenting to a room, import and export | C2–C4, C6 | Plus finance and ops | XXL, 10–14 weeks |
+| **C5** Sheets and Slides | Calc worker, accessible grid, co-editing, slides, present mode, presenting to a room, import and export | C2–C4 | Plus finance and ops | XXL, 10–14 weeks |
+| **C6** Core launch | DPO consoles, scale and chaos tests, pen test, DR drill, accessibility audit, rollout waves, WhatsApp sunset, then people insights | C1–C5 | The whole org | L, 5–7 weeks plus rollout |
 | **A0** AI platform | Cleared providers, the AI notice, the model layer, provider-send audit, spend caps, live kill switch | Core done | Founder, DPO, AI team | M, 2–3 weeks |
 | **A1** Speech-to-text | Transcripts for sessions and voice notes, corrections, redaction, quality gate, back-fill | A0, C2 | Pilot teams first | L, 4–5 weeks |
 | **A2** Org Brain | In-region embeddings index fed by the outbox; the one permission-enforcing retrieval layer; the leak suite | A0 | No user-facing feature (shadow indexing) | L, 5–6 weeks |
@@ -89,7 +89,7 @@ flowchart TB
 
 Each stage lists its goal, what it needs first, a rough size, its pilot, the ordered steps (with what each step needs first and the PRD rows it covers), the seams it leaves for AI, a "done when" checklist, and what is deliberately left out.
 
-**Default order: C0 → C1 → C2 → C3 → C4 → C6 → C5.** C6 makes the non-AI suite safe to launch org-wide and sunset WhatsApp for work. Sheets and Slides (C5) follow it, and the AI layer starts only after C5, so the full non-AI system still comes before any model call. Decision 3 in Part 1D lets you put C5 before C6 instead.
+**Order: C0 → C1 → C2 → C3 → C4 → C5 → C6.** Sheets and Slides are part of the core launch (D43), so C5 comes before C6, and C6 hardens and launches the whole non-AI suite, ending in the WhatsApp-for-work sunset (D42). The AI layer starts only after C6.
 
 Sizes are rough estimates for one founder working with AI coding tools; each stage states its assumption. They exist to show proportions and to trigger a re-plan when a stage overruns, not as commitments.
 
@@ -283,7 +283,7 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 | **C3.4** Availability and find a time | Free/busy over events and working hours as an API any principal can call; deterministic find-a-time with at least 3 slots in 1 s for 20 attendees. | C3.2 | CAL-04 |
 | **C3.5** Hidden suggested-tasks inbox; task extras | A hidden suggested-tasks entity and producer API (origin, provenance, restricted flag for owner-only, dedupe key); accepting or editing creates a real task with origin accepted_suggestion; contract tests with a fake producer. P1: board view, subtasks, recurring tasks. | C2.1, C0.6, C0.10 | TASK-06, TASK-03, TASK-07, TASK-08 |
 | **C3.6** Today v1 and meeting notifications | An upcoming-meetings provider with Join; meeting-starting push; a daily start-of-day reminder of unanswered mentions labelled 'Reminders'; out-of-office presence and DM auto-reply (P1). | C1.9, C3.2, C3.3, C2.1 | NOTIF-02, CAL-09 |
-| **C3.7** Sheets spike (parallel) | B.7 spike parts (a)-(e) with PRD-91's numeric exits, on the slowest phone and the org's 20-30 most-used files (Q16): IronCalc in a Worker, Yjs memory, virtualised ARIA grid, concurrent row and column operations, incremental recalculation, XLSX reader. Output: the Q21 engine decision and a Yjs document-type contract for C4.3. | C0.8 |  |
+| **C3.7** Sheets spike (parallel) | B.7 spike parts (a)-(e) with PRD-91's numeric exits, on the slowest phone and the org's 20-30 most-used files (Q16): IronCalc in a Worker, Yjs memory, virtualised ARIA grid, concurrent row and column operations, incremental recalculation, XLSX reader. Output: the Q23 (formula engine) engine decision and a Yjs document-type contract for C4.3. | C0.8 |  |
 | **C3.8** ICS import (P1 migration aid) | ICS import for existing recurring meetings (PRD-82); WhatsApp history is not imported (D17). Optional. | C3.2, C3.1, INF-IMPORT |  |
 | **C3.9** Coverage and pilot expansion | Retention (3 years) and holds for events and tasks, collector stubs, search coverage; the pilot grows to 3-5 teams. | C2.9, C1.7, C3.2, C2.1 |  |
 
@@ -298,7 +298,7 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 - [ ] Scheduled-meeting cards land in the event thread; team-room sessions bind to the event.
 - [ ] Find-a-time in 1 s or less for 20 attendees; task reminders on time and inside quiet hours; ≥60% open Today weekly.
 - [ ] Suggested-tasks contract tests pass with the UI hidden.
-- [ ] Spike numbers met; Q21 recorded; the Yjs contract handed to C4.3.
+- [ ] Spike numbers met; Q23 (formula engine) recorded; the Yjs contract handed to C4.3.
 
 **Not in this stage:** No prep briefs or visible suggestion inbox; no ICS export or sync (POST); no projects (POST); no Sheets build beyond the spike.
 
@@ -337,24 +337,24 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 
 **Not in this stage:** No inline AI writing or save-to-doc (A3); no Org Brain indexing (A2); no sheet or deck editors (C5).
 
-### C5 — Sheets and Slides, non-AI (by default after the C6 core launch)
+### C5 — Sheets and Slides, non-AI (part of the core launch, D43)
 
 **Goal:** Everyday team spreadsheets and decks (D39): calc worker with server-computed values, an accessible grid, co-editing on the shared sync server, slides with present mode, presenting to a room with the slide record, import and export, and search over computed values and slide text. Completes the non-AI suite before any AI work.
 
-**Needs first:** C2, C3, C4, C6. **Size:** XXL: about 10-14 weeks (55 P0 rows, two editors). Same assumption as C0. Default position: after C6 and before A0; if Sheets and Slides must gate the core launch, run C5 before C6 and cut it to about 25 P0 rows. Split into C5a Sheets (C5.1–C5.3 and the sheet parts of C5.7) and C5b Slides (C5.4–C5.6), each with its own exit and a pre-agreed P0 cut list..
+**Needs first:** C2, C3, C4. **Size:** XXL: about 10-14 weeks (55 P0 rows, two editors). Same assumption as C0. Position: before C6, as part of the core launch (D43). If C5 overruns, the fallback is a pre-agreed P0 cut list (the plan suggested about 25 P0 rows; nothing is cut yet). Split into C5a Sheets (C5.1–C5.3 and the sheet parts of C5.7) and C5b Slides (C5.4–C5.6), each with its own exit and a pre-agreed P0 cut list..
 
 **Pilot:** Plus finance and ops. Stand-ins: status-bar sums and filters instead of 'Ask about this sheet'; function autocomplete and trace-precedents instead of AI formula help; the change list instead of an AI summary; templates instead of AI deck drafting.
 
 | Step | What | Needs first | PRD rows |
 |---|---|---|---|
-| **C5.1** Calc engine and calc worker | IronCalc adapter (or the Q21 choice) pinned in browser and server; formulas and the 110 functions checked against an Excel-oracle corpus in CI; a calc service with no internet storing values by cell id (never browser values), ≤30 s fresh, server-seeded volatile functions, daily TODAY/NOW; an evaluate(formula, ranges) API for A3. | C3.7, C4.3, C0.6, INF-CALC | SHEET-07, SHEET-08 |
+| **C5.1** Calc engine and calc worker | IronCalc adapter (or whichever engine Q23 picks) pinned in browser and server; formulas and the 110 functions checked against an Excel-oracle corpus in CI; a calc service with no internet storing values by cell id (never browser values), ≤30 s fresh, server-seeded volatile functions, daily TODAY/NOW; an evaluate(formula, ranges) API for A3. | C3.7, C4.3, C0.6, INF-CALC | SHEET-07, SHEET-08 |
 | **C5.2** Sheets grid, formulas and formatting | Sheets as Drive items; a virtualised ARIA grid grown from the demo; keyboard, formula bar, paste special, fill, per-person undo; plain error explanations; formats, S$ and day-first dates; tabs, freeze, sort, personal filters, find and replace; size limits; P1 validation, conditional formatting, charts and named ranges; non-AI formula help (autocomplete, trace-precedents). | C5.1, C4.3, C0.8 | SHEET-01, SHEET-02, SHEET-03, SHEET-04, SHEET-05, SHEET-06, SHEET-09, SHEET-10, SHEET-11, SHEET-13, SHEET-14, SHEET-15, SHEET-16, SHEET-17, SHEET-18, SHEET-19, SHEET-20, SHEET-21, SHEET-22, SHEET-23, SHEET-33, SHEET-47 |
 | **C5.3** Sheets collaboration and phone | Co-editing on the shared sync server; cell comments outside Yjs; editor-only history with an origin field; one ACL per sheet with a reserved 'ask' capability; protected ranges (P1); range-reference links with access-aware previews; phone grid with a hidden Ask bottom sheet; a 'what changed' list from a change set, with a hidden summary slot. | C5.2, C4.5, C4.1 | SHEET-24, SHEET-25, SHEET-26, SHEET-27, SHEET-28, SHEET-29, SHEET-35, SHEET-36, SHEET-42 |
 | **C5.4** Slides model, renderer and editor | Decks as Drive items with a creation-action registry ('Draft from doc or meeting' off); positioned elements and one renderer; layouts, themes, rich text, images with alt text, editing tools, speaker notes, filmstrip; co-editing; history with reserved AI-assisted metadata; roles with a reserved deck.ai_help; P1 shapes, tables, org theme, templates and comments. | C4.3, C4.5, C1.5 | SLIDE-01, SLIDE-02, SLIDE-03, SLIDE-04, SLIDE-05, SLIDE-06, SLIDE-07, SLIDE-08, SLIDE-09, SLIDE-10, SLIDE-11, SLIDE-12, SLIDE-13, SLIDE-22, SLIDE-23, SLIDE-24, SLIDE-25 |
 | **C5.5** Present mode and presenter view | Present mode with keyboard, touch and screen-reader output; presenter view with notes, next slide and timer (next slide p95 <100 ms, Wake Lock); phone view, present and follow. | C5.4 | SLIDE-14, SLIDE-15, SLIDE-26 |
 | **C5.6** Present to a room | Present to a room over Hearth's WebSocket, not LiveKit (PRD-45); deck access checked against audienceOf(session) and re-checked on membership change; 'Present anyway' logged; followers get snapshots only, p95 <500 ms; late join and reconnect; slide timeline and copies in the session record with its retention and restricted flag; a transcript-lane slot in playback; hand-over (P1). | C5.5, C2.6, C2.8, C0.7, C0.4 | SLIDE-16, SLIDE-17, SLIDE-18, SLIDE-19, SLIDE-21 |
 | **C5.7** Import, export, embeds and templates | XLSX, CSV and TSV import in the sandbox with an import report; XLSX and CSV export with formula injection neutralised; PDF export (P1); sheet templates and rule-based sensitive-data share warnings (P1); PPTX import and export and sheet-range embeds (P1); exports audited. | C5.1, C5.3, C5.4, C4.2 | SHEET-30, SHEET-31, SHEET-32, SHEET-46, SHEET-48, SLIDE-27, SLIDE-28, SLIDE-29 |
-| **C5.8** Search and data protection for sheets and decks | Row documents from server-computed values with row-id links, and comments under their own audience; per-slide text, alt text and notes events (session slides except restricted); a purge-handler registry; retention, holds, ownership transfer and collectors for sheets and decks. Register sheet and deck collectors with the C6.1 PDPA-05 console, ADM-09 exporters and ADM-11 metrics. | C5.1, C5.3, C5.6, C1.7, C2.9, C6.1 | SHEET-44, SHEET-45, SLIDE-34, SLIDE-35 |
+| **C5.8** Search and data protection for sheets and decks | Row documents from server-computed values with row-id links, and comments under their own audience; per-slide text, alt text and notes events (session slides except restricted); a purge-handler registry; retention, holds, ownership transfer and collectors for sheets and decks. Register sheet and deck collectors, ADM-09 exporters and ADM-11 metrics in the registries that C6.1 builds on. | C5.1, C5.3, C5.6, C1.7, C2.9 | SHEET-44, SHEET-45, SLIDE-34, SLIDE-35 |
 | **C5.9** Performance, a11y, hardening delta | SHEET-34 and SLIDE-02 timings on reference devices; screen-reader tasks with NVDA, VoiceOver and TalkBack; 50 concurrent editors; calc and sync at their limits; C5's own hardening delta (load, soak, a pen-test delta for imports and calc, DPO coverage); finance and ops join. | C5.1, C5.2, C5.3, C5.4, C5.5, C5.6, C5.7, C5.8 | SHEET-34 |
 
 **Seams built here (space left for AI):**
@@ -379,21 +379,21 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 
 **Goal:** Make the non-AI suite safe and supportable for the whole org: DPO consoles on a collectors registry, the use-and-disclosure record, scale, soak, chaos and seam-conformance tests, pen test, DR drill, accessibility audit, frontline readiness, rollout waves and the WhatsApp sunset; plus the A0 readiness pack.
 
-**Needs first:** C1, C2, C3, C4. **Size:** L: about 5-7 weeks of build, plus pen-test lead time and 4-8 calendar weeks of rollout waves overlapping C5. Same assumption as C0..
+**Needs first:** C1, C2, C3, C4, C5. **Size:** L: about 5-7 weeks of build, plus pen-test lead time and 4-8 calendar weeks of rollout waves. Same assumption as C0..
 
 **Pilot:** The whole org in department waves, then the WhatsApp-for-work sunset date. People insights only after the sunset has settled.
 
 | Step | What | Needs first | PRD rows |
 |---|---|---|---|
-| **C6.1** DPO consoles and collectors | Collectors registry (CI fails on a missing kind); PDPA-05 console with review and 30-day timer; 05a redaction; 05b voice silencing (P1); PDPA-07 correction records with events; PDPA-04 withdrawal queue; PDPA-11 breach record (P1) and 11a unique-person scoping; legal-hold export; ADM-09 export (P1). Replaces the C1 runbooks. | C2.10, C4.5, C1.11, INF-COLLECT | PDPA-04, PDPA-05, PDPA-05a, PDPA-05b, PDPA-07, PDPA-11, PDPA-11a, ADM-09 |
+| **C6.1** DPO consoles and collectors | Collectors registry (CI fails on a missing kind); PDPA-05 console with review and 30-day timer; 05a redaction; 05b voice silencing (P1); PDPA-07 correction records with events; PDPA-04 withdrawal queue; PDPA-11 breach record (P1) and 11a unique-person scoping; legal-hold export; ADM-09 export (P1). Replaces the C1 runbooks. Covers sheets and decks directly (D43). | C2.10, C4.5, C5.8, C1.11, INF-COLLECT | PDPA-04, PDPA-05, PDPA-05a, PDPA-05b, PDPA-07, PDPA-11, PDPA-11a, ADM-09 |
 | **C6.2** Use-and-disclosure record | A per-person 12-month record from data_access_events and audit: LiveKit sends, exports, shares and privileged reads; AI rows appear once A0-A2 write them. | C2.2, C0.3 | PDPA-06 |
-| **C6.3** Scale, chaos, seam suite | §9.2 at 1,000 users (design check at 5,000): sockets, 3-year search, 200 recorded sessions, sync limits, 24 h soak, task kills, RDS failover; seam conformance: rebuild equals incremental index, re-ACL storm within 60 s, kill-switch drill within 10 s, audit sized for AI retrieval volume. A2 and A6 reuse it. | C1.12, C2.12, C4.8 |  |
+| **C6.3** Scale, chaos, seam suite | §9.2 at 1,000 users (design check at 5,000): sockets, 3-year search, 200 recorded sessions, sync limits, 24 h soak, task kills, RDS failover; seam conformance: rebuild equals incremental index, re-ACL storm within 60 s, kill-switch drill within 10 s, audit sized for AI retrieval volume. A2 and A6 reuse it. Includes the SHEET-34 and SLIDE-02 load cases. | C1.12, C2.12, C4.8, C5.9 |  |
 | **C6.4** Penetration test and hardening | Independent pen test with high and critical findings fixed; WAF and CSP tuned from prod data; break-glass and IAM reviewed by a second person; previews and the user-content origin re-tested; unusual-access alerts (PDPA-12). | C0.19, C6.3 |  |
 | **C6.5** DR drill and operational readiness | Quarterly DR drill with deletion-log replay; runbooks per service; second maintainer on call; maintenance banner; graceful-degradation tests. | C0.17, C6.3 |  |
 | **C6.6** Accessibility audit and usage analytics | WCAG 2.2 AA audit with NVDA, VoiceOver and TalkBack (axe 0 serious); ADM-11 usage analytics from outbox metrics, with a hidden AI usage panel. | C4.8, C0.18 | ADM-11 |
 | **C6.7** Frontline readiness | Shared or kiosk device mode if decided (PRD-86); all-hands answered as a listen-only mode or a stated non-goal (PRD-38). | C0.5, C2.3 |  |
-| **C6.8** Core launch and WhatsApp sunset | Department waves through roster import and cohorts, champions, help guides, the leadership's sunset date (Q12) and a WhatsApp survey at 30, 60 and 90 days: the core launch gate. | C6.1, C6.2, C6.4, C6.5, C6.6, C6.7 |  |
-| **C6.9** A0 readiness pack (during C5) | Signed by the DPO before A0: AI legal bases and the Org Brain LIA (Q3), the Q5 budget, Bedrock quota, OpenAI DPA, ZDR and residency, embeddings provider (PRD-75), back-fill and former-employee decisions, the AI notice draft; the consented transcription test set and glossary collected as plain data. | C0.9, C2.9, C2.6 |  |
+| **C6.8** Core launch and WhatsApp sunset | Department waves through roster import and cohorts, champions, help guides, the leadership's sunset date (Q12) and a WhatsApp survey at 30, 60 and 90 days: the core launch gate, Sheets and Slides included (D43). | C6.1, C6.2, C6.4, C6.5, C6.6, C6.7, C5.9 |  |
+| **C6.9** A0 readiness pack (during C6) | Signed by the DPO before A0: AI legal bases and the Org Brain LIA (Q3), the Q5 budget, Bedrock quota, OpenAI DPA, ZDR and residency, embeddings provider (PRD-75), back-fill and former-employee decisions, the AI notice draft; the consented transcription test set and glossary collected as plain data. | C0.9, C2.9, C2.6 |  |
 | **C6.10** People insights (30+ days post-sunset) | ADM-14 counts only, with the PDPA-18 safeguards; talk time from LiveKit spans (approximate, no VAD); restricted sessions excluded; views logged; at least 30 days after the sunset. | C6.8, C2.8, C2.1, C0.9 | ADM-14, PDPA-18 |
 
 **Seams built here (space left for AI):**
@@ -723,12 +723,12 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 4. C0.11 AWS and pipeline → C0.12 data plane and egress → C0.14 push on real phones → C0.15 first run → C0.16 admin → C0.17 restore drill → C0.19 exit.
 5. C1.1 → C1.2 → C1.4 → C1.5 → C1.7 search → C1.13 pilot go-live (notice v1, push services cleared) → 2-week WhatsApp soak.
 6. C2.1 tasks → C2.2 LiveKit (DPA cleared) → C2.4 sessions → C2.5 notice v2 re-ack → C2.6 recorder → C2.8 session pages → C2.9 retention (before any recording is 120 days old).
-7. C3.2 events → C3.3 meeting rooms; C3.7 Sheets spike decides Q21 before C4.3.
+7. C3.2 events → C3.3 meeting rooms; C3.7 Sheets spike decides the formula engine (PRD Q23) before C4.3.
 8. C4.1 Drive → C4.3 sync server (second maintainer on call) → C4.4 docs → C4.5 history → C4.8.
-9. C6.3 scale and seam suite → C6.4 pen test → C6.5 DR → C6.8 core launch and WhatsApp sunset.
-10. C5.1 calc → C5.2-C5.3 sheets → C5.4-C5.6 slides and present to room → C5.9: full non-AI system done.
+9. C5.1 calc → C5.2-C5.3 sheets → C5.4-C5.6 slides and present to room → C5.9.
+10. C6.3 scale and seam suite → C6.4 pen test → C6.5 DR → C6.8 core launch and WhatsApp sunset: the full non-AI system, Sheets and Slides included, is live (D43).
 11. A0.1 clearance and AI notice → A0.2 model layer → A0.3 kill switch → A1.1 transcription → A1.5 back-fill → A2.2 Org Brain → A2.4 leak gate → A3 → A4 → A5 → A6 full v1.
-12. Rough totals for one founder: core 49-65 weeks (core launch after about 39-51 if C5 follows it); AI 33-42 weeks.
+12. Rough totals for one founder: core 49-65 weeks, ending in the core launch; AI 33-42 weeks.
 
 **Can run in parallel:**
 - Legal and provider paperwork from today: SSIR (C0 exit); push-service PDPA-10 and Q3/Q13 for chat (C1 pilot); LiveKit DPA, drop-in LIA, Q8, Q10 (C2 pilot); Bedrock, OpenAI, embeddings and AI legal bases (A0, via C6.9).
@@ -739,7 +739,7 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 - Second maintainer hired during C3, on call before C4.3.
 - PRD v0.4 edits and the prd_changes below as a separate docs task.
 - Calendar core (C3.1, C3.2, C3.4) can be interleaved with C2 if iOS findings stall rooms.
-- C6.9 readiness pack, rollout waves and people insights run in calendar time during C5.
+- C6.9 readiness pack and people insights run in calendar time during the C6 rollout waves.
 
 ### Decisions for the owner
 
@@ -747,10 +747,10 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 |---|---|---|---|
 | 1 | Record 'core first, AI second' as a decision? | **Decided 11 Oct: D41 in the PRD.** Yes, as D41 (D40 stays reserved for version history, PRD-42): the full non-AI suite comes before any model call; 'AI' includes VAD, embeddings and ML noise cancellation; the seams are kept. Add the CLAUDE.md rules and CI import ban in C0.1 so AI coding tools don't wire transcription into C1 or C2. | Today, before the C0.1 commit |
 | 2 | Launch org-wide and set the WhatsApp sunset on the non-AI suite, before AI? | **Decided 11 Oct: D42 in the PRD.** Yes: a core launch after C6 and a full v1 launch after A6. Earlier sunset, no AI provider or zero-leak gate on the critical path, and AI later lands on months of real content. Accept: no transcripts or notes at launch, two notice re-acks, no transcripts for deaf and hard-of-hearing staff until A1 (record with HR), and recordings that expire before A1 stay untranscribed. | Direction in C0; confirm by end of C3 |
-| 3 | Do Sheets and Slides (C5) gate the core launch? | No. Run C6 straight after C4, then C5 with its own hardening delta, then A0, so the full non-AI system still precedes AI. If yes, run C5 before C6 and cut it to about 25 P0 rows with SLIDE-16 to SLIDE-19 as P1. | End of C3 |
+| 3 | Do Sheets and Slides (C5) gate the core launch? | **Decided 11 Oct: yes, D43 in the PRD (C5 runs before C6).** The plan had recommended no: Run C6 straight after C4, then C5 with its own hardening delta, then A0, so the full non-AI system still precedes AI. If yes, run C5 before C6 and cut it to about 25 P0 rows with SLIDE-16 to SLIDE-19 as P1. | End of C3 |
 | 4 | Record every session in C2 before transcription exists? | Record scheduled meetings and calls from C2; record drop-ins too if the DPO's LIA supports playback-only value (timeline, bookmarks, cards, viewed-by, restricted rooms, push-to-talk). Otherwise set REC-03 to 'scheduled meetings and calls only' until A1; no rework either way. | Before the C2 pilot |
 | 5 | What do core-stage notices say about AI? | Only active purposes, plus one plain sentence that transcription and AI features are not in use and start only after a new notice is acknowledged. The join notice says 'This session is recorded'. | C1 pilot |
-| 6 | May A1 transcribe audio captured before transcription was on? | Only after the AI notice is in force with a back-fill date announced 14 days ahead; only audio within normal retention; only acknowledged speakers (others and leavers marked 'not transcribed'); meetings and calls by default, drop-ins only if the DPO approves. Never extend audio retention to wait; otherwise transcribe from A1 onward. | C2 notice drafting; final in A0 |
+| 6 | May A1 transcribe audio captured before transcription was on? | **Decided 11 Oct: yes, D44 in the PRD, with these safeguards.** Only after the AI notice is in force with a back-fill date announced 14 days ahead; only audio within normal retention; only acknowledged speakers (others and leavers marked 'not transcribed'); meetings and calls by default, drop-ins only if the DPO approves. Never extend audio retention to wait; otherwise transcribe from A1 onward. | C2 notice drafting; final in A0 |
 | 7 | Move tasks core from C3 to the start of C2? | Yes: cheap, chat-only dependencies, new value during the rooms build, and a home for action items from the first recording. | End of C1 |
 | 8 | Hide AI surfaces or show 'coming soon'? | Hide them all behind flags; at most one honest line in Help; the bar says 'Search'. | C0.8 |
 | 9 | What is a space's audience under Rule 2 (PRD-35)? | Current members ∪ anyone who can join (public = whole org) ∪ future viewers of the record; AI posts in private spaces later carry a per-message audience override. | C0.4 (day 1) |
@@ -777,13 +777,13 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 | M3 Org Brain and assistant | A2 (Org Brain, retrieval, leak suite), A3 (Ask) and A4 (assistant); rule-based Today to C1; access-rules suite to C0. |
 | M4 Calendar and tasks | C3 (calendar, meeting rooms, hidden suggestion inbox) and C2.1 (tasks core); prep briefs to A4, suggested tasks to A3. |
 | M5 Docs, wiki, files | C4. |
-| M5b Sheets and Slides | C5 without AI, spike moved to C3.7, by default after the core launch and before A0; SHEET-37 to A2, other sheet and slide AI to A3. |
+| M5b Sheets and Slides | C5 without AI, spike moved to C3.7, before C6 as part of the core launch (D43); SHEET-37 to A2, other sheet and slide AI to A3. |
 | M6 Agents and hardening | Split: C6 (DPO consoles, scale, pen test, DR, insights, core launch), A5 (agents, Studio) and A6 (AI red-team, zero-leak gate, full v1). |
 
 ### PRD edits this re-sequencing needs
 
 - **Appendix A**: Add D41 'Core first, AI second' (owner, 11 Oct 2026): the non-AI suite (C0-C6, then C5) ships before any model call; AI layer A0-A6 after; 'AI' includes VAD, embeddings and ML noise cancellation; the seams are built in core. D41 overrides requirement or milestone text that puts AI into a core stage. Leave D40 for version history.
-- **§11 Release plan**: Replace M0-M6 with C0-C6 and A0-A6 (contents, pilot, exit) and two gates: core launch (WhatsApp sunset) after C6, full v1 after A6; C5 follows the core launch by default and precedes A0.
+- **§11 Release plan**: Replace M0-M6 with C0-C6 and A0-A6 (contents, pilot, exit) and two gates: core launch (WhatsApp sunset) after C6, full v1 after A6; C5 precedes C6 and is part of the core launch (D43).
 - **§10 and §3.1**: Split the launch gate: core (pen test, DR, scale, DPO consoles, non-AI access cases, sunset date) and AI (leak suite at A2, red-team at A6, pilots A1-A5). Tag G1, G4 and G6 to the core launch and G2, G3, G5 to full v1; move adoption, calendar and wiki metrics to the core launch.
 - **Appendix A D9, D17, D27**: Add 'see D41': recorded from C2, transcribed from A1, summarised from A3; voice messages audio-only until A1; D27's 5-minute rule drives the C2 session cards and later the A3 notes.
 - **§8.2 CHAT-07, CHAT-08, CHAT-05**: CHAT-07: record, waveform, speed and cap are core; transcript, trimming and 'No speech detected' arrive with A1, with no placeholder. CHAT-08: reactions core; quick replies AI (A3). CHAT-05: link previews through the SSRF-safe proxy after go-live.
@@ -796,7 +796,7 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 - **Appendix B.5, §9.5, §9.6**: 'Before the M1 pilot' becomes 'before A0' (agreements) and 'before A1' (spike); the quality gate runs in A1 on a test set collected in C6; transcription and model spend start in A1 and A0; core running cost is roughly $2.5-2.7k a month at 1,000 users.
 - **Appendix B.6**: S3 lifecycle only changes storage class; the retention engine deletes after isHeld(), with tag-filtered expiry as a backstop only; recorder speech detection arrives in A1; Valkey replaces Redis wording.
 - **§12 Risks**: R11 tested in the C1.15 spike; R10 second maintainer before C4.3; add risks for the recording-to-transcription gap, back-fill scope, rotting seams and restricted reclassification.
-- **§13 Open questions**: Re-date Q3 (C1, C2, A0 parts), Q13 and Q9 (C1), Q8 and Q10 (C2), Q11, Q17, Q19 (C4), Q16 and Q18 (C3 spike), Q20 (C5), Q12 (C6), Q5 (A0), Q1 (A4), Q4 and Q7 (A5); add Q21 Sheets engine (by C4.3), Q22 back-fill (C2, final A0) and Q23 leavers' content in AI (A0).
+- **§13 Open questions**: Re-date Q3 (C1, C2, A0 parts), Q13 and Q9 (C1), Q8 and Q10 (C2), Q11, Q17, Q19 (C4), Q16 and Q18 (C3 spike), Q20 (C5), Q12 (C6), Q5 (A0), Q1 (A4), Q4 and Q7 (A5); added Q21 (Sheets and Slides at the core launch; answered by D43), Q22 (back-fill of earlier recordings; answered by D44) and Q23 (the Sheets formula engine, decided by the C3.7 spike). Still to add: leavers' content in AI (A0).
 - **Principle 2 and §6**: AI surfaces are hidden, not shown as 'coming soon', until their A-stage.
 - **Part 1E.2 of this document (already done)**: Move OpenAI and Bedrock items to 'before A0'; add push-service PDPA-10 entries (C1 pilot) and the LiveKit DPA (C2 pilot).
 
@@ -1030,7 +1030,7 @@ All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | C2 Tasks, rooms, calls and recording (no transcription) | 35 | 32 | 25 | 10 | 0 |
 | C3 Calendar, meetings and task extras | 12 | 8 | 10 | 2 | 0 |
 | C4 Drive, Docs and wiki | 16 | 11 | 15 | 1 | 0 |
-| C5 Sheets and Slides, non-AI (by default after the C6 core launch) | 71 | 53 | 62 | 9 | 0 |
+| C5 Sheets and Slides, non-AI (part of the core launch, D43) | 71 | 53 | 62 | 9 | 0 |
 | C6 Core hardening and core launch (WhatsApp sunset) | 11 | 4 | 6 | 5 | 0 |
 | A0 AI platform | 5 | 4 | 0 | 0 | 5 |
 | A1 Speech-to-text | 5 | 4 | 0 | 0 | 5 |
@@ -1187,7 +1187,7 @@ All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | FILE-06 | P0 | core+seam | Extracted file text indexed for search, then Org Brain | FILE-02, FILE-03, SRCH-02, INF-SEARCH, INF-QUEUE, INF-OUTBOX | Org Brain indexing of the extracted text (embeddings and permission-enforced retrieval, BRAIN-01/02). (A2) |
 | FILE-07 | P1 | core | Admin-set storage quotas per user and team | FILE-02, ACC-07, ADM-01 |  |
 
-### C5 rows — Sheets and Slides, non-AI (by default after the C6 core launch)
+### C5 rows — Sheets and Slides, non-AI (part of the core launch, D43)
 
 | ID | Pri | Layer | What | Needs first | AI part deferred (to) |
 |---|---|---|---|---|---|
