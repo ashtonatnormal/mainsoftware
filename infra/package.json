@@ -1,0 +1,10 @@
+{
+  "name": "@hearth/infra",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AWS CDK app for ap-southeast-1 (T9, D37). Built in C0.11.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

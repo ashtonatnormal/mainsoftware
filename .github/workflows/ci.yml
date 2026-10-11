@@ -15,16 +15,14 @@ permissions:
 #     run: exit 1
 # because a failing dependency skips it, and GitHub counts a skipped required check as passed.
 jobs:
-  # Until the npm-workspaces monorepo lands, the only package is demo/, so this runs there and
-  # has no lint step. With the workspace it becomes, from the root: npm ci, npm run check
-  # (typecheck, lint, test) and the build; update CLAUDE.md (Testing and CI) in the same PR.
+  # Every npm workspace from the root (apps/*, packages/*, infra and demo/): what `npm run check`
+  # runs locally (typecheck, lint, test), as separate steps so a failure names its step, then the
+  # build. The tests include the guards in scripts/guards/ (no AI packages, no secret-shaped VITE_
+  # variables). Keep CLAUDE.md (Testing and CI) in step with this job.
   check:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: demo
     env:
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"  # only the local screenshot script uses it
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"  # only demo's local screenshot script uses it
     steps:
       - uses: actions/checkout@v5
         with:
@@ -33,9 +31,9 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-          cache-dependency-path: demo/package-lock.json
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run lint
       - run: npm test
       - run: npm run build
   migrations:

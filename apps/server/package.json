@@ -1,0 +1,10 @@
+{
+  "name": "@hearth/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The Hearth server: Fastify and ws (T2). The skeleton arrives in C0.2.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

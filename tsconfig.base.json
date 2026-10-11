@@ -1,0 +1,24 @@
+{
+  // Every package's tsconfig extends this one (T1, T2): strict, with index access checked.
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": ["ES2024"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "moduleDetection": "force",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    // Only syntax Node 24 can strip (no enums, namespaces or parameter properties), so any
+    // package's TypeScript runs as is in Node and in Vite.
+    "erasableSyntaxOnly": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": []
+  }
+}
