@@ -4,7 +4,7 @@
 |---|---|
 | **Date** | Sunday 11 Oct 2026 |
 | **Reviewed** | `demo/` at `e8e9f32` (about 19,000 lines; every screen) and `docs/PRD.md` v0.4 work in progress (1,300 lines) |
-| **How** | Six code reviewers (one per demo area), a runtime pass in a real browser at 320, 390 and 1440 px in light and dark, and a scripted plus manual PRD audit. Every bug was traced through the code; items reproduced in a browser say "verified" or "confirmed", and anything uncertain says "unverified". Nothing in the demo was changed. |
+| **How** | Six code reviewers (one per demo area), a runtime pass in a real browser (354 captures at 320, 390 and 1440 px in light and dark, 37 interaction runs, and an axe scan), and a scripted plus manual PRD audit. Every bug was traced through the code; items reproduced in a browser say "verified" or "confirmed", and anything uncertain says "unverified". Nothing in the demo was changed. |
 | **Companion** | [`BUILD-KICKOFF.md`](BUILD-KICKOFF.md): what to do at 11:00. |
 
 ## Summary
@@ -29,7 +29,7 @@
 | A4 Drive, preview, Share, Docs | 75 | 10 | 31 | 34 |
 | A5 Sheets | 62 | 5 | 28 | 29 |
 | A6 Slides | 67 | 8 | 26 | 33 |
-| A7 Runtime QA | see A7 | | | |
+| A7 Runtime QA (new findings only) | 16 | 0 | 3 | 13 |
 | B PRD | 112 | 30 | 56 | 26 |
 
 Each area lists **bugs**, **UX polish**, **accessibility**, **PRD gaps and contradictions** and **production future patches** (what the real build must do differently). "Production future patches" items are what you build in the milestone; everything else is a demo or PRD fix.
@@ -592,8 +592,58 @@ The same problems turned up in several areas. Each is fixed best once, in shared
 
 ### A7. Runtime QA
 
-_The runtime sweep (every route at 320, 390 and 1440 px, light and dark, with console, overflow and interaction checks) is still running; its findings will be added here._
+**What ran:** 59 states × 3 viewports (390, 320 and 1440 px) × light and dark, which is 354 captures plus 174 scrolled-to-bottom shots; 37 interaction runs; and axe-core 4.10.2 on 18 routes × 2 viewports × 2 schemes. About 120 screenshots were inspected, weighted toward 320 px and dark mode. Google Fonts were blocked, so text rendered in fallback fonts and truncation widths may differ slightly.
 
+**Clean:** 0 console errors or warnings, 0 uncaught page errors, 0 failed requests, and no horizontal overflow at any viewport or scheme (no element past the viewport or sticking out of a clipped parent). The only text spill is the transcript's "Play from 0:04" chips (43 px of text in a 39 px button), likely a fallback-font effect.
+
+**Worked end to end:**
+- Chat send and voice notes at 320 and 1440 px.
+- Rooms: join, mute, raise hand, the in-room bar, and leave.
+- Accepting, editing and completing tasks.
+- Drive rename and trash (a sheet on phones, a popover on desktop).
+- New doc with "/" menu, persisting across reopen.
+- Sheets: `=SUM`, `#CYCLE!` and range stats.
+- Slides: add a slide; present with arrows, N and Esc, with focus restored.
+- Theme persists across reload.
+- Share dialog focus trap, Escape and focus return.
+- Ask source chips, and the `#drive` deep link on load.
+- A visible focus ring in a sensible order on Today, Chats, Drive, Tasks and Docs.
+- All 7 onboarding steps.
+
+**Re-run:** the scripts are in the session scratch space, not the repo. Fold their probes into `demo/scripts/screenshots.mjs`, which today has no 320 px viewport and no element-level checks (QA-16).
+
+**Confirms earlier findings** (no new IDs): the URL never changes and Back leaves the demo (SHL-01); toast action and "Return" contrast (SHL-35); white on dark red (SHL-36); the PIN needs a physical keyboard (SHL-27); "Design" truncates to "D…" at 320 px (RMS-19); the composer placeholder wraps (CHT-29); the citation gap before punctuation (CHT-28); `Segmented` roles (SHL-40); no h1 on phone screens (X16); `Avatar` `aria-label` on a role-less span (SHL-41); the invalid sheet grid (SHT-36); editor headers truncate the title at 320 px (DRV-26, SHT-45).
+
+**New findings**
+- **QA-01** [M·XS] `ui/index.tsx:34`: avatar initials fail contrast. White on `oklch(0.58 0.12 hue)` is 3.9–4.5:1 for teal, green and blue hues (Marcus 3.96, Daniel 3.92, Farah 4.06, Arjun 4.16, Wei Ling 4.37, Ahmad 4.48, Hui Min 4.49). → Lightness about 0.52.
+- **QA-02** [M·XS] `drive/chrome.tsx:93`: on phones the active view chip (Trash, Starred, Recent) is scrolled off to the right and there's no heading, so nothing says which view you're in. → `scrollIntoView({inline:'nearest'})` on mount, or a view title (with DRV-46).
+- **QA-03** [M·S] `Docs.tsx:433-435`, `drive/header.tsx:28`: at 320 px the editor subtitle is cut hard ("Q4 launch · ⟳ S", no ellipsis) because the "Saved to Drive" span collapses beside four icon buttons. → Below 360 px, move Star and Comments into More and show save state as an icon.
+- **QA-04** [L·XS] `Onboarding.tsx` (PIN step): taps within 220 ms of the sixth digit are dropped silently; 12 quick taps ended on "Confirm your PIN" with nothing entered. → Advance synchronously, or queue extra digits (with SHL-07).
+- **QA-05** [L·XS] `App.tsx` tab bar: after closing the More sheet, the focus ring on "More" is clipped at the viewport edge. → `outline-offset: -2px` on tab bar buttons.
+- **QA-06** [L·XS] Sheets and Slides title inputs: keyboard focus shows only a background change (`outline-none` overrides the global ring); the Docs title is fine. → `focus-visible` ring.
+- **QA-07** [L·XS] `FilePreview.tsx`: the `.bg-wall` preview pane scrolls but can't be focused by keyboard (axe `scrollable-region-focusable`). → `tabIndex=0` and an `aria-label`.
+- **QA-08** [L·XS] `Sheets.tsx:901`: the sheet tab bar's `role="tablist"` contains non-tab "Options for…" buttons (axe, critical). → Move the option buttons out of the tablist (with SHT-41).
+- **QA-09** [L·XS] `slides/render.tsx`: `h1[role=textbox]` for the slide title (axe `aria-allowed-role`). → Don't override heading roles; use a `div` (with SLD-42).
+- **QA-10** [L·XS] App shell: the sr-only recording indicator sits outside any landmark (axe `region`). → Move it inside `<main>` or a status region (with SHL-06).
+- **QA-11** [L·S] Rooms at 320×640: the recording notice plus square 2×2 tiles push the second row of participants below the fold. → Shorter tiles on short screens, or collapse the notice after first view.
+- **QA-12** [L·XS] `store.tsx` `leaveRoom`: leaving r_ops empties the room for Priya, Marcus and Farah ("No one here yet") and says "Standup wrapped up", which reads as if leaving ends the meeting for everyone. → Others stay, or say "The standup ended" separately.
+- **QA-13** [L·XS] `Onboarding.tsx` welcome at 320 px: the wrapped third feature line centres its icon 4 px further in than the others. → `items-start` with an icon margin.
+- **QA-14** [L·XS] Inputs at 320 px cut long text mid-word: the Insights metric select ("Messages & reactic") and the Share placeholder ("Search people at T"). → Shorter labels or ellipsis.
+- **QA-15** [L·S] Phone ergonomics:
+  - The Docs "Edit" button covers the end of a line on first view (cosmetic: you can scroll clear).
+  - In `sh_forecast` at 390 and 320 px, right-aligned numbers in wide columns sit off-screen, so the first view looks empty. → Narrower default columns on phones.
+- **QA-16** [L·S] Small tap targets (<24 px on phones) not listed elsewhere:
+  - phone agenda event buttons in Calendar, 22 px tall;
+  - Docs checklist boxes, 20×20;
+  - Docs comment anchors, 22 px;
+  - Tasks "DONE 1" toggle, 16 px;
+  - Sheets row and column header buttons, 16 px;
+  - editor title inputs, about 21 px;
+  - editor breadcrumb links, 20 px;
+  - the chat header's info button, 23 px;
+  - the assistant's "See what it remembers" link, 20 px.
+  
+  → Theme X7. Also add 320 px and these element checks to `scripts/screenshots.mjs`.
 
 ---
 

@@ -21,7 +21,7 @@ Prepared Sunday 11 Oct 2026 for an **11:00 SGT** start. The full list of finding
 |---|---|
 | PRD | v0.4 work in progress (`e8e9f32`, "Sheets and Slides move into v1"). 204 P0, 72 P1, 18 P2 requirements. Sheets and Slides alone add 55 P0s (34 + 21), more than any other module. |
 | Technical spec | Doesn't exist yet. B.2 says the building blocks are "non-binding; confirm in the technical spec". §2 below is the minimum for M0. |
-| Demo | ~19,000 lines of React 19 + TypeScript, scripted data only, no server. Typecheck and build pass; 129 formula tests pass. The review found 412 items: mostly scripted state that drifts, access logic duplicated per screen, and shared-kit accessibility. REVIEW-360 Part D1 lists the 15 to fix before the next demo. |
+| Demo | ~19,000 lines of React 19 + TypeScript, scripted data only, no server. Typecheck and build pass; 129 formula tests pass. The review found 428 items (0 console errors and no overflow in a 354-screenshot runtime sweep): mostly scripted state that drifts, access logic duplicated per screen, and shared-kit accessibility. REVIEW-360 Part D1 lists the 15 to fix before the next demo. |
 | Repo hygiene | No `CLAUDE.md`, no CI, no linter, no `test` script (the Sheets formula tests exist but nothing runs them). Fix these in step 1 of §5. |
 
 ---
