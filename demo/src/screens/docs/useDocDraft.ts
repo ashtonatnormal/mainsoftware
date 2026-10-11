@@ -121,9 +121,10 @@ export function useDocDraft(doc: Doc) {
     schedule()
   }
 
-  const setTitle = (t: string) => {
+  /** The title field changed; `caret` is where its caret is now, so formatting in the heading stays put. */
+  const setTitle = (t: string, caret?: number) => {
     const first = itemsRef.current[0]
-    if (linked.current && first?.block.type === 'h1') change([{ ...first, block: setPlainText(first.block, t) }, ...itemsRef.current.slice(1)], { title: t, typing: 'title' })
+    if (linked.current && first?.block.type === 'h1') change([{ ...first, block: setPlainText(first.block, t, caret) }, ...itemsRef.current.slice(1)], { title: t, typing: 'title' })
     else change(itemsRef.current, { title: t, typing: 'title' })
   }
 

@@ -485,10 +485,15 @@ export default function Editor(props: EditorProps) {
     const runs = runsOf(b)
     const sel = getSel(el) ?? { start: b.text.length, end: b.text.length }
     const html = e.clipboardData.getData('text/html')
+    const raw = e.clipboardData.getData('text/plain').replace(/\r\n?/g, '\n')
     let lines = html ? blocksFromHTML(html) : []
-    if (lines.length) inline.consume(it.key, -1)
-    else {
-      const raw = e.clipboardData.getData('text/plain').replace(/\r\n?/g, '\n')
+    if (lines.length) {
+      inline.consume(it.key, -1)
+      // Reading HTML trims each line; one line of it keeps the spaces at its ends ("2 Nov " stays "2 Nov ").
+      if (lines.length === 1 && !raw.includes('\n') && raw.trim() === lines[0].text) {
+        lines = [withRuns(lines[0], [{ text: raw.slice(0, raw.length - raw.trimStart().length) }, ...runsOf(lines[0]), { text: raw.slice(raw.trimEnd().length) }])]
+      }
+    } else {
       if (!raw) return
       const marks = inline.consume(it.key, sel.start) ?? (sel.end > sel.start ? marksAt(runs, sel.start) : caretMarks(runs, sel.start))
       const plain: DocBlock[] = raw.includes('\n') ? parseLines(raw) : [{ type: 'p', text: raw }]
@@ -500,7 +505,9 @@ export default function Editor(props: EditorProps) {
     const after = sliceRuns(runs, sel.end)
     const [first, ...rest] = lines
     // An empty block takes the pasted line's own type ("## …", a list item); otherwise it keeps its own.
-    let head: DocBlock = !b.text && (first.type !== 'p' || b.type === 'p') ? { ...first } : withRuns(b, concatRuns(before, runsOf(first)))
+    // The title line always stays the title.
+    const title = idx === 0 && b.type === 'h1'
+    let head: DocBlock = !title && !b.text && (first.type !== 'p' || b.type === 'p') ? { ...first } : withRuns(b, concatRuns(before, runsOf(first)))
     if (heading && head.type === b.type) head = withType(head, b.type)
     if (!rest.length) {
       const caret = head.text.length

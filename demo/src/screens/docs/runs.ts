@@ -154,13 +154,14 @@ export function textChange(prev: string, next: string, caret: number): { start: 
 /**
  * Sets a block's text from something that only knows plain text (the title
  * field): the parts that didn't change keep their style, new text takes the
- * style of what it replaced or follows.
+ * style of what it replaced or follows. Pass the field's caret when known, so
+ * the edit lands where it was made; without it the smallest change is assumed.
  */
-export function setPlainText<T extends DocBlock>(b: T, text: string): T {
+export function setPlainText<T extends DocBlock>(b: T, text: string, caret = 0): T {
   if (b.text === text) return b
   const runs = runsOf(b)
   if (!hasMarks(runs)) return withRuns(b, text ? [{ text }] : [])
-  const ch = textChange(b.text, text, text.length)!
+  const ch = textChange(b.text, text, caret)!
   return withRuns(b, editRuns(runs, ch.start, ch.start + ch.removed, ch.inserted, ch.removed ? marksAt(runs, ch.start) : caretMarks(runs, ch.start)))
 }
 
@@ -213,34 +214,49 @@ export function applyInlineShortcut(runs: DocRun[], sc: InlineShortcut): { runs:
 const MD: Record<Mark, [string, string]> = { b: ['**', '**'], i: ['*', '*'], s: ['~~', '~~'], u: ['<u>', '</u>'] }
 const MD_ORDER: Mark[] = ['u', 's', 'b', 'i']
 
-/** Whitespace at the edge of a styled run moves outside its markers, which Markdown needs. */
-function spacesOut(runs: DocRun[]): DocRun[] {
-  const out: DocRun[] = []
-  runs.forEach((r, i) => {
-    const prev = runs[i - 1] ?? {}
-    const next = runs[i + 1] ?? {}
-    const both = (a: Marks, b: Marks) => marksOf(Object.fromEntries(MARKS.map(m => [m, !!a[m] && !!b[m]])))
-    const lead = r.text.length - r.text.trimStart().length
-    if (lead === r.text.length) { out.push(run(r.text, both(r, both(prev, next)))); return }
-    const tail = r.text.length - r.text.trimEnd().length
-    out.push(run(r.text.slice(0, lead), both(r, prev)), run(r.text.slice(lead, r.text.length - tail), r), run(r.text.slice(r.text.length - tail), both(r, next)))
-  })
-  return normalise(out)
+const wordChar = (c: string | undefined) => !!c && /[\p{L}\p{N}]/u.test(c)
+
+/** One run's text with the characters Markdown would read as formatting escaped (a literal 2*3*4 stays literal). */
+function escapeRun(text: string): string {
+  let out = ''
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    // An underscore inside a word (snake_case) is never emphasis, so it can stay.
+    if ('\\*~`'.includes(c) || (c === '_' && !(wordChar(text[i - 1]) && wordChar(text[i + 1]))) || (c === '<' && /[A-Za-z/!?]/.test(text[i + 1] ?? ''))) out += '\\'
+    out += c
+  }
+  return out
 }
 
-/** Runs as Markdown: **bold**, *italic*, ~~strikethrough~~ and <u>underline</u>. */
-export function runsToMarkdown(runs: DocRun[]): string {
+/**
+ * Runs as Markdown: **bold**, *italic*, ~~strikethrough~~ and <u>underline</u>.
+ * Markers hug the text: whitespace at the edge of a styled stretch goes outside
+ * them, which Markdown needs, and the style that lasts longest opens first so
+ * markers nest instead of closing and reopening.
+ */
+export function runsToMarkdown(input: DocRun[]): string {
+  const runs = normalise(input)
+  const lasts = (k: number, m: Mark) => { let n = 0; while (runs[k + n]?.[m]) n++; return n }
   let out = ''
+  let gap = '' // trailing whitespace, written once we know which markers close before it
   const open: Mark[] = []
-  for (const r of spacesOut(runs)) {
+  runs.forEach((r, k) => {
+    const text = escapeRun(r.text)
+    // Whitespace alone never opens or closes a marker; it waits for the next text.
+    if (!text.trim()) { gap += text; return }
     let keep = 0
     while (keep < open.length && r[open[keep]]) keep++
     while (open.length > keep) out += MD[open.pop()!][1]
-    for (const m of MD_ORDER) if (r[m] && !open.includes(m)) { out += MD[m][0]; open.push(m) }
-    out += r.text
-  }
+    out += gap
+    const add = MARKS.filter(m => r[m] && !open.includes(m)).sort((a, b) => lasts(k, b) - lasts(k, a) || MD_ORDER.indexOf(a) - MD_ORDER.indexOf(b))
+    const body = add.length ? text.trimStart() : text
+    out += text.slice(0, text.length - body.length)
+    for (const m of add) { out += MD[m][0]; open.push(m) }
+    out += body.trimEnd()
+    gap = body.slice(body.trimEnd().length)
+  })
   while (open.length) out += MD[open.pop()!][1]
-  return out
+  return out + gap
 }
 
 // ── HTML (copy and paste) ───────────────────────────────────────────────────

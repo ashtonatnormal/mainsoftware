@@ -51,6 +51,8 @@ eq('no change', R.textChange('x', 'x', 1), null)
 
 // ── setPlainText (the title field) and replaceOnce (restores) ──
 eq('editing the title keeps bold elsewhere', R.setPlainText({ type: 'h1', text: 'Q4 plan', runs: [B('Q4'), { text: ' plan' }] }, 'Q4 plans'), { type: 'h1', text: 'Q4 plans', runs: [B('Q4'), { text: ' plans' }] })
+eq('editing the start of the title keeps bold later on (no caret)', R.setPlainText({ type: 'h1', text: 'Q4 Launch plan', runs: [{ text: 'Q4 ' }, B('Launch'), { text: ' plan' }] }, 'Q5 Launch plan'), { type: 'h1', text: 'Q5 Launch plan', runs: [{ text: 'Q5 ' }, B('Launch'), { text: ' plan' }] })
+eq('… and with the field’s caret', R.setPlainText({ type: 'h1', text: 'Q4 Launch plan', runs: [{ text: 'Q4 ' }, B('Launch'), { text: ' plan' }] }, 'Q Launch plan', 1), { type: 'h1', text: 'Q Launch plan', runs: [{ text: 'Q ' }, B('Launch'), { text: ' plan' }] })
 eq('replaceOnce keeps formatting around it', R.replaceOnce({ type: 'p', text: 'a b c', runs: [B('a'), { text: ' b c' }] }, 'b', 'x'), { type: 'p', text: 'a x c', runs: [B('a'), { text: ' x c' }] })
 
 // ── Markdown shortcuts while typing ──
@@ -76,6 +78,9 @@ eq('a lone pair of stars stays', sc('**', '*'), null)
 eq('bold, italic, strike, underline', R.runsToMarkdown([{ text: 'a ' }, B('b'), { text: ' ' }, I('c'), { text: ' ' }, { text: 'd', s: true }, { text: ' ' }, { text: 'e', u: true }]), 'a **b** *c* ~~d~~ <u>e</u>')
 eq('spaces move outside markers', R.runsToMarkdown([B('bold '), { text: 'plain' }]), '**bold** plain')
 eq('nested marks open and close in order', R.runsToMarkdown([B('bold '), { text: 'both', b: true, i: true }]), '**bold *both***')
+eq('stacked marks: the longer one opens first', R.runsToMarkdown([{ text: 'x', b: true, i: true }, I('y')]), '***x**y*')
+eq('a space that only carries a style waits outside the markers', R.runsToMarkdown([{ text: 'a', b: true, s: true }, { text: ' ', b: true }, { text: 'c', s: true }]), '**~~a~~** ~~c~~')
+eq('literal * ~ ` and < are escaped; snake_case is left alone', R.runsToMarkdown([{ text: '2*3*4 ~x~ `c` <u> snake_case _y_ ' }, B('b*')]), '2\\*3\\*4 \\~x\\~ \\`c\\` \\<u> snake_case \\_y\\_ **b\\***')
 const md = M.toMarkdown('T', [{ type: 'h1', text: 'T' }, { type: 'li', ...{ text: 'first 300 pallets', runs: [{ text: 'first ' }, B('300 pallets')] } }, { type: 'quote', text: 'go / no-go', runs: [B('go / no-go')] }])
 eq('toMarkdown uses the runs', md, '# T\n\n- first **300 pallets**\n\n> **go / no-go**\n')
 

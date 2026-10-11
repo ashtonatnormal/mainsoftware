@@ -61,11 +61,15 @@ export function writeRuns(root: HTMLElement, runs: DocRun[]) {
   root.replaceChildren(...nodes)
 }
 
+// The only elements writeRuns makes. Typing over styled text can leave the browser's
+// own (<strike>, <b>, a styled <span>), which read the same but don't take our styles.
+const OWN = new Set(['STRONG', 'EM', 'U', 'S', 'BR'])
+
 /** Rewrites the element if it doesn't show these runs, keeping the selection where it was. */
 export function syncRuns(root: HTMLElement, runs: DocRun[]) {
   const shown = readRuns(root)
   const same = shown.length === normalise(runs).length && JSON.stringify(shown) === JSON.stringify(normalise(runs))
-  if (same) return false
+  if (same && [...root.querySelectorAll('*')].every(el => OWN.has(el.tagName))) return false
   const sel = document.activeElement === root ? getSel(root) : null
   writeRuns(root, runs)
   if (sel) setSel(root, sel.start, sel.end)

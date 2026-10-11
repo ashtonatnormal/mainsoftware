@@ -494,7 +494,7 @@ function DocHeader(p: {
         value={draft.title}
         placeholder={UNTITLED}
         size={Math.max(10, draft.title.length + 1)}
-        onChange={e => draft.setTitle(e.target.value)}
+        onChange={e => draft.setTitle(e.target.value, e.target.selectionEnd ?? undefined)}
         onKeyDown={e => {
           if (e.key !== 'Enter' && e.key !== 'Escape') return
           e.preventDefault()

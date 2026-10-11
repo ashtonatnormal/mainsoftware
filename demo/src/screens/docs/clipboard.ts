@@ -42,7 +42,7 @@ function typeFor(tag: string, inherited: BlockType): BlockType {
 }
 
 /** The marks an element adds or takes away, from its tag and its inline style. */
-function marksFor(el: HTMLElement, tag: string, inherited: Marks): Marks {
+function marksFor(el: HTMLElement, tag: string, inherited: Marks, inLink: boolean): Marks {
   const m: Marks = { ...inherited }
   if (tag === 'B' || tag === 'STRONG') m.b = true
   if (tag === 'I' || tag === 'EM' || tag === 'CITE' || tag === 'DFN') m.i = true
@@ -59,11 +59,12 @@ function marksFor(el: HTMLElement, tag: string, inherited: Marks): Marks {
   }
   const fs = st?.fontStyle
   if (fs) m.i = fs === 'italic' || fs.startsWith('oblique')
-  // A link's own underline is part of being a link, which a paste drops.
+  // A link's own underline is part of being a link, which a paste drops. Google Docs
+  // puts it on a <span> inside the <a>, so styles anywhere inside a link don't count.
   const deco = (st?.textDecorationLine || st?.textDecoration || '').toLowerCase()
   if (deco && tag !== 'A') {
     if (deco.includes('none')) { m.u = false; m.s = false }
-    if (deco.includes('underline')) m.u = true
+    if (deco.includes('underline') && !inLink) m.u = true
     if (deco.includes('line-through')) m.s = true
   }
   return m
@@ -96,7 +97,7 @@ export function blocksFromHTML(html: string): DocBlock[] {
     }
     line.runs.push({ text, ...marksOf(m) })
   }
-  const walk = (n: Node, type: BlockType, m: Marks, pre: boolean) => {
+  const walk = (n: Node, type: BlockType, m: Marks, pre: boolean, link = false) => {
     if (n.nodeType === 3) {
       const t = (n.nodeValue ?? '').replace(/ /g, ' ')
       if (pre) t.replace(/\r\n?/g, '\n').split('\n').forEach((part, i) => { if (i) end(); add(part, type, m) })
@@ -120,10 +121,11 @@ export function blocksFromHTML(html: string): DocBlock[] {
     }
     const block = BLOCK_TAGS.has(tag)
     const nextType = typeFor(tag, type)
-    const nextMarks = marksFor(el, tag, m)
+    const nextLink = link || tag === 'A'
+    const nextMarks = marksFor(el, tag, m, nextLink)
     const nextPre = pre || tag === 'PRE' || /^pre/.test(el.style?.whiteSpace ?? '')
     if (block) end()
-    for (const c of el.childNodes) walk(c, nextType, nextMarks, nextPre)
+    for (const c of el.childNodes) walk(c, nextType, nextMarks, nextPre, nextLink)
     if (block) end()
     else if (tag === 'TD' || tag === 'TH') add(' ', nextType, m)
   }
