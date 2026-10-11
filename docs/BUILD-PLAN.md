@@ -283,7 +283,7 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 | **C3.4** Availability and find a time | Free/busy over events and working hours as an API any principal can call; deterministic find-a-time with at least 3 slots in 1 s for 20 attendees. | C3.2 | CAL-04 |
 | **C3.5** Hidden suggested-tasks inbox; task extras | A hidden suggested-tasks entity and producer API (origin, provenance, restricted flag for owner-only, dedupe key); accepting or editing creates a real task with origin accepted_suggestion; contract tests with a fake producer. P1: board view, subtasks, recurring tasks. | C2.1, C0.6, C0.10 | TASK-06, TASK-03, TASK-07, TASK-08 |
 | **C3.6** Today v1 and meeting notifications | An upcoming-meetings provider with Join; meeting-starting push; a daily start-of-day reminder of unanswered mentions labelled 'Reminders'; out-of-office presence and DM auto-reply (P1). | C1.9, C3.2, C3.3, C2.1 | NOTIF-02, CAL-09 |
-| **C3.7** Sheets spike (parallel) | B.7 spike parts (a)-(e) with PRD-91's numeric exits, on the slowest phone and the org's 20-30 most-used files (Q16): IronCalc in a Worker, Yjs memory, virtualised ARIA grid, concurrent row and column operations, incremental recalculation, XLSX reader. Output: the Q21 (formula engine) engine decision and a Yjs document-type contract for C4.3. | C0.8 |  |
+| **C3.7** Sheets spike (parallel) | B.7 spike parts (a)-(e) with PRD-91's numeric exits, on the slowest phone and the 27 public workbooks in `spike/sheets-corpus/` (Q16): IronCalc in a Worker, Yjs memory, virtualised ARIA grid, concurrent row and column operations, incremental recalculation, XLSX reader. Output: the Q21 (formula engine) engine decision and a Yjs document-type contract for C4.3. | C0.8 |  |
 | **C3.8** ICS import (P1 migration aid) | ICS import for existing recurring meetings (PRD-82); WhatsApp history is not imported (D17). Optional. | C3.2, C3.1, INF-IMPORT |  |
 | **C3.9** Coverage and pilot expansion | Retention (3 years) and holds for events and tasks, collector stubs, search coverage; the pilot grows to 3-5 teams. | C2.9, C1.7, C3.2, C2.1 |  |
 
@@ -848,7 +848,7 @@ The completeness critic's three high-severity and most medium-severity correctio
 | C1.14 | The link-preview worker gets its own egress lane: public IPs only, model-provider hosts denied, size and time caps, no credentials. |
 | C2.3 | The `team.membership_changed` handler also joins default rooms; a flag-gated side-panel slot in the room UI for later agent cards and "Ask this meeting". |
 | C2.12 | Verify NFR-04's adaptive voice bitrate on real phones with ROOM-09. |
-| C3.7, C5.9 | The Sheets spike uses anonymised copies of the org's workbooks; non-prod stays synthetic-only. |
+| C3.7, C5.9 | The Sheets spike uses the public corpus in `spike/sheets-corpus/` (27 openly licensed workbooks). Before it starts, make the 5–6 small made-up workbooks its README lists (roster with OT pay, leave tracker with Singapore holidays, stock list, three-vendor quote comparison, shipment tracker, budget in S$) and generate the performance workbooks. Any anonymised internal workbooks added later stay out of non-prod. |
 | C4.1, C4.4 | Reserve a `doc.ai_help` capability in the role map, matching the sheet and deck ones. |
 | C5.3 | Register Today providers for sheet and deck review and comment requests. |
 | C6.1, C6.4, C5.2, C5.4 | State the non-model implementation: keyword and alias matching in the DPO finder, fixed alert thresholds, template replies, a fixed split for SLIDE-06, rule-based chart types for SHEET-23. |
