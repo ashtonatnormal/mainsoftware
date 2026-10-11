@@ -1,20 +1,28 @@
 # deps
 node_modules/
 
-# build output
+# build and test output
 dist/
 coverage/
 *.tsbuildinfo
 cdk.out/
+test-results/
+playwright-report/
+blob-report/
 
 # env & secrets (every .env file except the template)
 .env*
 !.env.example
 *.pem
 
+# Claude Code personal settings (never committed)
+.claude/settings.local.json
+
 # misc
 .DS_Store
 *.log
 
-# local output that holds people's data (exports, transcript comparisons, test-set clips): add
-# each path here before the code that writes it lands (CLAUDE.md, Security and privacy)
+# local output that holds people's data (exports, transcript comparisons, test-set clips). This
+# repo is public and the Stop hook pushes every file that isn't ignored, so such output goes only
+# here (CLAUDE.md, Security and privacy).
+/local-data/

@@ -71,12 +71,13 @@ notty() {
 # signing keys too), and token shapes for private keys (PEM, PGP), JWTs
 # (Supabase keys), Anthropic, OpenAI and Google keys, Supabase secret and access
 # tokens, GitHub, npm, AWS and SendGrid keys (sk- also right after a \n, \r or
-# \t escape), and Postgres URLs (postgresql+driver:// too) with a password (it
-# may hold @) that isn't an upper-case $VAR, [..], <..> or {..} placeholder,
-# for a dotted host name or an IP (127.x, ::1, localhost and other bare names
-# are local dev).
+# \t escape), AWS secret access keys and LiveKit API secrets assigned to their
+# usual variable names, and Postgres and Valkey/Redis URLs (postgresql+driver://
+# and rediss:// too) with a password (it may hold @) that isn't an upper-case
+# $VAR, [..], <..> or {..} placeholder, for a dotted host name or an IP (127.x,
+# ::1, localhost and other bare names are local dev).
 SECRET_FILES='(^|/)(\.env[^/]*(/.*)?|[^/]*\.env|\.netrc|\.npmrc|\.pgpass|\.mcp\.json|signing_keys[^/]*\.json|credentials[^/]*\.json|[^/]*service[-_]?account[^/]*\.json|[^/]*\.(pem|key|p12|pfx|jks|keystore)|id_(rsa|dsa|ecdsa|ed25519))$'
-SECRET_TOKENS='-----BEGIN ([A-Z]+ )*PRIVATE KEY( BLOCK)?-----|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(^|[^A-Za-z0-9_-]|\\[nrt])sk-((ant|proj|svcacct|admin|None)-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{32,})|AIza[0-9A-Za-z_-]{35}|sb_secret_[A-Za-z0-9_-]{10,}|sbp_[A-Za-z0-9_]{40,}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{30,}|npm_[A-Za-z0-9]{36}|(AKIA|ASIA)[0-9A-Z]{16}|SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}|postgres(ql)?(\+[A-Za-z0-9]+)?://[^@/:[:space:]]*:([^/[:space:]$<[{]|\$[^{A-Z_/[:space:]]|\$[A-Z_][A-Z0-9_]*[^A-Z0-9_@/[:space:]])[^/[:space:]]*@([^@/:[:space:]]*\.[A-Za-z]|\[[^:]|[2-9]|1[^2]|12[^7])'
+SECRET_TOKENS='-----BEGIN ([A-Z]+ )*PRIVATE KEY( BLOCK)?-----|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(^|[^A-Za-z0-9_-]|\\[nrt])sk-((ant|proj|svcacct|admin|None)-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{32,})|AIza[0-9A-Za-z_-]{35}|sb_secret_[A-Za-z0-9_-]{10,}|sbp_[A-Za-z0-9_]{40,}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{30,}|npm_[A-Za-z0-9]{36}|(AKIA|ASIA)[0-9A-Z]{16}|SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}|(aws_secret_access_key|AWS_SECRET_ACCESS_KEY)[^A-Za-z0-9/+]{1,4}[A-Za-z0-9/+]{40}|LIVEKIT_API_SECRET[^A-Za-z0-9]{1,4}[A-Za-z0-9]{20,}|(postgres(ql)?(\+[A-Za-z0-9]+)?|rediss?|valkeys?)://[^@/:[:space:]]*:([^/[:space:]$<[{]|\$[^{A-Z_/[:space:]]|\$[A-Z_][A-Z0-9_]*[^A-Z0-9_@/[:space:]])[^/[:space:]]*@([^@/:[:space:]]*\.[A-Za-z]|\[[^:]|[2-9]|1[^2]|12[^7])'
 ENV_EXAMPLE='(^|/)\.env\.example$'
 # A git-lfs pointer (any spec URL git-lfs accepts; an edit changes only its oid
 # line): the lfs pre-push hook uploads the real content, unscanned.

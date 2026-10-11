@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --no-warnings src/screens/sheets/formula.test.ts && node --experimental-strip-types --no-warnings src/screens/slides/history.test.ts && node --experimental-strip-types --no-warnings src/screens/docs/runs.test.ts",
+    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\"",
     "artifact": "npm run build && node scripts/build-artifact.mjs",
     "shots": "node scripts/screenshots.mjs"
   },

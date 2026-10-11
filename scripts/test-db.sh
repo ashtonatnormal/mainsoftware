@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
 # Run the DB tests in db/tests/ against the scratch database scripts/check-migrations.sh just
-# built. A test is a plain .sql file that fails by raising an error, e.g. a DO block that
-# switches to a role (set local role ...) and raises if it can see a row it shouldn't. Files run
-# in name order, each inside a transaction that is rolled back afterwards, so they can't affect
-# each other; don't commit inside one.
+# built. A test is a plain .sql file that fails by raising an error, e.g. a DO block that raises
+# if the role it switched to (set local role ...) can see a row it shouldn't. A test that doesn't
+# switch role runs as a superuser and proves nothing. Every .sql file directly in db/tests/ runs
+# as a test, in name order; keep shared fixtures in a subfolder and include them with \ir.
+#
+# Each test runs inside a transaction that is rolled back afterwards, with deferred constraints
+# checked at the end. A test that ends that transaction itself (COMMIT, ROLLBACK, \connect) or
+# turns ON_ERROR_STOP off fails, and its changes may stay in the scratch database until
+# check-migrations.sh rebuilds it.
 #
 # Usage: scripts/check-migrations.sh && scripts/test-db.sh
-# Same connection settings as check-migrations.sh.
+# Same connection settings and CHECK_DB as check-migrations.sh.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 export PGHOST=${PGHOST:-127.0.0.1} PGPORT=${PGPORT:-5432} PGUSER=${PGUSER:-postgres} PGPASSWORD=${PGPASSWORD:-postgres}
 db=${CHECK_DB:-hearth_check}
+[[ $db =~ ^[a-z_][a-z0-9_]{0,56}_check$ ]] ||
+  { echo "CHECK_DB must be a lower-case name ending in _check, at most 63 characters, not '$db'" >&2; exit 2; }
 
 shopt -s nullglob
 tests=(db/tests/*.sql)
@@ -20,10 +27,17 @@ if [ "${#tests[@]}" -eq 0 ]; then
   exit 0
 fi
 
+# Runs after the test, inside its transaction: an error the test let through has aborted the
+# transaction, so this fails too.
+guard="do \$\$ begin if current_setting('hearth.test_txn', true) is distinct from 'on' then
+  raise exception 'the test ended its own transaction (COMMIT, ROLLBACK or \\connect); its changes may have stayed in $db';
+end if; end \$\$"
 failed=0
 for path in "${tests[@]}"; do
-  if { echo 'begin;'; cat "$path"; echo; echo 'rollback;'; } |
-     psql --no-psqlrc -w -v ON_ERROR_STOP=1 -q -d "$db" >/dev/null; then
+  # -f keeps psql's file:line prefix on errors and lets \ir find files next to the test.
+  if psql --no-psqlrc -w -v ON_ERROR_STOP=1 -q -d "$db" \
+       -c 'begin' -c "set local hearth.test_txn = 'on'" -f "$path" \
+       -c '\set ON_ERROR_STOP 1' -c 'set constraints all immediate' -c "$guard" -c 'rollback' >/dev/null; then
     echo "ok    $path"
   else
     echo "FAIL  $path" >&2

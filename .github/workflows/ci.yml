@@ -3,6 +3,10 @@ on:
   pull_request: {}
   push:
     branches: [main]
+# The job ids `check` and `migrations` are the required checks in .github/rulesets/protect-main.json.
+# Don't rename them, give them a `name:`, add a matrix, or move them to another workflow: a PR then
+# waits forever for a check that never reports. Put new work in new jobs that these list in
+# `needs:`.
 jobs:
   # Until the npm-workspaces monorepo lands, the only package is demo/, so this runs there and
   # has no lint step. With the workspace it becomes, from the root: npm ci, npm run check
@@ -15,10 +19,10 @@ jobs:
     env:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"  # only the local screenshot script uses it
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: demo/package-lock.json
       - run: npm ci
@@ -44,12 +48,15 @@ jobs:
       PGUSER: postgres
       PGPASSWORD: postgres
     steps:
-      - uses: actions/checkout@v4
-      # Builds a scratch database from every file in db/migrations/; fails on a bad or duplicate
-      # name, the first failing migration, or a table with RLS off.
+      - uses: actions/checkout@v5
+      # Builds a scratch database as hearth_owner from every file in db/migrations/, in one
+      # transaction, then checks it against CLAUDE.md's Database rules (RLS, views, grants,
+      # functions, ownership, hearth_app's attributes).
       - run: scripts/check-migrations.sh
-      # DB tests in db/tests/: who can read and write what, for every role the table concerns.
+      # DB tests in db/tests/: who can read and write what, for every role, including the ones
+      # that must see nothing.
       - run: scripts/test-db.sh
-      # Risky migrations also get an upgrade step here: build the database up to the migration
-      # before it, load production-shaped data, apply it, and check the data survived
-      # (scripts/check-<name>-upgrade.sh).
+      # Risky migrations also get an upgrade step here, after the DB tests:
+      #   UP_TO=NNNN scripts/check-migrations.sh && scripts/check-<name>-upgrade.sh
+      # builds the database up to the migration before NNNN, loads production-shaped data, applies
+      # NNNN and checks the data survived.
