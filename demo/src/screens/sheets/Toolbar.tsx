@@ -1,14 +1,15 @@
 // Editing toolbar for Sheets: undo/redo, bold/italic, alignment, number format,
-// fill colour and Σ quick functions. Compact on phones (it scrolls sideways
-// inside itself; menus are fixed so they aren't clipped).
+// fill colour, Σ quick functions and fill down/right. Compact on phones (it
+// scrolls sideways inside itself; menus are fixed so they aren't clipped).
 import { useRef, useState, type ReactNode } from 'react'
-import { AlignCenter, AlignLeft, AlignRight, Bold, ChevronDown, Italic, PaintBucket, Redo2, Sigma, Undo2 } from 'lucide-react'
+import { AlignCenter, AlignLeft, AlignRight, ArrowDownToLine, ArrowRightToLine, Bold, ChevronDown, Italic, PaintBucket, Redo2, Sigma, Undo2 } from 'lucide-react'
 import type { SheetCell } from '../../types'
 import { cx } from '../../ui'
 import { FILL_CLASS } from './Grid'
 import { MenuItem, Popover } from './Popover'
 
 export type QuickFn = 'SUM' | 'AVERAGE' | 'MIN' | 'MAX' | 'COUNT'
+export type FillDir = 'down' | 'right'
 type Align = NonNullable<SheetCell['align']>
 type Fmt = SheetCell['fmt'] | 'auto'
 type Fill = SheetCell['fill'] | 'none'
@@ -40,6 +41,9 @@ export interface ToolbarProps {
   onRedo: () => void
   onStyle: (patch: Partial<SheetCell>) => void
   onQuick: (fn: QuickFn) => void
+  onFill: (dir: FillDir) => void
+  /** Everything waits while a formula is picking cells on another tab. */
+  locked?: boolean
 }
 
 function TB({ label, active, onClick, children, disabled, className, refEl, expanded }: { label: string; active?: boolean; onClick: () => void; children: ReactNode; disabled?: boolean; className?: string; refEl?: (el: HTMLButtonElement | null) => void; expanded?: boolean }) {
@@ -62,8 +66,8 @@ function TB({ label, active, onClick, children, disabled, className, refEl, expa
 
 const Divider = () => <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line" />
 
-export function Toolbar({ cell, canUndo, canRedo, onUndo, onRedo, onStyle, onQuick }: ToolbarProps) {
-  const [menu, setMenu] = useState<null | 'fmt' | 'fill' | 'sum' | 'align'>(null)
+export function Toolbar({ cell, canUndo, canRedo, onUndo, onRedo, onStyle, onQuick, onFill, locked }: ToolbarProps) {
+  const [menu, setMenu] = useState<null | 'fmt' | 'fill' | 'sum' | 'align' | 'copy'>(null)
   const anchors = useRef<Record<string, HTMLButtonElement | null>>({})
   const align: Align = cell?.align ?? 'left'
   const fmt: Fmt = cell?.fmt ?? 'auto'
@@ -72,7 +76,8 @@ export function Toolbar({ cell, canUndo, canRedo, onUndo, onRedo, onStyle, onQui
   const fmtLabel = FORMATS.find(f => f.value === fmt)?.label ?? 'Automatic'
 
   return (
-    <div role="toolbar" aria-label="Formatting" className="flex h-11 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-line bg-surface px-2 [scrollbar-width:none] md:px-3">
+    <fieldset disabled={locked} className="contents">
+    <div role="toolbar" aria-label="Formatting" aria-disabled={locked || undefined} className={cx('flex h-11 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-line bg-surface px-2 transition-opacity [scrollbar-width:none] md:px-3', locked && 'opacity-60')}>
       <TB label="Undo (Ctrl+Z)" onClick={onUndo} disabled={!canUndo}><Undo2 size={17} /></TB>
       <TB label="Redo (Ctrl+Shift+Z)" onClick={onRedo} disabled={!canRedo}><Redo2 size={17} /></TB>
       <Divider />
@@ -102,6 +107,9 @@ export function Toolbar({ cell, canUndo, canRedo, onUndo, onRedo, onStyle, onQui
       <Divider />
       <TB label="Insert a function (Σ)" expanded={menu === 'sum'} refEl={el => { anchors.current.sum = el }} onClick={() => setMenu(menu === 'sum' ? null : 'sum')} className="gap-0.5 px-2">
         <span className="flex items-center gap-0.5"><Sigma size={17} /><ChevronDown size={13} className="text-muted" /></span>
+      </TB>
+      <TB label="Fill down or right" expanded={menu === 'copy'} refEl={el => { anchors.current.copy = el }} onClick={() => setMenu(menu === 'copy' ? null : 'copy')} className="gap-0.5 px-2">
+        <span className="flex items-center gap-0.5"><ArrowDownToLine size={17} /><ChevronDown size={13} className="text-muted" /></span>
       </TB>
 
       <Popover label="Alignment" anchor={anchors.current.align ?? null} open={menu === 'align'} onClose={close}>
@@ -144,6 +152,12 @@ export function Toolbar({ cell, canUndo, canRedo, onUndo, onRedo, onStyle, onQui
         ))}
         <p className="px-3 pt-1 pb-1.5 text-[11px] text-muted">Uses the selected cells, or the numbers above the cell.</p>
       </Popover>
+      <Popover label="Fill" anchor={anchors.current.copy ?? null} open={menu === 'copy'} onClose={close}>
+        <MenuItem icon={<ArrowDownToLine size={16} />} onClick={() => { onFill('down'); close() }} hint="Ctrl+D">Fill down</MenuItem>
+        <MenuItem icon={<ArrowRightToLine size={16} />} onClick={() => { onFill('right'); close() }} hint="Ctrl+R">Fill right</MenuItem>
+        <p className="max-w-60 px-3 pt-1 pb-1.5 text-[11px] text-muted">Copies the top row (or left column) of the selection into the rest. References move with it; tab names stay.</p>
+      </Popover>
     </div>
+    </fieldset>
   )
 }

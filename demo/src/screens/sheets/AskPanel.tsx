@@ -1,6 +1,7 @@
 // "Ask about this sheet" panel (DOC-12, D16). Suggest-only: answers are worked
-// out from the cells and link back to them; a suggested formula goes in only
-// when the person accepts it.
+// out from the cells and link back to them (on any tab: a chip for a cell on
+// another tab switches to it); a suggested formula goes in only when the person
+// accepts it.
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, Grid3x3, Lock, Sigma, Sparkles } from 'lucide-react'
 import type { Sheet, SheetTab } from '../../types'
@@ -37,7 +38,8 @@ export function AskPanel({ sheet, tab, active, canEdit, onRef, onAcceptFormula, 
   }
 
   const addr = addrOf(active)
-  const suggestion = canEdit ? suggestFormula(tab, active) : null
+  const suggestion = canEdit ? suggestFormula(tab, active, sheet.tabs) : null
+  const chips = (refs: CellRef[]) => <RefChips refs={refs} onRef={onRef} tabs={sheet.tabs} here={tab.id} />
   const showSuggestion = suggestion && dismissed !== `${tab.id}:${addr}:${suggestion.formula}`
 
   return (
@@ -63,7 +65,7 @@ export function AskPanel({ sheet, tab, active, canEdit, onRef, onAcceptFormula, 
                 <span className="text-[13px] text-muted tabular">= {suggestion.preview}</span>
               </div>
               <p className="text-[13px]">{suggestion.why}</p>
-              <RefChips refs={suggestion.refs} onRef={onRef} />
+              {chips(suggestion.refs)}
               <div className="flex gap-2 pt-1">
                 <Button size="sm" variant="primary" onClick={() => onAcceptFormula(addr, suggestion.formula)}>Accept</Button>
                 <Button size="sm" variant="ghost" onClick={() => setDismissed(`${tab.id}:${addr}:${suggestion.formula}`)}>Discard</Button>
@@ -96,7 +98,7 @@ export function AskPanel({ sheet, tab, active, canEdit, onRef, onAcceptFormula, 
                 <span className="min-w-0 truncate text-[11px] text-muted">from “{e.tabName}”</span>
               </div>
               <p className="text-sm leading-relaxed">{e.a.text}</p>
-              <RefChips refs={e.a.refs} onRef={onRef} />
+              {chips(e.a.refs)}
               <Feedback />
             </div>
           </article>
@@ -124,21 +126,31 @@ export function AskPanel({ sheet, tab, active, canEdit, onRef, onAcceptFormula, 
   )
 }
 
-function RefChips({ refs, onRef }: { refs: CellRef[]; onRef: (r: CellRef) => void }) {
+/** Chips that select the cells an answer used. A chip for another tab than the one on show names the tab, and switches to it. */
+function RefChips({ refs, onRef, tabs, here }: { refs: CellRef[]; onRef: (r: CellRef) => void; tabs: SheetTab[]; here: string }) {
   if (!refs.length) return null
   return (
     <div className="flex flex-wrap gap-1.5">
-      {refs.map((r, i) => (
-        <button
-          key={i}
-          onClick={() => onRef(r)}
-          title={`Select ${r.label}`}
-          className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface px-2 py-0.5 font-mono text-xs text-fg transition hover:border-agent hover:text-agent"
-        >
-          <Grid3x3 size={11} className="text-muted" aria-hidden />
-          {r.label}
-        </button>
-      ))}
+      {refs.map((r, i) => {
+        const t = tabs.find(x => x.id === r.tabId)
+        const other = r.tabId !== here
+        const label = t ? (other ? `Select ${r.label} on “${t.name}”` : `Select ${r.label}`) : `${r.label} was on a tab that has been deleted`
+        return (
+          <button
+            key={i}
+            onClick={() => onRef(r)}
+            disabled={!t}
+            aria-label={label}
+            title={label}
+            className="inline-flex min-h-7 max-w-full items-center gap-1 rounded-lg border border-line bg-surface px-2 py-0.5 font-mono text-xs text-fg transition hover:border-agent hover:text-agent disabled:opacity-50 disabled:hover:border-line disabled:hover:text-fg"
+          >
+            <Grid3x3 size={11} className="shrink-0 text-muted" aria-hidden />
+            {other && <span className="min-w-0 truncate font-sans text-muted">{t?.name ?? 'Deleted tab'}</span>}
+            {other && <span className="text-muted" aria-hidden>›</span>}
+            <span className="shrink-0">{r.label}</span>
+          </button>
+        )
+      })}
     </div>
   )
 }
