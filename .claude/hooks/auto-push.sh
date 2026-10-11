@@ -19,7 +19,8 @@
 #   - commits a new file only in a source folder or as a known root config file,
 #     and never one shaped like data (this repo is public; CLAUDE.md, Git).
 #     Changes to tracked files are always committed. Other new files stay
-#     uncommitted and are named in the message
+#     uncommitted and are named in the message; if one is already staged, the
+#     checkpoint is refused and the index left as it was
 #
 # Opt out for a session: HEARTH_AUTOPUSH=0 claude
 set -uo pipefail
@@ -223,6 +224,14 @@ if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
   if git diff --cached --quiet; then
     restore  # nothing to commit (e.g. only a dirty submodule or nested repo)
   else
+    # A new file someone staged by hand gets the same allow-list check: refuse the
+    # checkpoint rather than commit it (renames count as new files here).
+    staged_out=$(git diff --cached --no-renames --name-only -z --diff-filter=A |
+      while IFS= read -r -d '' f; do checkpoint_allowed "$f" || printf '%s ' "$f"; done)
+    if [ -n "$staged_out" ]; then
+      restore
+      say "nothing committed - staged new files outside the checkpoint allow-list: ${staged_out% } (commit them by hand if they hold no people's data)"
+    fi
     blocked=$(scan_staged) || { restore; say "nothing committed - could not scan the staged files on $branch"; }
     if [ -n "$blocked" ]; then
       restore
