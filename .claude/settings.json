@@ -12,5 +12,17 @@
         ]
       }
     ]
+  },
+  "extraKnownMarketplaces": {
+    "claude-kit": {
+      "source": {
+        "source": "github",
+        "repo": "JohnnyVizz/claude-kit"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "savvy-flow@claude-kit": true,
+    "savvy-progress@claude-kit": true
   }
 }
