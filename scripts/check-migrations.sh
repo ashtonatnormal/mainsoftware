@@ -95,8 +95,17 @@ if [ -f "$journal" ]; then
   fi
 fi
 [ "$status" -eq 0 ] || exit "$status"
+if [ -n "$up_to" ]; then
+  found=
+  for path in ${named[@]+"${named[@]}"}; do
+    case "${path##*/}" in "${up_to}"_*) found=1 ;; esac
+  done
+  [ -n "$found" ] || { echo "UP_TO=$up_to: no migration with that number in db/migrations/" >&2; exit 2; }
+fi
 
-if [ "$(sql -d postgres -Atc "select count(*) from pg_roles where rolname = 'rds_superuser'")" != 0 ]; then
+rds=$(sql -d postgres -Atc "select count(*) from pg_roles where rolname = 'rds_superuser'") ||
+  { echo "Can't connect to Postgres: check the PG* settings and that the local stack is running." >&2; exit 2; }
+if [ "$rds" != 0 ]; then
   echo "Refusing to run on an RDS server: migrations change roles, which the whole server shares. Point PG* at the local stack." >&2
   exit 2
 fi

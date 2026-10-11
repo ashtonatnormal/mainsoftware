@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Claude Code Stop hook: after every Claude response, commit everything in the
-# working tree and push the current branch to GitHub. Each response is a
-# checkpoint, so unfinished work is pushed too (squash-merge the PR).
+# Claude Code Stop hook: after every Claude response, commit the working tree
+# and push the current branch to GitHub. Each response is a checkpoint, so
+# unfinished work is pushed too (squash-merge the PR).
 #
 # Guardrails (see CLAUDE.md):
 #   - never commits or pushes on main/master or off a local branch
@@ -16,6 +16,10 @@
 #   - pushes only the branch commit it scanned: no tags, submodule commits or
 #     git-lfs objects
 #   - leaves nested repositories (e.g. Claude's .claude/worktrees/) uncommitted
+#   - commits a new file only in a source folder or as a known root config file,
+#     and never one shaped like data (this repo is public; CLAUDE.md, Git).
+#     Changes to tracked files are always committed. Other new files stay
+#     uncommitted and are named in the message
 #
 # Opt out for a session: HEARTH_AUTOPUSH=0 claude
 set -uo pipefail
@@ -30,7 +34,7 @@ unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PA
 # drop control characters, quotes and backslashes so the string stays valid.
 say() {
   local text
-  text=$(printf '%s' "$1" | tr '\n\r\t' '   ' | tr -d '\000-\037"\\')
+  text=$(printf '%s%s' "$1" "${note-}" | tr '\n\r\t' '   ' | tr -d '\000-\037"\\')
   printf '{"systemMessage": "auto-push: %s"}\n' "$text"
   exit 0
 }
@@ -79,6 +83,17 @@ notty() {
 SECRET_FILES='(^|/)(\.env[^/]*(/.*)?|[^/]*\.env|\.netrc|\.npmrc|\.pgpass|\.mcp\.json|signing_keys[^/]*\.json|credentials[^/]*\.json|[^/]*service[-_]?account[^/]*\.json|[^/]*\.(pem|key|p12|pfx|jks|keystore)|id_(rsa|dsa|ecdsa|ed25519))$'
 SECRET_TOKENS='-----BEGIN ([A-Z]+ )*PRIVATE KEY( BLOCK)?-----|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(^|[^A-Za-z0-9_-]|\\[nrt])sk-((ant|proj|svcacct|admin|None)-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{32,})|AIza[0-9A-Za-z_-]{35}|sb_secret_[A-Za-z0-9_-]{10,}|sbp_[A-Za-z0-9_]{40,}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{30,}|npm_[A-Za-z0-9]{36}|(AKIA|ASIA)[0-9A-Z]{16}|SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}|(aws_secret_access_key|AWS_SECRET_ACCESS_KEY)[^A-Za-z0-9/+:=]{0,3}[:=][^A-Za-z0-9/+]{0,3}[A-Za-z0-9/+]{40}([^A-Za-z0-9/+]|$)|(LIVEKIT_API_SECRET|livekit_api_secret|livekitApiSecret)[^A-Za-z0-9:=]{0,3}[:=][^A-Za-z0-9]{0,3}[A-Za-z0-9]{32,}([^A-Za-z0-9(._-]|$)|(postgres(ql)?(\+[A-Za-z0-9]+)?|rediss?|valkeys?)://[^@/:[:space:]]*:([^/[:space:]$<[{]|\$[^{A-Z_/[:space:]]|\$[A-Z_][A-Z0-9_]*[^A-Z0-9_@/[:space:]])[^/[:space:]]*@([^@/:[:space:]]*\.[A-Za-z]|\[[^:]|[2-9]|1[^2]|12[^7])'
 ENV_EXAMPLE='(^|/)\.env\.example$'
+# New files a checkpoint may commit: source folders and root config files, but
+# nothing shaped like data, in any folder. Matched without regard to case.
+CHECKPOINT_NEW='^((apps|packages|db|docs|scripts|infra|demo|spike|\.github|\.claude)/.+|(CLAUDE|AGENTS|README)\.md|LICENSE|package(-lock)?\.json|tsconfig([.-][^/]*)?\.json|biome\.jsonc?|docker-compose\.ya?ml|\.gitignore|\.env\.example|\.nvmrc|\.editorconfig|\.coderabbit\.yaml|\.pr_agent\.toml|renovate\.json)$'
+DATA_SHAPED='\.(csv|tsv|jsonl|ndjson|xlsx?|xlsm|docx?|pptx?|pdf|wav|mp3|m4a|aac|ogg|oga|opus|webm|mp4|mov|flac|dump|sqlite3?|db|parquet|zip|gz|tgz)$'
+checkpoint_allowed() {
+  local ok=1
+  shopt -s nocasematch
+  if [[ $1 =~ $CHECKPOINT_NEW ]] && ! [[ $1 =~ $DATA_SHAPED ]]; then ok=0; fi
+  shopt -u nocasematch
+  return $ok
+}
 # A git-lfs pointer (any spec URL git-lfs accepts; an edit changes only its oid
 # line): the lfs pre-push hook uploads the real content, unscanned.
 LFS_POINTER='^(version (https://(git-lfs|hawser)\.github\.com/spec/|http://git-media\.io/v/)|oid sha256:)'
@@ -177,11 +192,24 @@ if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
   # .claude/worktrees/ at any depth (even a stale one git no longer sees as a
   # repository): git would commit each as a gitlink that points nowhere, or as
   # a copy. The list goes through a file: bash 3.2 in POSIX mode rejects <(..).
-  nested=()
+  # New files outside the checkpoint allow-list are left out the same way, and
+  # named in the message so a person can commit them by hand if they're safe.
+  nested=() leftout=0 names=''
   git ls-files -z -o --exclude-standard > "$gitdir/autopush.nested"
   while IFS= read -r -d '' f; do
-    case "$f" in */) nested+=(":(exclude,literal)${f%/}") ;; esac
+    case "$f" in
+      */) nested+=(":(exclude,literal)${f%/}") ;;
+      *) if ! checkpoint_allowed "$f"; then
+           nested+=(":(exclude,literal)$f")
+           leftout=$((leftout + 1))
+           [ "$leftout" -le 10 ] && names+="$f "
+         fi ;;
+    esac
   done < "$gitdir/autopush.nested"
+  if [ "$leftout" -gt 0 ]; then
+    [ "$leftout" -gt 10 ] && names+="and $((leftout - 10)) more "
+    note=" - left uncommitted (new files outside the checkpoint allow-list; commit them by hand if safe): ${names% }"
+  fi
   staging=$backup
   if ! out=$(git add -A -- . ':(exclude,glob)**/.claude/worktrees/**' ${nested[@]+"${nested[@]}"} 2>&1); then
     staging=; restore
@@ -226,6 +254,7 @@ if [ "${pushremote:-origin}" != origin ] && [ "$pushremote" != . ]; then
 fi
 if git rev-parse -q --verify "refs/remotes/origin/$branch" >/dev/null &&
    [ -z "$(git rev-list "refs/remotes/origin/$branch..$sha")" ]; then
+  [ -n "${note-}" ] && say "nothing new to push on $branch"
   exit 0  # already up to date
 fi
 # The scan trusts refs/remotes/origin/, so only origin may fetch into it: every

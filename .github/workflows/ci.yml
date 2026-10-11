@@ -3,6 +3,8 @@ on:
   pull_request: {}
   push:
     branches: [main]
+permissions:
+  contents: read
 # The job ids `check` and `migrations` are the required checks in .github/rulesets/protect-main.json.
 # Don't rename them, give them a `name:`, add a matrix, or move them to another workflow: a PR then
 # waits forever for a check that never reports. Add new work as steps in these jobs where you can.
@@ -25,6 +27,8 @@ jobs:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"  # only the local screenshot script uses it
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
@@ -54,6 +58,8 @@ jobs:
       PGPASSWORD: postgres
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       # Builds a scratch database from every file in db/migrations/, in one transaction, from a
       # session that can only act as hearth_owner, then checks it against CLAUDE.md's Database
       # rules (RLS, views, grants, functions, ownership, hearth_app's attributes).
