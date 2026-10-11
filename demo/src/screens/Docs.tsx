@@ -1,11 +1,12 @@
 // Docs (DOC-01..11, J6, D16, D19): a Google Docs-style editor that lives in the
 // Drive. Editors switch between Editing and Viewing; every block is editable,
-// with keyboard flow, a "/" menu and Markdown shortcuts. Saves are debounced to
+// with keyboard flow, a "/" menu and Markdown shortcuts, and text within a line
+// can be bold, italic, underlined or struck through. Saves are debounced to
 // the store and each visit you change adds a "You edited" version. Viewing keeps
 // anchored comments, live presence, version history with restore, and AI help
 // that only suggests. Without a docId, the docs route shows the Drive.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, Check, ClipboardCopy, CloudCheck, CloudUpload, Copy, Ellipsis, Eye, FileQuestion, History, Info, Lock, MessageSquarePlus, MessageSquareText, Pencil, Redo2, Sparkles, Star, Trash2, Undo2 } from 'lucide-react'
+import { ALargeSmall, ArrowLeft, Bold, Check, ClipboardCopy, CloudCheck, CloudUpload, Copy, Ellipsis, Eye, FileQuestion, History, Info, Italic, Lock, MessageSquarePlus, MessageSquareText, Pencil, Redo2, Sparkles, Star, Strikethrough, Trash2, Underline, Undo2 } from 'lucide-react'
 import type { Doc, Folder, Route } from '../types'
 import { newId, useStore, type State } from '../store'
 import { ME, personById } from '../data/people'
@@ -23,6 +24,12 @@ import { Comments, DetailsSheet, PermissionsSheet, stamp, Versions } from './doc
 import { Menu, useKeyboardInset, useMedia, type MenuItem } from './docs/ui'
 import { blockOrder, byName, canComment, cap, editorIds, fullName, nameList, openLine, permissionLine, toBlocks, toMarkdown, typeLabels, UNTITLED, type BlockType } from './docs/model'
 import { useDocDraft, type DocDraft } from './docs/useDocDraft'
+import { useInline } from './docs/useInline'
+import { markLabels, MARKS, type Mark } from './docs/runs'
+
+const markIcons: Record<Mark, typeof Bold> = { b: Bold, i: Italic, u: Underline, s: Strikethrough }
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+const markKeys: Record<Mark, string> = isMac ? { b: '⌘B', i: '⌘I', u: '⌘U', s: '⌘⇧X' } : { b: 'Ctrl+B', i: 'Ctrl+I', u: 'Ctrl+U', s: 'Ctrl+Shift+X' }
 
 export default function DocsScreen() {
   const { state } = useStore()
@@ -88,6 +95,14 @@ function DocView({ doc }: { doc: Doc }) {
   const [dialog, setDialog] = useState<'share' | 'perm' | 'details' | 'trash' | null>(null)
   const [markdown, setMarkdown] = useState<string | null>(null)
   const assist = useAssist({ doc, draft, editable, title: draft.title.trim() || UNTITLED })
+  // Bold, italic, underline and strikethrough for the line you're in (the caret's style, and toggling it).
+  const inline = useInline(draft, editing)
+  // Phones show block types or text styles in the bottom bar; selecting text brings up the styles.
+  const [phoneBar, setPhoneBar] = useState<'blocks' | 'marks'>('blocks')
+  const ranged = !!inline.state?.range
+  useEffect(() => {
+    if (ranged) setPhoneBar('marks')
+  }, [ranged])
 
   const setMode = (m: 'edit' | 'view') => {
     modes.set(doc.id, m)
@@ -224,6 +239,27 @@ function DocView({ doc }: { doc: Doc }) {
   const activeType = draft.items.find(i => i.key === active)?.block.type
   const setType = (t: BlockType) => applyType(draft, active, t)
   const typeHint = (t: BlockType) => (activeType ? typeLabels[t] : `${typeLabels[t]} (click a line first)`)
+  const markHint = (m: Mark) => (inline.state ? `${markLabels[m]} (${markKeys[m]})` : `${markLabels[m]} (click a line first)`)
+  const markButton = (m: Mark, phone: boolean) => {
+    const Icon = markIcons[m]
+    const on = !!inline.state?.marks[m]
+    return (
+      <button
+        key={m}
+        aria-pressed={on}
+        aria-label={markLabels[m]}
+        title={markHint(m)}
+        disabled={!inline.state}
+        onMouseDown={e => e.preventDefault()}
+        onClick={() => inline.toggle(m)}
+        className={phone
+          ? cx('grid h-9 max-w-10 min-w-7 flex-1 place-items-center rounded-full transition disabled:opacity-40', on ? 'bg-accent-soft text-accent-ink' : 'hover:bg-surface-2')
+          : cx('grid size-8 shrink-0 place-items-center rounded-lg transition disabled:opacity-40 disabled:hover:bg-transparent', on ? 'bg-accent-soft text-accent-ink' : 'text-muted hover:bg-surface-2 hover:text-fg')}
+      >
+        <Icon size={phone ? 19 : 16} strokeWidth={on ? 2.6 : 2} aria-hidden />
+      </button>
+    )
+  }
   const at = editing ? active ?? undefined : undefined
   const slashActions = assist.items().filter(i => !i.disabled).map(i => ({ id: `ai-${i.id}`, label: i.label, hint: '', icon: i.icon, run: (key: string) => assist.run(i.id as AssistKind, key) }))
 
@@ -246,7 +282,7 @@ function DocView({ doc }: { doc: Doc }) {
       />
 
       {editing && desktop && (
-        <div className="flex items-center gap-2 border-b border-line bg-surface px-3 py-1.5 sm:px-4" role="toolbar" aria-label="Block type">
+        <div className="flex items-center gap-2 border-b border-line bg-surface px-3 py-1.5 sm:px-4" role="toolbar" aria-label="Formatting">
           <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
             <IconButton label="Undo" title="Undo (Ctrl+Z)" className="size-8 text-muted hover:text-fg disabled:opacity-40" disabled={!draft.canUndo()} onMouseDown={e => e.preventDefault()} onClick={draft.undo}><Undo2 size={16} /></IconButton>
             <IconButton label="Redo" title="Redo (Ctrl+Shift+Z)" className="size-8 text-muted hover:text-fg disabled:opacity-40" disabled={!draft.canRedo()} onMouseDown={e => e.preventDefault()} onClick={draft.redo}><Redo2 size={16} /></IconButton>
@@ -268,6 +304,8 @@ function DocView({ doc }: { doc: Doc }) {
                 </button>
               )
             })}
+            <span className="mx-1.5 h-5 w-px shrink-0 bg-line" aria-hidden />
+            <div role="group" aria-label="Text style" className="flex shrink-0 items-center gap-0.5">{MARKS.map(m => markButton(m, false))}</div>
             <span className="mx-1.5 h-5 w-px shrink-0 bg-line" aria-hidden />
             <button
               onMouseDown={e => e.preventDefault()}
@@ -312,6 +350,7 @@ function DocView({ doc }: { doc: Doc }) {
               onActive={setActive}
               onSelectText={setSelection}
               onComment={startComment}
+              inline={inline}
               slashActions={slashActions}
               afterTitle={assist.slot('top')}
               afterBlock={assist.afterBlock()}
@@ -350,10 +389,21 @@ function DocView({ doc }: { doc: Doc }) {
       </div>
 
       {!desktop && editing && (
-        <div className="flex items-center gap-1 border-t border-line bg-surface px-1.5 py-1.5" style={{ marginBottom: inset }} role="toolbar" aria-label="Block type">
+        <div className="flex items-center gap-1 border-t border-line bg-surface px-1.5 py-1.5" style={{ marginBottom: inset }} role="toolbar" aria-label="Formatting">
           {/* The buttons share the width, so the bar fits from 320 px up without hiding Done. */}
           <div className="flex min-w-0 flex-1 items-center">
-            {blockOrder.map(t => {
+            <button
+              aria-label="Text style"
+              aria-pressed={phoneBar === 'marks'}
+              title={phoneBar === 'marks' ? 'Back to block types' : 'Bold, italic, underline, strikethrough'}
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => setPhoneBar(phoneBar === 'marks' ? 'blocks' : 'marks')}
+              className={cx('grid h-9 max-w-10 min-w-7 flex-1 place-items-center rounded-full transition', phoneBar === 'marks' ? 'bg-accent-soft text-accent-ink' : 'hover:bg-surface-2')}
+            >
+              <ALargeSmall size={20} aria-hidden />
+            </button>
+            <span className="mx-0.5 h-6 w-px shrink-0 bg-line" aria-hidden />
+            {phoneBar === 'marks' ? MARKS.map(m => markButton(m, true)) : blockOrder.map(t => {
               const Icon = typeIcons[t]
               return (
                 <button
@@ -364,13 +414,14 @@ function DocView({ doc }: { doc: Doc }) {
                   disabled={!activeType}
                   onMouseDown={e => e.preventDefault()}
                   onClick={() => setType(t)}
-                  className={cx('grid h-9 max-w-10 min-w-7 flex-1 place-items-center rounded-full transition disabled:opacity-40', activeType === t ? 'bg-surface-2 text-accent-ink' : 'hover:bg-surface-2')}
+                  // Below 400 px "Text" makes way so the others stay 40 px wide: tapping a pressed type turns the line back into text.
+                  className={cx('grid h-9 max-w-10 min-w-7 flex-1 place-items-center rounded-full transition disabled:opacity-40', activeType === t ? 'bg-surface-2 text-accent-ink' : 'hover:bg-surface-2', t === 'p' && 'max-[399px]:hidden')}
                 >
                   <Icon size={19} aria-hidden />
                 </button>
               )
             })}
-            <span className="mx-0.5 h-6 w-px shrink-0 bg-line" aria-hidden />
+            <span className={cx('mx-0.5 h-6 w-px shrink-0 bg-line', phoneBar === 'marks' && 'ml-auto')} aria-hidden />
             <button aria-label="Help me write" title="Help me write" onMouseDown={e => e.preventDefault()} onClick={() => setMenu('assist-bar')} className="grid h-9 max-w-10 min-w-7 flex-1 place-items-center rounded-full text-agent transition hover:bg-surface-2">
               <Sparkles size={19} aria-hidden />
             </button>
@@ -443,7 +494,7 @@ function DocHeader(p: {
         value={draft.title}
         placeholder={UNTITLED}
         size={Math.max(10, draft.title.length + 1)}
-        onChange={e => draft.setTitle(e.target.value)}
+        onChange={e => draft.setTitle(e.target.value, e.target.selectionEnd ?? undefined)}
         onKeyDown={e => {
           if (e.key !== 'Enter' && e.key !== 'Escape') return
           e.preventDefault()

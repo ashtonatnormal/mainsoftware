@@ -126,6 +126,28 @@ export const sheets: Sheet[] = [
           F14: { b: true, fmt: 'currency', fill: 'accent' }, F16: { b: true, fmt: 'currency', fill: 'ok' },
         },
       }),
+      // Read from the Roster tab, so it follows any change to the roster.
+      tab('t_summary', 'Summary', [
+        ['Item', 'Value'],
+        ['People on the roster', '=COUNTA(Roster!A2:A12)'],
+        ['Total hours', '=Roster!D14'],
+        ['Total OT pay', '=Roster!F14'],
+        ['Budget', '=Roster!F15'],
+        ['Left in budget', '=Roster!F16'],
+        ['Budget used', '=B4/B5'],
+        ['Average rate', '=AVERAGE(Roster!E2:E12)'],
+        ['Average OT pay a person', '=B4/B2'],
+        [],
+        ['Read from the Roster tab'],
+      ], {
+        cols: 6, rows: 20, frozenRows: 1,
+        widths: { A: 200, B: 130 },
+        style: {
+          ...bold(['A1', 'B1'], { fill: 'muted' }), ...bold(['A4', 'A6']),
+          B4: { b: true, fmt: 'currency', fill: 'accent' }, B5: { fmt: 'currency' }, B6: { b: true, fmt: 'currency', fill: 'ok' },
+          B7: { fmt: 'percent' }, B8: { fmt: 'currency' }, B9: { fmt: 'currency' }, A11: { i: true },
+        },
+      }),
       tab('t_notes', 'Notes', [
         ['Notes from Marcus'],
         ['Container from Pasir Panjang is now Tue 6 am, so the unloading crew moves to Saturday.'],
@@ -140,7 +162,8 @@ export const sheets: Sheet[] = [
     tabs: [
       tab('t_weekly', 'Weekly', [
         ['Week', 'Starts', 'Meridian pallets', 'Existing pallets', 'Total', 'Cold-room capacity', 'Utilisation'],
-        ...weeks.map(([w, s, m, e], i) => [w, s, m, e, `=C${i + 2}+D${i + 2}`, 1000, `=E${i + 2}/F${i + 2}`]),
+        // Capacity comes from the Assumptions tab, so changing it there moves every week.
+        ...weeks.map(([w, s, m, e], i) => [w, s, m, e, `=C${i + 2}+D${i + 2}`, '=Assumptions!$B$3', `=E${i + 2}/F${i + 2}`]),
         [],
         ['Total', null, '=SUM(C2:C9)', '=SUM(D2:D9)', '=SUM(E2:E9)', null, null],
         ['Average', null, '=AVERAGE(C2:C9)', '=AVERAGE(D2:D9)', '=AVERAGE(E2:E9)', null, '=AVERAGE(G2:G9)'],
@@ -158,9 +181,9 @@ export const sheets: Sheet[] = [
       tab('t_assume', 'Assumptions', [
         ['Assumption', 'Value', 'Source'],
         ['Meridian volume from week 3', '1,200 a month', 'Meridian Foods MSA, Schedule B'],
-        ['Cold-room capacity', '1,000 pallets a week', 'Ops wiki · site guide'],
+        ['Cold-room capacity (pallets a week)', 1000, 'Ops wiki · site guide'],
         ['Week 1 is racking and training', 'No Meridian pallets', 'Q4 Launch Proposal'],
-      ], { cols: 5, rows: 20, widths: { A: 230, B: 170, C: 240 }, style: bold(['A1', 'B1', 'C1'], { fill: 'muted' }) }),
+      ], { cols: 5, rows: 20, widths: { A: 250, B: 170, C: 240 }, style: { ...bold(['A1', 'B1', 'C1'], { fill: 'muted' }), B3: { fmt: 'integer', align: 'left' } } }),
     ],
   },
   {

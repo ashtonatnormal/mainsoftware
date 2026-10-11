@@ -1,12 +1,14 @@
 // Pure helpers for the doc editor: block keys, the line diff used by version
 // history (DOC-04), Markdown export (DOC-11), the extractive summary and the
 // meeting draft (DOC-09), restoring older versions, and pasted-text parsing.
+// Inline formatting (bold, italic…) lives in ./runs; these keep it intact.
 import type { Doc, DocBlock, DocTemplateId, DocVersion, PersonId, Session } from '../../types'
 import { ME, personById } from '../../data/people'
 import { clock, minutesLabel, shortDay } from '../../time'
+import { formatKey, replaceInRuns, replaceOnce, runsOf, runsToMarkdown, trimRuns, withRuns } from './runs'
 
 export type BlockType = DocBlock['type']
-/** A block plus a stable key, so React keeps each textarea (and its caret) in place. */
+/** A block plus a stable key, so React keeps each editable line (and its caret) in place. */
 export interface Item { key: string; block: DocBlock }
 
 export const UNTITLED = 'Untitled document'
@@ -23,10 +25,10 @@ export const typeLabels: Record<BlockType, string> = {
 export const typeHints: Record<BlockType, string> = { p: '', h1: '#', h2: '##', li: '-', todo: '[]', quote: '>' }
 export const blockOrder: BlockType[] = ['p', 'h1', 'h2', 'li', 'todo', 'quote']
 
-/** Changes a block's type, keeping its text (headings stay on one line). */
+/** Changes a block's type, keeping its text and formatting (headings stay on one line). */
 export function withType(b: DocBlock, type: BlockType): DocBlock {
-  const text = type === 'h1' || type === 'h2' ? b.text.replace(/\s*\n+\s*/g, ' ') : b.text
-  return type === 'todo' ? { type, text, done: b.type === 'todo' ? !!b.done : false } : { type, text }
+  const runs = type === 'h1' || type === 'h2' ? replaceInRuns(runsOf(b), /\s*\n+\s*/g, ' ') : runsOf(b)
+  return withRuns(type === 'todo' ? { type, text: '', done: b.type === 'todo' ? !!b.done : false } : { type, text: '' }, runs)
 }
 
 /** The block that follows when you press Enter in a block of this type. */
@@ -59,7 +61,7 @@ export function parseLines(text: string): DocBlock[] {
 export const isBlank = (blocks: DocBlock[]) => blocks.every((b, i) => (i === 0 && b.type === 'h1') || !b.text.trim())
 export const hasText = (blocks: DocBlock[]) => blocks.some(b => b.type !== 'h1' && b.text.trim())
 export const sameBlocks = (a: DocBlock[], b: DocBlock[]) =>
-  a.length === b.length && a.every((x, i) => x.type === b[i].type && x.text === b[i].text && !!x.done === !!b[i].done)
+  a.length === b.length && a.every((x, i) => x.type === b[i].type && x.text === b[i].text && !!x.done === !!b[i].done && formatKey(x) === formatKey(b[i]))
 
 /** A doc whose first block is a heading matching its title keeps the two in step. */
 export function titleLinked(doc: Pick<Doc, 'title' | 'blocks'>) {
@@ -74,13 +76,36 @@ export const openLine = (items: Item[]): Item | undefined => items.find(it => !i
 /** A brand-new blank doc shows an empty heading with an "Untitled document" placeholder. */
 export function openingBlocks(doc: Doc): DocBlock[] {
   const [h, ...rest] = doc.blocks
-  if (doc.title === UNTITLED && h?.type === 'h1' && h.text === UNTITLED) return [{ ...h, text: '' }, ...rest]
+  if (doc.title === UNTITLED && h?.type === 'h1' && h.text === UNTITLED) return [withRuns(h, []), ...rest]
   return doc.blocks.length ? doc.blocks : [{ type: 'h1', text: '' }, { type: 'p', text: '' }]
 }
 
 // ── Version diffs (DOC-04) ──────────────────────────────────────────────────
 export const lineOf = (b: DocBlock) => (b.type === 'todo' ? `${b.done ? '☑' : '☐'} ${b.text.trim()}` : b.text.trim())
 export const linesOf = (blocks: DocBlock[]) => blocks.filter(b => b.text.trim()).map(lineOf)
+
+/**
+ * Lines whose text stayed but whose formatting changed. Version history
+ * compares plain text, so these are listed separately ("formatting changed").
+ */
+export function formatChanges(before: DocBlock[], after: DocBlock[], added: string[]): string[] {
+  const fresh = new Set(added)
+  const was = new Map<string, Set<string>>()
+  for (const b of before) {
+    if (!b.text.trim()) continue
+    const l = lineOf(b)
+    if (!was.has(l)) was.set(l, new Set())
+    was.get(l)!.add(formatKey(b))
+  }
+  const out: string[] = []
+  for (const b of after) {
+    if (!b.text.trim()) continue
+    const l = lineOf(b)
+    const keys = was.get(l)
+    if (!fresh.has(l) && keys && !keys.has(formatKey(b)) && !out.includes(l)) out.push(l)
+  }
+  return out
+}
 
 /** Lines added and removed between two versions (longest common subsequence). */
 export function diffLines(a: string[], b: string[]): { added: string[]; removed: string[] } {
@@ -124,10 +149,12 @@ export function undoVersion(blocks: DocBlock[], v: DocVersion): DocBlock[] {
     const back = removed.shift()
     if (back !== undefined) {
       const r = parseLine(back)
-      out[i] = r.done !== undefined ? { type: 'todo', text: r.text, done: r.done } : { ...out[i], text: partial ? out[i].text.replace(text, r.text) : r.text }
+      // A whole line swapped back loses its formatting; a sentence put back inside a line keeps the rest's.
+      out[i] = r.done !== undefined ? { type: 'todo', text: r.text, done: r.done } : partial ? replaceOnce(out[i], text, r.text) : withRuns(out[i], [{ text: r.text }])
       if (out[i].type !== 'todo') delete out[i].done
     } else if (partial) {
-      out[i] = { ...out[i], text: out[i].text.replace(text, '').replace(/\s{2,}/g, ' ').trim() }
+      const cut = replaceOnce(out[i], text, '')
+      out[i] = withRuns(cut, trimRuns(replaceInRuns(runsOf(cut), /\s{2,}/g, ' ')))
       if (!out[i].text) out.splice(i, 1)
     } else out.splice(i, 1)
   }
@@ -139,14 +166,15 @@ export function undoVersion(blocks: DocBlock[], v: DocVersion): DocBlock[] {
 }
 
 // ── Markdown (DOC-11) ───────────────────────────────────────────────────────
+/** The doc as Markdown, with **bold**, *italic*, ~~strikethrough~~ and <u>underline</u> (Markdown has no underline of its own). */
 export function toMarkdown(title: string, blocks: DocBlock[]): string {
   const list = (t?: BlockType) => t === 'li' || t === 'todo'
   const parts: string[] = []
   let prev: BlockType | undefined
   if (blocks[0]?.type !== 'h1' || !blocks[0].text.trim()) { parts.push(`# ${title}`); prev = 'h1' }
   for (const b of blocks) {
-    const text = b.text.trim()
-    if (!text) continue
+    if (!b.text.trim()) continue
+    const text = runsToMarkdown(trimRuns(runsOf(b)))
     const md =
       b.type === 'h1' ? `# ${text}`
       : b.type === 'h2' ? `## ${text}`

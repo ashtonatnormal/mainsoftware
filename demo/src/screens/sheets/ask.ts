@@ -1,9 +1,11 @@
 // "Ask about this sheet" (DOC-12, D16): answers computed from the sheet's own
 // cells, never canned. Every answer names the cells it used so the person can
-// check them. Pure: no React, no store.
+// check them, including cells on other tabs that a formula reads. Pure: no
+// React, no store.
 import type { Sheet, SheetTab } from '../../types'
-import { addrOf, colName, computeTab, formatValue, isError, rangeLabel, type Pos, type Range, type Value } from './formula'
+import { addrOf, bookOf, cellsIn, colName, formatValue, formulaRefs, isError, parseAddr, rangeLabel, type Pos, type Range, type Value } from './formula'
 
+/** A chip that selects cells. tabId says which tab they're on (it may not be the tab that was asked about). */
 export interface CellRef { label: string; tabId: string; range: Range }
 export interface SheetAnswer { text: string; refs: CellRef[]; ok: boolean }
 
@@ -12,19 +14,44 @@ const ref = (tab: SheetTab, g: Range): CellRef => ({ label: rangeLabel(g), tabId
 const list = (xs: string[]) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`)
 const num = (v: Value | undefined) => (typeof v === 'number' ? v : null)
 
-/** A tab's evaluated values plus a few ways to read them. */
-export function readTab(tab: SheetTab) {
-  const values = computeTab(tab.cells, tab)
+/** The sheet's tabs with this version of the tab in them (a suggestion preview passes a changed copy). */
+function withTab(tab: SheetTab, tabs: readonly SheetTab[]): readonly SheetTab[] {
+  if (tabs.includes(tab)) return tabs
+  return tabs.some(t => t.id === tab.id) ? tabs.map(t => (t.id === tab.id ? tab : t)) : [...tabs, tab]
+}
+
+/** A tab's evaluated values plus a few ways to read them. Formulas can read the sheet's other tabs. */
+export function readTab(tab: SheetTab, tabs: readonly SheetTab[] = [tab]) {
+  const values = bookOf(withTab(tab, tabs)).values(tab.id)
   const at = (r: number, c: number) => values.get(addrOf({ r, c })) ?? null
   const show = (r: number, c: number) => formatValue(at(r, c), tab.cells[addrOf({ r, c })]?.fmt)
   return { values, at, show }
 }
 
+/** Cells on other tabs that the formulas in g read, as chips, so an answer can point at where a number comes from. */
+export function sourcesOf(tab: SheetTab, g: Range, tabs: readonly SheetTab[]): CellRef[] {
+  const out: CellRef[] = []
+  for (const p of cellsIn(g)) {
+    const v = tab.cells[addrOf(p)]?.v
+    if (!v?.startsWith('=') || tab.cells[addrOf(p)]?.fmt === 'text') continue
+    for (const r of formulaRefs(v)) {
+      if (typeof r.sheet !== 'string') continue
+      const name = r.sheet.toLowerCase()
+      const t = tabs.find(x => x.name.toLowerCase() === name)
+      if (!t || t.id === tab.id) continue
+      const clipped = { ...r.range, r1: Math.min(r.range.r1, t.rows - 1), c1: Math.min(r.range.c1, t.cols - 1) }
+      if (clipped.r0 > clipped.r1 || clipped.c0 > clipped.c1) continue
+      if (!out.some(o => o.tabId === t.id && rangeLabel(o.range) === rangeLabel(clipped))) out.push(ref(t, clipped))
+    }
+  }
+  return out
+}
+
 // ── Table shape: a header row and a block of data rows under it ─────────────
 interface Table { headerRow: number; first: number; last: number; cols: { c: number; name: string; numeric: boolean }[] }
 
-export function tableOf(tab: SheetTab): Table | null {
-  const { at } = readTab(tab)
+export function tableOf(tab: SheetTab, tabs: readonly SheetTab[] = [tab]): Table | null {
+  const { at } = readTab(tab, tabs)
   let headerRow = -1
   for (let r = 0; r < Math.min(tab.rows, 10) && headerRow < 0; r++) {
     let texts = 0
@@ -43,15 +70,35 @@ export function tableOf(tab: SheetTab): Table | null {
     }
     return false
   }
-  for (let r = first; r < tab.rows; r++) {
-    let any = false
-    for (let c = 0; c < tab.cols; c++) if (at(r, c) !== null && at(r, c) !== '') any = true
-    if (!any || summary(r)) break
-    last = r
+  const filledRow = (r: number) => { for (let c = 0; c < tab.cols; c++) if (at(r, c) !== null && at(r, c) !== '') return true; return false }
+  // A list of labelled figures (Item | Value, with money next to hours next to a
+  // percentage) runs to the first blank row: its "Total …" and "Average …" rows
+  // are figures in their own right, not a summary under the data.
+  const heads = Array.from({ length: tab.cols }, (_, c) => c).filter(c => typeof at(headerRow, c) === 'string' && at(headerRow, c) !== '')
+  let figureEnd = -1
+  if (heads.length === 2) {
+    const [ca, cb] = heads
+    const fmts = new Set<string>()
+    let r = first
+    for (; r < tab.rows && filledRow(r); r++) {
+      const label = at(r, ca), v = at(r, cb)
+      if (typeof label !== 'string' || !label || v === null || v === '') { r = -1; break }
+      fmts.add(tab.cells[addrOf({ r, c: cb })]?.fmt ?? 'auto')
+    }
+    if (r > first + 1 && fmts.size > 1) figureEnd = r - 1
+  }
+  if (figureEnd >= first) last = figureEnd
+  else {
+    for (let r = first; r < tab.rows; r++) {
+      if (!filledRow(r) || summary(r)) break
+      last = r
+    }
   }
   if (last < first) return null
   const cols: Table['cols'] = []
   for (let c = 0; c < tab.cols; c++) {
+    // A figure list is its two headed columns; notes or workings typed beside it aren't part of it.
+    if (figureEnd >= first && !heads.includes(c)) continue
     const h = at(headerRow, c)
     let n = 0, filled = 0
     for (let r = first; r <= last; r++) { const v = at(r, c); if (v !== null && v !== '') filled++; if (typeof v === 'number') n++ }
@@ -67,15 +114,39 @@ const SPECIAL: Record<string, string[]> = {
   sh_ot: ['What is the total OT pay and is it within budget?', 'Who earns the most OT?', 'How many hours in the cold room?'],
   sh_movers: ['How much do we save with Kranji?', 'Which mover has more insurance cover?'],
 }
+/** Questions for particular tabs other than the first. */
+const SPECIAL_TAB: Record<string, string[]> = {
+  t_summary: ['What is the total OT pay?', 'How much is left in the budget?', 'Where do these numbers come from?'],
+}
+const FROM_RE = /where .*(come|coming) from|comes? from|which tabs?\b|sources?\b|worked out|read from/
+
+/** Formula cells on this tab that read other tabs. */
+function crossTabCells(tab: SheetTab, tabs: readonly SheetTab[]): string[] {
+  return Object.keys(tab.cells).filter(a => { const p = parseAddr(a); return !!p && sourcesOf(tab, cellRange(p.r, p.c), tabs).length > 0 })
+}
 
 export function suggestedQuestions(sheet: Sheet, tab: SheetTab): string[] {
   const special = SPECIAL[sheet.id]
   if (special && tab.id === sheet.tabs[0]?.id) return special
-  const t = tableOf(tab)
+  if (SPECIAL_TAB[tab.id]) return SPECIAL_TAB[tab.id]
+  const t = tableOf(tab, sheet.tabs)
   const numeric = t?.cols.filter(c => c.numeric) ?? []
-  if (!t || !numeric.length) return ['Summarise this tab']
+  const from = crossTabCells(tab, sheet.tabs).length ? ['Where do these numbers come from?'] : []
+  if (!t || !numeric.length) return ['Summarise this tab', ...from]
+  if (isFigureList(tab, t)) return ['Summarise this tab', ...from]
   const a = numeric[numeric.length - 1].name.toLowerCase()
-  return [`What is the total ${a}?`, `Which row has the highest ${a}?`, 'Summarise this tab']
+  return [`What is the total ${a}?`, `Which row has the highest ${a}?`, ...(from.length ? from : ['Summarise this tab'])]
+}
+
+/**
+ * A list of labelled figures, like a summary tab, rather than a table of like
+ * rows: two columns, labels then values, and the values aren't all the same
+ * kind (money next to hours next to a percentage), so adding them up makes no
+ * sense but looking one up does.
+ */
+function isFigureList(tab: SheetTab, t: Table): boolean {
+  if (t.cols.length !== 2 || t.cols[0].numeric || !t.cols[1].numeric) return false
+  return new Set(rowsOf(t).map(r => tab.cells[addrOf({ r, c: t.cols[1].c })]?.fmt ?? 'auto')).size > 1
 }
 
 // ── Answering ────────────────────────────────────────────────────────────────
@@ -87,13 +158,63 @@ const overlap = (a: string[], b: string[]) => a.filter(x => b.some(y => stem(x) 
 export function answerQuestion(sheet: Sheet, tab: SheetTab, q: string): SheetAnswer {
   const special = specialAnswer(sheet, tab, q)
   if (special) return special
-  return genericAnswer(tab, q)
+  return genericAnswer(tab, q, sheet.tabs)
 }
 
-function genericAnswer(tab: SheetTab, q: string): SheetAnswer {
-  const t = tableOf(tab)
-  const { at, show } = readTab(tab)
+/** "Where do these numbers come from?": the formulas on this tab that read other tabs, with chips to the cells they read. */
+function sourcesAnswer(tab: SheetTab, tabs: readonly SheetTab[]): SheetAnswer {
+  const cells = crossTabCells(tab, tabs).map(parseAddr).filter((p): p is Pos => !!p).sort((a, b) => a.r - b.r || a.c - b.c)
+  if (!cells.length) return { ok: true, refs: [], text: `Nothing on “${tab.name}” reads another tab. Its numbers are typed here or worked out from cells on this tab.` }
+  const refs = cells.flatMap(p => sourcesOf(tab, cellRange(p.r, p.c), tabs))
+  const byTab = new Map<string, number>()
+  for (const p of cells) for (const r of sourcesOf(tab, cellRange(p.r, p.c), tabs)) byTab.set(r.tabId, (byTab.get(r.tabId) ?? 0) + 1)
+  const names = [...byTab.keys()].map(id => `“${tabs.find(t => t.id === id)?.name}”`)
+  const formulas = Object.values(tab.cells).filter(c => c.v.startsWith('=') && c.fmt !== 'text').length
+  const rest = formulas - cells.length
+  return {
+    ok: true,
+    text: `${cells.length} formula${cells.length === 1 ? '' : 's'} on “${tab.name}” read${cells.length === 1 ? 's' : ''} from ${list(names)}, so ${cells.length === 1 ? 'it changes' : 'they change'} when ${names.length === 1 ? 'that tab changes' : 'those tabs change'}.${rest > 0 ? ` ${rest === 1 ? 'One other formula doesn’t' : `${rest} other formulas don’t`} read another tab.` : ''} The chips show the cells ${cells.length === 1 ? 'it uses' : 'they use'}.`,
+    refs: dedupe(refs).slice(0, 10),
+  }
+}
+const dedupe = (refs: CellRef[]) => refs.filter((r, i) => refs.findIndex(o => o.tabId === r.tabId && o.label === r.label) === i)
+
+/** On a list of labels and values, the row whose label best matches the question, with where its value comes from. */
+function lookupAnswer(tab: SheetTab, t: Table, q: string, tabs: readonly SheetTab[]): SheetAnswer | null {
+  const { at, show } = readTab(tab, tabs)
+  const [labelCol, valueCol] = t.cols
+  const qw = words(q)
+  const all = q.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean)
+  let best: { r: number; s: number } | null = null
+  for (const r of rowsOf(t)) {
+    const label = at(r, labelCol.c)
+    if (typeof label !== 'string' || !label) continue
+    const lw = words(label)
+    const hits = overlap(qw, lw)
+    if (!hits) continue
+    // Most matching words first, then the label with the fewest words the question didn't use.
+    const s = hits * 100 + overlap(all, label.toLowerCase().split(/\s+/)) * 10 - (lw.length - hits)
+    if (!best || s > best.s) best = { r, s }
+  }
+  if (!best) return null
+  const label = at(best.r, labelCol.c) as string
+  const value = at(best.r, valueCol.c)
+  const cell = cellRange(best.r, valueCol.c)
+  const from = sourcesOf(tab, cell, tabs)
+  const where = from.map(f => `${f.label} on “${tabs.find(x => x.id === f.tabId)?.name}”`)
+  const shown = isError(value) ? `${value.error}, so I can’t give a number` : show(best.r, valueCol.c)
+  return {
+    ok: !isError(value),
+    text: `${label}: ${shown}.${where.length ? ` It’s worked out from ${list(where)}.` : ''}`,
+    refs: [ref(tab, cell), ...from],
+  }
+}
+
+function genericAnswer(tab: SheetTab, q: string, tabs: readonly SheetTab[] = [tab]): SheetAnswer {
+  const t = tableOf(tab, tabs)
+  const { at, show } = readTab(tab, tabs)
   const lq = q.toLowerCase()
+  if (FROM_RE.test(lq)) return sourcesAnswer(tab, tabs)
   if (!t) {
     const filled = Object.values(tab.cells).filter(c => c.v !== '').length
     return {
@@ -102,10 +223,24 @@ function genericAnswer(tab: SheetTab, q: string): SheetAnswer {
     }
   }
   const numeric = t.cols.filter(c => c.numeric)
+  const figures = isFigureList(tab, t)
+  const rows = t.last - t.first + 1
+  if (figures && /summar|overview|what.*in this/.test(lq)) {
+    const labels = rowsOf(t).map(r => show(r, t.cols[0].c))
+    return {
+      ok: true,
+      text: `“${tab.name}” lists ${rows} figure${rows === 1 ? '' : 's'}: ${list(labels.length > 5 ? [...labels.slice(0, 4), `${labels.length - 4} more`] : labels)}. Ask me for one of them, or where they come from.`,
+      refs: [ref(tab, { r0: t.headerRow, c0: t.cols[0].c, r1: t.last, c1: t.cols[1].c })],
+    }
+  }
+  if (figures) {
+    const hit = lookupAnswer(tab, t, q, tabs)
+    if (hit) return hit
+    return { ok: false, refs: [], text: `I can give you any figure on “${tab.name}”, like “${show(t.first, t.cols[0].c)}”, and say where it comes from.` }
+  }
   const labelCol = t.cols.find(c => !c.numeric)
   const rowName = (r: number) => (labelCol && show(r, labelCol.c)) || `Row ${r + 1}`
   const dataRange = (c: number): Range => ({ r0: t.first, c0: c, r1: t.last, c1: c })
-  const rows = t.last - t.first + 1
 
   if (/summar|overview|what.*in this/.test(lq) || !numeric.length) {
     const names = t.cols.map(c => c.name)
@@ -180,8 +315,8 @@ function fmtLike(tab: SheetTab, c: number, r: number, n: number) {
 function specialAnswer(sheet: Sheet, tab: SheetTab, q: string): SheetAnswer | null {
   if (tab.id !== sheet.tabs[0]?.id) return null
   const lq = q.toLowerCase()
-  const { at, show } = readTab(tab)
-  const t = tableOf(tab)
+  const { at, show } = readTab(tab, sheet.tabs)
+  const t = tableOf(tab, sheet.tabs)
   if (!t) return null
   const colNamed = (re: RegExp) => t.cols.find(c => re.test(c.name.toLowerCase()))
 
@@ -191,10 +326,12 @@ function specialAnswer(sheet: Sheet, tab: SheetTab, q: string): SheetAnswer | nu
     const over = rowsOf(t).filter(r => { const a = num(at(r, total.c)), b = num(at(r, cap.c)); return a !== null && b !== null && a > b })
     if (!over.length) return { ok: true, text: `No week goes over capacity. The busiest week is at ${show(t.first, total.c)} pallets.`, refs: [ref(tab, { r0: t.first, c0: total.c, r1: t.last, c1: total.c })] }
     const desc = over.map(r => `${show(r, week.c)}${starts ? ` (from ${show(r, starts.c)})` : ''} at ${show(r, total.c)} pallets${util ? ` (${show(r, util.c)})` : ''}`)
+    // The capacity is read from the Assumptions tab, so point at that too.
+    const capFrom = dedupe(over.flatMap(r => sourcesOf(tab, cellRange(r, cap.c), sheet.tabs)))
     return {
       ok: true,
-      text: `${over.length === 1 ? 'One week goes' : `${countWord(over.length)} weeks go`} over the cold-room capacity of ${show(over[0], cap.c)} pallets: ${list(desc)}. Everything else fits.`,
-      refs: over.map(r => ref(tab, { r0: r, c0: t.cols[0].c, r1: r, c1: (util ?? total).c })),
+      text: `${over.length === 1 ? 'One week goes' : `${countWord(over.length)} weeks go`} over the cold-room capacity of ${show(over[0], cap.c)} pallets${capFrom.length === 1 ? ` (from ${capFrom[0].label} on “${sheet.tabs.find(x => x.id === capFrom[0].tabId)?.name}”)` : ''}: ${list(desc)}. Everything else fits.`,
+      refs: [...over.map(r => ref(tab, { r0: r, c0: t.cols[0].c, r1: r, c1: (util ?? total).c })), ...capFrom],
     }
   }
   if (sheet.id === 'sh_forecast' && /peak|busiest/.test(lq)) {
@@ -273,10 +410,10 @@ export function numericRunAbove(tab: SheetTab, values: Map<string, Value>, p: Po
   return end - start + 1 >= 2 ? { r0: start, c0: p.c, r1: end, c1: p.c } : null
 }
 
-export function suggestFormula(tab: SheetTab, p: Pos): FormulaSuggestion | null {
+export function suggestFormula(tab: SheetTab, p: Pos, tabs: readonly SheetTab[] = [tab]): FormulaSuggestion | null {
   const addr = addrOf(p)
   if (tab.cells[addr]?.v) return null
-  const { values, at } = readTab(tab)
+  const { values, at } = readTab(tab, tabs)
   const run = numericRunAbove(tab, values, p)
   if (!run) return null
   // The row label decides the function: "Average …" → AVERAGE, "Peak/Max" → MAX, and so on.
@@ -284,7 +421,7 @@ export function suggestFormula(tab: SheetTab, p: Pos): FormulaSuggestion | null 
   for (let c = p.c - 1; c >= 0 && !label; c--) { const v = at(p.r, c); if (typeof v === 'string') label = v.toLowerCase() }
   const fn = /average|mean/.test(label) ? 'AVERAGE' : /peak|max|highest/.test(label) ? 'MAX' : /min|lowest/.test(label) ? 'MIN' : /count|how many/.test(label) ? 'COUNT' : 'SUM'
   const formula = `=${fn}(${rangeLabel(run)})`
-  const v = computeTab({ ...tab.cells, [addr]: { v: formula } }, tab).get(addr) ?? null
+  const v = readTab({ ...tab, cells: { ...tab.cells, [addr]: { v: formula } } }, tabs).at(p.r, p.c)
   const fmt = tab.cells[addrOf({ r: run.r1, c: run.c0 })]?.fmt
   const header = at(0, p.c)
   const what = typeof header === 'string' && header ? header : `column ${colName(p.c)}`

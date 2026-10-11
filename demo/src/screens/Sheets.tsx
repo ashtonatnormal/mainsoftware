@@ -1,8 +1,9 @@
 // Sheets (DOC-12): a small spreadsheet editor inside the Drive. Formulas are
-// evaluated by sheets/formula.ts; "Ask about this sheet" answers from the
-// cells (sheets/ask.ts) and only suggests. Restricted editing per DOC-03.
+// evaluated by sheets/formula.ts across all of a sheet's tabs (Roster!F14);
+// "Ask about this sheet" answers from the cells (sheets/ask.ts) and only
+// suggests. Restricted editing per DOC-03.
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { ArrowLeft, Check, ClipboardCopy, Copy, Ellipsis, FilePlus2, Lock, MoreVertical, Pencil, Plus, Sheet as SheetIcon, Sparkles, Star, Trash2, Undo2, X } from 'lucide-react'
+import { ArrowLeft, Check, ClipboardCopy, Copy, Ellipsis, FilePlus2, Lock, MoreVertical, MousePointerClick, Pencil, Plus, Sheet as SheetIcon, Sparkles, Star, Trash2, TriangleAlert, Undo2, X } from 'lucide-react'
 import type { PersonId, Sheet, SheetCell, SheetTab } from '../types'
 import { newId, useStore } from '../store'
 import { ME } from '../data/people'
@@ -10,9 +11,9 @@ import { canEdit, folderPath, isTrashed } from '../drive'
 import { clock, listStamp } from '../time'
 import { AvatarStack, Button, cx, EmptyState, IconButton, personName, personShort, Sheet as Dialog } from '../ui'
 import { ShareDialog } from '../ui/share'
-import { addrOf, cellsIn, colName, computeTab, formatValue, fromTSV, isError, parseAddr, parseLiteral, rangeLabel, rangeOf, shiftFormula, toCSV, toTSV, type Pos, type Range, type Value } from './sheets/formula'
-import { errorHelp, Grid, type EditState } from './sheets/Grid'
-import { Toolbar, type QuickFn } from './sheets/Toolbar'
+import { addrOf, cellsIn, colName, explainError, formatValue, formulasUsing, fromTSV, isError, parseAddr, parseLiteral, parseRef, rangeLabel, rangeOf, refText, removeTabFromBook, renameTabInBook, shiftFormula, tabValues, toCSV, toTSV, type Pos, type Range, type TabValues, type Value } from './sheets/formula'
+import { Grid, type EditState } from './sheets/Grid'
+import { Toolbar, type FillDir, type QuickFn } from './sheets/Toolbar'
 import { AskPanel, AskTitle } from './sheets/AskPanel'
 import { numericRunAbove, suggestFormula, type CellRef } from './sheets/ask'
 import { MenuItem, Popover } from './sheets/Popover'
@@ -70,6 +71,12 @@ const conditional: Record<string, (tab: SheetTab, values: Map<string, Value>) =>
 }
 
 type Sel = { a: Pos; f: Pos }
+/** An edit in progress, and the cell it belongs to. While typing a formula you can visit other tabs to pick cells, so the cell isn't always on the tab you're looking at. */
+type Editing = EditState & { home: { tabId: string; pos: Pos } }
+const origin: Sel = { a: { r: 0, c: 0 }, f: { r: 0, c: 0 } }
+/** Collaborators' seeded cursors are on the tab that was first when the sheet opened (they don't jump to another tab if it's deleted). */
+const noCursors: Record<PersonId, string> = {}
+const clampTo = (t: { rows: number; cols: number }, p: Pos): Pos => ({ r: Math.max(0, Math.min(t.rows - 1, p.r)), c: Math.max(0, Math.min(t.cols - 1, p.c)) })
 
 function SheetEditor({ sheet }: { sheet: Sheet }) {
   const store = useStore()
@@ -84,10 +91,10 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
 
   const [tabId, setTabId] = useState(sheet.tabs[0]?.id)
   const tab = sheet.tabs.find(t => t.id === tabId) ?? sheet.tabs[0]
-  const [sel, setSel] = useState<Sel>({ a: { r: 0, c: 0 }, f: { r: 0, c: 0 } })
-  const [edit, setEditState] = useState<EditState | null>(null)
-  const editRef = useRef<EditState | null>(null)
-  const setEdit = (e: EditState | null) => { editRef.current = e; setEditState(e) }
+  const [sel, setSel] = useState<Sel>(origin)
+  const [edit, setEditState] = useState<Editing | null>(null)
+  const editRef = useRef<Editing | null>(null)
+  const setEdit = (e: Editing | null) => { editRef.current = e; setEditState(e) }
   const [widths, setWidths] = useState<Record<string, number>>({})
   const [saving, setSaving] = useState(false)
   const [askOpen, setAskOpen] = useState(false)
@@ -95,6 +102,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   const [moreOpen, setMoreOpen] = useState(false)
   const moreRef = useRef<HTMLButtonElement>(null)
   const [cursors, setCursors] = useState<Record<PersonId, string>>(() => ({ ...(sheet.cursors ?? {}) }))
+  const cursorTab = useRef(sheet.tabs[0]?.id)
   const gridRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -104,12 +112,18 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   const history = histories.get(sheet.id) ?? (histories.set(sheet.id, { undo: [], redo: [] }), histories.get(sheet.id)!)
   const refInsert = useRef<{ start: number; anchor: Pos; after: string } | null>(null)
 
-  const values = useMemo(() => computeTab(tab.cells, tab), [tab])
+  // Values for the tab on show. Formulas can read other tabs, so this recalculates
+  // when this tab or any tab it reads changes, and not for edits elsewhere.
+  const valuesCache = useRef<TabValues | null>(null)
+  const values = useMemo(() => (valuesCache.current = tabValues(sheet.tabs, tab.id, valuesCache.current)).values, [sheet.tabs, tab.id])
   const highlight = useMemo(() => conditional[sheet.id]?.(tab, values), [sheet.id, tab, values])
   const range = rangeOf(sel.a, sel.f)
   const active = sel.a
   const activeAddr = addrOf(active)
   const activeCell = tab.cells[activeAddr]
+  // Picking cells on another tab for a formula that belongs to the home tab.
+  const away = !!edit && edit.home.tabId !== tab.id
+  const homeTab = edit ? sheet.tabs.find(t => t.id === edit.home.tabId) : undefined
 
   // New sheet: title first, then A1.
   const isNew = useRef(!seen.has(sheet.id) && sheet.ownerId === ME && sheet.title === 'Untitled sheet' && sheet.tabs.every(t => Object.keys(t.cells).length === 0))
@@ -151,7 +165,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   // so they build on the latest sheet in sheetRef, not on this render's props.
   const sheetRef = useRef(sheet)
   sheetRef.current = sheet
-  const curTab = () => sheetRef.current.tabs.find(t => t.id === tab.id) ?? sheetRef.current.tabs[0]
+  const curTab = (id = tab.id) => sheetRef.current.tabs.find(t => t.id === id) ?? sheetRef.current.tabs[0]
   const saveTimer = useRef<number | undefined>(undefined)
   const commitTabs = (tabs: SheetTab[], opts: { record?: boolean } = {}) => {
     const prev = sheetRef.current
@@ -172,8 +186,8 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   const patchTab = (patch: Partial<SheetTab>, id = tab.id) => commitTabs(sheetRef.current.tabs.map(t => (t.id === id ? { ...t, ...patch } : t)))
 
   /** Writes cells; null clears a cell's value (formatting stays). */
-  const writeCells = (changes: Record<string, Partial<SheetCell> | null>, grow?: { rows: number; cols: number }) => {
-    const t = curTab()
+  const writeCells = (changes: Record<string, Partial<SheetCell> | null>, grow?: { rows: number; cols: number }, tabId = tab.id) => {
+    const t = curTab(tabId)
     const cells = { ...t.cells }
     for (const [addr, ch] of Object.entries(changes)) {
       const prev = cells[addr]
@@ -182,7 +196,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
       if (!next.v && !styled) delete cells[addr]
       else cells[addr] = next
     }
-    patchTab({ cells, ...(grow ? { rows: Math.max(t.rows, grow.rows), cols: Math.max(t.cols, grow.cols) } : {}) })
+    patchTab({ cells, ...(grow ? { rows: Math.max(t.rows, grow.rows), cols: Math.max(t.cols, grow.cols) } : {}) }, t.id)
   }
 
   // After undo/redo the tab may be gone or smaller, so keep the selection inside it.
@@ -243,22 +257,42 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   const startEdit = (mode: EditState['mode'], value = activeCell?.v ?? '') => {
     if (!editable) return
     refInsert.current = null
-    setEdit({ value, mode })
+    setEdit({ value, mode, home: { tabId: tab.id, pos: active } })
+  }
+  const changeEdit = (value: string) => {
+    const e = editRef.current
+    setEdit(e ? { ...e, value } : { value, mode: 'bar', home: { tabId: tab.id, pos: active } })
+  }
+  /** Shows a tab with one cell selected (finishing an edit made on another tab comes back here). */
+  const showTab = (id: string, p: Pos) => {
+    if (id !== tab.id) { setTabId(id); setWidths({}) }
+    setSel({ a: p, f: p })
   }
   const commitEdit = (dr = 0, dc = 0, refocus = true) => {
     const e = editRef.current
     if (!e) return
     setEdit(null)
     refInsert.current = null
-    const prev = activeCell?.v ?? ''
+    const home = sheetRef.current.tabs.find(t => t.id === e.home.tabId)
+    if (!home) return
+    const addr = addrOf(e.home.pos)
+    const cell = home.cells[addr]
+    const prev = cell?.v ?? ''
     if (e.value !== prev && !(e.value.trim() === '' && prev === '')) {
       const lit: { fmt?: SheetCell['fmt'] } = e.value.startsWith('=') ? {} : parseLiteral(e.value)
-      writeCells({ [activeAddr]: e.value.trim() === '' ? null : { v: e.value, ...(lit.fmt && !activeCell?.fmt ? { fmt: lit.fmt } : {}) } })
+      writeCells({ [addr]: e.value.trim() === '' ? null : { v: e.value, ...(lit.fmt && !cell?.fmt ? { fmt: lit.fmt } : {}) } }, undefined, home.id)
     }
-    if (dr || dc) select({ r: active.r + dr, c: active.c + dc })
+    // Enter, Tab and Done take you back to the cell you were editing, wherever you picked cells.
+    if (home.id !== tab.id || dr || dc) showTab(home.id, clampTo(home, { r: e.home.pos.r + dr, c: e.home.pos.c + dc }))
     if (refocus) focusGrid()
   }
-  const cancelEdit = () => { setEdit(null); refInsert.current = null; focusGrid() }
+  const cancelEdit = () => {
+    const e = editRef.current
+    setEdit(null)
+    refInsert.current = null
+    if (e && e.home.tabId !== tab.id && sheetRef.current.tabs.some(t => t.id === e.home.tabId)) showTab(e.home.tabId, e.home.pos)
+    focusGrid()
+  }
 
   /** While typing a formula, clicking cells inserts their references. */
   const refMode = () => {
@@ -271,11 +305,22 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
     const e = editRef.current!
     const ri = refInsert.current && refInsert.current.after === e.value ? refInsert.current : null
     const start = ri ? ri.start : e.value.length
-    const label = rangeLabel(rangeOf(ri && to !== anchor ? ri.anchor : anchor, to))
+    const from = ri && to !== anchor ? ri.anchor : anchor
+    // On another tab the reference carries the tab's name: Roster!F2:F12.
+    const label = away ? refText(rangeOf(from, to), tab.name) : rangeLabel(rangeOf(from, to))
     const value = e.value.slice(0, start) + label
-    refInsert.current = { start, anchor: ri && to !== anchor ? ri.anchor : anchor, after: value }
+    refInsert.current = { start, anchor: from, after: value }
     setEdit({ ...e, value })
-    window.requestAnimationFrame(() => (e.mode === 'bar' ? barRef.current : inputRef.current)?.focus())
+    // The edited cell isn't on this tab, so the selection is free to show what you picked.
+    if (away) setSel({ a: from, f: to })
+    // The caret goes to the end of what's there by then: typing straight after a click mustn't land before it.
+    // An edit finished in the meantime (Enter straight after the click) leaves focus where that put it.
+    window.requestAnimationFrame(() => {
+      const el = e.mode === 'bar' ? barRef.current : inputRef.current
+      if (!el || !editRef.current) return
+      el.focus()
+      el.setSelectionRange(el.value.length, el.value.length)
+    })
   }
 
   const dragging = useRef(false)
@@ -305,7 +350,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
       insertRef(p)
       return
     }
-    if (editRef.current) commitEdit()
+    if (editRef.current) { commitEdit(); if (away) { e.preventDefault(); return } }
     if (e.shiftKey) setSel(s => ({ a: s.a, f: clamp(p) }))
     else select(p)
     if (document.activeElement !== gridRef.current) { e.preventDefault(); focusGrid() }
@@ -319,12 +364,12 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
     window.clearTimeout(blurTimer.current)
     if (editRef.current && refMode()) { insertRef(p); return }
     const same = p.r === active.r && p.c === active.c && range.r0 === range.r1 && range.c0 === range.c1
-    if (editRef.current) commitEdit()
+    if (editRef.current) { commitEdit(); if (away) return }
     if (same && editable && !editRef.current) startEdit('inplace')
     else select(p)
   }
   const onHeaderSelect = (kind: 'row' | 'col', i: number, extend: boolean) => {
-    if (editRef.current) commitEdit()
+    if (editRef.current) { commitEdit(); if (away) return }
     skipScroll.current = true
     if (kind === 'col') {
       if (extend) setSel(s => ({ a: { r: 0, c: s.a.c }, f: { r: tab.rows - 1, c: i } }))
@@ -392,6 +437,29 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
     startEdit('inplace', `=${fn}(`)
   }
 
+  // Fill down or right (Ctrl+D, Ctrl+R): copies the selection's first row or
+  // column (or, for one row or column, the cells just above or to the left) into
+  // the rest, moving relative references and keeping tab names (Roster!F2 → Roster!F3).
+  const fill = (dir: FillDir) => {
+    if (!editable) return
+    if (editRef.current) commitEdit()
+    const t = curTab()
+    const down = dir === 'down'
+    const src = down ? (range.r0 === range.r1 ? range.r0 - 1 : range.r0) : (range.c0 === range.c1 ? range.c0 - 1 : range.c0)
+    if (src < 0) { toast(down ? 'There’s nothing above to fill down from' : 'There’s nothing to the left to fill right from'); return }
+    const cells = { ...t.cells }
+    for (let r = range.r0; r <= range.r1; r++) {
+      for (let c = range.c0; c <= range.c1; c++) {
+        if (down ? r === src : c === src) continue
+        const from = down ? { r: src, c } : { r, c: src }
+        const s = t.cells[addrOf(from)]
+        if (!s) delete cells[addrOf({ r, c })]
+        else cells[addrOf({ r, c })] = { ...s, v: s.fmt === 'text' ? s.v : shiftFormula(s.v, r - from.r, c - from.c) }
+      }
+    }
+    patchTab({ cells })
+  }
+
   // ── Keyboard ────────────────────────────────────────────────────────────
   // Tab walks along the row like a spreadsheet, but never traps focus (WCAG 2.1.2):
   // it leaves the grid past the last filled column (Shift+Tab before column A),
@@ -411,6 +479,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
       if (lk === 'b') { e.preventDefault(); styleRange({ b: !activeCell?.b }); return }
       if (lk === 'i') { e.preventDefault(); styleRange({ i: !activeCell?.i }); return }
       if (lk === 'a') { e.preventDefault(); skipScroll.current = true; setSel({ a: { r: 0, c: 0 }, f: { r: tab.rows - 1, c: tab.cols - 1 } }); return }
+      if (lk === 'd' || lk === 'r') { e.preventDefault(); fill(lk === 'd' ? 'down' : 'right'); return }
       if (k.startsWith('Arrow')) {
         e.preventDefault()
         const to = { ArrowUp: { r: 0, c: active.c }, ArrowDown: { r: tab.rows - 1, c: active.c }, ArrowLeft: { r: active.r, c: 0 }, ArrowRight: { r: active.r, c: tab.cols - 1 } }[k]!
@@ -511,40 +580,76 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
 
   // ── Tabs ────────────────────────────────────────────────────────────────
   const switchTab = (id: string) => {
-    if (editRef.current) commitEdit()
+    const e = editRef.current
+    if (e && id === tab.id) return
+    // Typing a formula and waiting for a reference: stay in the edit and pick
+    // cells on the other tab, as in Google Sheets. Enter or Done brings you back.
+    if (e && refMode()) {
+      window.clearTimeout(blurTimer.current)
+      if (e.mode !== 'bar') setEdit({ ...e, mode: 'bar' })
+      setTabId(id)
+      setWidths({})
+      setSel(id === e.home.tabId ? { a: e.home.pos, f: e.home.pos } : origin)
+      window.requestAnimationFrame(() => { const el = barRef.current; if (!el || !editRef.current) return; el.focus(); el.setSelectionRange(el.value.length, el.value.length) })
+      return
+    }
+    if (e) commitEdit()
     setTabId(id)
-    setSel({ a: { r: 0, c: 0 }, f: { r: 0, c: 0 } })
+    setSel(origin)
     setWidths({})
   }
   const addTab = () => {
     if (editRef.current) commitEdit()
     let n = sheet.tabs.length + 1
-    while (sheet.tabs.some(t => t.name === `Sheet${n}`)) n++
+    while (sheet.tabs.some(t => t.name.toLowerCase() === `sheet${n}`)) n++
     const t: SheetTab = { id: newId('tab'), name: `Sheet${n}`, rows: 50, cols: 12, cells: {} }
     commitTabs([...sheetRef.current.tabs, t])
     setTabId(t.id)
-    setSel({ a: { r: 0, c: 0 }, f: { r: 0, c: 0 } })
+    setSel(origin)
   }
+  // Renaming rewrites every formula that reads the tab, on every tab, as one undo step.
   const renameTab = (id: string, name: string) => {
     const n = name.trim()
-    if (!n || sheet.tabs.find(t => t.id === id)?.name === n) return
-    if (sheet.tabs.some(t => t.id !== id && t.name.toLowerCase() === n.toLowerCase())) { toast(`There’s already a tab called “${n}”`); return }
-    patchTab({ name: n }, id)
+    const cur = sheetRef.current.tabs
+    const old = cur.find(t => t.id === id)
+    if (!old || !n || old.name === n) return
+    if (cur.some(t => t.id !== id && t.name.toLowerCase() === n.toLowerCase())) { toast(`There’s already a tab called “${n}”`); return }
+    const { tabs, changed } = renameTabInBook(cur, id, n)
+    commitTabs(tabs)
+    if (changed) toast(`Renamed to “${n}”. ${changed === 1 ? '1 formula now uses' : `${changed} formulas now use`} the new name.`)
   }
+  // Formulas on other tabs that read a deleted tab show #REF! (Undo puts them back).
   const deleteTab = (id: string) => {
     const i = sheet.tabs.findIndex(t => t.id === id)
-    const rest = sheetRef.current.tabs.filter(t => t.id !== id)
+    const { tabs: rest, changed } = removeTabFromBook(sheetRef.current.tabs, id)
     if (!rest.length) return
     commitTabs(rest)
     if (id === tab.id) switchTab(rest[Math.max(0, i - 1)].id)
-    toast('Tab deleted. Undo brings it back.')
+    toast(changed ? `Tab deleted. ${changed === 1 ? '1 formula shows' : `${changed} formulas show`} #REF! now. Undo brings it back.` : 'Tab deleted. Undo brings it back.')
     window.requestAnimationFrame(focusGrid)
+  }
+  /** Goes to cells on any tab (Ask's chips, the address box). */
+  const goTo = (tabId: string, g: Range) => {
+    const t = sheetRef.current.tabs.find(x => x.id === tabId)
+    if (!t) { toast('That tab has been deleted'); return false }
+    if (editRef.current) commitEdit(0, 0, false)
+    setTabId(t.id)
+    if (t.id !== tab.id) setWidths({})
+    setSel({ a: clampTo(t, { r: g.r0, c: g.c0 }), f: clampTo(t, { r: g.r1, c: g.c1 }) })
+    return true
+  }
+  // The address box takes B2, B2:D9, or a cell on another tab: Roster!F14, 'OT roster'!F2:F12.
+  const goToTyped = (text: string) => {
+    const ref = parseRef(text)
+    if (!ref) { toast(`“${text}” isn’t a cell address`); return }
+    const t = ref.sheet === undefined ? tab : sheet.tabs.find(x => x.name.toLowerCase() === ref.sheet!.toLowerCase())
+    if (!t) { toast(`There’s no tab called “${ref.sheet}”`); return }
+    if (goTo(t.id, ref.range)) focusGrid()
   }
 
   // ── Ask ────────────────────────────────────────────────────────────────
   const onRef = (r: CellRef) => {
-    if (r.tabId !== tab.id) setTabId(r.tabId)
-    setSel({ a: { r: r.range.r0, c: r.range.c0 }, f: { r: r.range.r1, c: r.range.c1 } })
+    if (!goTo(r.tabId, r.range)) return
     if (!wide) setAskOpen(false)
     focusGrid()
   }
@@ -555,7 +660,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
     toast(`Formula added to ${addr}`)
     if (!wide) setAskOpen(false)
   }
-  const suggestion = editable && !activeCell?.v ? suggestFormula(tab, active) : null
+  const suggestion = editable && !activeCell?.v && !edit ? suggestFormula(tab, active, sheet.tabs) : null
 
   // ── Title ──────────────────────────────────────────────────────────────
   const [title, setTitle] = useState(sheet.title)
@@ -648,7 +753,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
       }
     }
     const v = values.get(activeAddr)
-    if (isError(v)) return { kind: 'error' as const, text: `${v.error} ${errorHelp(v.error)}` }
+    if (isError(v)) return { kind: 'error' as const, text: `${v.error} ${explainError(v, activeCell?.v, sheet.tabs.map(t => t.name))}` }
     return null
   })()
 
@@ -744,15 +849,17 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
           onRedo={redo}
           onStyle={styleRange}
           onQuick={quick}
+          onFill={fill}
+          locked={away}
         />
       )}
 
       {/* Formula bar */}
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line bg-surface px-2 md:px-3">
         <label htmlFor="sheet-goto" className="sr-only">Cell address (type one to jump)</label>
-        <AddressBox id="sheet-goto" label={rangeOn ? rangeLabel(range) : activeAddr} onGo={a => { const g = a.includes(':') ? a.split(':').map(parseAddr) : [parseAddr(a)]; if (g[0]) { select(g[0], g[1] ?? g[0]); focusGrid() } else toast(`“${a}” isn’t a cell address`) }} />
+        <AddressBox id="sheet-goto" label={rangeOn ? rangeLabel(range) : activeAddr} onGo={goToTyped} />
         <span className="font-serif text-sm text-muted italic" aria-hidden>fx</span>
-        <label htmlFor="sheet-formula" className="sr-only">Contents of {activeAddr}</label>
+        <label htmlFor="sheet-formula" className="sr-only">Contents of {away && homeTab ? `${homeTab.name}!${addrOf(edit.home.pos)}` : activeAddr}</label>
         <input
           id="sheet-formula"
           ref={barRef}
@@ -760,7 +867,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
           value={edit ? edit.value : activeCell?.v ?? ''}
           placeholder={editable ? 'Type a value or a formula, like =SUM(B2:B9)' : ''}
           onFocus={() => { if (editable && !editRef.current) startEdit('bar') }}
-          onChange={e => setEdit({ value: e.target.value, mode: editRef.current?.mode ?? 'bar' })}
+          onChange={e => changeEdit(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter') { e.preventDefault(); commitEdit(e.shiftKey ? -1 : 1, 0) }
             else if (e.key === 'Tab') commitEdit(0, 0, false) // commit, then Tab moves on as usual
@@ -769,9 +876,27 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
           onBlur={() => { if (editRef.current?.mode === 'bar') onEditorBlur() }}
           spellCheck={false}
           autoComplete="off"
-          className="h-8 min-w-0 flex-1 rounded-md bg-transparent px-1.5 font-mono text-base md:text-[13px] outline-none placeholder:font-sans placeholder:text-muted focus:bg-surface-2"
+          className={cx('h-8 min-w-0 flex-1 rounded-md bg-transparent px-1.5 font-mono text-base md:text-[13px] outline-none placeholder:font-sans placeholder:text-muted focus:bg-surface-2', away && 'bg-surface-2 ring-2 ring-accent')}
         />
       </div>
+
+      {/* Picking cells on another tab for a formula: where it's going, and how to finish. */}
+      {away && edit && homeTab && (
+        <div role="status" onMouseDown={e => e.preventDefault()} className="flex shrink-0 items-center gap-2 border-b border-line bg-accent-soft py-1 pr-2 pl-3 text-[13px] md:pr-3">
+          <MousePointerClick size={16} className="shrink-0 text-accent-ink" aria-hidden />
+          {/* The cell being edited stays readable on narrow phones; the words before it give way first. */}
+          <p className="flex min-w-0 flex-1 items-baseline gap-1">
+            <span className="min-w-0 truncate">
+              <span className="hidden sm:inline">{desktop ? 'Click or drag cells on' : 'Tap cells on'} “{tab.name}” to add them to</span>
+              <span className="hidden min-[360px]:inline sm:hidden">Adding cells to</span>
+              <span className="min-[360px]:hidden">For</span>
+            </span>
+            <b className="max-w-[70%] shrink-0 truncate font-mono font-semibold text-accent-ink">{homeTab.name}!{addrOf(edit.home.pos)}</b>
+          </p>
+          <Button size="sm" variant="ghost" className="h-10" onClick={cancelEdit}>Cancel</Button>
+          <Button size="sm" variant="primary" className="h-10" icon={<Check size={15} />} onClick={() => commitEdit()}>Done</Button>
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1">
         <div className="min-h-0 min-w-0 flex-1">
@@ -780,12 +905,12 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
             values={values}
             range={range}
             active={active}
-            edit={edit}
+            edit={away ? null : edit}
             readOnly={!editable}
             rowH={rowH}
             headH={headH}
             widths={widths}
-            cursors={cursors}
+            cursors={tab.id === cursorTab.current ? cursors : noCursors}
             highlight={highlight}
             gridRef={gridRef}
             inputRef={inputRef}
@@ -793,9 +918,9 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
             onCellPointerDown={onCellPointerDown}
             onCellPointerEnter={onCellPointerEnter}
             onCellTap={onCellTap}
-            onCellDoubleClick={() => { if (editable) startEdit('inplace') }}
+            onCellDoubleClick={() => { if (editable && !editRef.current) startEdit('inplace') }}
             onHeaderSelect={onHeaderSelect}
-            onEditChange={v => setEdit({ value: v, mode: editRef.current?.mode ?? 'inplace' })}
+            onEditChange={changeEdit}
             onEditKeyDown={onEditKeyDown}
             onEditBlur={() => { if (editRef.current && editRef.current.mode !== 'bar') onEditorBlur() }}
             onResize={(col, w, done) => {
@@ -836,6 +961,8 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
           <span className="truncate">{status.text}</span>
         ) : status?.kind === 'error' ? (
           <span className="truncate text-rec">{status.text}</span>
+        ) : away ? (
+          <span className="truncate">{desktop ? 'Enter finishes the formula, Escape cancels it' : 'Tap Done to finish the formula'}</span>
         ) : suggestion ? (
           <button className="inline-flex min-w-0 items-center gap-1.5 truncate font-medium text-agent hover:underline" onClick={() => setAskOpen(true)}>
             <Sparkles size={13} aria-hidden /> Suggest a formula for {activeAddr}
@@ -847,7 +974,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
         )}
       </div>
 
-      <TabsBar sheet={sheet} activeId={tab.id} editable={editable} onSwitch={switchTab} onAdd={addTab} onRename={renameTab} onDelete={deleteTab} />
+      <TabsBar sheet={sheet} activeId={tab.id} editable={editable} editing={!!edit} picking={away} onSwitch={switchTab} onAdd={addTab} onRename={renameTab} onDelete={deleteTab} />
     </div>
   )
 }
@@ -863,7 +990,7 @@ function AddressBox({ id, label, onGo }: { id: string; label: string; onGo: (a: 
       onChange={e => setV(e.target.value)}
       onBlur={() => setV(null)}
       onKeyDown={e => {
-        if (e.key === 'Enter') { e.preventDefault(); const a = (v ?? '').trim().toUpperCase(); setV(null); if (a) onGo(a) }
+        if (e.key === 'Enter') { e.preventDefault(); const a = (v ?? '').trim(); setV(null); if (a) onGo(a) }
         if (e.key === 'Escape') { setV(null); e.currentTarget.blur() }
       }}
       spellCheck={false}
@@ -874,10 +1001,14 @@ function AddressBox({ id, label, onGo }: { id: string; label: string; onGo: (a: 
 }
 
 // ── Tabs bar ──────────────────────────────────────────────────────────────
-function TabsBar({ sheet, activeId, editable, onSwitch, onAdd, onRename, onDelete }: {
+function TabsBar({ sheet, activeId, editable, editing, picking, onSwitch, onAdd, onRename, onDelete }: {
   sheet: Sheet
   activeId: string
   editable: boolean
+  /** A cell is being edited: tabs keep the editor's focus, so a formula can take references from another tab. */
+  editing: boolean
+  /** Picking cells on another tab for a formula: renaming and tab options wait until it's done. */
+  picking: boolean
   onSwitch: (id: string) => void
   onAdd: () => void
   onRename: (id: string, name: string) => void
@@ -889,15 +1020,17 @@ function TabsBar({ sheet, activeId, editable, onSwitch, onAdd, onRename, onDelet
   const [confirm, setConfirm] = useState<string | null>(null)
   const menuAnchor = useRef<HTMLButtonElement | null>(null)
   const startRename = (id: string) => {
-    if (!editable) return
+    if (!editable || picking) return
     setDraft(sheet.tabs.find(t => t.id === id)?.name ?? '')
     setRenaming(id)
   }
   const confirmTab = sheet.tabs.find(t => t.id === confirm)
+  const uses = confirmTab ? formulasUsing(sheet.tabs, confirmTab.id) : 0
+  const filled = confirmTab ? Object.values(confirmTab.cells).filter(c => c.v).length : 0
 
   return (
     <div className="flex h-11 shrink-0 items-center gap-1 border-t border-line bg-surface-2 px-2">
-      {editable && <IconButton label="Add a tab" className="size-9" onClick={onAdd}><Plus size={17} /></IconButton>}
+      {editable && <IconButton label="Add a tab" className="size-9" disabled={picking} onClick={onAdd}><Plus size={17} /></IconButton>}
       <div role="tablist" aria-label="Tabs" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
         {sheet.tabs.map(t => {
           const on = t.id === activeId
@@ -920,10 +1053,18 @@ function TabsBar({ sheet, activeId, editable, onSwitch, onAdd, onRename, onDelet
           }
           return (
             <span key={t.id} className={cx('flex h-8 shrink-0 items-center rounded-lg text-[13px]', on ? 'bg-surface font-semibold text-fg shadow-card' : 'text-muted hover:bg-surface/60')}>
-              <button role="tab" aria-selected={on} onClick={() => onSwitch(t.id)} onDoubleClick={() => startRename(t.id)} className={cx('h-full max-w-40 truncate pl-3', on && editable ? 'pr-1' : 'pr-3')} title={editable ? 'Double-click to rename' : undefined}>
+              <button
+                role="tab"
+                aria-selected={on}
+                onMouseDown={e => { if (editing) e.preventDefault() }}
+                onClick={() => onSwitch(t.id)}
+                onDoubleClick={() => startRename(t.id)}
+                className={cx('h-full max-w-40 truncate pl-3', on && editable && !picking ? 'pr-1' : 'pr-3')}
+                title={picking ? `Pick cells on ${t.name}` : editable ? 'Double-click to rename' : undefined}
+              >
                 {t.name}
               </button>
-              {on && editable && (
+              {on && editable && !picking && (
                 <button
                   aria-label={`Options for ${t.name}`}
                   aria-expanded={menuFor === t.id}
@@ -955,8 +1096,14 @@ function TabsBar({ sheet, activeId, editable, onSwitch, onAdd, onRename, onDelet
         }
       >
         <p className="text-sm">
-          {confirmTab && Object.keys(confirmTab.cells).length ? `${filledLabel(Object.values(confirmTab.cells).filter(c => c.v).length)} go${Object.values(confirmTab.cells).filter(c => c.v).length === 1 ? 'es' : ''} with it.` : 'It’s empty.'} You can bring it back with Undo while this page is open.
+          {filled ? `${filledLabel(filled)} go${filled === 1 ? 'es' : ''} with it.` : 'It’s empty.'} You can bring it back with Undo while this page is open.
         </p>
+        {uses > 0 && (
+          <p className="mt-3 flex items-start gap-2 rounded-xl bg-warn-soft px-3 py-2 text-sm">
+            <TriangleAlert size={16} className="mt-0.5 shrink-0 text-warn" aria-hidden />
+            <span>{uses === 1 ? '1 formula on another tab uses' : `${uses} formulas on other tabs use`} “{confirmTab?.name}”. {uses === 1 ? 'It' : 'They'}’ll show #REF! once it’s gone.</span>
+          </p>
+        )}
       </Dialog>
     </div>
   )
