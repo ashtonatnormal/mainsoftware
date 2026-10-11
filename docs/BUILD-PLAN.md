@@ -54,11 +54,18 @@
 ### Stage map
 
 ```mermaid
-flowchart LR
-  C0["C0 Foundations"] --> C1["C1 Chat"] --> C2["C2 Tasks, rooms, recording"] --> C3["C3 Calendar"] --> C4["C4 Drive and Docs"] --> C6["C6 Core launch"] --> C5["C5 Sheets and Slides"] --> A0["A0 AI platform"]
-  A0 --> A1["A1 Speech-to-text"] --> A3["A3 Built-in AI"]
-  A0 --> A2["A2 Org Brain and retrieval"] --> A3 --> A4["A4 Assistant"] --> A5["A5 Agents"] --> A6["A6 Full v1 launch"]
-  A2 --> A5
+flowchart TB
+  subgraph CORE["Core suite, no AI"]
+    direction LR
+    C0["C0 Foundations"] --> C1["C1 Chat"] --> C2["C2 Tasks, rooms, recording"] --> C3["C3 Calendar"] --> C4["C4 Drive and Docs"] --> C6["C6 Core launch (D42)"] --> C5["C5 Sheets and Slides"]
+  end
+  subgraph AI["AI layer"]
+    direction LR
+    A0["A0 AI platform"] --> A1["A1 Speech-to-text"] --> A3["A3 Built-in AI"] --> A4["A4 Assistant"] --> A5["A5 Agents"] --> A6["A6 Full v1 launch"]
+    A0 --> A2["A2 Org Brain and retrieval"] --> A3
+    A2 --> A5
+  end
+  CORE --> AI
 ```
 
 | Stage | What it builds | Needs | Who uses it | Size |
