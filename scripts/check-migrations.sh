@@ -117,9 +117,10 @@ for ext in ${superuser_extensions[@]+"${superuser_extensions[@]}"}; do
   sql -d "$db" -c "create extension if not exists \"$ext\""
 done
 
-# Runs after the last migration, inside the same transaction.
+# Runs after the last migration, inside the same transaction.  The transaction ID is captured in
+# a psql variable, which migration SQL cannot restore after COMMIT or ROLLBACK.
 sentinel="do \$\$ begin
-  if current_setting('hearth.migration_txn', true) is distinct from 'on' then
+  if txid_current() <> :'migration_txn' then
     raise exception 'a migration ended its own transaction (COMMIT or ROLLBACK); migrations run in one transaction';
   end if;
   if current_user <> '$owner' then
@@ -129,7 +130,7 @@ end \$\$"
 args=()
 for path in ${files[@]+"${files[@]}"}; do args+=(-c "\\warn applying $path" -c "$(cat "$path")"); done
 PGUSER=$migrator PGPASSWORD=$migrator_pw \
-  sql -d "$db" --single-transaction -c "set local hearth.migration_txn = 'on'" -c "set local role $owner" \
+  sql -d "$db" --single-transaction -c "select txid_current() as migration_txn \\gset" -c "set local role $owner" \
   ${args[@]+"${args[@]}"} -c "$sentinel" >/dev/null ||
   { echo "Migrations failed in the last file named above." >&2; exit 1; }
 
@@ -171,7 +172,8 @@ with rel as (
     and a.privilege_type in ('TRUNCATE', 'TRIGGER', 'REFERENCES')
   union all
   select 'Function PUBLIC can execute (revoke execute on function <name> from public)', name
-  from fn where has_function_privilege('public', oid, 'execute')
+  from fn cross join lateral aclexplode(coalesce(fn.proacl, acldefault('f', fn.proowner))) a
+  where a.grantee = 0 and a.privilege_type = 'EXECUTE'
   union all
   select 'SECURITY DEFINER function without search_path = '''' (alter function <name> set search_path = '''')', name
   from fn where prosecdef and not coalesce('search_path=\"\"' = any(proconfig), false)
