@@ -61,9 +61,9 @@ Ids: O = oracle (function tests), F = feature, E = everyday, P = performance, X 
 
 ## Coverage
 
-**SHEET-08 functions: 98 of 110** by the analyser's count. Missing: DATEDIF, DATEVALUE, DAYS, EDATE, ISEVEN, ISODD, MROUND, PROPER, SWITCH, TEXTJOIN, WEEKNUM, XOR. Strictly it is 97: plain NETWORKDAYS appears nowhere, only NETWORKDAYS.INTL (O03), which the analyser counts as NETWORKDAYS. Many functions sit in a single file (O01 alone carries 30 of them), so a bad file would hide a lot.
+**SHEET-08 functions: 97 of 109** (the finished PRD v0.4 dropped RAND and RANDBETWEEN to post-v1 and added HYPERLINK). Missing: DATEDIF, DATEVALUE, DAYS, EDATE, ISEVEN, ISODD, MROUND, PROPER, SWITCH, TEXTJOIN, WEEKNUM, XOR. Strictly it is 96: plain NETWORKDAYS appears nowhere, only NETWORKDAYS.INTL (O03), which the analyser counts as NETWORKDAYS. Many functions sit in a single file (O01 alone carries 30 of them), so a bad file would hide a lot. `manifest.json`'s coverage fields were computed against the earlier 110-function list.
 
-IronCalc's own test suite (259 workbooks, 74,590 formulas, at the same commit) covers 107. Run it alongside this corpus and coverage reaches 109 of 110. Only WEEKNUM is in neither.
+IronCalc's own test suite (259 workbooks, 74,590 formulas, at the same commit) covers 108 of the 109. Run it alongside this corpus; only WEEKNUM is in neither.
 
 **Features** (number of files that have each): custom number formats 19, defined names 14, merged cells 11, array formulas 11, dynamic-array cells 10, conditional formatting 10, notes 8, frozen panes 7, hidden sheets 7, Excel tables 6, hyperlinks 6, data validation 5, charts 3, hidden rows 3, pivot tables 2, chart sheets 2, autofilter 2, external workbook links 2, images 2, sheet protection 2, and one each of very hidden sheet, threaded comment, form controls, VBA macros, 1904 dates and hidden columns. Also present: newer-style CF rules (F01, F03), a Power Query query (P03) and Microsoft sensitivity labels (E01, E12).
 

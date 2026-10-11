@@ -1,7 +1,7 @@
 // Side panels and sheets for an open doc: comments (DOC-05), version history
 // with diffs and restore (DOC-04), who can do what (DOC-03) and details.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { CheckCircle2, Eye, FileText, Lock, MessageSquare, Pencil, RotateCcw, Send, Users } from 'lucide-react'
+import { CheckCircle2, Eye, FileText, Lock, MessageSquare, Pencil, RotateCcw, Send, Type, Users } from 'lucide-react'
 import type { Doc, DocComment, DocVersion } from '../../types'
 import { newId, useStore } from '../../store'
 import { ME, ORG_NAME } from '../../data/people'
@@ -184,12 +184,13 @@ export function Versions({ doc, draft, editable, lockedReason = 'Only people who
         ))}
       </ul>
       {sel === PENDING && pending && (
-        <Diff added={pending.added} removed={pending.removed} footer={<p className="mt-1 flex items-center gap-1.5 text-xs text-muted"><Eye size={13} aria-hidden />Saved to Drive. This becomes a “You edited” version when you leave the doc.</p>} />
+        <Diff added={pending.added} removed={pending.removed} formatted={pending.formatted} footer={<p className="mt-1 flex items-center gap-1.5 text-xs text-muted"><Eye size={13} aria-hidden />Saved to Drive. This becomes a “You edited” version when you leave the doc.</p>} />
       )}
       {v && (
         <Diff
           added={v.added ?? []}
           removed={v.removed ?? []}
+          formatted={v.formatted ?? []}
           empty={v === doc.versions[doc.versions.length - 1] ? `${v.summary}. There’s no earlier version to compare with.` : 'Layout changes only. No text changed.'}
           footer={
             v.id === doc.versions[0]?.id && !pending ? (
@@ -206,17 +207,25 @@ export function Versions({ doc, draft, editable, lockedReason = 'Only people who
   )
 }
 
-function Diff({ added, removed, empty, footer }: { added: string[]; removed: string[]; empty?: string; footer: ReactNode }) {
+function Diff({ added, removed, formatted, empty, footer }: { added: string[]; removed: string[]; formatted: string[]; empty?: string; footer: ReactNode }) {
   return (
     <div className="flex flex-col gap-2 border-t border-line pt-4">
       <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-muted">Changes in this version</p>
-      {!added.length && !removed.length && <p className="text-sm text-muted">{empty ?? 'No text changed.'}</p>}
+      {!added.length && !removed.length && !formatted.length && <p className="text-sm text-muted">{empty ?? 'No text changed.'}</p>}
       {removed.map((l, i) => (
         <p key={`r${i}`} className="rounded-lg bg-rec-soft px-2.5 py-1.5 text-sm text-fg line-through decoration-rec [overflow-wrap:anywhere]"><span className="sr-only">Removed: </span>{l}</p>
       ))}
       {added.map((l, i) => (
         <p key={`a${i}`} className="rounded-lg bg-ok-soft px-2.5 py-1.5 text-sm text-fg [overflow-wrap:anywhere]"><span className="sr-only">Added: </span>{l}</p>
       ))}
+      {formatted.length > 0 && (
+        <>
+          <p className={cx('flex items-center gap-1.5 text-xs text-muted', (added.length > 0 || removed.length > 0) && 'mt-1')}><Type size={13} className="shrink-0" aria-hidden />Formatting changed{!added.length && !removed.length ? ', no text changed' : ''}</p>
+          {formatted.map((l, i) => (
+            <p key={`f${i}`} className="rounded-lg border border-dashed border-line px-2.5 py-1.5 text-sm text-fg [overflow-wrap:anywhere]"><span className="sr-only">Formatting changed: </span>{l}</p>
+          ))}
+        </>
+      )}
       {footer}
     </div>
   )

@@ -6,7 +6,7 @@ import { Plus } from 'lucide-react'
 import type { PersonId, SheetCell, SheetTab } from '../../types'
 import { personById } from '../../data/people'
 import { cx, personShort } from '../../ui'
-import { addrOf, colName, formatValue, isError, type Pos, type Range, type Value } from './formula'
+import { addrOf, colName, errorHelp, formatValue, isError, type Pos, type Range, type Value } from './formula'
 
 export const FILL_CLASS: Record<NonNullable<SheetCell['fill']>, string> = {
   accent: 'bg-accent-soft',
@@ -243,16 +243,4 @@ export function Grid(props: GridProps) {
       </div>
     </>
   )
-}
-
-export function errorHelp(code: string): string {
-  switch (code) {
-    case '#DIV/0!': return 'Divides by zero or by an empty cell.'
-    case '#REF!': return 'Refers to a cell outside this tab.'
-    case '#NAME?': return 'Uses a function or name this sheet doesn’t know.'
-    case '#VALUE!': return 'Does maths on text, or a range where one value is needed.'
-    case '#CYCLE!': return 'Refers back to itself, directly or through other cells.'
-    case '#ERROR!': return 'The formula can’t be read. Check brackets, quotes and commas.'
-    default: return ''
-  }
 }
