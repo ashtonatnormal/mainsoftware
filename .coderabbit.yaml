@@ -1,0 +1,13 @@
+# CodeRabbit = the PR reviewer (bugs, regressions, security, missing tests).
+reviews:
+  request_changes_workflow: true      # approves once its comments are resolved (the 1 approval main's ruleset needs); requests changes until then
+  auto_review:
+    enabled: true
+    auto_pause_after_reviewed_commits: 0  # the Stop hook pushes after every response; never pause
+  path_filters:
+    - "!**/*.generated.ts"
+    - "!db/migrations/**"             # the owner reads these before merge (CLAUDE.md, Git), so no nitpicks here
+  pre_merge_checks:
+    docstrings:
+      mode: "off"                     # counts only /** */ docstrings; this repo explains code in // comments
+language: "en"
