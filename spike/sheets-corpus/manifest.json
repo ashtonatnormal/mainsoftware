@@ -1,0 +1,4455 @@
+{
+ "name": "Hearth Sheets spike corpus (C3.7 / B.7 / Q16)",
+ "generated": "2026-10-11",
+ "about": "27 openly licensed public workbooks used by the Sheets spike (BUILD-PLAN C3.7, PRD B.7 part b, Q16) in place of the org's own files, by the owner's choice. Each was saved by Excel, so formula cells carry Excel's computed values, which act as the oracle. Categories: oracle (function test matrices), feature (one import/export structure each), everyday (the kinds of workbook the org uses), performance (large real models), edge (sheet states, links, macros).",
+ "fields": {
+  "id": "Corpus id: O = oracle, F = feature, E = everyday, P = performance, X = edge. Gaps in numbering (F05, E03, E04) are files dropped at the licence check.",
+  "file": "Path inside the corpus. Byte-identical to the pinned source; see sha256.",
+  "source": "Repository, commit, path and pinned raw URL. fetch.py re-downloads from raw_url and checks sha256.",
+  "licence": "SPDX id (LicenseRef-PublicDomain-USGov = US federal work, 17 U.S.C. 105), the evidence, and the licence texts in LICENSES/.",
+  "attribution": "Credit line the licence or publisher asks for; also in NOTICE.md.",
+  "application, app_version, excel_saved, sheets, hidden_sheets, cells, formulas, formulas_with_cached_value, array_formulas, shared_formulas, cross_sheet_formulas, defined_names, sheet08_functions_used, functions_outside_sheet08, function_counts, lookup_calls, volatile_functions, features": "From analyse_xlsx.py run over files/. 'cells' counts <c> elements, including styled empty cells. Function counts are per formula text, so a shared formula counts once, not once per cell. The analyser counts Excel's newer names for the same function as the SHEET-08 function (STDEV.S, VAR.S, RANK.EQ, CEILING.MATH, FLOOR.MATH); NETWORKDAYS.INTL and WORKDAY.INTL are kept separate.",
+  "sheet08_functions_exact_names": "SHEET-08 functions whose own name appears (no folding).",
+  "non_empty_cells, max_row, max_col, excel_build, features_exact": "From the selector's read-only zip/XML scan of the same bytes (same sha256). features_exact corrects the analyser's double counts (pivot tables, external links) and adds hidden and very hidden sheets, chart sheets, notes, threaded comments, hyperlinks, dynamic-array cells, form controls, rich data and the 1904 flag.",
+  "features_present": "Readable list built from features_exact.",
+  "tests": "What the file is for in the spike.",
+  "notes": "Corrections and cautions from the licence and provenance checks."
+ },
+ "analyser": {
+  "name": "tools/analyse_xlsx.py",
+  "sha256": "542bdbabf8bf86189011a89c98692a0a8470888ee044bdf8ebd4915784369e32",
+  "command": "python3 -I tools/analyse_xlsx.py OUT.json files/",
+  "note": "Static: unzips and reads XML only; nothing in a workbook is executed. Numeric fields come from it unless the field list says otherwise.",
+  "known_limits": [
+   "Counts pivot-table and external-link relationship parts as well as the parts themselves, so it reports about double (use features_exact).",
+   "'cells' includes styled empty <c> elements; use non_empty_cells for SHEET-33 sizing.",
+   "Reads only the master text of shared formulas, so function and lookup counts for P01-P03 are far below the per-cell numbers.",
+   "Misses mixed-case VBA user-defined functions (=Subsidy(...) in X03).",
+   "Misses values written as <v xml:space=\"preserve\">.",
+   "Does not count x14 conditional-formatting or validation rules, or cross-sheet references inside them (F03 has 12 x14 blocks; F01 has one).",
+   "Does not detect Power Query mashups (P03 customXml/item1.xml), sensitivity-label parts (docMetadata/LabelInfo.xml in E01, E12) or add-in parts (xl/webextensions in O04, E06, X02).",
+   "Treats docProps <Application> alone as proof of an Excel save; the selector also checked workbook.xml rupBuild/calcId (excel_build)."
+  ],
+  "history": "The first build used an earlier copy (sha256 85d90cf3…) with the 110-function list and NETWORKDAYS.INTL folded into NETWORKDAYS. The committed version fixes both; the SHEET-08 fields here were regenerated with it. All other numeric fields are unchanged between the two versions."
+ },
+ "totals": {
+  "files": 27,
+  "by_category": {
+   "oracle": 5,
+   "feature": 6,
+   "everyday": 10,
+   "performance": 3,
+   "edge": 3
+  },
+  "excel_saved": 27,
+  "bytes": 12299257,
+  "formulas": 332660,
+  "formulas_with_cached_value": 332627,
+  "non_empty_cells": 712984,
+  "cells_analyser": 1017070
+ },
+ "coverage": {
+  "sheet08": {
+   "list": "SHEET-08 in the finished PRD v0.4: 109 functions (RAND and RANDBETWEEN moved to post-v1; HYPERLINK added).",
+   "rule": "A SHEET-08 function counts when its own name, or Excel's newer name for the same function (STDEV.S, VAR.S, RANK.EQ, CEILING.MATH, FLOOR.MATH), appears in a formula. NETWORKDAYS.INTL and WORKDAY.INTL are different functions and do not count. The README uses the same rule.",
+   "covered": 96,
+   "missing": [
+    "DATEDIF",
+    "DATEVALUE",
+    "DAYS",
+    "EDATE",
+    "ISEVEN",
+    "ISODD",
+    "MROUND",
+    "NETWORKDAYS",
+    "PROPER",
+    "SWITCH",
+    "TEXTJOIN",
+    "WEEKNUM",
+    "XOR"
+   ],
+   "only_in_one_file": {
+    "E02": [
+     "ISOWEEKNUM"
+    ],
+    "E08": [
+     "IFS"
+    ],
+    "E10": [
+     "WORKDAY"
+    ],
+    "F06": [
+     "COUNTIFS",
+     "IFNA",
+     "XMATCH"
+    ],
+    "O01": [
+     "CEILING",
+     "CLEAN",
+     "COLUMNS",
+     "CONCATENATE",
+     "COUNTBLANK",
+     "FALSE",
+     "FLOOR",
+     "HOUR",
+     "INT",
+     "ISLOGICAL",
+     "ISNA",
+     "LEN",
+     "LOWER",
+     "MEDIAN",
+     "MINUTE",
+     "MONTH",
+     "NOT",
+     "PRODUCT",
+     "ROW",
+     "ROWS",
+     "SEARCH",
+     "SECOND",
+     "SMALL",
+     "TIME",
+     "TRIM",
+     "TRUE",
+     "TRUNC",
+     "UPPER",
+     "VALUE",
+     "YEAR"
+    ],
+    "O03": [
+     "RANK"
+    ],
+    "O04": [
+     "REPT"
+    ],
+    "O05": [
+     "AVERAGEIF",
+     "AVERAGEIFS",
+     "MAXIFS"
+    ]
+   },
+   "ironcalc_suite": {
+    "repo": "ironcalc/IronCalc",
+    "commit": "c88f07f0c776ad42bc4cfd68dfc65f68195908f0",
+    "path": "xlsx/tests",
+    "files": 259,
+    "excel_saved": 249,
+    "formulas": 74590,
+    "formulas_with_cached_value": 74407,
+    "covered": 108,
+    "missing": [
+     "WEEKNUM"
+    ],
+    "covered_with_corpus": 108,
+    "missing_with_corpus": [
+     "WEEKNUM"
+    ],
+    "suite_files_for_corpus_gaps": {
+     "DATEDIF": [
+      "calc_tests/DATE_AND_TIME/YEARFRAC_DATEDIF.xlsx"
+     ],
+     "DATEVALUE": [
+      "calc_tests/DATE_AND_TIME/DATE.xlsx",
+      "calc_tests/DATE_AND_TIME/DATEVALUE.xlsx",
+      "calc_tests/DATE_AND_TIME/DATEVALUE_issue_1379.xlsx",
+      "calc_tests/DATE_AND_TIME/DATEVALUE_issue_1380.xlsx"
+     ],
+     "DAYS": [
+      "calc_tests/DATE_AND_TIME/DAYS_DAYS360.xlsx"
+     ],
+     "EDATE": [
+      "calc_tests/DATE_AND_TIME/DATE_DAY_MONTH_YEAR.xlsx",
+      "calc_tests/DATE_AND_TIME/EDATE.xlsx"
+     ],
+     "ISEVEN": [
+      "calc_tests/INFORMATION/ISREF_ISFORMULA_ISODD_ISEVEN.xlsx"
+     ],
+     "ISODD": [
+      "calc_tests/INFORMATION/ISREF_ISFORMULA_ISODD_ISEVEN.xlsx"
+     ],
+     "MROUND": [
+      "calc_tests/MATH_AND_TRIGONOMETRY/MROUND_TRUNC_INT.xlsx"
+     ],
+     "PROPER": [
+      "calc_tests/TEXT/MID_LEFT_RIGHT_arrays.xlsx",
+      "calc_tests/TEXT/PROPER.xlsx"
+     ],
+     "SWITCH": [
+      "calc_tests/logical.xlsx"
+     ],
+     "TEXTJOIN": [
+      "calc_tests/TEXT/TEXTJOIN.xlsx"
+     ],
+     "WEEKNUM": [],
+     "XOR": [
+      "calc_tests/LOGICAL/AND_OR_XOR.xlsx",
+      "calc_tests/logical.xlsx"
+     ]
+    }
+   }
+  },
+  "features_files": {
+   "merged cells": [
+    "O01",
+    "O02",
+    "O03",
+    "F01",
+    "F06",
+    "E08",
+    "E09",
+    "E12",
+    "P02",
+    "P03",
+    "X03"
+   ],
+   "conditional formatting": [
+    "O02",
+    "F01",
+    "F03",
+    "F06",
+    "E02",
+    "E05",
+    "E06",
+    "E08",
+    "E09",
+    "P02"
+   ],
+   "data validation": [
+    "E08",
+    "E12",
+    "P02",
+    "P03",
+    "X03"
+   ],
+   "custom number formats": [
+    "O01",
+    "O03",
+    "F02",
+    "F03",
+    "F06",
+    "E01",
+    "E02",
+    "E05",
+    "E06",
+    "E07",
+    "E08",
+    "E09",
+    "E10",
+    "E11",
+    "E12",
+    "P01",
+    "P02",
+    "P03",
+    "X03"
+   ],
+   "frozen panes": [
+    "F01",
+    "F04",
+    "F06",
+    "E05",
+    "E07",
+    "E12",
+    "P01"
+   ],
+   "hidden rows": [
+    "O03",
+    "F02",
+    "P02"
+   ],
+   "hidden columns": [
+    "P02"
+   ],
+   "hidden sheets": [
+    "F01",
+    "E02",
+    "E06",
+    "E10",
+    "P02",
+    "P03",
+    "X01"
+   ],
+   "very hidden sheets": [
+    "X01"
+   ],
+   "chart sheets": [
+    "F01",
+    "X01"
+   ],
+   "charts": [
+    "F01",
+    "P02",
+    "X01"
+   ],
+   "pivot tables": [
+    "F01",
+    "P03"
+   ],
+   "Excel tables": [
+    "F01",
+    "F02",
+    "E01",
+    "E09",
+    "P02",
+    "P03"
+   ],
+   "autofilter": [
+    "E07",
+    "P03"
+   ],
+   "notes (legacy comments)": [
+    "O01",
+    "F01",
+    "F06",
+    "F07",
+    "P01",
+    "P02",
+    "P03",
+    "X03"
+   ],
+   "threaded comments": [
+    "F07"
+   ],
+   "images / media": [
+    "F06",
+    "P03"
+   ],
+   "defined names": [
+    "F01",
+    "F02",
+    "F06",
+    "E05",
+    "E07",
+    "E08",
+    "E09",
+    "E10",
+    "E12",
+    "P01",
+    "P02",
+    "P03",
+    "X02",
+    "X03"
+   ],
+   "sheet protection": [
+    "P02",
+    "X03"
+   ],
+   "form controls": [
+    "X03"
+   ],
+   "hyperlinks": [
+    "O01",
+    "E07",
+    "E08",
+    "P02",
+    "P03",
+    "X02"
+   ],
+   "external workbook links": [
+    "P02",
+    "X02"
+   ],
+   "VBA macros": [
+    "X03"
+   ],
+   "1904 date system": [
+    "F04"
+   ],
+   "dynamic-array cells": [
+    "O02",
+    "O04",
+    "F06",
+    "E02",
+    "E05",
+    "E08",
+    "E09",
+    "E10",
+    "E12",
+    "X03"
+   ],
+   "array formulas": [
+    "O02",
+    "O04",
+    "F06",
+    "E02",
+    "E05",
+    "E08",
+    "E09",
+    "E10",
+    "E12",
+    "P02",
+    "X03"
+   ],
+   "rich-value data (#SPILL! / rich values)": [
+    "F06"
+   ]
+  },
+  "volatile_files": {
+   "INDIRECT": [
+    "O01",
+    "F02",
+    "P02"
+   ],
+   "OFFSET": [
+    "O01",
+    "O02",
+    "F02"
+   ],
+   "TODAY": [
+    "F03",
+    "E02",
+    "E06",
+    "E10"
+   ],
+   "RAND": [
+    "F06"
+   ],
+   "RANDBETWEEN": [
+    "F06"
+   ],
+   "NOW": [
+    "E02",
+    "E06",
+    "E10"
+   ]
+  }
+ },
+ "everyday_subcategories": {
+  "covered": {
+   "staff roster / on-call rota (no formulas)": [
+    "E01"
+   ],
+   "weekly timesheet": [
+    "E02"
+   ],
+   "expense tracker": [
+    "E05"
+   ],
+   "project / task tracker (Gantt)": [
+    "E06"
+   ],
+   "record log with summary tabs (tracker / dashboard)": [
+    "E07"
+   ],
+   "multi-year forecast / cost projection": [
+    "E08"
+   ],
+   "quote builder / cost calculator": [
+    "E09"
+   ],
+   "invoice": [
+    "E10"
+   ],
+   "loan amortisation schedule": [
+    "E11"
+   ],
+   "cash-flow / project finance model": [
+    "E12"
+   ]
+  },
+  "missing": [
+   "department or project budget (E04 was dropped)",
+   "timesheet with overtime pay (E03 was dropped)",
+   "shift roster with formulas (hours, OT pay)",
+   "attendance / leave tracker",
+   "inventory / stock list with reorder levels",
+   "side-by-side vendor quote comparison",
+   "payroll",
+   "logistics trackers (shipments, delivery runs)",
+   "chart-based KPI dashboard",
+   "anything Singapore-specific: S$ formats, day-first dates, en-SG locale, GST, public holidays"
+  ]
+ },
+ "files": [
+  {
+   "id": "O01",
+   "file": "files/O01-poi-formula-eval-test-data.xlsx",
+   "category": "oracle",
+   "subcategory": "function matrix (75 SHEET-08 functions)",
+   "title": "Apache POI formula evaluation test data",
+   "description": "Apache POI's formula-evaluation matrix: one row per function with Excel's expected results.",
+   "source": {
+    "repo": "apache/poi",
+    "repo_url": "https://github.com/apache/poi",
+    "commit": "ae62bb5116b9aee19ebd5834e3a82066132c9f7f",
+    "repo_path": "test-data/spreadsheet/FormulaEvalTestData_Copy.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/apache/poi/ae62bb5116b9aee19ebd5834e3a82066132c9f7f/test-data/spreadsheet/FormulaEvalTestData_Copy.xlsx",
+    "blob_url": "https://github.com/apache/poi/blob/ae62bb5116b9aee19ebd5834e3a82066132c9f7f/test-data/spreadsheet/FormulaEvalTestData_Copy.xlsx"
+   },
+   "licence": {
+    "spdx": "Apache-2.0",
+    "evidence": "legal/LICENSE (Apache License 2.0) + legal/NOTICE; test-data is part of the ASF source tree",
+    "licence_file_url": "https://github.com/apache/poi/blob/ae62bb5116b9aee19ebd5834e3a82066132c9f7f/legal/LICENSE",
+    "texts": [
+     "LICENSES/Apache-2.0--apache-poi.txt",
+     "LICENSES/Apache-2.0--apache-poi-NOTICE.txt"
+    ],
+    "obligations": "Apache-2.0 s.4: give recipients the licence and the NOTICE text (LICENSES/Apache-2.0--apache-poi.txt and LICENSES/Apache-2.0--apache-poi-NOTICE.txt), and mark any modified copy as changed."
+   },
+   "attribution": "Apache POI\nCopyright 2003-2026 The Apache Software Foundation\nThis product includes software developed at The Apache Software Foundation (https://www.apache.org/).\n(Source: test-data/spreadsheet/FormulaEvalTestData_Copy.xlsx, apache/poi @ ae62bb5116b9aee19ebd5834e3a82066132c9f7f; Apache License 2.0)",
+   "modified": false,
+   "sha256": "01b21647d53501e8ec10f4eb522945d41ea3c8d1fdd57f8b0142ec34884c33eb",
+   "bytes": 65011,
+   "application": "Microsoft Excel",
+   "app_version": "15.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "14420",
+    "calcId": "152511"
+   },
+   "sheets": 4,
+   "hidden_sheets": 0,
+   "cells": 4588,
+   "non_empty_cells": 4177,
+   "max_row": 1504,
+   "max_col": 38,
+   "formulas": 1295,
+   "formulas_with_cached_value": 1287,
+   "formulas_without_cached_value": 8,
+   "array_formulas": 0,
+   "shared_formulas": 62,
+   "cross_sheet_formulas": 11,
+   "defined_names": 0,
+   "sheet08_functions_used": [
+    "ABS",
+    "AND",
+    "AVERAGE",
+    "CEILING",
+    "CHOOSE",
+    "CLEAN",
+    "COLUMN",
+    "COLUMNS",
+    "CONCATENATE",
+    "COUNT",
+    "COUNTA",
+    "COUNTBLANK",
+    "COUNTIF",
+    "DATE",
+    "DAY",
+    "EXACT",
+    "FALSE",
+    "FIND",
+    "FLOOR",
+    "HLOOKUP",
+    "HOUR",
+    "HYPERLINK",
+    "IF",
+    "INDEX",
+    "INT",
+    "ISBLANK",
+    "ISERROR",
+    "ISLOGICAL",
+    "ISNA",
+    "ISNUMBER",
+    "ISTEXT",
+    "LARGE",
+    "LEFT",
+    "LEN",
+    "LOOKUP",
+    "LOWER",
+    "MATCH",
+    "MAX",
+    "MEDIAN",
+    "MID",
+    "MIN",
+    "MINUTE",
+    "MOD",
+    "MONTH",
+    "NA",
+    "NOT",
+    "OR",
+    "POWER",
+    "PRODUCT",
+    "REPLACE",
+    "RIGHT",
+    "ROUND",
+    "ROUNDDOWN",
+    "ROUNDUP",
+    "ROW",
+    "ROWS",
+    "SEARCH",
+    "SECOND",
+    "SMALL",
+    "SQRT",
+    "STDEV",
+    "SUBSTITUTE",
+    "SUBTOTAL",
+    "SUM",
+    "SUMIF",
+    "SUMPRODUCT",
+    "TEXT",
+    "TIME",
+    "TRIM",
+    "TRUE",
+    "TRUNC",
+    "UPPER",
+    "VALUE",
+    "VAR",
+    "VLOOKUP",
+    "YEAR"
+   ],
+   "sheet08_functions_count": 76,
+   "sheet08_functions_exact_names": [
+    "ABS",
+    "AND",
+    "AVERAGE",
+    "CEILING",
+    "CHOOSE",
+    "CLEAN",
+    "COLUMN",
+    "COLUMNS",
+    "CONCATENATE",
+    "COUNT",
+    "COUNTA",
+    "COUNTBLANK",
+    "COUNTIF",
+    "DATE",
+    "DAY",
+    "EXACT",
+    "FALSE",
+    "FIND",
+    "FLOOR",
+    "HLOOKUP",
+    "HOUR",
+    "HYPERLINK",
+    "IF",
+    "INDEX",
+    "INT",
+    "ISBLANK",
+    "ISERROR",
+    "ISLOGICAL",
+    "ISNA",
+    "ISNUMBER",
+    "ISTEXT",
+    "LARGE",
+    "LEFT",
+    "LEN",
+    "LOOKUP",
+    "LOWER",
+    "MATCH",
+    "MAX",
+    "MEDIAN",
+    "MID",
+    "MIN",
+    "MINUTE",
+    "MOD",
+    "MONTH",
+    "NA",
+    "NOT",
+    "OR",
+    "POWER",
+    "PRODUCT",
+    "REPLACE",
+    "RIGHT",
+    "ROUND",
+    "ROUNDDOWN",
+    "ROUNDUP",
+    "ROW",
+    "ROWS",
+    "SEARCH",
+    "SECOND",
+    "SMALL",
+    "SQRT",
+    "STDEV",
+    "SUBSTITUTE",
+    "SUBTOTAL",
+    "SUM",
+    "SUMIF",
+    "SUMPRODUCT",
+    "TEXT",
+    "TIME",
+    "TRIM",
+    "TRUE",
+    "TRUNC",
+    "UPPER",
+    "VALUE",
+    "VAR",
+    "VLOOKUP",
+    "YEAR"
+   ],
+   "functions_outside_sheet08": [
+    "ACOS",
+    "ACOSH",
+    "ADDRESS",
+    "ASIN",
+    "ASINH",
+    "ATAN",
+    "ATAN2",
+    "ATANH",
+    "AVEDEV",
+    "AVERAGEA",
+    "CHAR",
+    "COMBIN",
+    "COS",
+    "COSH",
+    "DAYS360",
+    "DEGREES",
+    "DEVSQ",
+    "DOLLAR",
+    "ERROR.TYPE",
+    "EVEN",
+    "EXP",
+    "FACT",
+    "FV",
+    "INDIRECT",
+    "IRR",
+    "ISNONTEXT",
+    "ISREF",
+    "LN",
+    "LOG",
+    "LOG10",
+    "MAXA",
+    "MINA",
+    "MODE",
+    "NPER",
+    "NPV",
+    "ODD",
+    "OFFSET",
+    "PI",
+    "PMT",
+    "POISSON",
+    "PV",
+    "RADIANS",
+    "RATE",
+    "SIGN",
+    "SIN",
+    "SINH",
+    "SUMSQ",
+    "SUMX2MY2",
+    "SUMX2PY2",
+    "SUMXMY2",
+    "T",
+    "TAN",
+    "TANH",
+    "VARP"
+   ],
+   "function_counts": {
+    "SUBSTITUTE": 21,
+    "FACT": 16,
+    "TRIM": 16,
+    "SUM": 15,
+    "ABS": 15,
+    "UPPER": 15,
+    "ACOS": 14,
+    "ISNUMBER": 14,
+    "DEVSQ": 13,
+    "AND": 13,
+    "ASIN": 13,
+    "ASINH": 13,
+    "ATAN": 13,
+    "DATE": 13,
+    "LN": 13,
+    "LOWER": 13,
+    "ROUND": 13,
+    "ROUNDDOWN": 13,
+    "SIN": 13,
+    "SQRT": 13,
+    "LARGE": 12,
+    "MEDIAN": 12,
+    "MODE": 12,
+    "ACOSH": 12,
+    "ATAN2": 12,
+    "COS": 12,
+    "DEGREES": 12,
+    "IF": 12,
+    "ISERROR": 12,
+    "INT": 12,
+    "LOG10": 12,
+    "ROUNDUP": 12,
+    "SIGN": 12,
+    "SINH": 12,
+    "T": 12,
+    "ATANH": 11,
+    "COSH": 11,
+    "DOLLAR": 11,
+    "EVEN": 11,
+    "MOD": 11,
+    "ODD": 11,
+    "OFFSET": 11,
+    "POWER": 11,
+    "RADIANS": 11,
+    "SUMSQ": 11,
+    "TANH": 11,
+    "AVEDEV": 10,
+    "STDEV": 10,
+    "VAR": 10,
+    "CEILING": 10,
+    "FLOOR": 10,
+    "LOG": 10,
+    "MIN": 10,
+    "SUMX2MY2": 10,
+    "TAN": 10,
+    "CONCATENATE": 9,
+    "MAX": 9,
+    "SMALL": 9,
+    "COMBIN": 9,
+    "EXACT": 9,
+    "EXP": 9,
+    "TRUNC": 9,
+    "ISBLANK": 9,
+    "ISLOGICAL": 9,
+    "ISNONTEXT": 9,
+    "ISTEXT": 9,
+    "LEN": 9,
+    "PRODUCT": 9,
+    "SUMPRODUCT": 9,
+    "VARP": 9,
+    "ERROR.TYPE": 8,
+    "ISREF": 8,
+    "LEFT": 8,
+    "OR": 8,
+    "RIGHT": 8,
+    "ROW": 8,
+    "SUMX2PY2": 8,
+    "FV": 7,
+    "NPER": 7,
+    "AVERAGE": 7,
+    "MAXA": 7,
+    "MINA": 7,
+    "SUMXMY2": 7,
+    "NPV": 6,
+    "COLUMN": 6,
+    "ISNA": 6,
+    "MONTH": 6,
+    "REPLACE": 6,
+    "YEAR": 6,
+    "PV": 5,
+    "PMT": 5,
+    "CHAR": 5,
+    "CHOOSE": 5,
+    "DAY": 5,
+    "FIND": 5,
+    "HOUR": 5,
+    "NOT": 5,
+    "SEARCH": 5,
+    "SUBTOTAL": 5,
+    "HLOOKUP": 4,
+    "MID": 4,
+    "TIME": 4,
+    "VLOOKUP": 4,
+    "AVERAGEA": 3,
+    "ADDRESS": 3,
+    "COUNT": 3,
+    "COUNTA": 3,
+    "COUNTIF": 3,
+    "DAYS360": 3,
+    "INDIRECT": 3,
+    "IRR": 3,
+    "MATCH": 3,
+    "MINUTE": 3,
+    "SECOND": 3,
+    "TEXT": 3,
+    "COUNTBLANK": 2,
+    "INDEX": 2,
+    "TRUE": 2,
+    "LOOKUP": 2,
+    "PI": 2,
+    "POISSON": 2,
+    "SUMIF": 2,
+    "VALUE": 2,
+    "CLEAN": 1,
+    "COLUMNS": 1,
+    "FALSE": 1,
+    "HYPERLINK": 1,
+    "NA": 1,
+    "RATE": 1,
+    "ROWS": 1
+   },
+   "lookup_calls": 29,
+   "volatile_functions": [
+    "INDIRECT",
+    "OFFSET"
+   ],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 1,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 7,
+    "merged_cells": 6,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "comments": 1,
+    "custom_num_formats": 7,
+    "merged_cells": 6,
+    "legacy_comments": 1,
+    "hyperlinks": 1,
+    "defined_names": 0,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "merged cells",
+    "custom number formats",
+    "notes (legacy comments)",
+    "hyperlinks"
+   ],
+   "tests": "Main independent formula oracle. Compare every formula cell with the value Excel 2013 saved: 1,287 of 1,295 formulas have one, and the 8 without are reported as 'no oracle'. Covers 75 of the 110 SHEET-08 functions; 28 of them appear in no other selected file (COUNTBLANK, MEDIAN, STDEV, VAR, TIME/HOUR/MINUTE/SECOND, SEARCH, TRIM, CLEAN, VALUE, INT, TRUNC, CEILING, FLOOR, ROWS, COLUMNS and others). About 55 more finance, statistics and trigonometry functions are outside SHEET-08 and exercise SHEET-31's 'kept as fixed value' marker. INDIRECT and OFFSET are compared normally.",
+   "notes": [
+    "Excel 2013 values (saved 2016): re-check suspect mismatches in current Excel before calling them engine bugs."
+   ]
+  },
+  {
+   "id": "O02",
+   "file": "files/O02-libreoffice-dynamic-array-fixture.xlsx",
+   "category": "oracle",
+   "subcategory": "dynamic arrays, legacy CSE arrays, implicit intersection, spill operator",
+   "title": "LibreOffice dynamic-array fixture",
+   "description": "LibreOffice's fixture of dynamic-array, CSE-array and implicit-intersection cases with Expected/Result columns.",
+   "source": {
+    "repo": "LibreOffice/core",
+    "repo_url": "https://github.com/LibreOffice/core",
+    "commit": "63a2e191551b157adad367d020835e9ec21fc964",
+    "repo_path": "sc/qa/unit/data/functions/dynamic_array/xlsx/DynamicArrayFixture.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/LibreOffice/core/63a2e191551b157adad367d020835e9ec21fc964/sc/qa/unit/data/functions/dynamic_array/xlsx/DynamicArrayFixture.xlsx",
+    "blob_url": "https://github.com/LibreOffice/core/blob/63a2e191551b157adad367d020835e9ec21fc964/sc/qa/unit/data/functions/dynamic_array/xlsx/DynamicArrayFixture.xlsx"
+   },
+   "licence": {
+    "spdx": "MPL-2.0",
+    "evidence": "COPYING.MPL at repo root (LibreOffice core is MPL-2.0; COPYING.LGPL also present for legacy parts)",
+    "licence_file_url": "https://github.com/LibreOffice/core/blob/63a2e191551b157adad367d020835e9ec21fc964/COPYING.MPL",
+    "texts": [
+     "LICENSES/MPL-2.0--libreoffice-core.txt"
+    ],
+    "obligations": "MPL-2.0: keep the licence notice (LICENSES/MPL-2.0--libreoffice-core.txt). A modified copy that is shared stays under MPL-2.0 and must say where the source form is available."
+   },
+   "attribution": "DynamicArrayFixture.xlsx from LibreOffice core (https://github.com/LibreOffice/core, commit 63a2e191551b157adad367d020835e9ec21fc964), Copyright (c) LibreOffice contributors / The Document Foundation; contributed by Tomaz Vajngerl (Collabora). Licensed under the Mozilla Public License 2.0.",
+   "modified": false,
+   "sha256": "b10c917495578a5f0238ec4f4c0d8cd457d8afda602cd23edc3642be6b0ee577",
+   "bytes": 27708,
+   "application": "Microsoft Excel Online",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "30224",
+    "calcId": "191028"
+   },
+   "sheets": 3,
+   "hidden_sheets": 0,
+   "cells": 1334,
+   "non_empty_cells": 1107,
+   "max_row": 115,
+   "max_col": 16,
+   "formulas": 639,
+   "formulas_with_cached_value": 639,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 77,
+   "shared_formulas": 217,
+   "cross_sheet_formulas": 1,
+   "defined_names": 0,
+   "sheet08_functions_used": [
+    "AND",
+    "CHOOSE",
+    "COUNT",
+    "IF",
+    "IFERROR",
+    "ISBLANK",
+    "ISERROR",
+    "ISNUMBER",
+    "ISTEXT",
+    "MAX",
+    "MIN",
+    "SUM"
+   ],
+   "sheet08_functions_count": 12,
+   "sheet08_functions_exact_names": [
+    "AND",
+    "CHOOSE",
+    "COUNT",
+    "IF",
+    "IFERROR",
+    "ISBLANK",
+    "ISERROR",
+    "ISNUMBER",
+    "ISTEXT",
+    "MAX",
+    "MIN",
+    "SUM"
+   ],
+   "functions_outside_sheet08": [
+    "ANCHORARRAY",
+    "ERROR.TYPE",
+    "FORMULATEXT",
+    "ISFORMULA",
+    "ISREF",
+    "LET",
+    "MMULT",
+    "OFFSET",
+    "SEQUENCE",
+    "SINGLE",
+    "SUMSQ",
+    "TRANSPOSE",
+    "TYPE",
+    "UNIQUE"
+   ],
+   "function_counts": {
+    "FORMULATEXT": 110,
+    "ANCHORARRAY": 64,
+    "ERROR.TYPE": 34,
+    "SINGLE": 21,
+    "TRANSPOSE": 11,
+    "IF": 8,
+    "CHOOSE": 8,
+    "SUM": 7,
+    "ISFORMULA": 7,
+    "ISREF": 5,
+    "AND": 3,
+    "COUNT": 3,
+    "LET": 3,
+    "UNIQUE": 3,
+    "OFFSET": 2,
+    "IFERROR": 1,
+    "SEQUENCE": 1,
+    "MMULT": 1,
+    "TYPE": 1,
+    "ISNUMBER": 1,
+    "ISTEXT": 1,
+    "ISERROR": 1,
+    "ISBLANK": 1,
+    "MIN": 1,
+    "MAX": 1,
+    "SUMSQ": 1
+   },
+   "lookup_calls": 0,
+   "volatile_functions": [
+    "OFFSET"
+   ],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 0,
+    "merged_cells": 12,
+    "conditional_formatting": 3,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "merged_cells": 12,
+    "conditional_formatting": 3,
+    "dynamic_array_cells": 77,
+    "defined_names": 0,
+    "array_formulas": 77
+   },
+   "features_present": [
+    "merged cells",
+    "conditional formatting",
+    "dynamic-array cells",
+    "array formulas"
+   ],
+   "tests": "Independent (LibreOffice-made) oracle for array semantics. 639 formulas, all with values saved by Excel Online, and Expected/Result columns. Covers 77 dynamic-array cells, CSE arrays, implicit intersection (@, _xlfn.SINGLE), spill references (#, ANCHORARRAY), LET, MMULT and FORMULATEXT. Measures R15 (#VALUE! from a dynamic-array formula) and the SHEET-12 boundary: which cells P0 computes, which it keeps as fixed values, and whether spilled ranges survive export.",
+   "notes": [
+    "MPL-2.0 is file-level copyleft: a modified copy we redistribute (for example a round-tripped export) stays MPL-2.0 and must point to the source."
+   ]
+  },
+  {
+   "id": "O03",
+   "file": "files/O03-libreoffice-functions-excel-2010.xlsx",
+   "category": "oracle",
+   "subcategory": "Excel 2010 function set (self-checking): .INTL date functions, RANK.EQ/RANK.AVG, STDEV.S/VAR.S, AGGREGATE",
+   "title": "LibreOffice Excel 2010 functions test",
+   "description": "LibreOffice's self-checking sheet of functions added in Excel 2010 ('Result should be' / 'Equal?').",
+   "source": {
+    "repo": "LibreOffice/core",
+    "repo_url": "https://github.com/LibreOffice/core",
+    "commit": "63a2e191551b157adad367d020835e9ec21fc964",
+    "repo_path": "sc/qa/unit/data/xlsx/functions-excel-2010.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/LibreOffice/core/63a2e191551b157adad367d020835e9ec21fc964/sc/qa/unit/data/xlsx/functions-excel-2010.xlsx",
+    "blob_url": "https://github.com/LibreOffice/core/blob/63a2e191551b157adad367d020835e9ec21fc964/sc/qa/unit/data/xlsx/functions-excel-2010.xlsx"
+   },
+   "licence": {
+    "spdx": "MPL-2.0",
+    "evidence": "COPYING.MPL at repo root (LibreOffice core is MPL-2.0; COPYING.LGPL also present for legacy parts)",
+    "licence_file_url": "https://github.com/LibreOffice/core/blob/63a2e191551b157adad367d020835e9ec21fc964/COPYING.MPL",
+    "texts": [
+     "LICENSES/MPL-2.0--libreoffice-core.txt"
+    ],
+    "obligations": "MPL-2.0: keep the licence notice (LICENSES/MPL-2.0--libreoffice-core.txt). A modified copy that is shared stays under MPL-2.0 and must say where the source form is available."
+   },
+   "attribution": "functions-excel-2010.xlsx from LibreOffice core (https://github.com/LibreOffice/core, commit 63a2e191551b157adad367d020835e9ec21fc964), Copyright (c) LibreOffice contributors / The Document Foundation; authored by Kohei Yoshida, with changes by Eike Rathke and Winfried Donkers. Licensed under the Mozilla Public License 2.0.",
+   "modified": false,
+   "sha256": "16a2f714110e538e505d566ff4fdf8267c49ac80b11f87b2b671bac894537b25",
+   "bytes": 21127,
+   "application": "Microsoft Excel",
+   "app_version": "15.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "14420",
+    "calcId": "152511"
+   },
+   "sheets": 2,
+   "hidden_sheets": 0,
+   "cells": 1207,
+   "non_empty_cells": 973,
+   "max_row": 81,
+   "max_col": 21,
+   "formulas": 517,
+   "formulas_with_cached_value": 517,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 365,
+   "cross_sheet_formulas": 1,
+   "defined_names": 0,
+   "sheet08_functions_used": [
+    "AND",
+    "RANK",
+    "ROUND",
+    "STDEV",
+    "SUBTOTAL",
+    "VAR"
+   ],
+   "sheet08_functions_count": 6,
+   "sheet08_functions_exact_names": [
+    "AND",
+    "RANK.EQ",
+    "ROUND",
+    "STDEV.S",
+    "SUBTOTAL",
+    "VAR.S"
+   ],
+   "functions_outside_sheet08": [
+    "AGGREGATE",
+    "BETA.DIST",
+    "BETA.INV",
+    "BINOM.DIST",
+    "BINOM.INV",
+    "CEILING.PRECISE",
+    "CHISQ.DIST",
+    "CHISQ.DIST.RT",
+    "CHISQ.INV",
+    "CHISQ.INV.RT",
+    "CHISQ.TEST",
+    "CONFIDENCE.NORM",
+    "CONFIDENCE.T",
+    "COVARIANCE.P",
+    "COVARIANCE.S",
+    "ERF.PRECISE",
+    "ERFC.PRECISE",
+    "EXPON.DIST",
+    "F.DIST",
+    "F.DIST.RT",
+    "F.INV",
+    "F.INV.RT",
+    "F.TEST",
+    "FLOOR.PRECISE",
+    "GAMMA.DIST",
+    "GAMMA.INV",
+    "GAMMALN.PRECISE",
+    "HYPGEOM.DIST",
+    "ISO.CEILING",
+    "LOGNORM.DIST",
+    "LOGNORM.INV",
+    "MODE.MULT",
+    "MODE.SNGL",
+    "NEGBINOM.DIST",
+    "NETWORKDAYS.INTL",
+    "NORM.DIST",
+    "NORM.INV",
+    "NORM.S.DIST",
+    "NORM.S.INV",
+    "PERCENTILE.EXC",
+    "PERCENTILE.INC",
+    "PERCENTRANK.INC",
+    "POISSON.DIST",
+    "QUARTILE.EXC",
+    "QUARTILE.INC",
+    "RANK.AVG",
+    "STDEV.P",
+    "T.DIST",
+    "T.DIST.2T",
+    "T.DIST.RT",
+    "T.INV",
+    "T.INV.2T",
+    "T.TEST",
+    "VAR.P",
+    "WEIBULL.DIST",
+    "WORKDAY.INTL",
+    "Z.TEST"
+   ],
+   "function_counts": {
+    "AGGREGATE": 68,
+    "ROUND": 24,
+    "WORKDAY.INTL": 5,
+    "NETWORKDAYS.INTL": 4,
+    "SUBTOTAL": 3,
+    "AND": 2,
+    "BETA.DIST": 2,
+    "BINOM.DIST": 2,
+    "EXPON.DIST": 2,
+    "F.DIST": 2,
+    "HYPGEOM.DIST": 2,
+    "LOGNORM.DIST": 2,
+    "NEGBINOM.DIST": 2,
+    "NORM.DIST": 2,
+    "NORM.S.DIST": 2,
+    "PERCENTILE.EXC": 2,
+    "POISSON.DIST": 2,
+    "T.DIST": 2,
+    "WEIBULL.DIST": 2,
+    "BETA.INV": 1,
+    "BINOM.INV": 1,
+    "CEILING.PRECISE": 1,
+    "ISO.CEILING": 1,
+    "CHISQ.DIST": 1,
+    "CHISQ.DIST.RT": 1,
+    "CHISQ.INV": 1,
+    "CHISQ.INV.RT": 1,
+    "CHISQ.TEST": 1,
+    "CONFIDENCE.NORM": 1,
+    "CONFIDENCE.T": 1,
+    "COVARIANCE.P": 1,
+    "COVARIANCE.S": 1,
+    "ERF.PRECISE": 1,
+    "ERFC.PRECISE": 1,
+    "F.DIST.RT": 1,
+    "F.INV": 1,
+    "F.INV.RT": 1,
+    "F.TEST": 1,
+    "FLOOR.PRECISE": 1,
+    "GAMMA.DIST": 1,
+    "GAMMA.INV": 1,
+    "GAMMALN.PRECISE": 1,
+    "LOGNORM.INV": 1,
+    "MODE.MULT": 1,
+    "MODE.SNGL": 1,
+    "NORM.INV": 1,
+    "NORM.S.INV": 1,
+    "PERCENTILE.INC": 1,
+    "PERCENTRANK.INC": 1,
+    "QUARTILE.EXC": 1,
+    "QUARTILE.INC": 1,
+    "RANK.AVG": 1,
+    "RANK.EQ": 1,
+    "STDEV.P": 1,
+    "STDEV.S": 1,
+    "T.DIST.2T": 1,
+    "T.DIST.RT": 1,
+    "T.INV": 1,
+    "T.INV.2T": 1,
+    "T.TEST": 1,
+    "VAR.P": 1,
+    "VAR.S": 1,
+    "Z.TEST": 1
+   },
+   "lookup_calls": 0,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 4,
+    "merged_cells": 3,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 1,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "custom_num_formats": 4,
+    "merged_cells": 3,
+    "hidden_rows": 1,
+    "defined_names": 0,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "merged cells",
+    "custom number formats",
+    "hidden rows"
+   ],
+   "tests": "Independent self-checking oracle with Function / Formula / 'Result should be' / 'Equal?' columns: 517 formulas, all with values saved by Excel 2013. Adds the newer names STDEV.S, VAR.S and RANK.EQ (which SHEET-08 says must work), plus NETWORKDAYS.INTL, WORKDAY.INTL, RANK.AVG, STDEV.P, VAR.P and SUBTOTAL. Its other functions (AGGREGATE, NORM.DIST, PERCENTILE.INC and so on) are outside SHEET-08: they check the fixed-value path and let the adapter compare IronCalc, HyperFormula and Univer on harder numerics.",
+   "notes": [
+    "Correction from the licence check: the file does NOT contain plain NETWORKDAYS, WORKDAY, RANK, STDEV or VAR. The analyser folds NETWORKDAYS.INTL, WORKDAY.INTL, RANK.EQ, STDEV.S and VAR.S into those base names, so its SHEET-08 list for this file overstates coverage. .INTL functions take a weekend-mask argument, so they do not test the plain functions.",
+    "MPL-2.0 file-level copyleft, as for O02."
+   ]
+  },
+  {
+   "id": "O04",
+   "file": "files/O04-ironcalc-error-broadcast.xlsx",
+   "category": "oracle",
+   "subcategory": "error propagation through operators and arrays",
+   "title": "IronCalc error-propagation tests",
+   "description": "IronCalc's matrix of error values pushed through operators, comparisons, arrays and functions.",
+   "source": {
+    "repo": "ironcalc/IronCalc",
+    "repo_url": "https://github.com/ironcalc/IronCalc",
+    "commit": "c88f07f0c776ad42bc4cfd68dfc65f68195908f0",
+    "repo_path": "xlsx/tests/calc_tests/INFORMATION/error_broadcast.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/ironcalc/IronCalc/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/calc_tests/INFORMATION/error_broadcast.xlsx",
+    "blob_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/calc_tests/INFORMATION/error_broadcast.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT OR Apache-2.0",
+    "evidence": "LICENSE-MIT and LICENSE-Apache-2.0 at repo root; README licence badges link to both files (dual MIT / Apache-2.0)",
+    "licence_file_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/LICENSE-MIT",
+    "texts": [
+     "LICENSES/MIT--ironcalc.txt",
+     "LICENSES/Apache-2.0--ironcalc.txt"
+    ],
+    "obligations": "Keep the MIT copyright and permission notice with the file (LICENSES/MIT--ironcalc.txt). The Apache-2.0 option (LICENSES/Apache-2.0--ironcalc.txt) is also available."
+   },
+   "attribution": "Copyright (c) 2023 EqualTo GmbH, 2023 Nicolás Hatcher (IronCalc, https://github.com/ironcalc/IronCalc). Used under the MIT licence; Apache-2.0 is also offered.",
+   "modified": false,
+   "sha256": "3e36fac873c4ba77f69314b4eeafc377786e3571376761360a95d7d7bfb0609e",
+   "bytes": 16215,
+   "application": "Microsoft Macintosh Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "10927",
+    "calcId": "191029"
+   },
+   "sheets": 2,
+   "hidden_sheets": 0,
+   "cells": 323,
+   "non_empty_cells": 323,
+   "max_row": 92,
+   "max_col": 7,
+   "formulas": 86,
+   "formulas_with_cached_value": 86,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 72,
+   "shared_formulas": 0,
+   "cross_sheet_formulas": 1,
+   "defined_names": 0,
+   "sheet08_functions_used": [
+    "AVERAGE",
+    "DATE",
+    "EXACT",
+    "FIND",
+    "IFERROR",
+    "LEFT",
+    "MID",
+    "NA",
+    "POWER",
+    "REPLACE",
+    "REPT",
+    "RIGHT",
+    "SQRT",
+    "SUBSTITUTE",
+    "SUM",
+    "SUMPRODUCT",
+    "TEXT",
+    "WEEKDAY"
+   ],
+   "sheet08_functions_count": 18,
+   "sheet08_functions_exact_names": [
+    "AVERAGE",
+    "DATE",
+    "EXACT",
+    "FIND",
+    "IFERROR",
+    "LEFT",
+    "MID",
+    "NA",
+    "POWER",
+    "REPLACE",
+    "REPT",
+    "RIGHT",
+    "SQRT",
+    "SUBSTITUTE",
+    "SUM",
+    "SUMPRODUCT",
+    "TEXT",
+    "WEEKDAY"
+   ],
+   "functions_outside_sheet08": [
+    "LAMBDA",
+    "VAR.P"
+   ],
+   "function_counts": {
+    "NA": 38,
+    "DATE": 7,
+    "LEFT": 6,
+    "EXACT": 6,
+    "IFERROR": 6,
+    "TEXT": 6,
+    "AVERAGE": 4,
+    "SUM": 3,
+    "MID": 3,
+    "WEEKDAY": 3,
+    "LAMBDA": 3,
+    "SQRT": 3,
+    "VAR.P": 3,
+    "POWER": 2,
+    "SUMPRODUCT": 1,
+    "RIGHT": 1,
+    "REPT": 1,
+    "FIND": 1,
+    "SUBSTITUTE": 1,
+    "REPLACE": 1
+   },
+   "lookup_calls": 1,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 0,
+    "merged_cells": 0,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "dynamic_array_cells": 72,
+    "defined_names": 0,
+    "array_formulas": 72
+   },
+   "features_present": [
+    "dynamic-array cells",
+    "array formulas"
+   ],
+   "tests": "How #DIV/0!, #N/A and #VALUE! propagate through + - * / ^ &, comparisons, 72 array formulas and 18 SHEET-08 functions. It is the only selected file with REPT. 86 formulas, all with saved values. Engines often disagree with Excel on errors. IronCalc wrote it, so it mainly checks the harness and the fallback engines.",
+   "notes": [
+    "Made in Excel by IronCalc's maintainer; uses LAMBDA and VAR.P (outside SHEET-08).",
+    "Carries a Claude for Excel add-in part (xl/webextensions): a ready 'unknown part kept or dropped?' round-trip case."
+   ]
+  },
+  {
+   "id": "O05",
+   "file": "files/O05-ironcalc-sumifs-family.xlsx",
+   "category": "oracle",
+   "subcategory": "conditional aggregation (SUMIFS, SUMIF, AVERAGEIF(S), MINIFS, MAXIFS)",
+   "title": "IronCalc SUMIFS family tests",
+   "description": "IronCalc's criteria test sheet for SUMIFS, SUMIF, AVERAGEIF(S), MINIFS and MAXIFS.",
+   "source": {
+    "repo": "ironcalc/IronCalc",
+    "repo_url": "https://github.com/ironcalc/IronCalc",
+    "commit": "c88f07f0c776ad42bc4cfd68dfc65f68195908f0",
+    "repo_path": "xlsx/tests/calc_tests/MATH_AND_TRIGONOMETRY/SUMIFS.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/ironcalc/IronCalc/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/calc_tests/MATH_AND_TRIGONOMETRY/SUMIFS.xlsx",
+    "blob_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/calc_tests/MATH_AND_TRIGONOMETRY/SUMIFS.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT OR Apache-2.0",
+    "evidence": "LICENSE-MIT and LICENSE-Apache-2.0 at repo root; README licence badges link to both files (dual MIT / Apache-2.0)",
+    "licence_file_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/LICENSE-MIT",
+    "texts": [
+     "LICENSES/MIT--ironcalc.txt",
+     "LICENSES/Apache-2.0--ironcalc.txt"
+    ],
+    "obligations": "Keep the MIT copyright and permission notice with the file (LICENSES/MIT--ironcalc.txt). The Apache-2.0 option (LICENSES/Apache-2.0--ironcalc.txt) is also available."
+   },
+   "attribution": "Copyright (c) 2023 EqualTo GmbH, 2023 Nicolás Hatcher (IronCalc, https://github.com/ironcalc/IronCalc). Used under the MIT licence; Apache-2.0 is also offered.",
+   "modified": false,
+   "sha256": "19d7c5cdc45635fe56dcb9b0d571b6b439a6e367683547fc5527c101b8ba2146",
+   "bytes": 14499,
+   "application": "Microsoft Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "20374",
+    "calcId": "191029"
+   },
+   "sheets": 2,
+   "hidden_sheets": 0,
+   "cells": 438,
+   "non_empty_cells": 438,
+   "max_row": 37,
+   "max_col": 9,
+   "formulas": 285,
+   "formulas_with_cached_value": 285,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 260,
+   "cross_sheet_formulas": 0,
+   "defined_names": 0,
+   "sheet08_functions_used": [
+    "AVERAGEIF",
+    "AVERAGEIFS",
+    "MAXIFS",
+    "MINIFS",
+    "NA",
+    "SUMIF",
+    "SUMIFS"
+   ],
+   "sheet08_functions_count": 7,
+   "sheet08_functions_exact_names": [
+    "AVERAGEIF",
+    "AVERAGEIFS",
+    "MAXIFS",
+    "MINIFS",
+    "NA",
+    "SUMIF",
+    "SUMIFS"
+   ],
+   "functions_outside_sheet08": [],
+   "function_counts": {
+    "SUMIFS": 6,
+    "AVERAGEIFS": 6,
+    "MINIFS": 6,
+    "MAXIFS": 6,
+    "SUMIF": 4,
+    "AVERAGEIF": 4,
+    "NA": 2
+   },
+   "lookup_calls": 16,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 0,
+    "merged_cells": 0,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "defined_names": 0,
+    "array_formulas": 0
+   },
+   "features_present": [],
+   "tests": "Criteria rules behind every budget and tracker summary. 285 formulas, all with saved values, testing wildcards, comparison operators inside strings, blanks, numbers stored as text and multi-range criteria for SUMIFS, SUMIF, AVERAGEIF, AVERAGEIFS, MINIFS and MAXIFS. It is the only selected file with AVERAGEIF, AVERAGEIFS and MAXIFS. IronCalc wrote it.",
+   "notes": [
+    "docProps creator is blank (Excel privacy filter on); the licence check traced it to IronCalc's initial file dump from the EqualTo era. No sign of a third-party source."
+   ]
+  },
+  {
+   "id": "F01",
+   "file": "files/F01-ironcalc-multi-feature-example.xlsx",
+   "category": "feature",
+   "subcategory": "multi-feature round-trip probe",
+   "title": "IronCalc multi-feature example workbook",
+   "description": "Small IronCalc workbook that packs a chart sheet, hidden tab, pivot table, charts, table, notes, merges, CF, panes and names.",
+   "source": {
+    "repo": "ironcalc/IronCalc",
+    "repo_url": "https://github.com/ironcalc/IronCalc",
+    "commit": "c88f07f0c776ad42bc4cfd68dfc65f68195908f0",
+    "repo_path": "xlsx/tests/example.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/ironcalc/IronCalc/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/example.xlsx",
+    "blob_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/example.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT OR Apache-2.0",
+    "evidence": "LICENSE-MIT and LICENSE-Apache-2.0 at repo root; README licence badges link to both files (dual MIT / Apache-2.0)",
+    "licence_file_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/LICENSE-MIT",
+    "texts": [
+     "LICENSES/MIT--ironcalc.txt",
+     "LICENSES/Apache-2.0--ironcalc.txt"
+    ],
+    "obligations": "Keep the MIT copyright and permission notice with the file (LICENSES/MIT--ironcalc.txt). The Apache-2.0 option (LICENSES/Apache-2.0--ironcalc.txt) is also available."
+   },
+   "attribution": "Copyright (c) 2023 EqualTo GmbH, 2023 Nicolás Hatcher (IronCalc, https://github.com/ironcalc/IronCalc). Used under the MIT licence; Apache-2.0 is also offered.",
+   "modified": false,
+   "sha256": "35010189f3dbd9ec1881749cb1995d55fe35b7f3a9c07d6198abc55218bbc445",
+   "bytes": 41197,
+   "application": "Microsoft Macintosh Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "10414",
+    "calcId": "191029"
+   },
+   "sheets": 11,
+   "hidden_sheets": 1,
+   "cells": 257,
+   "non_empty_cells": 154,
+   "max_row": 33,
+   "max_col": 14,
+   "formulas": 36,
+   "formulas_with_cached_value": 36,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 19,
+   "cross_sheet_formulas": 0,
+   "defined_names": 5,
+   "sheet08_functions_used": [
+    "ISERROR",
+    "NA",
+    "SUM"
+   ],
+   "sheet08_functions_count": 3,
+   "sheet08_functions_exact_names": [
+    "ISERROR",
+    "NA",
+    "SUM"
+   ],
+   "functions_outside_sheet08": [
+    "SIN"
+   ],
+   "function_counts": {
+    "NA": 6,
+    "ISERROR": 4,
+    "SIN": 3,
+    "SUM": 2
+   },
+   "lookup_calls": 0,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 2,
+    "pivot_tables": 2,
+    "tables": 1,
+    "comments": 2,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 0,
+    "merged_cells": 2,
+    "conditional_formatting": 2,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 1,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "charts": 2,
+    "pivot_tables": 1,
+    "tables": 1,
+    "comments": 2,
+    "merged_cells": 2,
+    "conditional_formatting": 2,
+    "frozen_panes": 1,
+    "sheets_hidden": 1,
+    "chartsheets": 1,
+    "legacy_comments": 2,
+    "defined_names": 5,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "merged cells",
+    "conditional formatting",
+    "frozen panes",
+    "hidden sheets",
+    "chart sheets",
+    "charts",
+    "pivot tables",
+    "Excel tables",
+    "notes (legacy comments)",
+    "defined names"
+   ],
+   "tests": "One small file holding most SHEET-31 structures, for the kept / kept-as-values / dropped list. It has 11 tabs including a chart sheet and a hidden tab, 1 pivot table, 2 charts, 1 Excel table, 2 legacy notes, merged cells, conditional formatting (including an x14 rule), frozen and split panes, 5 workbook- and sheet-scoped names, and 36 formulas with saved values. Import, export and re-import it, then compare the parts.",
+   "notes": [
+    "The analyser reports pivot_tables=2; the package holds one pivot table (it also counts the pivot table's relationship part)."
+   ]
+  },
+  {
+   "id": "F02",
+   "file": "files/F02-ironcalc-tables-structured-refs.xlsx",
+   "category": "feature",
+   "subcategory": "Excel tables and structured references",
+   "title": "IronCalc Excel tables and structured references",
+   "description": "Nine Excel tables with totals rows, filtered rows and structured references.",
+   "source": {
+    "repo": "ironcalc/IronCalc",
+    "repo_url": "https://github.com/ironcalc/IronCalc",
+    "commit": "c88f07f0c776ad42bc4cfd68dfc65f68195908f0",
+    "repo_path": "xlsx/tests/calc_test_no_export/tables.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/ironcalc/IronCalc/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/calc_test_no_export/tables.xlsx",
+    "blob_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/calc_test_no_export/tables.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT OR Apache-2.0",
+    "evidence": "LICENSE-MIT and LICENSE-Apache-2.0 at repo root; README licence badges link to both files (dual MIT / Apache-2.0)",
+    "licence_file_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/LICENSE-MIT",
+    "texts": [
+     "LICENSES/MIT--ironcalc.txt",
+     "LICENSES/Apache-2.0--ironcalc.txt"
+    ],
+    "obligations": "Keep the MIT copyright and permission notice with the file (LICENSES/MIT--ironcalc.txt). The Apache-2.0 option (LICENSES/Apache-2.0--ironcalc.txt) is also available."
+   },
+   "attribution": "Copyright (c) 2023 EqualTo GmbH, 2023 Nicolás Hatcher (IronCalc, https://github.com/ironcalc/IronCalc). Used under the MIT licence; Apache-2.0 is also offered.",
+   "modified": false,
+   "sha256": "d603afdea61b0809f92561a55b202956f8b46f80235652cf6ef702f995993615",
+   "bytes": 35787,
+   "application": "Microsoft Macintosh Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "10312",
+    "calcId": "191029"
+   },
+   "sheets": 9,
+   "hidden_sheets": 0,
+   "cells": 833,
+   "non_empty_cells": 831,
+   "max_row": 61,
+   "max_col": 15,
+   "formulas": 212,
+   "formulas_with_cached_value": 212,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 0,
+   "cross_sheet_formulas": 0,
+   "defined_names": 2,
+   "sheet08_functions_used": [
+    "CONCAT",
+    "COUNT",
+    "COUNTA",
+    "NA",
+    "SUBTOTAL",
+    "SUM"
+   ],
+   "sheet08_functions_count": 6,
+   "sheet08_functions_exact_names": [
+    "CONCAT",
+    "COUNT",
+    "COUNTA",
+    "NA",
+    "SUBTOTAL",
+    "SUM"
+   ],
+   "functions_outside_sheet08": [
+    "INDIRECT",
+    "OFFSET",
+    "SHEET"
+   ],
+   "function_counts": {
+    "SUBTOTAL": 74,
+    "SUM": 23,
+    "SHEET": 11,
+    "OFFSET": 4,
+    "INDIRECT": 4,
+    "COUNT": 2,
+    "NA": 1,
+    "COUNTA": 1,
+    "CONCAT": 1
+   },
+   "lookup_calls": 0,
+   "volatile_functions": [
+    "INDIRECT",
+    "OFFSET"
+   ],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 9,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 13,
+    "merged_cells": 0,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 21,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "tables": 9,
+    "custom_num_formats": 13,
+    "hidden_rows": 21,
+    "defined_names": 2,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "custom number formats",
+    "hidden rows",
+    "Excel tables",
+    "defined names"
+   ],
+   "tests": "9 Excel tables with header rows, totals rows and filtered rows. 212 formulas, all with saved values, use structured references (Table16[[#This Row],[Units]], totals rows, escaped names), and 74 SUBTOTAL calls run over 21 hidden or filtered rows. IronCalc keeps it in calc_test_no_export: it calculates the file but cannot yet write it back, so this is the known-hard export case.",
+   "notes": [
+    "Also uses INDIRECT and OFFSET (volatile, outside SHEET-08)."
+   ]
+  },
+  {
+   "id": "F03",
+   "file": "files/F03-phpspreadsheet-cf-cell-matcher.xlsx",
+   "category": "feature",
+   "subcategory": "conditional-formatting rule types",
+   "title": "PhpSpreadsheet conditional-formatting cell matcher",
+   "description": "Ten tabs of conditional-formatting rules with formulas giving each cell's expected match.",
+   "source": {
+    "repo": "PHPOffice/PhpSpreadsheet",
+    "repo_url": "https://github.com/PHPOffice/PhpSpreadsheet",
+    "commit": "242961d07f7cd5dca40de343315d2136967dac20",
+    "repo_path": "tests/data/Style/ConditionalFormatting/CellMatcher.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/PHPOffice/PhpSpreadsheet/242961d07f7cd5dca40de343315d2136967dac20/tests/data/Style/ConditionalFormatting/CellMatcher.xlsx",
+    "blob_url": "https://github.com/PHPOffice/PhpSpreadsheet/blob/242961d07f7cd5dca40de343315d2136967dac20/tests/data/Style/ConditionalFormatting/CellMatcher.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT",
+    "evidence": "LICENSE at repo root: \"MIT License, Copyright (c) 2019-2026 PhpSpreadsheet Authors\"",
+    "licence_file_url": "https://github.com/PHPOffice/PhpSpreadsheet/blob/242961d07f7cd5dca40de343315d2136967dac20/LICENSE",
+    "texts": [
+     "LICENSES/MIT--phpspreadsheet.txt"
+    ],
+    "obligations": "Keep the MIT copyright and permission notice with the file (LICENSES/MIT--phpspreadsheet.txt)."
+   },
+   "attribution": "Copyright (c) 2019-2026 PhpSpreadsheet Authors. File tests/data/Style/ConditionalFormatting/CellMatcher.xlsx, authored by Mark Baker (PhpSpreadsheet commit 4a04499bffb83378f9c1cfba8a39c0c2cb80359d, PR #2491). MIT License.",
+   "modified": false,
+   "sha256": "5e8b18ff22816589d28f29a71a4b75e6c6b6ad65b3061c6f8822a39721b97c69",
+   "bytes": 35435,
+   "application": "Microsoft Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "24912",
+    "calcId": "191029"
+   },
+   "sheets": 10,
+   "hidden_sheets": 0,
+   "cells": 555,
+   "non_empty_cells": 543,
+   "max_row": 37,
+   "max_col": 11,
+   "formulas": 197,
+   "formulas_with_cached_value": 197,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 187,
+   "cross_sheet_formulas": 0,
+   "defined_names": 0,
+   "sheet08_functions_used": [
+    "TODAY"
+   ],
+   "sheet08_functions_count": 1,
+   "sheet08_functions_exact_names": [
+    "TODAY"
+   ],
+   "functions_outside_sheet08": [],
+   "function_counts": {
+    "TODAY": 5
+   },
+   "lookup_calls": 0,
+   "volatile_functions": [
+    "TODAY"
+   ],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 7,
+    "merged_cells": 0,
+    "conditional_formatting": 28,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "custom_num_formats": 7,
+    "conditional_formatting": 28,
+    "defined_names": 0,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "conditional formatting",
+    "custom number formats"
+   ],
+   "tests": "28 conditional-formatting blocks over 10 tabs: cellIs, expressions, text, blanks, errors, date periods, duplicates, cross-sheet and x14 rules. 197 formulas compute the expected match flag for each cell. Checks that rules import, evaluate as Excel does and survive export (SHEET-22; listed as dropped until it ships). The date-period rules use TODAY, so pin the date.",
+   "notes": [
+    "Has 12 more x14 conditional-formatting blocks that the analyser does not count; its cross_sheet_formulas=0 misses the cross-sheet references inside x14 rules (<xm:f>).",
+    "Only SHEET-08 function used is TODAY; almost all formulas are plain comparisons."
+   ]
+  },
+  {
+   "id": "F04",
+   "file": "files/F04-poi-number-format-tests.xlsx",
+   "category": "feature",
+   "subcategory": "custom, date and fraction number formats; 1904 date system",
+   "title": "Apache POI number-format tests",
+   "description": "TEXT() against about 127 custom number formats, on the 1904 date system.",
+   "source": {
+    "repo": "apache/poi",
+    "repo_url": "https://github.com/apache/poi",
+    "commit": "ae62bb5116b9aee19ebd5834e3a82066132c9f7f",
+    "repo_path": "test-data/spreadsheet/NumberFormatTests.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/apache/poi/ae62bb5116b9aee19ebd5834e3a82066132c9f7f/test-data/spreadsheet/NumberFormatTests.xlsx",
+    "blob_url": "https://github.com/apache/poi/blob/ae62bb5116b9aee19ebd5834e3a82066132c9f7f/test-data/spreadsheet/NumberFormatTests.xlsx"
+   },
+   "licence": {
+    "spdx": "Apache-2.0",
+    "evidence": "legal/LICENSE (Apache License 2.0) + legal/NOTICE; test-data is part of the ASF source tree",
+    "licence_file_url": "https://github.com/apache/poi/blob/ae62bb5116b9aee19ebd5834e3a82066132c9f7f/legal/LICENSE",
+    "texts": [
+     "LICENSES/Apache-2.0--apache-poi.txt",
+     "LICENSES/Apache-2.0--apache-poi-NOTICE.txt"
+    ],
+    "obligations": "Apache-2.0 s.4: give recipients the licence and the NOTICE text (LICENSES/Apache-2.0--apache-poi.txt and LICENSES/Apache-2.0--apache-poi-NOTICE.txt), and mark any modified copy as changed."
+   },
+   "attribution": "Apache POI\nCopyright 2003-2026 The Apache Software Foundation\nThis product includes software developed at The Apache Software Foundation (https://www.apache.org/).\n(Source: test-data/spreadsheet/NumberFormatTests.xlsx, apache/poi @ ae62bb5116b9aee19ebd5834e3a82066132c9f7f; Apache License 2.0)",
+   "modified": false,
+   "sha256": "a11d437ee538abe36d630a4795dd30d5823a68dce02a404a45e085dd49c4435d",
+   "bytes": 21470,
+   "application": "Microsoft Macintosh Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "10323",
+    "calcId": "191029"
+   },
+   "sheets": 2,
+   "hidden_sheets": 0,
+   "cells": 1322,
+   "non_empty_cells": 1314,
+   "max_row": 335,
+   "max_col": 4,
+   "formulas": 325,
+   "formulas_with_cached_value": 321,
+   "formulas_without_cached_value": 4,
+   "array_formulas": 0,
+   "shared_formulas": 298,
+   "cross_sheet_formulas": 0,
+   "defined_names": 0,
+   "sheet08_functions_used": [
+    "TEXT"
+   ],
+   "sheet08_functions_count": 1,
+   "sheet08_functions_exact_names": [
+    "TEXT"
+   ],
+   "functions_outside_sheet08": [],
+   "function_counts": {
+    "TEXT": 64
+   },
+   "lookup_calls": 0,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 0,
+    "merged_cells": 0,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 2,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "frozen_panes": 2,
+    "date1904": true,
+    "defined_names": 0,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "frozen panes",
+    "1904 date system"
+   ],
+   "tests": "325 TEXT() formulas (321 with saved values) over about 127 custom formats: fractions, digit placeholders, thousands and scaling, currency, colours and literal text. Excel's saved strings show exactly how each format renders, which also checks SHEET-44's 'values as displayed'. It is the only selected workbook on the 1904 date system, so date serials must shift by 1,462 days on import and export.",
+   "notes": [
+    "Saved by Excel 2016 for Mac (workbookPr date1904=\"1\")."
+   ]
+  },
+  {
+   "id": "F06",
+   "file": "files/F06-packt-dynamic-arrays.xlsx",
+   "category": "feature",
+   "subcategory": "lookup functions and dynamic-array spills; notes with picture fills",
+   "title": "Packt 'Hidden Treasures' ch. 10: lookups and dynamic arrays",
+   "description": "Book companion workbook: lookup techniques, XLOOKUP/XMATCH and dynamic-array spills, with picture-filled notes.",
+   "source": {
+    "repo": "PacktPublishing/Exploring-Microsoft-Excels-Hidden-Treasures",
+    "repo_url": "https://github.com/PacktPublishing/Exploring-Microsoft-Excels-Hidden-Treasures",
+    "commit": "14ed024e6c22ecb15021e581f882cf01e56024da",
+    "repo_path": "Chapter10/Chapter 10 - Dynamic Arrays.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/PacktPublishing/Exploring-Microsoft-Excels-Hidden-Treasures/14ed024e6c22ecb15021e581f882cf01e56024da/Chapter10/Chapter%2010%20-%20Dynamic%20Arrays.xlsx",
+    "blob_url": "https://github.com/PacktPublishing/Exploring-Microsoft-Excels-Hidden-Treasures/blob/14ed024e6c22ecb15021e581f882cf01e56024da/Chapter10/Chapter%2010%20-%20Dynamic%20Arrays.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT",
+    "evidence": "MIT: LICENSE at repo root of the pinned commit ('MIT License, Copyright (c) 2022 Packt'); files are the book/course companion workbooks published by the publisher.",
+    "licence_file_url": "https://github.com/PacktPublishing/Exploring-Microsoft-Excels-Hidden-Treasures/blob/14ed024e6c22ecb15021e581f882cf01e56024da/LICENSE",
+    "texts": [
+     "LICENSES/MIT--packt-hidden-treasures.txt"
+    ],
+    "obligations": "Keep the MIT copyright and permission notice with the file (LICENSES/MIT--packt-hidden-treasures.txt)."
+   },
+   "attribution": "Copyright (c) 2022 Packt. Workbook authored by David Ringstrom for 'Exploring Microsoft Excel's Hidden Treasures' (Packt, 2022). MIT License.",
+   "modified": false,
+   "sha256": "06b83bc254130b17dcc461e4b54aad61ce8b7911cb0c62dbcee8677884d9e502",
+   "bytes": 853151,
+   "application": "Microsoft Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "25225",
+    "calcId": "191029"
+   },
+   "sheets": 17,
+   "hidden_sheets": 0,
+   "cells": 2868,
+   "non_empty_cells": 1815,
+   "max_row": 68,
+   "max_col": 27,
+   "formulas": 107,
+   "formulas_with_cached_value": 107,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 31,
+   "shared_formulas": 13,
+   "cross_sheet_formulas": 0,
+   "defined_names": 1,
+   "sheet08_functions_used": [
+    "COUNTIFS",
+    "EOMONTH",
+    "IFNA",
+    "INDEX",
+    "MATCH",
+    "SUM",
+    "SUMIF",
+    "SUMIFS",
+    "VLOOKUP",
+    "XLOOKUP",
+    "XMATCH"
+   ],
+   "sheet08_functions_count": 11,
+   "sheet08_functions_exact_names": [
+    "COUNTIFS",
+    "EOMONTH",
+    "IFNA",
+    "INDEX",
+    "MATCH",
+    "SUM",
+    "SUMIF",
+    "SUMIFS",
+    "VLOOKUP",
+    "XLOOKUP",
+    "XMATCH"
+   ],
+   "functions_outside_sheet08": [
+    "ANCHORARRAY",
+    "IPMT",
+    "PMT",
+    "PPMT",
+    "RAND",
+    "RANDARRAY",
+    "RANDBETWEEN",
+    "SEQUENCE",
+    "SORTBY",
+    "UNIQUE"
+   ],
+   "function_counts": {
+    "XLOOKUP": 14,
+    "VLOOKUP": 12,
+    "MATCH": 11,
+    "ANCHORARRAY": 7,
+    "SUMIF": 5,
+    "UNIQUE": 5,
+    "INDEX": 4,
+    "SUMIFS": 4,
+    "RANDARRAY": 4,
+    "SUM": 3,
+    "XMATCH": 3,
+    "IFNA": 2,
+    "SORTBY": 1,
+    "COUNTIFS": 1,
+    "PMT": 1,
+    "SEQUENCE": 1,
+    "EOMONTH": 1,
+    "IPMT": 1,
+    "PPMT": 1,
+    "RAND": 1,
+    "RANDBETWEEN": 1
+   },
+   "lookup_calls": 54,
+   "volatile_functions": [
+    "RAND",
+    "RANDBETWEEN"
+   ],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 17,
+    "images": 62,
+    "external_links": 0,
+    "custom_num_formats": 4,
+    "merged_cells": 8,
+    "conditional_formatting": 1,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 7,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "comments": 17,
+    "images": 62,
+    "custom_num_formats": 4,
+    "merged_cells": 8,
+    "conditional_formatting": 1,
+    "frozen_panes": 7,
+    "legacy_comments": 17,
+    "dynamic_array_cells": 31,
+    "richData": true,
+    "defined_names": 1,
+    "array_formulas": 31
+   },
+   "features_present": [
+    "merged cells",
+    "conditional formatting",
+    "custom number formats",
+    "frozen panes",
+    "notes (legacy comments)",
+    "images / media",
+    "defined names",
+    "dynamic-array cells",
+    "array formulas",
+    "rich-value data (#SPILL! / rich values)"
+   ],
+   "tests": "One tab per technique: VLOOKUP/IFNA, INDEX/MATCH, SUMIF/SUMIFS, XLOOKUP (exact, approximate, search mode, multi-column), XMATCH, then UNIQUE/SORT/SORTBY/FILTER/SEQUENCE/RANDARRAY spills, the spill operator and a dynamic amortisation table. 107 formulas, all with saved values, including 31 dynamic-array cells and rich-value #SPILL! metadata. It is the only selected file with XMATCH, COUNTIFS, IFNA, RAND and RANDBETWEEN; check RAND and RANDBETWEEN for type and range only. Separates what SHEET-08 must compute from spills that SHEET-12 keeps as values. Its 17 visible notes use picture fills (62 media parts showing formulas), a case for 'notes import as comments, pictures dropped'.",
+   "notes": [
+    "The author uploaded it himself to the publisher's MIT-licensed repo; MIT's wording is aimed at software but is the stated licence for the repo's contents."
+   ]
+  },
+  {
+   "id": "F07",
+   "file": "files/F07-libreoffice-threaded-comment.xlsx",
+   "category": "feature",
+   "subcategory": "threaded comments with replies and persons part",
+   "title": "LibreOffice threaded comment",
+   "description": "Minimal workbook with one threaded comment, a reply and a plain note.",
+   "source": {
+    "repo": "LibreOffice/core",
+    "repo_url": "https://github.com/LibreOffice/core",
+    "commit": "63a2e191551b157adad367d020835e9ec21fc964",
+    "repo_path": "sc/qa/unit/data/xlsx/threadedComment.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/LibreOffice/core/63a2e191551b157adad367d020835e9ec21fc964/sc/qa/unit/data/xlsx/threadedComment.xlsx",
+    "blob_url": "https://github.com/LibreOffice/core/blob/63a2e191551b157adad367d020835e9ec21fc964/sc/qa/unit/data/xlsx/threadedComment.xlsx"
+   },
+   "licence": {
+    "spdx": "MPL-2.0",
+    "evidence": "COPYING.MPL at repo root (LibreOffice core is MPL-2.0; COPYING.LGPL also present for legacy parts)",
+    "licence_file_url": "https://github.com/LibreOffice/core/blob/63a2e191551b157adad367d020835e9ec21fc964/COPYING.MPL",
+    "texts": [
+     "LICENSES/MPL-2.0--libreoffice-core.txt"
+    ],
+    "obligations": "MPL-2.0: keep the licence notice (LICENSES/MPL-2.0--libreoffice-core.txt). A modified copy that is shared stays under MPL-2.0 and must say where the source form is available."
+   },
+   "attribution": "threadedComment.xlsx from LibreOffice core (https://github.com/LibreOffice/core, commit 63a2e191551b157adad367d020835e9ec21fc964), Copyright (c) LibreOffice contributors / The Document Foundation; contributed by Mike Kaganski (Collabora). Licensed under the Mozilla Public License 2.0.",
+   "modified": false,
+   "sha256": "47f1813c00f19e88e202f5915b419a0c2e5e2768f95524af0cb11634612d5158",
+   "bytes": 9175,
+   "application": "Microsoft Excel Online",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "29930",
+    "calcId": "191028"
+   },
+   "sheets": 1,
+   "hidden_sheets": 0,
+   "cells": 0,
+   "non_empty_cells": 0,
+   "max_row": 0,
+   "max_col": 0,
+   "formulas": 0,
+   "formulas_with_cached_value": 0,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 0,
+   "cross_sheet_formulas": 0,
+   "defined_names": 0,
+   "sheet08_functions_used": [],
+   "sheet08_functions_count": 0,
+   "sheet08_functions_exact_names": [],
+   "functions_outside_sheet08": [],
+   "function_counts": {},
+   "lookup_calls": 0,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 2,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 0,
+    "merged_cells": 0,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "comments": 2,
+    "threaded_comments": 1,
+    "legacy_comments": 1,
+    "defined_names": 0,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "notes (legacy comments)",
+    "threaded comments"
+   ],
+   "tests": "Minimal Excel-made threaded comment with a reply: xl/threadedComments, xl/persons and the legacy-note fallback. Excel 365 creates threaded comments by default, so the org's files will contain them. Checks SHEET-31 (comments kept, marked 'Imported', with the author's name) and SHEET-32 (on export, replies become note text).",
+   "notes": [
+    "No thread carries a resolved ('done') flag, so this file cannot test SHEET-32's 'resolved state is lost'; author a resolved thread in Excel if that matters.",
+    "xl/persons/person.xml holds the contributor's name and Windows Live id (public in the repo already); keep the corpus internal.",
+    "MPL-2.0 file-level copyleft, as for O02."
+   ]
+  },
+  {
+   "id": "E01",
+   "file": "files/E01-msdocs-on-call-rotation.xlsx",
+   "category": "everyday",
+   "subcategory": "staff roster / on-call rotation",
+   "title": "Microsoft Office Scripts on-call rotation",
+   "description": "On-call rota held in an Excel table (names, e-mails, start and end dates); no formulas.",
+   "source": {
+    "repo": "OfficeDev/office-scripts-docs",
+    "repo_url": "https://github.com/OfficeDev/office-scripts-docs",
+    "commit": "d7c390453009f552851b89441a9f0d8f4fa31135",
+    "repo_path": "docs/tutorials/on-call-rotation.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/OfficeDev/office-scripts-docs/d7c390453009f552851b89441a9f0d8f4fa31135/docs/tutorials/on-call-rotation.xlsx",
+    "blob_url": "https://github.com/OfficeDev/office-scripts-docs/blob/d7c390453009f552851b89441a9f0d8f4fa31135/docs/tutorials/on-call-rotation.xlsx"
+   },
+   "licence": {
+    "spdx": "CC-BY-4.0",
+    "evidence": "LICENSE at repo root is CC-BY-4.0 (documentation content); LICENSE-CODE is MIT for code. ThirdPartyNotices.md grants CC BY 4.0 for documentation and other content. The workbook is a docs tutorial asset.",
+    "licence_file_url": "https://raw.githubusercontent.com/OfficeDev/office-scripts-docs/d7c390453009f552851b89441a9f0d8f4fa31135/LICENSE",
+    "texts": [
+     "LICENSES/CC-BY-4.0--office-scripts-docs.txt",
+     "LICENSES/CC-BY-4.0--office-scripts-docs-ThirdPartyNotices.md"
+    ],
+    "obligations": "CC BY 4.0 s.3: credit Microsoft Corporation and contributors, link the licence and the source, and say whether the file was modified (a round-tripped copy is). The licence grants no rights to Microsoft or Contoso names or trademarks."
+   },
+   "attribution": "on-call-rotation.xlsx, Copyright (c) Microsoft Corporation and contributors (OfficeDev/office-scripts-docs, docs/tutorials/on-call-rotation.xlsx @ d7c390453009f552851b89441a9f0d8f4fa31135). Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Microsoft and Contoso names and trademarks are not licensed.",
+   "modified": false,
+   "sha256": "4692848274767fa74c7d89adee90b9c009f43cb70d9ef4ebb71e49baf3708457",
+   "bytes": 11955,
+   "application": "Microsoft Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "27127",
+    "calcId": "191028"
+   },
+   "sheets": 1,
+   "hidden_sheets": 0,
+   "cells": 114,
+   "non_empty_cells": 109,
+   "max_row": 28,
+   "max_col": 9,
+   "formulas": 0,
+   "formulas_with_cached_value": 0,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 0,
+   "cross_sheet_formulas": 0,
+   "defined_names": 0,
+   "sheet08_functions_used": [],
+   "sheet08_functions_count": 0,
+   "sheet08_functions_exact_names": [],
+   "functions_outside_sheet08": [],
+   "function_counts": {},
+   "lookup_calls": 0,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 1,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 2,
+    "merged_cells": 0,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "tables": 1,
+    "custom_num_formats": 2,
+    "defined_names": 0,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "custom number formats",
+    "Excel tables"
+   ],
+   "tests": "On-call rota as an Excel table (names, contoso e-mails, start and end dates) with no formulas. Tests table import, date cells, day-first display (SHEET-15) and per-row search indexing (SHEET-44). It is the only cleanly licensed Excel-saved roster found; a roster with formulas must be authored.",
+   "notes": [
+    "No formulas, so it adds nothing to the formula comparison.",
+    "CC BY 4.0: credit Microsoft Corporation and contributors, link the licence and the source, and say if the file was changed (round-tripped copies are changed).",
+    "Carries a Microsoft Purview sensitivity-label part (docMetadata/LabelInfo.xml) from Microsoft's own tenant: a label round-trip case."
+   ]
+  },
+  {
+   "id": "E02",
+   "file": "files/E02-ironcalc-weekly-timesheet.xlsx",
+   "category": "everyday",
+   "subcategory": "weekly timesheet with month overview by project",
+   "title": "IronCalc weekly timesheet template",
+   "description": "Weekly timesheet with a monthly overview by project.",
+   "source": {
+    "repo": "ironcalc/IronCalc",
+    "repo_url": "https://github.com/ironcalc/IronCalc",
+    "commit": "c88f07f0c776ad42bc4cfd68dfc65f68195908f0",
+    "repo_path": "xlsx/tests/templates/weekly_timesheet.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/ironcalc/IronCalc/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/templates/weekly_timesheet.xlsx",
+    "blob_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/templates/weekly_timesheet.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT OR Apache-2.0",
+    "evidence": "LICENSE-MIT and LICENSE-Apache-2.0 at repo root; README licence badges link to both files (dual MIT / Apache-2.0)",
+    "licence_file_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/LICENSE-MIT",
+    "texts": [
+     "LICENSES/MIT--ironcalc.txt",
+     "LICENSES/Apache-2.0--ironcalc.txt"
+    ],
+    "obligations": "Keep the MIT copyright and permission notice with the file (LICENSES/MIT--ironcalc.txt). The Apache-2.0 option (LICENSES/Apache-2.0--ironcalc.txt) is also available."
+   },
+   "attribution": "Copyright (c) 2023 EqualTo GmbH, 2023 Nicolás Hatcher, and IronCalc contributors; template by Daniel González-Albo (IronCalc, https://github.com/ironcalc/IronCalc). Used under the MIT licence; Apache-2.0 is also offered.",
+   "modified": false,
+   "sha256": "4deed2bd9a9fb330d5285709da903320880c54c198783cfcb00643c2e6145364",
+   "bytes": 15307,
+   "application": "Microsoft Macintosh Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "10713",
+    "calcId": "191029"
+   },
+   "sheets": 3,
+   "hidden_sheets": 1,
+   "cells": 401,
+   "non_empty_cells": 131,
+   "max_row": 33,
+   "max_col": 6,
+   "formulas": 109,
+   "formulas_with_cached_value": 109,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 35,
+   "shared_formulas": 6,
+   "cross_sheet_formulas": 34,
+   "defined_names": 0,
+   "sheet08_functions_used": [
+    "COLUMN",
+    "COUNTA",
+    "DAY",
+    "EOMONTH",
+    "IF",
+    "ISOWEEKNUM",
+    "NOW",
+    "SUM",
+    "SUMIF",
+    "SUMPRODUCT",
+    "TEXT",
+    "TODAY",
+    "WEEKDAY"
+   ],
+   "sheet08_functions_count": 13,
+   "sheet08_functions_exact_names": [
+    "COLUMN",
+    "COUNTA",
+    "DAY",
+    "EOMONTH",
+    "IF",
+    "ISOWEEKNUM",
+    "NOW",
+    "SUM",
+    "SUMIF",
+    "SUMPRODUCT",
+    "TEXT",
+    "TODAY",
+    "WEEKDAY"
+   ],
+   "functions_outside_sheet08": [
+    "ANCHORARRAY",
+    "SEQUENCE",
+    "UNIQUE"
+   ],
+   "function_counts": {
+    "COLUMN": 60,
+    "ISOWEEKNUM": 31,
+    "SUMPRODUCT": 30,
+    "WEEKDAY": 30,
+    "SUM": 6,
+    "ANCHORARRAY": 3,
+    "IF": 2,
+    "TODAY": 1,
+    "SEQUENCE": 1,
+    "DAY": 1,
+    "EOMONTH": 1,
+    "TEXT": 1,
+    "UNIQUE": 1,
+    "COUNTA": 1,
+    "SUMIF": 1,
+    "NOW": 1
+   },
+   "lookup_calls": 31,
+   "volatile_functions": [
+    "NOW",
+    "TODAY"
+   ],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 1,
+    "merged_cells": 0,
+    "conditional_formatting": 1,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "custom_num_formats": 1,
+    "conditional_formatting": 1,
+    "sheets_hidden": 1,
+    "dynamic_array_cells": 35,
+    "defined_names": 0,
+    "array_formulas": 35
+   },
+   "features_present": [
+    "conditional formatting",
+    "custom number formats",
+    "hidden sheets",
+    "dynamic-array cells",
+    "array formulas"
+   ],
+   "tests": "109 formulas, all with saved values (35 dynamic-array, 34 cross-sheet), using ISOWEEKNUM (only selected file), WEEKDAY, EOMONTH, SUMPRODUCT, SUMIF, COLUMN, TEXT, UNIQUE, SEQUENCE and TODAY/NOW, with a hidden METADATA tab and conditional formatting. Pin TODAY/NOW or exclude those cells. Made by IronCalc's designer for its template gallery.",
+   "notes": [
+    "In-house IronCalc gallery template, not a vendor template despite the generic name."
+   ]
+  },
+  {
+   "id": "E05",
+   "file": "files/E05-ironcalc-travel-expenses-tracker.xlsx",
+   "category": "everyday",
+   "subcategory": "expense tracker / trip budget",
+   "title": "IronCalc travel expenses tracker template",
+   "description": "Trip expense log with an overview of totals, top expenses and cities.",
+   "source": {
+    "repo": "ironcalc/IronCalc",
+    "repo_url": "https://github.com/ironcalc/IronCalc",
+    "commit": "c88f07f0c776ad42bc4cfd68dfc65f68195908f0",
+    "repo_path": "xlsx/tests/templates/travel_expenses_tracker.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/ironcalc/IronCalc/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/templates/travel_expenses_tracker.xlsx",
+    "blob_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/templates/travel_expenses_tracker.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT OR Apache-2.0",
+    "evidence": "LICENSE-MIT and LICENSE-Apache-2.0 at repo root; README licence badges link to both files (dual MIT / Apache-2.0)",
+    "licence_file_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/LICENSE-MIT",
+    "texts": [
+     "LICENSES/MIT--ironcalc.txt",
+     "LICENSES/Apache-2.0--ironcalc.txt"
+    ],
+    "obligations": "Keep the MIT copyright and permission notice with the file (LICENSES/MIT--ironcalc.txt). The Apache-2.0 option (LICENSES/Apache-2.0--ironcalc.txt) is also available."
+   },
+   "attribution": "Copyright (c) 2023 EqualTo GmbH, 2023 Nicolás Hatcher, and IronCalc contributors; template by Daniel González-Albo (IronCalc, https://github.com/ironcalc/IronCalc). Used under the MIT licence; Apache-2.0 is also offered.",
+   "modified": false,
+   "sha256": "829e06370ddab439610be9456580f0f01c40ce8bd42949a6ce220bafbf55a05d",
+   "bytes": 21288,
+   "application": "Microsoft Macintosh Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "10713",
+    "calcId": "181029"
+   },
+   "sheets": 2,
+   "hidden_sheets": 0,
+   "cells": 1531,
+   "non_empty_cells": 384,
+   "max_row": 51,
+   "max_col": 8,
+   "formulas": 40,
+   "formulas_with_cached_value": 40,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 9,
+   "shared_formulas": 10,
+   "cross_sheet_formulas": 28,
+   "defined_names": 2,
+   "sheet08_functions_used": [
+    "INDEX",
+    "LARGE",
+    "MATCH",
+    "MAX",
+    "MIN",
+    "SUMIF"
+   ],
+   "sheet08_functions_count": 6,
+   "sheet08_functions_exact_names": [
+    "INDEX",
+    "LARGE",
+    "MATCH",
+    "MAX",
+    "MIN",
+    "SUMIF"
+   ],
+   "functions_outside_sheet08": [
+    "UNIQUE"
+   ],
+   "function_counts": {
+    "SUMIF": 12,
+    "UNIQUE": 10,
+    "LARGE": 9,
+    "MAX": 8,
+    "MIN": 8,
+    "INDEX": 6,
+    "MATCH": 6
+   },
+   "lookup_calls": 24,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 4,
+    "merged_cells": 0,
+    "conditional_formatting": 1,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 1,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "custom_num_formats": 4,
+    "conditional_formatting": 1,
+    "frozen_panes": 1,
+    "dynamic_array_cells": 9,
+    "defined_names": 2,
+    "array_formulas": 9
+   },
+   "features_present": [
+    "conditional formatting",
+    "custom number formats",
+    "frozen panes",
+    "defined names",
+    "dynamic-array cells",
+    "array formulas"
+   ],
+   "tests": "Expense log with an overview: SUMIF by type, LARGE/INDEX/MATCH for the top 3 expenses and days, MAX/MIN dates, a UNIQUE city list (outside SHEET-08), 2 names, CF, frozen panes and emoji in text. 40 formulas, all with saved values. It is the only expense tracker under a clean licence.",
+   "notes": [
+    "Taken from the reserve list; sha256 re-checked against the pinned raw URL."
+   ]
+  },
+  {
+   "id": "E06",
+   "file": "files/E06-ironcalc-gantt-project-tracker.xlsx",
+   "category": "everyday",
+   "subcategory": "project / task tracker (Gantt)",
+   "title": "IronCalc Gantt project tracker template",
+   "description": "Task list driving a conditional-formatting Gantt chart.",
+   "source": {
+    "repo": "ironcalc/IronCalc",
+    "repo_url": "https://github.com/ironcalc/IronCalc",
+    "commit": "c88f07f0c776ad42bc4cfd68dfc65f68195908f0",
+    "repo_path": "xlsx/tests/templates/gantt_project_tracker.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/ironcalc/IronCalc/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/templates/gantt_project_tracker.xlsx",
+    "blob_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/templates/gantt_project_tracker.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT OR Apache-2.0",
+    "evidence": "LICENSE-MIT and LICENSE-Apache-2.0 at repo root; README licence badges link to both files (dual MIT / Apache-2.0)",
+    "licence_file_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/LICENSE-MIT",
+    "texts": [
+     "LICENSES/MIT--ironcalc.txt",
+     "LICENSES/Apache-2.0--ironcalc.txt"
+    ],
+    "obligations": "Keep the MIT copyright and permission notice with the file (LICENSES/MIT--ironcalc.txt). The Apache-2.0 option (LICENSES/Apache-2.0--ironcalc.txt) is also available."
+   },
+   "attribution": "Copyright (c) 2023 EqualTo GmbH, 2023 Nicolás Hatcher, and IronCalc contributors; template by Daniel González-Albo (IronCalc, https://github.com/ironcalc/IronCalc). Used under the MIT licence; Apache-2.0 is also offered.",
+   "modified": false,
+   "sha256": "771c40af914a51f11633ae24fa3f365549a4d32bac83c7c189e15f36c9310927",
+   "bytes": 36981,
+   "application": "Microsoft Macintosh Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "10713",
+    "calcId": "191029"
+   },
+   "sheets": 4,
+   "hidden_sheets": 1,
+   "cells": 5564,
+   "non_empty_cells": 629,
+   "max_row": 43,
+   "max_col": 128,
+   "formulas": 444,
+   "formulas_with_cached_value": 444,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 274,
+   "cross_sheet_formulas": 163,
+   "defined_names": 0,
+   "sheet08_functions_used": [
+    "DAY",
+    "IF",
+    "MINIFS",
+    "NOW",
+    "TODAY"
+   ],
+   "sheet08_functions_count": 5,
+   "sheet08_functions_exact_names": [
+    "DAY",
+    "IF",
+    "MINIFS",
+    "NOW",
+    "TODAY"
+   ],
+   "functions_outside_sheet08": [],
+   "function_counts": {
+    "IF": 4,
+    "DAY": 4,
+    "TODAY": 2,
+    "MINIFS": 1,
+    "NOW": 1
+   },
+   "lookup_calls": 0,
+   "volatile_functions": [
+    "NOW",
+    "TODAY"
+   ],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 3,
+    "merged_cells": 0,
+    "conditional_formatting": 6,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "custom_num_formats": 3,
+    "conditional_formatting": 6,
+    "sheets_hidden": 1,
+    "defined_names": 0,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "conditional formatting",
+    "custom number formats",
+    "hidden sheets"
+   ],
+   "tests": "A task list drives a Gantt chart drawn by 6 CF blocks across 128 columns. 444 formulas, all with saved values (163 cross-sheet), using MINIFS, DAY, IF and TODAY/NOW. Tests CF rendering across a wide sheet, date maths and a hidden METADATA tab.",
+   "notes": [
+    "Carries a Claude for Excel add-in part (xl/webextensions)."
+   ]
+  },
+  {
+   "id": "E07",
+   "file": "files/E07-cbo-sanctions-penalty-model.xlsx",
+   "category": "everyday",
+   "subcategory": "record log with SUMIFS summary tabs (tracker / dashboard)",
+   "title": "CBO sanctions penalty model",
+   "description": "About 400 enforcement records summarised by SUMIFS into country, action and year tabs.",
+   "source": {
+    "repo": "US-CBO/sanctions-penalty-model",
+    "repo_url": "https://github.com/US-CBO/sanctions-penalty-model",
+    "commit": "2ef0eef90986729d26de3f5be63d972126e80432",
+    "repo_path": "Sanctions-penalty-model.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/US-CBO/sanctions-penalty-model/2ef0eef90986729d26de3f5be63d972126e80432/Sanctions-penalty-model.xlsx",
+    "blob_url": "https://github.com/US-CBO/sanctions-penalty-model/blob/2ef0eef90986729d26de3f5be63d972126e80432/Sanctions-penalty-model.xlsx"
+   },
+   "licence": {
+    "spdx": "LicenseRef-PublicDomain-USGov",
+    "evidence": "LICENSE.md: \"created by CBO employees in their official capacity. Therefore, they are not subject to copyright and are in the public domain in the United States.\"",
+    "licence_file_url": "https://github.com/US-CBO/sanctions-penalty-model/blob/2ef0eef90986729d26de3f5be63d972126e80432/LICENSE.md",
+    "texts": [
+     "LICENSES/PublicDomain-USGov--cbo-sanctions-penalty-model.md"
+    ],
+    "obligations": "None required (public domain). CBO asks that anyone modifying the package identify the changes and who made them, so mark round-tripped or edited copies as modified by Hearth."
+   },
+   "attribution": "\"CBO's Sanctions Penalty Model\" (posted 2026-02-24) by the Congressional Budget Office (US-CBO), https://github.com/US-CBO/sanctions-penalty-model, commit 2ef0eef90986729d26de3f5be63d972126e80432. Developed by Emma Uebelhor, Madeleine Fox and Jacob Fabian. A work of US federal government employees, in the public domain in the United States. Settlement data come from the US Treasury OFAC Enforcement Actions page. Two 2022 GDP figures come from the IMF World Economic Outlook.",
+   "modified": false,
+   "sha256": "df767723d1af362dd819d52e42cad2e44fc5a9cb9ba780547ed1dbc2fb2227b0",
+   "bytes": 93121,
+   "application": "Microsoft Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "29628",
+    "calcId": "191029"
+   },
+   "sheets": 8,
+   "hidden_sheets": 0,
+   "cells": 7723,
+   "non_empty_cells": 6397,
+   "max_row": 402,
+   "max_col": 27,
+   "formulas": 1800,
+   "formulas_with_cached_value": 1800,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 682,
+   "cross_sheet_formulas": 809,
+   "defined_names": 1,
+   "sheet08_functions_used": [
+    "AVERAGE",
+    "ROUND",
+    "SUM",
+    "SUMIFS"
+   ],
+   "sheet08_functions_count": 4,
+   "sheet08_functions_exact_names": [
+    "AVERAGE",
+    "ROUND",
+    "SUM",
+    "SUMIFS"
+   ],
+   "functions_outside_sheet08": [],
+   "function_counts": {
+    "SUMIFS": 360,
+    "SUM": 11,
+    "ROUND": 10,
+    "AVERAGE": 9
+   },
+   "lookup_calls": 360,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 12,
+    "merged_cells": 0,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 1,
+    "frozen_panes": 4,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "custom_num_formats": 12,
+    "autofilter": 1,
+    "frozen_panes": 4,
+    "hyperlinks": 9,
+    "defined_names": 1,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "custom number formats",
+    "frozen panes",
+    "autofilter",
+    "defined names",
+    "hyperlinks"
+   ],
+   "tests": "A record list of about 400 rows is summarised by 360 SUMIFS into country, action and fiscal-year tabs. 1,800 formulas, all with saved values, 809 of them cross-sheet, plus an autofilter, 4 tabs with frozen panes and 9 hyperlinks. It has the same shape as a shipment or incident log with a summary sheet, the commonest tracker pattern.",
+   "notes": [
+    "The analyser counts SUMIFS as lookup calls.",
+    "Named companies come from public OFAC enforcement records."
+   ]
+  },
+  {
+   "id": "E08",
+   "file": "files/E08-cbo-mpfs-payment-increase-model.xlsx",
+   "category": "everyday",
+   "subcategory": "multi-year forecast / cost projection with FY-CY apportionment",
+   "title": "CBO physician fee schedule payment model",
+   "description": "Ten-year cost projection with input switches and fiscal/calendar-year apportionment.",
+   "source": {
+    "repo": "US-CBO/MPFS-payment-increase-model",
+    "repo_url": "https://github.com/US-CBO/MPFS-payment-increase-model",
+    "commit": "25d4fbdb8068cf7dbcdd2ac5eac40b3a08cffff7",
+    "repo_path": "MPFS-payment-increase-model.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/US-CBO/MPFS-payment-increase-model/25d4fbdb8068cf7dbcdd2ac5eac40b3a08cffff7/MPFS-payment-increase-model.xlsx",
+    "blob_url": "https://github.com/US-CBO/MPFS-payment-increase-model/blob/25d4fbdb8068cf7dbcdd2ac5eac40b3a08cffff7/MPFS-payment-increase-model.xlsx"
+   },
+   "licence": {
+    "spdx": "LicenseRef-PublicDomain-USGov",
+    "evidence": "LICENSE.md: \"created by CBO employees in their official capacity ... public domain in the United States.\"",
+    "licence_file_url": "https://github.com/US-CBO/MPFS-payment-increase-model/blob/25d4fbdb8068cf7dbcdd2ac5eac40b3a08cffff7/LICENSE.md",
+    "texts": [
+     "LICENSES/PublicDomain-USGov--cbo-mpfs-payment-increase-model.md"
+    ],
+    "obligations": "None required (public domain). CBO asks that modifications be identified as not CBO's work."
+   },
+   "attribution": "Medicare Physician Fee Schedule Payment Increase Model, U.S. Congressional Budget Office (CBO), developed by Sarah Sajewski, Julia Sheriff and Katherine Kim; https://github.com/US-CBO/MPFS-payment-increase-model at commit 25d4fbdb8068cf7dbcdd2ac5eac40b3a08cffff7. Work of U.S. federal government employees made in their official capacity; public domain in the United States (no copyright holder). Provided by CBO 'as is', with no warranty.",
+   "modified": false,
+   "sha256": "3564ffb7f8cf68ab0410fbaf6e55410e94e597b6fc26a4f0999ddfa1a7d7d262",
+   "bytes": 48844,
+   "application": "Microsoft Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "29628",
+    "calcId": "191028"
+   },
+   "sheets": 5,
+   "hidden_sheets": 0,
+   "cells": 2725,
+   "non_empty_cells": 1178,
+   "max_row": 98,
+   "max_col": 19,
+   "formulas": 872,
+   "formulas_with_cached_value": 872,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 46,
+   "shared_formulas": 556,
+   "cross_sheet_formulas": 113,
+   "defined_names": 8,
+   "sheet08_functions_used": [
+    "AND",
+    "CONCAT",
+    "COUNTIF",
+    "DATE",
+    "IF",
+    "IFS",
+    "OR",
+    "ROUND",
+    "SUM",
+    "XLOOKUP"
+   ],
+   "sheet08_functions_count": 10,
+   "sheet08_functions_exact_names": [
+    "AND",
+    "CONCAT",
+    "COUNTIF",
+    "DATE",
+    "IF",
+    "IFS",
+    "OR",
+    "ROUND",
+    "SUM",
+    "XLOOKUP"
+   ],
+   "functions_outside_sheet08": [],
+   "function_counts": {
+    "AND": 91,
+    "SUM": 88,
+    "XLOOKUP": 70,
+    "ROUND": 57,
+    "IFS": 44,
+    "OR": 24,
+    "IF": 22,
+    "DATE": 9,
+    "CONCAT": 2,
+    "COUNTIF": 1
+   },
+   "lookup_calls": 71,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 5,
+    "merged_cells": 1,
+    "conditional_formatting": 4,
+    "data_validation": 3,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "custom_num_formats": 5,
+    "merged_cells": 1,
+    "conditional_formatting": 4,
+    "data_validation": 3,
+    "hyperlinks": 1,
+    "dynamic_array_cells": 46,
+    "defined_names": 8,
+    "array_formulas": 46
+   },
+   "features_present": [
+    "merged cells",
+    "conditional formatting",
+    "data validation",
+    "custom number formats",
+    "defined names",
+    "hyperlinks",
+    "dynamic-array cells",
+    "array formulas"
+   ],
+   "tests": "Ten-year cost projection with inputs, on/off switches, and fiscal- versus calendar-year allocation by policy start and end dates. 872 formulas, all with saved values, using XLOOKUP(TRUE, range<>0, ..., 0, 1 / -1) lookups entered as array formulas, IFS (the only selected use), CONCAT, COUNTIF, DATE and ROUND, plus 46 array formulas, 8 names, CF and validation. Tests 'change an assumption, totals move' and 'XLOOKUP returns one value, no spill' (SHEET-08/12).",
+   "notes": [
+    "SUM(XLOOKUP(...):XLOOKUP(...)) uses XLOOKUP as a reference to build a range.",
+    "6 of the 8 sheet-scoped names (CY_calc, CY_check, FY_calc, FY_check) point to #REF!: a round-trip fidelity case."
+   ]
+  },
+  {
+   "id": "E09",
+   "file": "files/E09-cloudgov-cost-estimator.xlsx",
+   "category": "everyday",
+   "subcategory": "quote builder / cost calculator",
+   "title": "cloud.gov cost estimator",
+   "description": "Cost estimator: quantities times unit prices looked up from tier and price tables.",
+   "source": {
+    "repo": "cloud-gov/cg-site",
+    "repo_url": "https://github.com/cloud-gov/cg-site",
+    "commit": "536b459f25dc541450f8b02675b32584196a05fd",
+    "repo_path": "_assets/documents/cloud-gov-cost-estimator.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/cloud-gov/cg-site/536b459f25dc541450f8b02675b32584196a05fd/_assets/documents/cloud-gov-cost-estimator.xlsx",
+    "blob_url": "https://github.com/cloud-gov/cg-site/blob/536b459f25dc541450f8b02675b32584196a05fd/_assets/documents/cloud-gov-cost-estimator.xlsx"
+   },
+   "licence": {
+    "spdx": "CC0-1.0",
+    "evidence": "LICENSE.md: \"As a work of the United States government, this project is in the public domain within the United States. Additionally, we waive copyright ... through the CC0 1.0 Universal public domain dedication.\"",
+    "licence_file_url": "https://raw.githubusercontent.com/cloud-gov/cg-site/536b459f25dc541450f8b02675b32584196a05fd/LICENSE.md",
+    "texts": [
+     "LICENSES/CC0-1.0--cloud-gov-cg-site.md"
+    ],
+    "obligations": "None required (CC0); the credit line is a courtesy. Do not imply endorsement by GSA or cloud.gov."
+   },
+   "attribution": "cloud.gov Cost Estimator (v1.1, April 2025), U.S. General Services Administration / cloud.gov, from github.com/cloud-gov/cg-site @ 536b459f25dc541450f8b02675b32584196a05fd, _assets/documents/cloud-gov-cost-estimator.xlsx. US Government work: public domain in the United States and dedicated worldwide under CC0 1.0 Universal; no copyright holder.",
+   "modified": false,
+   "sha256": "e30df9616a55235797be05b3af935346f4156047dffb84077bd77278b2a97e4e",
+   "bytes": 44367,
+   "application": "Microsoft Macintosh Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "10329",
+    "calcId": "191029"
+   },
+   "sheets": 3,
+   "hidden_sheets": 0,
+   "cells": 1418,
+   "non_empty_cells": 966,
+   "max_row": 56,
+   "max_col": 19,
+   "formulas": 131,
+   "formulas_with_cached_value": 131,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 7,
+   "shared_formulas": 98,
+   "cross_sheet_formulas": 11,
+   "defined_names": 7,
+   "sheet08_functions_used": [
+    "IF",
+    "MIN",
+    "ROUNDUP",
+    "SUM",
+    "VLOOKUP"
+   ],
+   "sheet08_functions_count": 5,
+   "sheet08_functions_exact_names": [
+    "IF",
+    "MIN",
+    "ROUNDUP",
+    "SUM",
+    "VLOOKUP"
+   ],
+   "functions_outside_sheet08": [
+    "LET"
+   ],
+   "function_counts": {
+    "ROUNDUP": 6,
+    "SUM": 5,
+    "VLOOKUP": 4,
+    "IF": 2,
+    "LET": 1,
+    "MIN": 1
+   },
+   "lookup_calls": 4,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 11,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 21,
+    "merged_cells": 1,
+    "conditional_formatting": 7,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "tables": 11,
+    "custom_num_formats": 21,
+    "merged_cells": 1,
+    "conditional_formatting": 7,
+    "dynamic_array_cells": 3,
+    "defined_names": 7,
+    "array_formulas": 7
+   },
+   "features_present": [
+    "merged cells",
+    "conditional formatting",
+    "custom number formats",
+    "Excel tables",
+    "defined names",
+    "dynamic-array cells",
+    "array formulas"
+   ],
+   "tests": "Multiplies quantities by unit prices looked up (VLOOKUP, MIN, ROUNDUP) from tier and price tabs held in 11 Excel tables. 131 formulas, all with saved values, with 7 names, 7 CF blocks and 21 custom formats. LET with _xlpm parameters and the array formulas are outside P0 and must fall back to saved values. It is the closest clean match to a quote or price comparison.",
+   "notes": [
+    "The analyser counts 7 array formulas (the selector's note said 3 dynamic-array cells).",
+    "Passed through Google Sheets at some point (GoogleSheetsCustomDataVersion2 extension); Excel saved it last, with a calcChain, so the saved values are Excel's."
+   ]
+  },
+  {
+   "id": "E10",
+   "file": "files/E10-ironcalc-invoice.xlsx",
+   "category": "everyday",
+   "subcategory": "invoice / quotation",
+   "title": "IronCalc invoice template",
+   "description": "Invoice layout driven by named settings (VAT rate, payment terms) with a WORKDAY due date.",
+   "source": {
+    "repo": "ironcalc/IronCalc",
+    "repo_url": "https://github.com/ironcalc/IronCalc",
+    "commit": "c88f07f0c776ad42bc4cfd68dfc65f68195908f0",
+    "repo_path": "xlsx/tests/templates/invoice.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/ironcalc/IronCalc/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/templates/invoice.xlsx",
+    "blob_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/templates/invoice.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT OR Apache-2.0",
+    "evidence": "LICENSE-MIT and LICENSE-Apache-2.0 at repo root; README licence badges link to both files (dual MIT / Apache-2.0)",
+    "licence_file_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/LICENSE-MIT",
+    "texts": [
+     "LICENSES/MIT--ironcalc.txt",
+     "LICENSES/Apache-2.0--ironcalc.txt"
+    ],
+    "obligations": "Keep the MIT copyright and permission notice with the file (LICENSES/MIT--ironcalc.txt). The Apache-2.0 option (LICENSES/Apache-2.0--ironcalc.txt) is also available."
+   },
+   "attribution": "Copyright (c) 2023 EqualTo GmbH, 2023 Nicolás Hatcher, and IronCalc contributors; template by Daniel González-Albo (IronCalc, https://github.com/ironcalc/IronCalc). Used under the MIT licence; Apache-2.0 is also offered.",
+   "modified": false,
+   "sha256": "7879d312f90fafb497b0f45115186a23730a92d44d1e914b8c2c492460ffcd39",
+   "bytes": 15552,
+   "application": "Microsoft Macintosh Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "10713",
+    "calcId": "191029"
+   },
+   "sheets": 3,
+   "hidden_sheets": 1,
+   "cells": 478,
+   "non_empty_cells": 98,
+   "max_row": 38,
+   "max_col": 8,
+   "formulas": 25,
+   "formulas_with_cached_value": 25,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 1,
+   "shared_formulas": 10,
+   "cross_sheet_formulas": 0,
+   "defined_names": 12,
+   "sheet08_functions_used": [
+    "AND",
+    "COUNTA",
+    "IF",
+    "ISNUMBER",
+    "NOW",
+    "ROUND",
+    "SUM",
+    "TODAY",
+    "WORKDAY"
+   ],
+   "sheet08_functions_count": 9,
+   "sheet08_functions_exact_names": [
+    "AND",
+    "COUNTA",
+    "IF",
+    "ISNUMBER",
+    "NOW",
+    "ROUND",
+    "SUM",
+    "TODAY",
+    "WORKDAY"
+   ],
+   "functions_outside_sheet08": [
+    "SEQUENCE"
+   ],
+   "function_counts": {
+    "ISNUMBER": 2,
+    "TODAY": 1,
+    "WORKDAY": 1,
+    "SEQUENCE": 1,
+    "COUNTA": 1,
+    "IF": 1,
+    "AND": 1,
+    "SUM": 1,
+    "ROUND": 1,
+    "NOW": 1
+   },
+   "lookup_calls": 0,
+   "volatile_functions": [
+    "NOW",
+    "TODAY"
+   ],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 1,
+    "merged_cells": 0,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "custom_num_formats": 1,
+    "sheets_hidden": 1,
+    "dynamic_array_cells": 1,
+    "defined_names": 12,
+    "array_formulas": 1
+   },
+   "features_present": [
+    "custom number formats",
+    "hidden sheets",
+    "defined names",
+    "dynamic-array cells",
+    "array formulas"
+   ],
+   "tests": "Invoice layout driven by 12 named settings on a Settings tab (VatRate, PaymentTermsDays and others). Uses WORKDAY for the due date, ROUND, SUM, IF/AND, ISNUMBER, COUNTA, SEQUENCE and TODAY/NOW; 25 formulas, all with saved values, and a hidden METADATA tab. Tests named ranges, which are fixed values under P0 because SHEET-11 is P1, and print-style layout.",
+   "notes": [
+    "Sample content is IronCalc's own (dummy IBAN and VAT number)."
+   ]
+  },
+  {
+   "id": "E11",
+   "file": "files/E11-packt-amortisation-table.xlsx",
+   "category": "everyday",
+   "subcategory": "loan amortisation schedule with payment dates",
+   "title": "Packt 'Hidden Treasures' ch. 2: amortisation table",
+   "description": "Loan amortisation schedule with monthly payment dates and balance chain.",
+   "source": {
+    "repo": "PacktPublishing/Exploring-Microsoft-Excels-Hidden-Treasures",
+    "repo_url": "https://github.com/PacktPublishing/Exploring-Microsoft-Excels-Hidden-Treasures",
+    "commit": "14ed024e6c22ecb15021e581f882cf01e56024da",
+    "repo_path": "Chapter02/Chapter 2 - Amortization Table.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/PacktPublishing/Exploring-Microsoft-Excels-Hidden-Treasures/14ed024e6c22ecb15021e581f882cf01e56024da/Chapter02/Chapter%202%20-%20Amortization%20Table.xlsx",
+    "blob_url": "https://github.com/PacktPublishing/Exploring-Microsoft-Excels-Hidden-Treasures/blob/14ed024e6c22ecb15021e581f882cf01e56024da/Chapter02/Chapter%202%20-%20Amortization%20Table.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT",
+    "evidence": "MIT: LICENSE at repo root of the pinned commit ('MIT License, Copyright (c) 2022 Packt'); files are the book/course companion workbooks published by the publisher.",
+    "licence_file_url": "https://github.com/PacktPublishing/Exploring-Microsoft-Excels-Hidden-Treasures/blob/14ed024e6c22ecb15021e581f882cf01e56024da/LICENSE",
+    "texts": [
+     "LICENSES/MIT--packt-hidden-treasures.txt"
+    ],
+    "obligations": "Keep the MIT copyright and permission notice with the file (LICENSES/MIT--packt-hidden-treasures.txt)."
+   },
+   "attribution": "Copyright (c) 2022 Packt. Workbook authored by David Ringstrom for 'Exploring Microsoft Excel's Hidden Treasures' (Packt, 2022). MIT License.",
+   "modified": false,
+   "sha256": "71b2d4aefb46d89fb2f466b645044fc88374eb01f8985e64c573dce48939dd5b",
+   "bytes": 13904,
+   "application": "Microsoft Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "25211",
+    "calcId": "191029"
+   },
+   "sheets": 1,
+   "hidden_sheets": 0,
+   "cells": 256,
+   "non_empty_cells": 253,
+   "max_row": 54,
+   "max_col": 5,
+   "formulas": 192,
+   "formulas_with_cached_value": 192,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 184,
+   "cross_sheet_formulas": 0,
+   "defined_names": 0,
+   "sheet08_functions_used": [
+    "EOMONTH"
+   ],
+   "sheet08_functions_count": 1,
+   "sheet08_functions_exact_names": [
+    "EOMONTH"
+   ],
+   "functions_outside_sheet08": [
+    "PMT"
+   ],
+   "function_counts": {
+    "EOMONTH": 2,
+    "PMT": 1
+   },
+   "lookup_calls": 0,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 3,
+    "merged_cells": 0,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "custom_num_formats": 3,
+    "defined_names": 0,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "custom number formats"
+   ],
+   "tests": "192 formulas, all with saved values: EOMONTH payment dates, interest, principal and balance chains with mixed absolute references, and PMT. PMT is outside SHEET-08, so under P0 the payment cell is a fixed value with a marker while every cell below it must still recompute. Also checks date serials and number formats on export.",
+   "notes": [
+    "Replaces the MinLaw S$ repayment calculator, excluded for its sensitivity label."
+   ]
+  },
+  {
+   "id": "E12",
+   "file": "files/E12-nrel-sam-single-owner-cashflow.xlsx",
+   "category": "everyday",
+   "subcategory": "cash-flow / project finance model",
+   "title": "NREL SAM single-owner cash-flow model",
+   "description": "25-year project cash-flow model with inputs, depreciation and IRR/NPV.",
+   "source": {
+    "repo": "NREL/SAM",
+    "repo_url": "https://github.com/NREL/SAM",
+    "commit": "3cd4af6142cca586ec04d8f4e11c13be6d347b88",
+    "repo_path": "deploy/runtime/spreadsheets/single_owner.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/NREL/SAM/3cd4af6142cca586ec04d8f4e11c13be6d347b88/deploy/runtime/spreadsheets/single_owner.xlsx",
+    "blob_url": "https://github.com/NREL/SAM/blob/3cd4af6142cca586ec04d8f4e11c13be6d347b88/deploy/runtime/spreadsheets/single_owner.xlsx"
+   },
+   "licence": {
+    "spdx": "BSD-3-Clause",
+    "evidence": "LICENSE at repo root: \"BSD 3-Clause License, Copyright (c) 2017, 2022 Alliance for Energy Innovation, LLC\".",
+    "licence_file_url": "https://github.com/NREL/SAM/blob/3cd4af6142cca586ec04d8f4e11c13be6d347b88/LICENSE",
+    "texts": [
+     "LICENSES/BSD-3-Clause--nrel-sam.txt"
+    ],
+    "obligations": "BSD-3-Clause: reproduce the copyright notice, the conditions and the disclaimer (LICENSES/BSD-3-Clause--nrel-sam.txt), and do not use the names of the copyright holder or contributors to endorse or promote Hearth."
+   },
+   "attribution": "Copyright (c) 2017, 2022 Alliance for Energy Innovation, LLC. All rights reserved. From NREL/SAM (System Advisor Model), file deploy/runtime/spreadsheets/single_owner.xlsx at commit 3cd4af6142cca586ec04d8f4e11c13be6d347b88. BSD 3-Clause License.",
+   "modified": false,
+   "sha256": "dc2bca107c72cc531341500b3813f014f6f4187fe94b79443186d3dc6d24611b",
+   "bytes": 249192,
+   "application": "Microsoft Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "29929",
+    "calcId": "191029"
+   },
+   "sheets": 3,
+   "hidden_sheets": 0,
+   "cells": 30585,
+   "non_empty_cells": 19549,
+   "max_row": 751,
+   "max_col": 43,
+   "formulas": 16574,
+   "formulas_with_cached_value": 16574,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 57,
+   "shared_formulas": 13723,
+   "cross_sheet_formulas": 1130,
+   "defined_names": 294,
+   "sheet08_functions_used": [
+    "AND",
+    "HLOOKUP",
+    "IF",
+    "ISERROR",
+    "ISNUMBER",
+    "LOOKUP",
+    "MAX",
+    "MIN",
+    "ROUND",
+    "SUM"
+   ],
+   "sheet08_functions_count": 10,
+   "sheet08_functions_exact_names": [
+    "AND",
+    "HLOOKUP",
+    "IF",
+    "ISERROR",
+    "ISNUMBER",
+    "LOOKUP",
+    "MAX",
+    "MIN",
+    "ROUND",
+    "SUM"
+   ],
+   "functions_outside_sheet08": [
+    "IRR",
+    "NPV",
+    "PMT"
+   ],
+   "function_counts": {
+    "IF": 3721,
+    "SUM": 1370,
+    "LOOKUP": 540,
+    "AND": 206,
+    "IRR": 80,
+    "ROUND": 46,
+    "ISERROR": 40,
+    "MAX": 40,
+    "ISNUMBER": 32,
+    "MIN": 11,
+    "NPV": 6,
+    "HLOOKUP": 2,
+    "PMT": 1
+   },
+   "lookup_calls": 542,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 13,
+    "merged_cells": 13,
+    "conditional_formatting": 0,
+    "data_validation": 8,
+    "autofilter": 0,
+    "frozen_panes": 1,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "custom_num_formats": 13,
+    "merged_cells": 13,
+    "data_validation": 8,
+    "frozen_panes": 1,
+    "dynamic_array_cells": 17,
+    "defined_names": 294,
+    "array_formulas": 57
+   },
+   "features_present": [
+    "merged cells",
+    "data validation",
+    "custom number formats",
+    "frozen panes",
+    "defined names",
+    "dynamic-array cells",
+    "array formulas"
+   ],
+   "tests": "25-year cash-flow model with Inputs, Cash Flow and Depreciation tabs. 16,574 formulas, all with saved values: 1,130 cross-sheet, 294 defined names, HLOOKUP/LOOKUP, 57 SUM(IF(ISNUMBER())) arrays and IRR/NPV/PMT. The heaviest everyday model (about 19,500 non-empty cells). Shows how much of a name-heavy model P0 can recalculate before SHEET-11, and gives a mid-size recalculation timing.",
+   "notes": [
+    "Carries a Microsoft Purview sensitivity-label part (docMetadata/LabelInfo.xml; no visible marking, no encryption): a label round-trip case.",
+    "BSD-3-Clause clause 3: do not use the NREL or Alliance name to endorse Hearth.",
+    "The repo now redirects to NatLabRockies/SAM; the pinned NREL/SAM URL still resolves."
+   ]
+  },
+  {
+   "id": "P01",
+   "file": "files/P01-eia-nems-trnairx.xlsx",
+   "category": "performance",
+   "subcategory": "SHEET-34 reference-workbook shape, 100% P0-computable",
+   "title": "EIA NEMS air travel input (trnairx)",
+   "description": "Single-tab model input with about 71k cells of totals, INDEX/MATCH and growth chains.",
+   "source": {
+    "repo": "EIAgov/NEMS",
+    "repo_url": "https://github.com/EIAgov/NEMS",
+    "commit": "1bfbb2af4c3eb6e884227630ae67eb0e0e3c72ba",
+    "repo_path": "input/tdm/trnairx.xlsx",
+    "raw_url": "https://media.githubusercontent.com/media/EIAgov/NEMS/1bfbb2af4c3eb6e884227630ae67eb0e0e3c72ba/input/tdm/trnairx.xlsx",
+    "blob_url": "https://github.com/EIAgov/NEMS/blob/1bfbb2af4c3eb6e884227630ae67eb0e0e3c72ba/input/tdm/trnairx.xlsx"
+   },
+   "licence": {
+    "spdx": "Apache-2.0",
+    "evidence": "No LICENSE file in the NEMS repo. Its README 'Licenses' section links to https://github.com/eiagov; the EIAgov/EIAgov README (commit 92bc5b3a619ff0f262e0cf2b9b3915198e672f27) states: 'All EIA projects will be released under Apache 2.0, unless otherwise specifically noted within the project repository.' Nothing in NEMS notes otherwise for this path.",
+    "licence_file_url": "https://github.com/EIAgov/EIAgov/blob/92bc5b3a619ff0f262e0cf2b9b3915198e672f27/LICENSE",
+    "texts": [
+     "LICENSES/Apache-2.0--eiagov.txt",
+     "LICENSES/Apache-2.0--eiagov-README.md"
+    ],
+    "obligations": "Apache-2.0 s.4: give recipients the licence text (LICENSES/Apache-2.0--eiagov.txt) and mark any modified copy as changed. No NOTICE file exists."
+   },
+   "attribution": "U.S. Energy Information Administration (EIA), National Energy Modeling System (NEMS), https://github.com/EIAgov/NEMS, commit 1bfbb2af4c3eb6e884227630ae67eb0e0e3c72ba, file input/tdm/trnairx.xlsx. Licensed under the Apache License 2.0 under EIA's GitHub licence policy (EIAgov/EIAgov README and LICENSE, commit 92bc5b3a619ff0f262e0cf2b9b3915198e672f27). Data sources named in the workbook: ICAO, IATA, U.S. BTS, FAA, ICCT, World Jet Inventory, Oxford Economics, IHS.",
+   "modified": false,
+   "sha256": "52766baa6acd85f5953339f0797dc7d5814b2b1392527b188181812822164a38",
+   "bytes": 626943,
+   "application": "Microsoft Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "29328",
+    "calcId": "191029"
+   },
+   "sheets": 1,
+   "hidden_sheets": 0,
+   "cells": 73148,
+   "non_empty_cells": 70962,
+   "max_row": 1569,
+   "max_col": 61,
+   "formulas": 11655,
+   "formulas_with_cached_value": 11655,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 11633,
+   "cross_sheet_formulas": 0,
+   "defined_names": 63,
+   "sheet08_functions_used": [
+    "AVERAGE",
+    "INDEX",
+    "LEFT",
+    "MATCH",
+    "RIGHT",
+    "ROUNDDOWN",
+    "SUM"
+   ],
+   "sheet08_functions_count": 7,
+   "sheet08_functions_exact_names": [
+    "AVERAGE",
+    "INDEX",
+    "LEFT",
+    "MATCH",
+    "RIGHT",
+    "ROUNDDOWN",
+    "SUM"
+   ],
+   "functions_outside_sheet08": [],
+   "function_counts": {
+    "SUM": 55,
+    "INDEX": 48,
+    "MATCH": 48,
+    "LEFT": 4,
+    "RIGHT": 4,
+    "AVERAGE": 2,
+    "ROUNDDOWN": 1
+   },
+   "lookup_calls": 96,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 1,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 4,
+    "merged_cells": 0,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 1,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "comments": 1,
+    "custom_num_formats": 4,
+    "frozen_panes": 1,
+    "legacy_comments": 1,
+    "defined_names": 63,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "custom number formats",
+    "frozen panes",
+    "notes (legacy comments)",
+    "defined names"
+   ],
+   "tests": "70,962 non-empty cells and 11,655 formulas, all with values saved by Excel 16. They include SUM row and column totals, INDEX/MATCH pairs, growth-rate chains and LEFT/RIGHT/ROUNDDOWN, with no arrays, names or external references in formulas. Every formula can be computed and checked, so run this file first: open time, full recalculation, per-edit recalculation p50/p95 and value match.",
+   "notes": [
+    "Stored in Git LFS: the raw URL is media.githubusercontent.com.",
+    "Licence rests on EIA's organisation-wide statement, not a LICENSE file in NEMS. Not established as a US federal work (the last editor is a contractor), so rely on Apache-2.0.",
+    "Some figures are cited from commercial datasets (World Jet Inventory, Oxford Economics, IHS). Numeric facts are not copyrightable, but use it as an internal test fixture and do not republish it as a dataset.",
+    "Apache-2.0 s.4: include the licence text and mark round-tripped outputs as modified."
+   ]
+  },
+  {
+   "id": "P02",
+   "file": "files/P02-decc-2050-pathways-model.xlsx",
+   "category": "performance",
+   "subcategory": "multi-tab planning model at 83% of the P0 cell cap",
+   "title": "DECC 2050 Pathways Calculator model",
+   "description": "75-tab energy planning model with about 209k non-empty cells and 161k formulas.",
+   "source": {
+    "repo": "decc/twenty-fifty",
+    "repo_url": "https://github.com/decc/twenty-fifty",
+    "commit": "7fd820b58de919e3d0276260bb4bf70a98d8451e",
+    "repo_path": "model/model.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/decc/twenty-fifty/7fd820b58de919e3d0276260bb4bf70a98d8451e/model/model.xlsx",
+    "blob_url": "https://github.com/decc/twenty-fifty/blob/7fd820b58de919e3d0276260bb4bf70a98d8451e/model/model.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT",
+    "evidence": "LICENCE at repo root of the pinned commit: 'Where not otherwise covered by separate copyright, this source code is Crown Copyright (c) 2010-2014. Where not otherwise covered by a separate licence, this source code is distributed under the MIT licence' (only contrib/ differs). Published by the copyright holder's own organisation (UK DECC).",
+    "licence_file_url": "https://github.com/decc/twenty-fifty/blob/7fd820b58de919e3d0276260bb4bf70a98d8451e/LICENCE",
+    "texts": [
+     "LICENSES/MIT--decc-twenty-fifty.txt"
+    ],
+    "obligations": "Keep the MIT permission notice together with the Crown Copyright line (LICENSES/MIT--decc-twenty-fifty.txt)."
+   },
+   "attribution": "Crown Copyright (c) 2010, 2011, 2012, 2013, 2014 (UK Department of Energy and Climate Change, now DESNZ). Source: DECC 2050 Pathways Calculator, https://github.com/decc/twenty-fifty, file model/model.xlsx at commit 7fd820b58de919e3d0276260bb4bf70a98d8451e. Distributed under the MIT licence. Excel model by James Geddes and Michael Clark (repo CREDITS file).",
+   "modified": false,
+   "sha256": "c0c20319514b03f1c3f7b7f3d72ad02cf1d7e9bbe75abda1dcd73d8536a02ade",
+   "bytes": 4651383,
+   "application": "Microsoft Macintosh Excel",
+   "app_version": "14.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "25203",
+    "calcId": "140001"
+   },
+   "sheets": 75,
+   "hidden_sheets": 1,
+   "cells": 424727,
+   "non_empty_cells": 208709,
+   "max_row": 1262,
+   "max_col": 112,
+   "formulas": 161165,
+   "formulas_with_cached_value": 161144,
+   "formulas_without_cached_value": 21,
+   "array_formulas": 1939,
+   "shared_formulas": 123897,
+   "cross_sheet_formulas": 15175,
+   "defined_names": 372,
+   "sheet08_functions_used": [
+    "ABS",
+    "AND",
+    "AVERAGE",
+    "CHOOSE",
+    "COUNT",
+    "FIND",
+    "IF",
+    "IFERROR",
+    "INDEX",
+    "LEFT",
+    "MATCH",
+    "MAX",
+    "MIN",
+    "MOD",
+    "ROUND",
+    "ROUNDDOWN",
+    "ROUNDUP",
+    "SUBTOTAL",
+    "SUM",
+    "SUMIF",
+    "SUMIFS",
+    "SUMPRODUCT",
+    "TEXT",
+    "VLOOKUP"
+   ],
+   "sheet08_functions_count": 24,
+   "sheet08_functions_exact_names": [
+    "ABS",
+    "AND",
+    "AVERAGE",
+    "CHOOSE",
+    "COUNT",
+    "FIND",
+    "IF",
+    "IFERROR",
+    "INDEX",
+    "LEFT",
+    "MATCH",
+    "MAX",
+    "MIN",
+    "MOD",
+    "ROUND",
+    "ROUNDDOWN",
+    "ROUNDUP",
+    "SUBTOTAL",
+    "SUM",
+    "SUMIF",
+    "SUMIFS",
+    "SUMPRODUCT",
+    "TEXT",
+    "VLOOKUP"
+   ],
+   "functions_outside_sheet08": [
+    "INDIRECT",
+    "LN",
+    "PMT"
+   ],
+   "function_counts": {
+    "MATCH": 7394,
+    "INDIRECT": 7376,
+    "INDEX": 7241,
+    "SUM": 6330,
+    "IFERROR": 2734,
+    "IF": 1038,
+    "SUMIFS": 984,
+    "SUBTOTAL": 862,
+    "VLOOKUP": 600,
+    "AVERAGE": 492,
+    "ROUND": 442,
+    "SUMPRODUCT": 389,
+    "SUMIF": 205,
+    "MOD": 186,
+    "MAX": 161,
+    "ROUNDDOWN": 93,
+    "ROUNDUP": 93,
+    "MIN": 62,
+    "PMT": 45,
+    "LEFT": 45,
+    "FIND": 45,
+    "ABS": 30,
+    "TEXT": 27,
+    "LN": 20,
+    "CHOOSE": 7,
+    "AND": 1,
+    "COUNT": 1
+   },
+   "lookup_calls": 16813,
+   "volatile_functions": [
+    "INDIRECT"
+   ],
+   "features": {
+    "macros": false,
+    "charts": 9,
+    "pivot_tables": 0,
+    "tables": 233,
+    "comments": 4,
+    "images": 0,
+    "external_links": 28,
+    "custom_num_formats": 3312,
+    "merged_cells": 75,
+    "conditional_formatting": 24,
+    "data_validation": 5,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 1010,
+    "hidden_cols": 75,
+    "sheet_protection": 2
+   },
+   "features_exact": {
+    "charts": 9,
+    "tables": 233,
+    "comments": 4,
+    "external_links": 14,
+    "custom_num_formats": 3312,
+    "merged_cells": 75,
+    "conditional_formatting": 24,
+    "data_validation": 5,
+    "hidden_rows": 1010,
+    "hidden_cols": 75,
+    "sheet_protection": 2,
+    "sheets_hidden": 1,
+    "legacy_comments": 4,
+    "hyperlinks": 41,
+    "defined_names": 372,
+    "array_formulas": 1939
+   },
+   "features_present": [
+    "merged cells",
+    "conditional formatting",
+    "data validation",
+    "custom number formats",
+    "hidden rows",
+    "hidden columns",
+    "hidden sheets",
+    "charts",
+    "Excel tables",
+    "notes (legacy comments)",
+    "defined names",
+    "sheet protection",
+    "hyperlinks",
+    "external workbook links",
+    "array formulas"
+   ],
+   "tests": "208,709 non-empty cells and 161,165 formulas (161,144 with saved values) over 75 tabs: INDEX/MATCH pairs, SUMIFS and very many INDIRECT calls, plus 1,939 array formulas, 372 names, 233 tables, 14 external-link parts and 9 charts. It should trigger SHEET-33's 80% warning. Measures load, first calculation and per-edit recalculation on a realistic worst case, and the share of cells P0 must freeze (about 53% are computable). 96 formulas contain #REF!.",
+   "notes": [
+    "Saved by Excel 2011 for Mac (AppVersion 14.0300), last modified 2015: re-check suspect mismatches in current Excel.",
+    "The analyser double-counts external links (28; there are 14 externalLink parts) and counts functions per formula text, not per cell.",
+    "External-link paths and comment authors include civil servants' usernames: keep the file unmodified and the corpus internal."
+   ]
+  },
+  {
+   "id": "P03",
+   "file": "files/P03-eia-state-to-state-capacity.xlsx",
+   "category": "performance",
+   "subcategory": "5 MB import over the P0 cap; pivot tables and GETPIVOTDATA",
+   "title": "EIA state-to-state gas pipeline capacity",
+   "description": "5.1 MB capacity tracker with about 388k non-empty cells, VLOOKUPs and 9 pivot tables.",
+   "source": {
+    "repo": "EIAgov/NEMS",
+    "repo_url": "https://github.com/EIAgov/NEMS",
+    "commit": "1bfbb2af4c3eb6e884227630ae67eb0e0e3c72ba",
+    "repo_path": "models/ngas/input/EIA_StatetoStateCapacity.xlsx",
+    "raw_url": "https://media.githubusercontent.com/media/EIAgov/NEMS/1bfbb2af4c3eb6e884227630ae67eb0e0e3c72ba/models/ngas/input/EIA_StatetoStateCapacity.xlsx",
+    "blob_url": "https://github.com/EIAgov/NEMS/blob/1bfbb2af4c3eb6e884227630ae67eb0e0e3c72ba/models/ngas/input/EIA_StatetoStateCapacity.xlsx"
+   },
+   "licence": {
+    "spdx": "Apache-2.0",
+    "evidence": "No LICENSE file in the NEMS repo. Its README 'Licenses' section links to https://github.com/eiagov; the EIAgov/EIAgov README (commit 92bc5b3a619ff0f262e0cf2b9b3915198e672f27) states: 'All EIA projects will be released under Apache 2.0, unless otherwise specifically noted within the project repository.' Authored by EIA staff, so plausibly also a US federal work (17 U.S.C. 105).",
+    "licence_file_url": "https://github.com/EIAgov/EIAgov/blob/92bc5b3a619ff0f262e0cf2b9b3915198e672f27/LICENSE",
+    "texts": [
+     "LICENSES/Apache-2.0--eiagov.txt",
+     "LICENSES/Apache-2.0--eiagov-README.md"
+    ],
+    "obligations": "Apache-2.0 s.4: give recipients the licence text (LICENSES/Apache-2.0--eiagov.txt) and mark any modified copy as changed. No NOTICE file exists."
+   },
+   "attribution": "Source: U.S. Energy Information Administration (EIA), 'U.S. State-to-State capacity' workbook, from the National Energy Modeling System (NEMS) repository https://github.com/EIAgov/NEMS, commit 1bfbb2af4c3eb6e884227630ae67eb0e0e3c72ba, file models/ngas/input/EIA_StatetoStateCapacity.xlsx. Licensed under the Apache License 2.0 under EIA's GitHub licence policy (EIAgov/EIAgov, commit 92bc5b3a619ff0f262e0cf2b9b3915198e672f27).",
+   "modified": false,
+   "sha256": "32b9d8e9f8a350a7caefb045a634d39b45f225790a68a5e44f9416e795f1dfa8",
+   "bytes": 5105277,
+   "application": "Microsoft Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "28827",
+    "calcId": "191029"
+   },
+   "sheets": 15,
+   "hidden_sheets": 3,
+   "cells": 435551,
+   "non_empty_cells": 387775,
+   "max_row": 18649,
+   "max_col": 34,
+   "formulas": 135691,
+   "formulas_with_cached_value": 135691,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 33533,
+   "cross_sheet_formulas": 100902,
+   "defined_names": 50,
+   "sheet08_functions_used": [
+    "IF",
+    "MAX",
+    "VLOOKUP"
+   ],
+   "sheet08_functions_count": 3,
+   "sheet08_functions_exact_names": [
+    "IF",
+    "MAX",
+    "VLOOKUP"
+   ],
+   "functions_outside_sheet08": [
+    "GETPIVOTDATA"
+   ],
+   "function_counts": {
+    "GETPIVOTDATA": 7667,
+    "VLOOKUP": 807,
+    "MAX": 310,
+    "IF": 269
+   },
+   "lookup_calls": 807,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 18,
+    "tables": 2,
+    "comments": 2,
+    "images": 64,
+    "external_links": 0,
+    "custom_num_formats": 25,
+    "merged_cells": 3,
+    "conditional_formatting": 0,
+    "data_validation": 1,
+    "autofilter": 1,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "pivot_tables": 9,
+    "tables": 2,
+    "comments": 2,
+    "images": 64,
+    "custom_num_formats": 25,
+    "merged_cells": 3,
+    "data_validation": 1,
+    "autofilter": 1,
+    "sheets_hidden": 3,
+    "legacy_comments": 2,
+    "hyperlinks": 12,
+    "defined_names": 50,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "merged cells",
+    "data validation",
+    "custom number formats",
+    "hidden sheets",
+    "pivot tables",
+    "Excel tables",
+    "autofilter",
+    "notes (legacy comments)",
+    "images / media",
+    "defined names",
+    "hyperlinks"
+   ],
+   "tests": "5.1 MB with 387,775 non-empty cells (over the 250,000 P0 cap) and 135,691 formulas, all with saved values: VLOOKUP and IF over two 18,649-row tabs, plus GETPIVOTDATA over 9 pivot tables, 50 names, 64 images and 3 hidden tabs. Under P0 it must stay a file with a clear message (SHEET-30/33). Under P1 it is the 'convert a 5 MB XLSX in under 30 s' case (SHEET-34), and it exercises 'pivots kept as values' and fixed GETPIVOTDATA values.",
+   "notes": [
+    "Stored in Git LFS: the raw URL is media.githubusercontent.com.",
+    "The analyser reports 18 pivot tables; there are 9 pivot-table parts over 2 caches.",
+    "Holds a Power Query mashup (customXml/item1.xml, one SQL query, no connections.xml) that the analyser does not detect: add 'Power Query mashup preserved?' to the round-trip loss list."
+   ]
+  },
+  {
+   "id": "X01",
+   "file": "files/X01-calamine-sheet-visibility.xlsx",
+   "category": "edge",
+   "subcategory": "visible, hidden and veryHidden sheets plus a chart sheet",
+   "title": "calamine sheet visibility states",
+   "description": "Four tabs in every visibility state: visible, hidden, very hidden and a chart sheet.",
+   "source": {
+    "repo": "tafia/calamine",
+    "repo_url": "https://github.com/tafia/calamine",
+    "commit": "0af05f4f6030351e3b8a999ea0810c8618368776",
+    "repo_path": "tests/any_sheets.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/tafia/calamine/0af05f4f6030351e3b8a999ea0810c8618368776/tests/any_sheets.xlsx",
+    "blob_url": "https://github.com/tafia/calamine/blob/0af05f4f6030351e3b8a999ea0810c8618368776/tests/any_sheets.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT",
+    "evidence": "LICENSE-MIT.md at repo root: \"The MIT License (MIT) Copyright (c) 2016 Johann Tuffe\"",
+    "licence_file_url": "https://github.com/tafia/calamine/blob/0af05f4f6030351e3b8a999ea0810c8618368776/LICENSE-MIT.md",
+    "texts": [
+     "LICENSES/MIT--calamine.txt"
+    ],
+    "obligations": "Keep the MIT copyright and permission notice with the file (LICENSES/MIT--calamine.txt)."
+   },
+   "attribution": "calamine (https://github.com/tafia/calamine), file tests/any_sheets.xlsx at commit 0af05f4f6030351e3b8a999ea0810c8618368776. Copyright (c) 2016 Johann Tuffe and calamine contributors. MIT License.",
+   "modified": false,
+   "sha256": "fba48e0141f847d80738a4417f0a336cba92e4ac692d8dd7516eac41e32c9e4f",
+   "bytes": 14804,
+   "application": "Microsoft Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "14420",
+    "calcId": "162913"
+   },
+   "sheets": 4,
+   "hidden_sheets": 2,
+   "cells": 7,
+   "non_empty_cells": 7,
+   "max_row": 5,
+   "max_col": 2,
+   "formulas": 0,
+   "formulas_with_cached_value": 0,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 0,
+   "cross_sheet_formulas": 0,
+   "defined_names": 0,
+   "sheet08_functions_used": [],
+   "sheet08_functions_count": 0,
+   "sheet08_functions_exact_names": [],
+   "functions_outside_sheet08": [],
+   "function_counts": {},
+   "lookup_calls": 0,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 1,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 0,
+    "merged_cells": 0,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "charts": 1,
+    "sheets_hidden": 1,
+    "sheets_veryHidden": 1,
+    "chartsheets": 1,
+    "defined_names": 0,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "hidden sheets",
+    "very hidden sheets",
+    "chart sheets",
+    "charts"
+   ],
+   "tests": "Smallest file with every sheet state: Visible, Hidden, VeryHidden and a chart sheet. Checks that the very hidden tab is kept but not shown, and is indexed and cited as hidden for AI (Rule 1, SHEET-37). Also checks that the chart sheet is dropped and reported. A copy is a good carrier for Rule 8 injection text.",
+   "notes": [
+    "No formulas.",
+    "workbook.xml absPath and docProps carry the contributor's first name (already public)."
+   ]
+  },
+  {
+   "id": "X02",
+   "file": "files/X02-ironcalc-hyperlinks.xlsx",
+   "category": "edge",
+   "subcategory": "hyperlinks of every kind and an external-workbook link",
+   "title": "IronCalc hyperlink tests",
+   "description": "21 numbered hyperlink cases plus a link to a missing external workbook.",
+   "source": {
+    "repo": "ironcalc/IronCalc",
+    "repo_url": "https://github.com/ironcalc/IronCalc",
+    "commit": "c88f07f0c776ad42bc4cfd68dfc65f68195908f0",
+    "repo_path": "xlsx/tests/link_test.xlsx",
+    "raw_url": "https://raw.githubusercontent.com/ironcalc/IronCalc/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/link_test.xlsx",
+    "blob_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/xlsx/tests/link_test.xlsx"
+   },
+   "licence": {
+    "spdx": "MIT OR Apache-2.0",
+    "evidence": "LICENSE-MIT and LICENSE-Apache-2.0 at repo root; README licence badges link to both files (dual MIT / Apache-2.0)",
+    "licence_file_url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/LICENSE-MIT",
+    "texts": [
+     "LICENSES/MIT--ironcalc.txt",
+     "LICENSES/Apache-2.0--ironcalc.txt"
+    ],
+    "obligations": "Keep the MIT copyright and permission notice with the file (LICENSES/MIT--ironcalc.txt). The Apache-2.0 option (LICENSES/Apache-2.0--ironcalc.txt) is also available."
+   },
+   "attribution": "Copyright (c) 2023 EqualTo GmbH, 2023 Nicolás Hatcher, and IronCalc contributors (IronCalc, https://github.com/ironcalc/IronCalc). Used under the MIT licence; Apache-2.0 is also offered.",
+   "modified": false,
+   "sha256": "0250b126df7928d9d79238948e087e1ec1d5862f6f003a3ad3b863cd88639069",
+   "bytes": 15354,
+   "application": "Microsoft Macintosh Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "10719",
+    "calcId": "191029"
+   },
+   "sheets": 2,
+   "hidden_sheets": 0,
+   "cells": 70,
+   "non_empty_cells": 70,
+   "max_row": 33,
+   "max_col": 5,
+   "formulas": 9,
+   "formulas_with_cached_value": 9,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 0,
+   "shared_formulas": 0,
+   "cross_sheet_formulas": 4,
+   "defined_names": 1,
+   "sheet08_functions_used": [
+    "HYPERLINK"
+   ],
+   "sheet08_functions_count": 1,
+   "sheet08_functions_exact_names": [
+    "HYPERLINK"
+   ],
+   "functions_outside_sheet08": [],
+   "function_counts": {
+    "HYPERLINK": 5
+   },
+   "lookup_calls": 0,
+   "volatile_functions": [],
+   "features": {
+    "macros": false,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 0,
+    "images": 0,
+    "external_links": 2,
+    "custom_num_formats": 0,
+    "merged_cells": 0,
+    "conditional_formatting": 0,
+    "data_validation": 0,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 0
+   },
+   "features_exact": {
+    "external_links": 1,
+    "hyperlinks": 13,
+    "defined_names": 1,
+    "array_formulas": 0
+   },
+   "features_present": [
+    "defined names",
+    "hyperlinks",
+    "external workbook links"
+   ],
+   "tests": "21 numbered cases: http/https links with ScreenTips, ftp, mailto with subject and body, local file path, UNC path, internal anchors, 5 HYPERLINK() formulas and an external-workbook formula link to a missing C:\\Temp\\Source.xlsx. Tests link safety on import (keep, neutralise or drop; R17, no cross-file references in v1), and checks that the external reference keeps its saved value with a marker (SHEET-31).",
+   "notes": [
+    "Treat every link as inert test data and never follow it.",
+    "A contributor's e-mail and local folder path are inside the file (already public).",
+    "The analyser reports external_links=2; there is one external workbook (it also counts the relationship part)."
+   ]
+  },
+  {
+   "id": "X03",
+   "file": "files/X03-cbo-credit-subsidy-tool.xlsm",
+   "category": "edge",
+   "subcategory": "macro workbook: VBA project and user-defined function (Q17)",
+   "title": "CBO credit subsidy tool (macro workbook)",
+   "description": "Macro-enabled loan subsidy calculator whose key results come from a VBA user-defined function.",
+   "source": {
+    "repo": "US-CBO/credit-subsidy-tool",
+    "repo_url": "https://github.com/US-CBO/credit-subsidy-tool",
+    "commit": "133d239e274419e4426b54d089e2a941becd788e",
+    "repo_path": "credit-subsidy-tool.xlsm",
+    "raw_url": "https://raw.githubusercontent.com/US-CBO/credit-subsidy-tool/133d239e274419e4426b54d089e2a941becd788e/credit-subsidy-tool.xlsm",
+    "blob_url": "https://github.com/US-CBO/credit-subsidy-tool/blob/133d239e274419e4426b54d089e2a941becd788e/credit-subsidy-tool.xlsm"
+   },
+   "licence": {
+    "spdx": "LicenseRef-PublicDomain-USGov",
+    "evidence": "LICENSE.md: \"As a work of the United States Government, these materials are in the public domain within the United States under 17 U.S.C. 105 ... waives any other intellectual property rights ... worldwide.\"",
+    "licence_file_url": "https://github.com/US-CBO/credit-subsidy-tool/blob/133d239e274419e4426b54d089e2a941becd788e/LICENSE.md",
+    "texts": [
+     "LICENSES/PublicDomain-USGov--cbo-credit-subsidy-tool.md"
+    ],
+    "obligations": "None required (public domain). CBO asks that anyone who modifies these materials identify and attribute the changes: keep the file unmodified and never present Hearth's output as CBO's."
+   },
+   "attribution": "Congressional Budget Office (CBO), \"CBO's Credit Subsidy Tool\", https://github.com/US-CBO/credit-subsidy-tool, commit 133d239e274419e4426b54d089e2a941becd788e. Developed by Wendy Kiska; reviewed by Michael Falkenheim and Emily Stern. A work of the United States Government, in the public domain in the US under 17 U.S.C. § 105; the US Government waives all other IP rights worldwide. There is no copyright holder.",
+   "modified": false,
+   "sha256": "3cb3535fead09c1b3491cdedb4196522ae711fbee2cfa194f1ac28cec867ee4c",
+   "bytes": 194210,
+   "application": "Microsoft Excel",
+   "app_version": "16.0300",
+   "excel_saved": true,
+   "excel_build": {
+    "rupBuild": "30131",
+    "calcId": "191029"
+   },
+   "sheets": 9,
+   "hidden_sheets": 0,
+   "cells": 19047,
+   "non_empty_cells": 4092,
+   "max_row": 410,
+   "max_col": 20,
+   "formulas": 254,
+   "formulas_with_cached_value": 254,
+   "formulas_without_cached_value": 0,
+   "array_formulas": 4,
+   "shared_formulas": 220,
+   "cross_sheet_formulas": 0,
+   "defined_names": 30,
+   "sheet08_functions_used": [
+    "AND",
+    "IF",
+    "INDEX",
+    "MATCH",
+    "SUM"
+   ],
+   "sheet08_functions_count": 5,
+   "sheet08_functions_exact_names": [
+    "AND",
+    "IF",
+    "INDEX",
+    "MATCH",
+    "SUM"
+   ],
+   "functions_outside_sheet08": [
+    "IPMT",
+    "PPMT"
+   ],
+   "function_counts": {
+    "SUM": 15,
+    "MATCH": 4,
+    "IF": 3,
+    "PPMT": 2,
+    "IPMT": 2,
+    "INDEX": 2,
+    "AND": 1
+   },
+   "lookup_calls": 6,
+   "volatile_functions": [],
+   "features": {
+    "macros": true,
+    "charts": 0,
+    "pivot_tables": 0,
+    "tables": 0,
+    "comments": 2,
+    "images": 0,
+    "external_links": 0,
+    "custom_num_formats": 8,
+    "merged_cells": 31,
+    "conditional_formatting": 0,
+    "data_validation": 17,
+    "autofilter": 0,
+    "frozen_panes": 0,
+    "hidden_rows": 0,
+    "hidden_cols": 0,
+    "sheet_protection": 5
+   },
+   "features_exact": {
+    "macros": true,
+    "comments": 2,
+    "custom_num_formats": 8,
+    "merged_cells": 31,
+    "data_validation": 17,
+    "sheet_protection": 5,
+    "legacy_comments": 2,
+    "dynamic_array_cells": 4,
+    "ctrlProps": 2,
+    "defined_names": 30,
+    "array_formulas": 4
+   },
+   "features_present": [
+    "merged cells",
+    "data validation",
+    "custom number formats",
+    "notes (legacy comments)",
+    "defined names",
+    "sheet protection",
+    "form controls",
+    "VBA macros",
+    "dynamic-array cells",
+    "array formulas"
+   ],
+   "tests": "The deliberate .xlsm case. A VBA project's user-defined function, =Subsidy(...), produces the key results; the analyser misses it. Alongside are IPMT/PPMT, INDEX/MATCH on concatenated keys, 17 validation rules, 5 protected sheets, 30 names and 2 form controls; 254 formulas, all with saved values. Checks that macros never run (Q17/R17), that the UDF cells keep their saved values with a marker, that the preview works and that export drops vbaProject.bin. Analyse it statically only.",
+   "notes": [
+    "Contains a Workbook_Open auto-macro and Worksheet_Change handlers. Never open it in desktop Excel with macros enabled.",
+    "Odd defined name _xleta.AND = #NAME? and 18 CIQ/IQ_* names injected by an S&P Capital IQ add-in (no S&P content): import edge cases.",
+    "Kept as .xlsm on purpose; the file name keeps its real extension."
+   ]
+  }
+ ],
+ "dropped": [
+  {
+   "id": "F05",
+   "repo": "isomerpages/singapore-customs-old",
+   "commit": "18ef4ff982dd743ffc2f43b8783434f177bdcce6",
+   "path": "documents/businesses/Manufacturing Cost Statement (October 2021).xlsx",
+   "reason": "Licence conflict. The repo's stock Isomer LICENSE (MIT, GovTech 2018) is contradicted by Singapore Customs' own terms of use in the same repo ('All rights reserved (Singapore Customs © 2013)'), and the workbook belongs to Singapore Customs. Effective licence: NOASSERTION. Technically a good data-entry and validation case (en-SG formats, 233 merges, 15 validation rules, workbook protection); usable only with Singapore Customs' written permission."
+  },
+  {
+   "id": "E03",
+   "repo": "gitlab.com/keyboardplaying/xtt/xls-time-tracker",
+   "commit": "3ec0b1e242e911544a4a537285cfee71b0219d10",
+   "path": "xlsx_deconstructed/ (unzipped OOXML parts)",
+   "reason": "No LICENSE file, only a one-line 'MIT' statement in the README with no copyright line; the workbook was started on a client's corporate machine during an engagement, so the author's right to license it is unclear. Also no upstream .xlsx exists (the repo stores unzipped parts). Technically excellent (8,252 formulas, timesheet with overtime); reconsider only if the author adds a LICENSE or the owner accepts the risk."
+  },
+  {
+   "id": "E04",
+   "repo": "PacktPublishing/Microsoft-Excel-2021-365---Beginner-to-Advanced",
+   "commit": "101fc67ac62ff80387fc6260c9fb477b28923183",
+   "path": "Intermediate/Course Files/Section 14/14-02-goal-seek.xlsx",
+   "reason": "Third-party course material (Simon Sez IT) placed in a repo under the publisher's blanket MIT licence, with no evidence the author licensed it. Do not use any file from that repo."
+  }
+ ],
+ "gaps": [
+  {
+   "gap": "SHEET-08 functions",
+   "detail": "The 27 files cover 96 of the 109 SHEET-08 functions (finished PRD v0.4; same counting rule as coverage.sheet08). Missing: DATEDIF, DATEVALUE, DAYS, EDATE, ISEVEN, ISODD, MROUND, NETWORKDAYS, PROPER, SWITCH, TEXTJOIN, WEEKNUM, XOR. Only NETWORKDAYS.INTL appears (O03), which is a different function.",
+   "close": "Run IronCalc's xlsx/tests suite (commit c88f07f0, 259 files, 74,590 formulas) alongside the corpus: together they cover 108 of 109, all but WEEKNUM. Those suite files are IronCalc's own, so add independent checks: Apache POI's atp.xlsx (ISEVEN, ISODD, MROUND; Apache-2.0, not yet licence-checked file by file) and a small workbook authored in Excel for WEEKNUM, DATEDIF, DATEVALUE, DAYS, EDATE, PROPER, SWITCH, TEXTJOIN, XOR and plain NETWORKDAYS with Singapore public holidays."
+  },
+  {
+   "gap": "IronCalc self-bias",
+   "detail": "9 of the 27 files (O04, O05, F01, F02, E02, E05, E06, E10, X02) were made by IronCalc's team; IronCalc will probably pass them.",
+   "close": "Use them to validate the harness and the HyperFormula and Univer fallbacks; judge IronCalc on the other 18."
+  },
+  {
+   "gap": "Everyday workbooks the org uses",
+   "detail": "See everyday_subcategories.missing. No cleanly licensed public file was found for these; forum-sourced candidates (SpreadsheetBench) were excluded.",
+   "close": "Before the spike, author 5-6 small workbooks in Excel with synthetic data: shift roster with OT pay, leave tracker (NETWORKDAYS with Singapore public holidays), stock list with reorder levels, 3-vendor quote comparison, shipment tracker and a department budget, using S$ formats and day-first dates. Synthetic data needs no licence."
+  },
+  {
+   "gap": "Stand-ins for Q16",
+   "detail": "Public files test the engine and import fidelity but cannot show whether SHEET-31's conversion and SHEET-33's limits fit the org's real files.",
+   "close": "Before the core launch, run the same checks on a few anonymised copies of real workbooks (BUILD-PLAN already allows anonymised copies for C3.7)."
+  },
+  {
+   "gap": "Volatile and random cells",
+   "detail": "TODAY/NOW in E02, E06, E10, F03; RAND/RANDBETWEEN in F06; INDIRECT/OFFSET in O01, O02, F02, P02.",
+   "close": "Pin TODAY/NOW to each file's dcterms:modified time in Asia/Singapore, or exclude the dependent cells. Check RAND and RANDBETWEEN for type and range only. Compare INDIRECT and OFFSET normally."
+  },
+  {
+   "gap": "Older Excel builds",
+   "detail": "P02 was last saved by Excel 2011 for Mac (2015); O01 and O03 by Excel 2013. P02 also has 21 formulas with no saved value and 96 containing #REF!.",
+   "close": "Re-check suspect mismatches in current Excel before calling them engine bugs; report formulas with no saved value as 'no oracle'."
+  },
+  {
+   "gap": "Features not in the corpus",
+   "detail": "Sparklines, slicers and timelines, What-If data tables, external data connections, Power Pivot, pictures in cells, password-protected or encrypted files, workbook-structure protection, x14 data validation, and a resolved threaded comment.",
+   "close": "Candidates from the finders, not yet licence-checked: LibreOffice core sc/qa Sparklines.xlsx and one-variable.xlsx (MPL-2.0). Author the rest in Excel: a password-protected copy (SHEET-30 says it stays a file), a resolved thread, a slicer over a table."
+  },
+  {
+   "gap": "Sensitivity labels",
+   "detail": "E01 and E12 carry Microsoft Purview label parts (docMetadata/LabelInfo.xml). The PRD does not say whether import keeps, shows or strips labels, or how MIP-encrypted files are handled.",
+   "close": "Add to the spike checklist; an encrypted file is not a zip, so it likely 'stays a file' like a password-protected one."
+  },
+  {
+   "gap": "Security cases",
+   "detail": "No public file holds formula-injection strings or hidden instructions.",
+   "close": "Author CSV-export cases (cells starting with =, +, -, @, tab or CR; DDE and HYPERLINK strings) and Rule 8 cases (instructions in cells, notes, threaded comments, hidden and very hidden tabs) in copies of E07 and X01."
+  },
+  {
+   "gap": "Performance shapes",
+   "detail": "No openly licensed large file uses XLOOKUP or dynamic arrays at scale, and none is a roster, budget or logistics tracker. P03 is over the P0 cell cap, so under P0 it only tests the 'stays a file' message.",
+   "close": "Generate the SHEET-34 reference workbook and the B.7 XLOOKUP/SUMIFS stress case with the generator spec below. Share of formula cells P0 can compute, from the performance finder: P01 100%, P03 about 71%, P02 about 53%; report this per file."
+  },
+  {
+   "gap": "Personal data in metadata",
+   "detail": "Author and editor names in docProps; civil servants' usernames in P02's external-link paths; a developer's name and Windows Live id in F07's persons part; contributor e-mail and folder path in X02; named companies from public OFAC records in E07.",
+   "close": "Keep the corpus internal, or strip docProps and persons parts from copies before publishing anything."
+  },
+  {
+   "gap": "Macro workbook",
+   "detail": "X03 contains a VBA project with a Workbook_Open macro.",
+   "close": "Analyse it statically only, never open it in desktop Excel with macros enabled, and check that Hearth's preview and import never run it (Q17, R17)."
+  }
+ ],
+ "generator_spec": {
+  "name": "hearth-perf-gen (to be written and run in the spike; nothing has been generated yet)",
+  "purpose": "Deterministic workbooks with known values for SHEET-33/34 and B.7's stress case, which no public file provides.",
+  "tooling": "Python 3 stdlib plus XlsxWriter (BSD-2-Clause), or rust_xlsxwriter (MIT/Apache-2.0); both write a formula together with its saved value. CLI: --profile, --rows, --seed (default 20261011), --out.",
+  "determinism": "An in-house SplitMix64 PRNG, never Python's random. Integers and 2-decimal amounts; dates as serials 45292-45657 (2024); no volatile functions; fixed docProps (creator 'hearth-perf-gen', fixed dates). The same arguments always give the same sha256.",
+  "outputs": "The .xlsx, with each formula saved alongside the value the generator computed, plus manifest.json: seed, profile, non-empty cell count, formulas by function, the expected value of each formula cell (or a per-column digest), and 20 scripted edits with the cells each changes and their new values.",
+  "excel_twin": "Open each file once in desktop Excel, press Ctrl+Alt+F9 and save it as <name>.excel.xlsx. Fix the generator wherever it disagrees with the twin, then use the twin as the oracle, as with the public files.",
+  "profiles": {
+   "REF100K": [
+    "SHEET-34 reference workbook: 100,000 +/-1% non-empty cells; print the exact count.",
+    "Tab Data: header row, then rows 2-8001 with A ShipmentID (int), B Date (serial), C Depot (12 codes such as SG-JUR, SG-TUAS, SG-CHANGI), D SKU (400 codes) and E-J Qty/Weight/Cartons/Pallets/Cost/Freight. K2:K8001 =SUM(E2:J2) and L2:L8001 =IF(K2>=$N$1,\"Over\",\"OK\"). Row 8002 holds column totals =SUM(E2:E8001) for E-K.",
+    "Tab Rates: 400 rows of SKU, UnitCost, Category.",
+    "Tab Summary: 300 SKUs, each with =XLOOKUP(A2,Rates!$A$2:$A$401,Rates!$B$2:$B$401,\"n/a\") and =SUMIFS(Data!$E$2:$E$8001,Data!$D$2:$D$8001,A2). Pad with a values block to reach 100,000 cells.",
+    "Edits: 10 in Data!E, 5 in Rates!B, 5 to $N$1. Measure per-edit recalculation p50/p95 against 250 ms desktop and 750 ms phone, and open time against 2 s / 4 s using a 50K variant."
+   ],
+   "B7": [
+    "Tab Ref: 5,000 rows (A key K00001..., B value, C composite key).",
+    "Tab Data: N rows with A key (95% present, 5% missing), B group (1 of 50), C amount, D =XLOOKUP(A2,Ref!A:A,Ref!B:B,\"missing\") and E =SUMIFS(C:C,B:B,B2), whole columns as in B.7. N = 1,000 / 3,000 / 5,000 / 10,000.",
+    "Variants: bounded ranges; INDEX/MATCH; VLOOKUP(...,FALSE); XLOOKUP binary search (search_mode 2) on sorted keys; COUNTIFS in place of SUMIFS; composite key =XLOOKUP(A2&\"|\"&B2,Ref!C:C,Ref!B:B).",
+    "Edits: one Data!C (dirties every SUMIFS), one Ref!B, one Data!A. Record load, first calculation, per-edit recalculation p50/p95 and memory: WebAssembly in a Web Worker on the slowest supported phone, and the Node binding on one server core.",
+    "B.7 baselines: IronCalc about 9 s at 5,000 rows and 3.6 s at 3,000; HyperFormula 34 s to load and 7.8 s per edit at 3,000."
+   ],
+   "LIMITS": [
+    "Values only, for SHEET-33's warnings and blocks.",
+    "Cells: 200,000 non-empty (80% warning), 250,000 (at the cap) and 250,001 (blocked). Rows: one tab of 100,000 rows and one of 100,001. Columns: 200 (A-GR) and 201 (GS). Cell text: 50,000 characters and 50,001. Tabs: 100 and 101.",
+    "P1 set: 800,000, 1,000,000 and 1,000,001 cells. A 5 MB XLSX near 250k cells for the 30 s conversion target.",
+    "Real files P02 (83% of cap) and P03 (over the P0 cap) complement these."
+   ],
+   "PATTERNS": [
+    "Small oracle files cut down from shapes seen in real workbooks: CSE INDEX/MATCH(1,(a=b)*(c=d),0) and MIN/MAX/SUM(IF()) arrays; INDEX(OFFSET(col,,n),row) and whole-column INDEX/MATCH; LOOKUP(C:C,{...},{...}) relying on implicit intersection, and formulas with a leading '+'; GETPIVOTDATA over a small pivot; INDIRECT(ADDRESS()) volatile chains.",
+    "For each, record whether Hearth computes the cell or keeps it as a fixed value under SHEET-31, and compare with the Excel twin."
+   ],
+   "INJECTION": [
+    "Security, not performance: the CSV-export and Rule 8 cases listed in gaps, written into normal, hidden and very hidden tabs, notes and threaded comments."
+   ]
+  }
+ },
+ "licence_texts": [
+  {
+   "file": "LICENSES/Apache-2.0--apache-poi.txt",
+   "repo": "apache/poi",
+   "commit": "ae62bb5116b9aee19ebd5834e3a82066132c9f7f",
+   "path": "legal/LICENSE",
+   "url": "https://github.com/apache/poi/blob/ae62bb5116b9aee19ebd5834e3a82066132c9f7f/legal/LICENSE",
+   "sha256": "6e7c918e5a49f677c1b85a9eb2d035cd85c217fc42af6b4a336964a434001a9c"
+  },
+  {
+   "file": "LICENSES/Apache-2.0--apache-poi-NOTICE.txt",
+   "repo": "apache/poi",
+   "commit": "ae62bb5116b9aee19ebd5834e3a82066132c9f7f",
+   "path": "legal/NOTICE",
+   "url": "https://github.com/apache/poi/blob/ae62bb5116b9aee19ebd5834e3a82066132c9f7f/legal/NOTICE",
+   "sha256": "a89ff8b670bcacd3e98ebee64979e0569181c7942e9ad795f4222b25e5637a61"
+  },
+  {
+   "file": "LICENSES/MPL-2.0--libreoffice-core.txt",
+   "repo": "LibreOffice/core",
+   "commit": "63a2e191551b157adad367d020835e9ec21fc964",
+   "path": "COPYING.MPL",
+   "url": "https://github.com/LibreOffice/core/blob/63a2e191551b157adad367d020835e9ec21fc964/COPYING.MPL",
+   "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
+  },
+  {
+   "file": "LICENSES/MIT--ironcalc.txt",
+   "repo": "ironcalc/IronCalc",
+   "commit": "c88f07f0c776ad42bc4cfd68dfc65f68195908f0",
+   "path": "LICENSE-MIT",
+   "url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/LICENSE-MIT",
+   "sha256": "2daf68cb21cba8ec3b9e76138fa1ae5ff3707823dc6a89ff3df321d7a5213df0"
+  },
+  {
+   "file": "LICENSES/Apache-2.0--ironcalc.txt",
+   "repo": "ironcalc/IronCalc",
+   "commit": "c88f07f0c776ad42bc4cfd68dfc65f68195908f0",
+   "path": "LICENSE-Apache-2.0",
+   "url": "https://github.com/ironcalc/IronCalc/blob/c88f07f0c776ad42bc4cfd68dfc65f68195908f0/LICENSE-Apache-2.0",
+   "sha256": "508d09859d3ef9a73985e8862c9e617ae9020451546e83d86830e5b1c42ad38f"
+  },
+  {
+   "file": "LICENSES/MIT--phpspreadsheet.txt",
+   "repo": "PHPOffice/PhpSpreadsheet",
+   "commit": "242961d07f7cd5dca40de343315d2136967dac20",
+   "path": "LICENSE",
+   "url": "https://github.com/PHPOffice/PhpSpreadsheet/blob/242961d07f7cd5dca40de343315d2136967dac20/LICENSE",
+   "sha256": "1416c9cb9b9925bbbecbd2aaeb62864fa5544f5572e5e0e130304f532c38ac8e"
+  },
+  {
+   "file": "LICENSES/MIT--packt-hidden-treasures.txt",
+   "repo": "PacktPublishing/Exploring-Microsoft-Excels-Hidden-Treasures",
+   "commit": "14ed024e6c22ecb15021e581f882cf01e56024da",
+   "path": "LICENSE",
+   "url": "https://github.com/PacktPublishing/Exploring-Microsoft-Excels-Hidden-Treasures/blob/14ed024e6c22ecb15021e581f882cf01e56024da/LICENSE",
+   "sha256": "8387fd17a4c8f3946dcfd9cfe644a2ae6064cf26deea1476f09ab2535c0fb759"
+  },
+  {
+   "file": "LICENSES/CC-BY-4.0--office-scripts-docs.txt",
+   "repo": "OfficeDev/office-scripts-docs",
+   "commit": "d7c390453009f552851b89441a9f0d8f4fa31135",
+   "path": "LICENSE",
+   "url": "https://github.com/OfficeDev/office-scripts-docs/blob/d7c390453009f552851b89441a9f0d8f4fa31135/LICENSE",
+   "sha256": "842c308595f749b548e933b755151b7c0bafb1bbd676eda2e7fbd1a9e54ba551"
+  },
+  {
+   "file": "LICENSES/CC-BY-4.0--office-scripts-docs-ThirdPartyNotices.md",
+   "repo": "OfficeDev/office-scripts-docs",
+   "commit": "d7c390453009f552851b89441a9f0d8f4fa31135",
+   "path": "ThirdPartyNotices.md",
+   "url": "https://github.com/OfficeDev/office-scripts-docs/blob/d7c390453009f552851b89441a9f0d8f4fa31135/ThirdPartyNotices.md",
+   "sha256": "dd2a53262bfad067bab98b0c26934558c19d3512c9fc33bc189d1ed1e5f646ed"
+  },
+  {
+   "file": "LICENSES/PublicDomain-USGov--cbo-sanctions-penalty-model.md",
+   "repo": "US-CBO/sanctions-penalty-model",
+   "commit": "2ef0eef90986729d26de3f5be63d972126e80432",
+   "path": "LICENSE.md",
+   "url": "https://github.com/US-CBO/sanctions-penalty-model/blob/2ef0eef90986729d26de3f5be63d972126e80432/LICENSE.md",
+   "sha256": "534ff862a5ca4781de3bc31f99065552a86182ab6126c9b6db0ad72c5ef917ad"
+  },
+  {
+   "file": "LICENSES/PublicDomain-USGov--cbo-mpfs-payment-increase-model.md",
+   "repo": "US-CBO/MPFS-payment-increase-model",
+   "commit": "25d4fbdb8068cf7dbcdd2ac5eac40b3a08cffff7",
+   "path": "LICENSE.md",
+   "url": "https://github.com/US-CBO/MPFS-payment-increase-model/blob/25d4fbdb8068cf7dbcdd2ac5eac40b3a08cffff7/LICENSE.md",
+   "sha256": "6fd6202766cf4879a5f479aa66d2cd4ba2fe9df30ae448e40ed414c399514647"
+  },
+  {
+   "file": "LICENSES/PublicDomain-USGov--cbo-credit-subsidy-tool.md",
+   "repo": "US-CBO/credit-subsidy-tool",
+   "commit": "133d239e274419e4426b54d089e2a941becd788e",
+   "path": "LICENSE.md",
+   "url": "https://github.com/US-CBO/credit-subsidy-tool/blob/133d239e274419e4426b54d089e2a941becd788e/LICENSE.md",
+   "sha256": "baa22d12cced1a8b57c6ecaeb229b87c80d35ca7f275c26649a435264f3bcf25"
+  },
+  {
+   "file": "LICENSES/CC0-1.0--cloud-gov-cg-site.md",
+   "repo": "cloud-gov/cg-site",
+   "commit": "536b459f25dc541450f8b02675b32584196a05fd",
+   "path": "LICENSE.md",
+   "url": "https://github.com/cloud-gov/cg-site/blob/536b459f25dc541450f8b02675b32584196a05fd/LICENSE.md",
+   "sha256": "2b693b515e74bd1eb977b944a629ecfcedb6c2725ca64e36608b0d9c6abe41b4"
+  },
+  {
+   "file": "LICENSES/BSD-3-Clause--nrel-sam.txt",
+   "repo": "NREL/SAM",
+   "commit": "3cd4af6142cca586ec04d8f4e11c13be6d347b88",
+   "path": "LICENSE",
+   "url": "https://github.com/NREL/SAM/blob/3cd4af6142cca586ec04d8f4e11c13be6d347b88/LICENSE",
+   "sha256": "22b6f0585f60c136d6d3d196acf1cea2e69b9d84ac860125f9401960a7ef5a14"
+  },
+  {
+   "file": "LICENSES/Apache-2.0--eiagov.txt",
+   "repo": "EIAgov/EIAgov",
+   "commit": "92bc5b3a619ff0f262e0cf2b9b3915198e672f27",
+   "path": "LICENSE",
+   "url": "https://github.com/EIAgov/EIAgov/blob/92bc5b3a619ff0f262e0cf2b9b3915198e672f27/LICENSE",
+   "sha256": "bc8021ea241935b06ef3979502bd2a6829e1dffe6f5a9677109a88c3cc504c7e"
+  },
+  {
+   "file": "LICENSES/Apache-2.0--eiagov-README.md",
+   "repo": "EIAgov/EIAgov",
+   "commit": "92bc5b3a619ff0f262e0cf2b9b3915198e672f27",
+   "path": "README.md",
+   "url": "https://github.com/EIAgov/EIAgov/blob/92bc5b3a619ff0f262e0cf2b9b3915198e672f27/README.md",
+   "sha256": "4c76ee86f84eb2168e4eab71974e2884ff5db236624b8e90a241512846ff56f6"
+  },
+  {
+   "file": "LICENSES/MIT--decc-twenty-fifty.txt",
+   "repo": "decc/twenty-fifty",
+   "commit": "7fd820b58de919e3d0276260bb4bf70a98d8451e",
+   "path": "LICENCE",
+   "url": "https://github.com/decc/twenty-fifty/blob/7fd820b58de919e3d0276260bb4bf70a98d8451e/LICENCE",
+   "sha256": "49cd4307913d5c6b0b4a59462999ae20e253616f166989a77ec3d8eef76766c9"
+  },
+  {
+   "file": "LICENSES/MIT--calamine.txt",
+   "repo": "tafia/calamine",
+   "commit": "0af05f4f6030351e3b8a999ea0810c8618368776",
+   "path": "LICENSE-MIT.md",
+   "url": "https://github.com/tafia/calamine/blob/0af05f4f6030351e3b8a999ea0810c8618368776/LICENSE-MIT.md",
+   "sha256": "f0cf9b1c62bbe3bd3a69f5f79c7158f513f612b4940a0a812d1db39d605318bc"
+  }
+ ]
+}
