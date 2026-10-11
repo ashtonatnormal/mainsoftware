@@ -5,7 +5,7 @@
 | **Date** | Sunday 11 Oct 2026, for an 11:00 SGT start |
 | **Covers** | `docs/PRD.md` v0.4 (work in progress, `e8e9f32`) and the clickable demo in `demo/` at the same commit |
 | **Replaces** | `docs/BUILD-KICKOFF.md` and `docs/REVIEW-360.md` (both merged into this document) |
-| **Rule for the build** | **Core first, AI second.** Build the whole suite without any model calls, AI context or assistants, and leave seams so the AI layer plugs in later without rework. |
+| **Rule for the build** | **Core first, AI second (D41).** Build the whole suite without any model calls, AI context or assistants, and leave seams so the AI layer plugs in later without rework. Launch org-wide and sunset WhatsApp for work on the core, before any AI (D42). |
 
 ## Contents
 
@@ -25,13 +25,13 @@
 ### Summary
 
 1. **Today starts C0 exactly as planned.** The five day-1 prompts in Part 1E.4 (repo and CI → local stack → tenant, principals and audit schema → access core and rule suite → sign-in) are the first five steps of C0.
-2. **Build order: C0 → C1 → C2 → C3 → C4 → C6 → C5 → A0 → A1 → A2 → A3 → A4 → A5 → A6.** The seven C-stages build the whole suite with no model calls. C6 is the core launch, where the org can sunset WhatsApp for work. C5 adds Sheets and Slides. The six A-stages then add transcription, the Org Brain, built-in AI, the assistant and agents, ending in the full v1 launch.
+2. **Build order: C0 → C1 → C2 → C3 → C4 → C6 → C5 → A0 → A1 → A2 → A3 → A4 → A5 → A6.** The seven C-stages build the whole suite with no model calls. C6 is the core launch, where the org sunsets WhatsApp for work (D42). C5 adds Sheets and Slides. The six A-stages then add transcription, the Org Brain, built-in AI, the assistant and agents, ending in the full v1 launch.
 3. **No AI in the core, enforced from the first commit.** C0.1 adds a CI guard that fails the build on any model SDK, speech-recognition or ML package, and the egress rules leave no route to a model provider. What counts as AI is defined below.
 4. **Space for AI is built in, not bolted on.** The core builds 57 seams (Part 1D), among them an outbox event with an ACL snapshot on every write, principals that can be agents or Hearth itself, nullable transcript and notes slots with a status, AI flags that exist and are off, and recordings stored so A1 can transcribe them later.
 5. **Every PRD row has a stage.** Of the 299 rows, 164 are pure core, 50 are core with a seam (the non-AI part ships in the core, the AI part later), 81 are AI and 4 are retired. Part 2 lists each one.
 6. **Rough size for one founder:** the core takes about 49–65 weeks (the core launch comes after about 39–51 weeks, because C5 follows it), and the AI layer about 33–42 weeks more. A second maintainer is recommended before the shared sync server goes live in C4.
 7. **Paperwork changes too.** The core needs the SMS sender ID, AWS, domain, DPO contact, LiveKit and PDPA items. The OpenAI and Bedrock paperwork no longer gates any pilot (Part 1E.2).
-8. **Decisions for you are in Part 1D (21 of them).** The first is to record "core first, AI second" as decision D41 in the PRD before the first commit.
+8. **Two decisions are made and recorded in the PRD:** core first, AI second (D41), and the org-wide launch and WhatsApp-for-work sunset on the non-AI suite, before any AI (D42). The PRD's §11 now shows this stage plan with its two launches. The other 19 decisions are in Part 1D; the next one that matters is whether Sheets and Slides join the core launch (decision 3, PRD Q21).
 
 ### Sequencing rules
 
@@ -738,8 +738,8 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 
 | # | Question | Recommendation | Needed by |
 |---|---|---|---|
-| 1 | Record 'core first, AI second' as a decision? | Yes, as D41 (D40 stays reserved for version history, PRD-42): the full non-AI suite comes before any model call; 'AI' includes VAD, embeddings and ML noise cancellation; the seams are kept. Add the CLAUDE.md rules and CI import ban in C0.1 so AI coding tools don't wire transcription into C1 or C2. | Today, before the C0.1 commit |
-| 2 | Launch org-wide and set the WhatsApp sunset on the non-AI suite, before AI? | Yes: a core launch after C6 and a full v1 launch after A6. Earlier sunset, no AI provider or zero-leak gate on the critical path, and AI later lands on months of real content. Accept: no transcripts or notes at launch, two notice re-acks, no transcripts for deaf and hard-of-hearing staff until A1 (record with HR), and recordings that expire before A1 stay untranscribed. | Direction in C0; confirm by end of C3 |
+| 1 | Record 'core first, AI second' as a decision? | **Decided 11 Oct: D41 in the PRD.** Yes, as D41 (D40 stays reserved for version history, PRD-42): the full non-AI suite comes before any model call; 'AI' includes VAD, embeddings and ML noise cancellation; the seams are kept. Add the CLAUDE.md rules and CI import ban in C0.1 so AI coding tools don't wire transcription into C1 or C2. | Today, before the C0.1 commit |
+| 2 | Launch org-wide and set the WhatsApp sunset on the non-AI suite, before AI? | **Decided 11 Oct: D42 in the PRD.** Yes: a core launch after C6 and a full v1 launch after A6. Earlier sunset, no AI provider or zero-leak gate on the critical path, and AI later lands on months of real content. Accept: no transcripts or notes at launch, two notice re-acks, no transcripts for deaf and hard-of-hearing staff until A1 (record with HR), and recordings that expire before A1 stay untranscribed. | Direction in C0; confirm by end of C3 |
 | 3 | Do Sheets and Slides (C5) gate the core launch? | No. Run C6 straight after C4, then C5 with its own hardening delta, then A0, so the full non-AI system still precedes AI. If yes, run C5 before C6 and cut it to about 25 P0 rows with SLIDE-16 to SLIDE-19 as P1. | End of C3 |
 | 4 | Record every session in C2 before transcription exists? | Record scheduled meetings and calls from C2; record drop-ins too if the DPO's LIA supports playback-only value (timeline, bookmarks, cards, viewed-by, restricted rooms, push-to-talk). Otherwise set REC-03 to 'scheduled meetings and calls only' until A1; no rework either way. | Before the C2 pilot |
 | 5 | What do core-stage notices say about AI? | Only active purposes, plus one plain sentence that transcription and AI features are not in use and start only after a new notice is acknowledged. The join notice says 'This session is recorded'. | C1 pilot |

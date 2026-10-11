@@ -50,6 +50,8 @@ The first customer is our own organization (250–1,000 people, a mix of desk an
 
 **v1 ships:** a phone-friendly, installable web app containing chat, voice rooms and meetings (with universal recording, transcription, and notes), the personal assistant, calendar, tasks, docs and wiki, sheets and slides (D39), a Drive that holds them alongside uploaded files (D38), a first set of specialist agents, and an admin console.
 
+**Two launches** (D41, D42): first a **core launch** of the whole suite without any AI, which moves the org off WhatsApp for work; then the **full v1 launch**, which adds transcription, meeting notes, the Org Brain, the personal assistant and specialist agents on top (§11).
+
 ## 2. Background and problem
 
 ### 2.1 Today
@@ -842,7 +844,7 @@ Maximum financial penalties are 10% of annual Singapore turnover (for organizati
 
 ## 10. Success metrics
 
-Targets are proposals for the first 90 days after org-wide launch.
+Targets are proposals for the first 90 days after launch: adoption and suite metrics from the core launch, and meetings, assistant, agent and trust metrics from the full v1 launch (D42).
 
 | Area | Metric | Target |
 |---|---|---|
@@ -864,22 +866,32 @@ Targets are proposals for the first 90 days after org-wide launch.
 | | Meetings scheduled in Hearth Calendar | ≥ 80% |
 | | New spreadsheets and decks made in Hearth (Hearth sheets and decks created, as a share of those plus XLSX and PPTX uploads; from ADM-11) | ≥ 60% (depends on Q18) |
 
-**Launch gate** (separate from these 90-day targets): no open leak from the access-rule test suite (M3), the AI red-team (M6), or pilot reports (M3–M5b). After launch, a confirmed leak triggers the kill switch (ADM-10) for the affected feature until it is fixed.
+**Launch gates** (separate from these 90-day targets). *Core launch* (after C6, D42): no open leak from the non-AI cases of the access-rule test suite, a clean penetration test, a passed restore drill and scale tests, the DPO consoles live, and a WhatsApp-for-work sunset date set (Q12). *Full v1 launch* (after A6): no open leak from the access-rule test suite including its AI cases (A2), the AI red-team (A6), or pilot reports (A1–A5). After the full v1 launch, a confirmed AI leak triggers the kill switch (ADM-10) for the affected feature until it is fixed.
 
 ## 11. Release plan
 
-No fixed date (D23). The work is sequenced so that each milestone gives a real pilot group something to use. The solo builder with AI coding tools (D24) completes one milestone at a time. Pilot groups grow at each milestone.
+No fixed date (D23). The solo builder with AI coding tools (D24) completes one stage at a time, and pilot groups grow at each stage. The build is sequenced **core first, AI second** (D41): stages C0–C6 build the whole suite without any model call and leave seams for the AI layer; stages A0–A6 then add it. Hearth launches twice (D42): the **core launch** after C6, when the org moves off WhatsApp for work on the non-AI suite, and the **full v1 launch** after A6. The detailed plan, with ordered steps, exit criteria and every requirement placed in a stage, is `docs/BUILD-PLAN.md`.
 
-| Milestone | Contents | Pilot |
+| Stage | Contents | Pilot |
 |---|---|---|
-| **M0 — Foundations** | Org/tenant data model, phone sign-in + PIN, roles (incl. DPO), teams, permission model, audit log (incl. AI retrievals and provider sends, ADM-06), admin console shell, privacy notice and acknowledgment (PDPA-01 – PDPA-03, PDPA-13), transfer register (PDPA-10) with agreements for the cloud host and SMS provider where they process data outside Singapore, DPO request intake (PDPA-04, PDPA-13) handled manually until the consoles ship, design system, installable web app shell, push notifications, first-run flow (ACC-14) | Builder only |
-| **M1 — Chat** | CHAT P0s except CHAT-16 (M2) and CHAT-17/18 (M6); voice messages with transcripts; a minimal file store for chat attachments; keyword search; notifications. **Before the pilot:** OpenAI set up per B.5 (agreement signed and recorded in PDPA-10, training off, zero retention applied for) and the no-training checks (PDPA-16). AI spend tracking and alerts (ADM-05) ship here, since transcription spend starts. | One team (10–20 people) moves its WhatsApp group over |
-| **M2 — Rooms and meetings** | ROOM and REC P0s except REC-14 and posting to scheduled-meeting threads (both M4): drop-in rooms, calls, universal recording, transcripts, notes, restricted rooms, "viewed by" lists; retention engine with holds (PDPA-09, ADM-08); corrections (PDPA-07); privileged access (Rule 9, ADM-12). AI kill switch for all AI and per feature (ADM-10). **Before the pilot:** agreement with the AI model provider (PDPA-10), since meeting notes start here — or before M1 if quick replies (CHAT-08) are AI-generated. | Same team plus one more |
-| **M3 — Org Brain and assistant** | BRAIN P0s, SRCH-03 Ask, PA P0s (Today, actionables, catch-up, drafts, nudges, memory), AI conversation retention (PDPA-15), access-rule test suite | 3–5 teams (~100 people) |
-| **M4 — Calendar and tasks** | CAL and TASK P0s, scheduled meetings with their own rooms, meeting prep briefs, suggested tasks from meetings | Same |
-| **M5 — Docs, wiki, files** | DOC and FILE P0s: co-editing, permissions, version history, wiki spaces, drive | Same, plus HR and IT (to seed policy content for agents) |
-| **M5b — Sheets and Slides** | The Sheets spike first (B.7), then SLIDE and SHEET P0s, reusing M5's sync server, sharing, comments, version history, and Drive: decks, present mode, and presenting to a room with slides kept in the session record (SLIDE-16 – SLIDE-19, which also build on M2's rooms and recorder); the grid, formulas, formatting, XLSX and CSV import and export, and the AI rules for sheets (SHEET-37, SHEET-38, SHEET-44) | Same, plus finance and ops (e.g. OT rosters, budgets, forecasts) |
-| **M6 — Agents and hardening** | AGT and STU P0s, CHAT-17/18, the launch agent set, compliance (export, access-request console PDPA-05/05a, breach scoping PDPA-11a), people insights with their safeguards (ADM-14, PDPA-18), pen test, AI red-team, scale tests | **v1 org-wide launch**; set a date to stop using WhatsApp for work |
+| **C0 — Foundations** | Org/tenant data model, phone sign-in with PIN and passkeys, roles (incl. DPO), teams, permission model with the access-rule test suite, audit log, event outbox, job queue and feature flags (AI flags present and off), realtime gateway, privacy notice and acknowledgment (PDPA-01 – PDPA-03, PDPA-13), transfer register (PDPA-10) with agreements for AWS, the SMS provider and the push services, DPO request intake handled manually, design system, installable web app shell, push notifications, first-run flow (ACC-14), admin console shell, AWS setup, backups and observability | Builder plus 2–3 testers |
+| **C1 — Chat** | CHAT P0s except a channel's attached voice room (CHAT-16, C2), AI quick replies (CHAT-08, A3) and agents in chat (CHAT-17/18, A5); voice messages as audio, without transcripts (A1); attachments in a minimal file store; keyword search; notifications; a rule-based Today. **Before the pilot:** the notice covers chat, Q3 and Q13 are answered for it, and the breach runbook and DPO procedures are written. | One team (10–20 people) moves its WhatsApp group over |
+| **C2 — Tasks, rooms and recording** | TASK P0s; ROOM and REC P0s without transcription or notes: drop-in rooms, calls, universal per-track recording, session pages with playback, restricted rooms, "viewed by" lists; retention engine with holds (PDPA-09, ADM-08); privileged access (Rule 9, ADM-12); audio redaction. **Before the pilot:** the LiveKit agreement (PDPA-10), and no session is recorded until retention, holds, privileged access and redaction are live. | Same team plus a call-heavy team |
+| **C3 — Calendar** | CAL P0s, scheduled meetings with their own rooms and event threads; the Sheets spike (B.7) | 3–5 teams (~100 people) |
+| **C4 — Docs, wiki, Drive** | DOC and FILE P0s: Drive, previews, co-editing, permissions, version history, wiki spaces, templates | Same, plus HR and IT |
+| **C6 — Core hardening and core launch** | Compliance consoles (export, access requests PDPA-05/05a, corrections PDPA-07, breach scoping PDPA-11a), scale tests, penetration test, restore drill, accessibility audit, rollout in waves; then people insights with their safeguards (ADM-14, PDPA-18) | **Core launch** org-wide; WhatsApp-for-work sunset (D42) |
+| **C5 — Sheets and Slides** | SHEET and SLIDE P0s without AI, reusing C4's sync server, sharing, comments, version history and Drive: the grid, formulas, formatting, XLSX and CSV import and export, decks, present mode, and presenting to a room with slides kept in the session record (SLIDE-16 – SLIDE-19) | Same, plus finance and ops |
+| **A0 — AI platform** | Model layer (D4), AI provider agreements (PDPA-10), AI purposes added to the notice and re-acknowledged, AI kill switch (ADM-10), spend tracking and caps (ADM-05), AI markers and feedback (AMB-06) | Founder, DPO and the central AI team |
+| **A1 — Speech-to-text** | Session and voice-message transcripts (REC-10, CHAT-07, B.5), org vocabulary (REC-19), corrections (REC-15), transcript redaction (REC-18), the quality gate (§9.5), back-fill of recordings still within retention (Q22) | The C1 and C2 pilot teams first |
+| **A2 — Org Brain and retrieval** | BRAIN P0s, the shared retrieval layer (B.4), the access-rule suite's AI cases | No user-facing feature; shadow indexing |
+| **A3 — Built-in AI** | Meeting notes and suggested tasks (REC-11 – REC-14, TASK-06), Ask (SRCH-03), catch-up (AMB-01), AI in Docs, Sheets and Slides (AMB-07), AI conversation retention (PDPA-15) | 3–5 teams, then wider |
+| **A4 — Personal assistant** | PA P0s: AI actionables, digest, drafts, prep briefs, nudges, memory | Pilot teams, then wider |
+| **A5 — Agents** | AGT and STU P0s, CHAT-17/18, the launch agent set | HR Policy and IT Helpdesk first |
+| **A6 — AI hardening** | AI red-team, the zero-leak gate, retrieval scale tests | **Full v1 launch** |
+
+By default C5 follows the core launch and precedes A0, so Sheets and Slides don't hold up the WhatsApp sunset and the whole non-AI suite still comes before any AI (Q21).
+
+**Older milestone names.** Rows elsewhere in this document still cite milestones M0 to M6. Read them as: M0 → C0; M1 → C1, with voice-message transcripts in A1; M2 → C2, with transcripts in A1 and notes in A3; M3 → A2 (Org Brain), A3 (Ask) and A4 (assistant), with the non-AI cases of the access-rule suite from C0; M4 → C3, with tasks in C2 and suggested tasks in A3; M5 → C4; M5b → C5, with the spike in C3; M6 → C6 (compliance consoles, people insights, hardening) and A5–A6 (agents, AI hardening). Agreements a row required before the M1 or M2 pilot for OpenAI or the AI model provider are now required before A0, and for OpenAI before A1.
 
 **Post-v1 roadmap (in rough order):** native mobile apps → P1 leftovers → agents speaking in rooms → agent computers and external connectors → guests and external consent → readiness for selling to other orgs (multi-org hosting, billing, self-serve onboarding, per-customer recording policies).
 
@@ -929,6 +941,9 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | Q18 | Do heavy Excel and PowerPoint users (e.g. finance models, customer-facing decks) keep Office after launch, with their files stored in the Drive, or is Hearth expected to replace Office for everyone? This sets the §10 target and how much import and export fidelity (Q16) matters. | M5b |
 | Q19 | Who can see version history? SHEET-26 and SLIDE-24 limit it to people who can edit, so old values removed on purpose never reach Viewers or the AI (Rule 1). Should DOC-04 do the same for docs (D19 says "viewable version history")? | M5 |
 | Q20 | Should a deck's owner be able to stop people presenting it to an audience that can't open it (SLIDE-18, "Present anyway")? Proposed: not in v1, because screen share already allows the same and the choice is logged. | M5b |
+| Q21 | Should Sheets and Slides (C5) be part of the core launch? Proposed: no; C5 follows the core launch and precedes A0 (§11), so it can't delay the WhatsApp sunset. If yes, C5 runs before C6 and its P0 scope is cut to about 25 rows. | End of C3 |
+| Q22 | When transcription starts (A1), may it transcribe sessions and voice messages recorded before it was on? Proposed: only audio still within retention, only for people who have acknowledged the AI notice, announced 14 days ahead. | C2 notice; final in A0 |
+| Q23 | Which formula engine do Sheets use (B.7)? Recorded as a decision once the spike ends. | Before C4's sync server |
 
 ---
 
@@ -940,11 +955,11 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | D2 | **Personal assistant + specialist agents** | The four-layer model in §7.1. |
 | D3 | **AI mirrors each user's access** | Rules 1–8 (§7.2). Revised by D11: "AI off" for sensitive rooms now means "not indexed," not "never processed by a model." |
 | D4 | **Cloud model APIs** | Behind a swappable model layer; no training on our data; zero data retention wherever granted (PDPA-10). |
-| D5 | **v1 leads with voice rooms + personal assistant** | Specialist agents ship as a small curated set. |
+| D5 | **v1 leads with voice rooms + personal assistant** | Specialist agents ship as a small curated set. Build order set by D41: voice rooms in C2, the assistant in A4. |
 | D6 | **Only a central AI team creates agents** | Agent Studio (§8.15) plus request intake. |
 | D7 | **Agents may be active in channels** | With guardrails: participation levels, suggest cards, caps, never in DMs/restricted rooms, never speak aloud unprompted. The assistant's proactivity is private nudges. |
 | D8 | **250–1,000 people** | Drives roles, admin, audit, retention. |
-| D9 | **All meetings recorded, transcribed, with notes** | Added mid-discovery. Refined by D27: notes for substantive sessions. |
+| D9 | **All meetings recorded, transcribed, with notes** | Added mid-discovery. Refined by D27: notes for substantive sessions. Sequenced by D41: recorded from C2, transcribed from A1, notes from A3. |
 | D10 | **Every session with 2+ people is recorded** | Includes casual drop-ins and DM calls. |
 | D11 | **No recording exceptions** | Sensitive conversations protected by access (restricted rooms), not by skipping recording. The only carve-out is legal: if the DPO records a purpose as consent-based and someone withdraws, PDPA-04a applies to them. |
 | D12 | **Audio/video kept short, transcripts/notes kept long** | 120-day default for session audio/video (D36). Transcripts and notes are kept for a finite period, proposed as 3 years, not indefinitely, because PDPA retention limits apply (PDPA-09, D32). |
@@ -952,7 +967,7 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | D14 | **Web only for v1** | Specified as phone-friendly and installable with push. |
 | D15 | **Internal only for v1** | No guests or shared channels. |
 | D16 | **Personal assistant is suggest-only** | Has all the user's context; suggests actionables and drafts; never edits or sends. |
-| D17 | **Coming from WhatsApp** | Fresh start; WhatsApp simplicity is the bar; voice messages with transcripts. |
+| D17 | **Coming from WhatsApp** | Fresh start; WhatsApp simplicity is the bar; voice messages with transcripts. Voice messages are audio-only until transcription arrives in A1 (D41). |
 | D18 | **v1 includes every module** | Each at a defined depth (P0 lists in §8). |
 | D19 | **Docs like Google Docs** | Restricted editing and viewable version history. |
 | D20 | **Phone-number sign-in** | Hardened with device PIN/passkey and admin-only roster. |
@@ -975,6 +990,8 @@ No fixed date (D23). The work is sequenced so that each milestone gives a real p
 | D37 | **Host on AWS Singapore (ap-southeast-1)** | Chosen after the cloud research in B.6. Recommended alongside it: LiveKit Cloud for rooms with Hearth's own recorder bot, and Claude through Amazon Bedrock in Singapore. |
 | D38 | **Docs works like a Drive; Sheets and Slides are in the demo** | Docs, sheets, slide decks, uploaded files and folders live in one Drive (FILE-01..05) with My Drive, Shared with me, team folders, Recent, Starred and Trash, and anyone can create a doc, sheet or deck from it. The demo includes working Sheets and Slides. D39 moves them into v1. |
 | D39 | **Sheets and Slides are in v1** | Owner's decision, 11 Oct 2026, answering Q15. Supersedes D22. Requirements, with proposed priorities, are in §8.7 (SHEET-01 – SHEET-49) and §8.8 (SLIDE-01 – SLIDE-39); DOC-12 and DOC-13 point there. Sequenced as M5b, after the Docs P0s (§11). Aimed at everyday team spreadsheets and decks, not full Excel or PowerPoint parity (§3.2). The formula engine and other building blocks stay recommendations until the spike (B.7). |
+| D41 | **Core first, AI second** | Owner's decision, 11 Oct 2026. The whole suite is built and piloted without any model call (stages C0–C6, §11) before the AI layer (A0–A6). "AI" means any model: LLMs, speech-to-text, embeddings, and local ML models such as speech detection or ML noise suppression. The core builds the seams the AI layer needs, so no core work is redone: an outbox event with an ACL snapshot on every write, agent and system principals, empty transcript and notes slots, AI flags present and off, and recordings stored for later transcription. Where a requirement or milestone puts AI into a core stage, the AI part moves to its A-stage (`docs/BUILD-PLAN.md`, Part 2). D40 is held for the version-history decision (Q19). |
+| D42 | **Core launch before AI** | Owner's decision, 11 Oct 2026. The org launches Hearth org-wide and sets the WhatsApp-for-work sunset date on the non-AI suite, after C6 (§11), before any AI arrives. The full v1 launch follows A6. G1 and G6 are measured from the core launch; G2, G3 and G5 from the full v1 launch. The sunset date (Q12) attaches to the core launch. |
 
 ## Appendix B — Build approach and suggested building blocks
 
