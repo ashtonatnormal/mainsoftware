@@ -1,0 +1,12 @@
+# CodeRabbit = the PR reviewer (bugs, regressions, security, missing tests).
+reviews:
+  request_changes_workflow: true      # can block a PR, not just comment
+  auto_review:
+    enabled: true
+  path_filters:
+    - "!**/*.generated.ts"
+    - "!db/migrations/**"             # migrations reviewed by a human, not nitpicked
+  pre_merge_checks:
+    docstrings:
+      mode: "off"                     # counts only /** */ docstrings; this repo explains code in // comments
+language: "en"

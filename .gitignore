@@ -1,0 +1,20 @@
+# deps
+node_modules/
+
+# build output
+dist/
+coverage/
+*.tsbuildinfo
+cdk.out/
+
+# env & secrets (every .env file except the template)
+.env*
+!.env.example
+*.pem
+
+# misc
+.DS_Store
+*.log
+
+# local output that holds people's data (exports, transcript comparisons, test-set clips): add
+# each path here before the code that writes it lands (CLAUDE.md, Security and privacy)

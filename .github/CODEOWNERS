@@ -1,0 +1,5 @@
+# Asks Ashton to review every change. The ruleset doesn't require code-owner review, so any one
+# approval (CodeRabbit's counts) passes.
+*                 @ashtonatnormal
+/db/              @ashtonatnormal
+/.github/         @ashtonatnormal

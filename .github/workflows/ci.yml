@@ -1,0 +1,55 @@
+name: ci
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+jobs:
+  # Until the npm-workspaces monorepo lands, the only package is demo/, so this runs there and
+  # has no lint step. With the workspace it becomes, from the root: npm ci, npm run check
+  # (typecheck, lint, test) and the build; update CLAUDE.md (Testing and CI) in the same PR.
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: demo
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"  # only the local screenshot script uses it
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: demo/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      # Builds a scratch database from every file in db/migrations/; fails on a bad or duplicate
+      # name, the first failing migration, or a table with RLS off.
+      - run: scripts/check-migrations.sh
+      # DB tests in db/tests/: who can read and write what, for every role the table concerns.
+      - run: scripts/test-db.sh
+      # Risky migrations also get an upgrade step here: build the database up to the migration
+      # before it, load production-shaped data, apply it, and check the data survived
+      # (scripts/check-<name>-upgrade.sh).
