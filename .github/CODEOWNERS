@@ -1,0 +1,6 @@
+# Ashton owns everything. PRs here are opened under his account, so GitHub requests no code-owner
+# review from him and his approval doesn't count; the 1 required approval comes from CodeRabbit.
+# This file enforces no human review: CLAUDE.md (Git) says which PRs wait for him.
+*                 @ashtonatnormal
+/db/              @ashtonatnormal
+/.github/         @ashtonatnormal

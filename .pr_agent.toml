@@ -1,0 +1,9 @@
+# Qodo = the second PR reviewer. Claude merges only once Qodo's review of the latest commit
+# leaves no open "Action required" finding (CLAUDE.md, Git).
+[github_app]
+# Review only: Qodo's describe rewrites the PR description, which holds the "Before merging" steps.
+pr_commands = ["/agentic_review"]
+# Review every push, merges of main included, so the latest commit always has a Qodo review.
+handle_push_trigger = true
+push_trigger_ignore_merge_commits = false
+push_commands = ["/agentic_review"]

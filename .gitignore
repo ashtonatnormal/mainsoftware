@@ -1,0 +1,29 @@
+# deps
+node_modules/
+
+# build and test output
+dist/
+coverage/
+*.tsbuildinfo
+cdk.out/
+test-results/
+playwright-report/
+blob-report/
+
+# env & secrets (every .env file except the template)
+.env*
+!.env.example
+*.pem
+
+# Claude Code personal settings (never committed)
+.claude/settings.local.json
+
+# misc
+.DS_Store
+*.log
+
+# local output that holds people's data (exports, transcript comparisons, test-set clips). This
+# repo is public and the Stop hook pushes every file that isn't ignored, so such output goes only
+# in local-data/ at the repo root (CLAUDE.md, Security and privacy). Unanchored on purpose:
+# workspace scripts run in their package folder, so a relative local-data/ is ignored there too.
+local-data/
