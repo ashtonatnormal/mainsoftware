@@ -1,14 +1,18 @@
 // The open doc's working copy. Typing changes local blocks at once and saves to
 // the store after a short pause ("Saving…" → "Saved to Drive"). Leaving a doc
-// you changed adds one "You edited" version with line diffs (DOC-04).
+// you changed adds one "You edited" version with line diffs (DOC-04), plus the
+// lines whose formatting alone changed.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Doc, DocBlock, DocVersion } from '../../types'
 import { newId, useStore } from '../../store'
 import { ME } from '../../data/people'
 import { clock, shortDay } from '../../time'
-import { diffLines, linesOf, openingBlocks, sameBlocks, titleLinked, toBlocks, toItems, undoVersion, UNTITLED, type Item } from './model'
+import { diffLines, formatChanges, linesOf, openingBlocks, sameBlocks, titleLinked, toBlocks, toItems, undoVersion, UNTITLED, type Item } from './model'
+import { getSel, isBlockEl, keyOfEl } from './dom'
+import { setPlainText } from './runs'
 
-export interface Focus { key: string; caret: number | 'end' }
+/** Where the caret goes: a block and an offset in its text, or a selection up to `end`. */
+export interface Focus { key: string; caret: number | 'end'; end?: number }
 interface Snapshot { items: Item[]; title: string; emoji: string; focus?: Focus }
 
 // What a doc looked like right after a version was made, so restores made in
@@ -42,7 +46,7 @@ export function useDocDraft(doc: Doc) {
   const focusReq = useRef<Focus | null>(null)
   const [, bump] = useState(0)
   const [fresh, setFresh] = useState<Set<string>>(() => new Set())
-  // Undo understands splits and merges, which a textarea's own undo can't.
+  // Undo understands splits, merges and formatting, which the browser's own undo can't.
   const undoStack = useRef<Snapshot[]>([])
   const redoStack = useRef<Snapshot[]>([])
   const lastTyping = useRef({ at: 0, key: '' })
@@ -83,8 +87,9 @@ export function useDocDraft(doc: Doc) {
   }
 
   const caretNow = (): Focus | undefined => {
-    const el = document.activeElement as HTMLTextAreaElement | null
-    return el?.id?.startsWith('blk-') ? { key: el.id.slice(4), caret: el.selectionStart } : undefined
+    const el = document.activeElement
+    const sel = isBlockEl(el) ? getSel(el) : null
+    return isBlockEl(el) && sel ? { key: keyOfEl(el), caret: sel.start, ...(sel.end !== sel.start ? { end: sel.end } : {}) } : undefined
   }
 
   /** Replace the blocks (and maybe the title), optionally moving the caret. Typing in one
@@ -116,9 +121,10 @@ export function useDocDraft(doc: Doc) {
     schedule()
   }
 
-  const setTitle = (t: string) => {
+  /** The title field changed; `caret` is where its caret is now, so formatting in the heading stays put. */
+  const setTitle = (t: string, caret?: number) => {
     const first = itemsRef.current[0]
-    if (linked.current && first?.block.type === 'h1') change([{ ...first, block: { ...first.block, text: t } }, ...itemsRef.current.slice(1)], { title: t, typing: 'title' })
+    if (linked.current && first?.block.type === 'h1') change([{ ...first, block: setPlainText(first.block, t, caret) }, ...itemsRef.current.slice(1)], { title: t, typing: 'title' })
     else change(itemsRef.current, { title: t, typing: 'title' })
   }
 
@@ -167,33 +173,34 @@ export function useDocDraft(doc: Doc) {
 
   const changed = () => !sameBlocks(toBlocks(itemsRef.current), baseline.current) || savedTitle() !== baseTitle.current
 
-  const makeVersion = (summary?: string): DocVersion => {
+  /** Text added and removed since the visit began, and lines whose formatting changed. */
+  const diffNow = () => {
     const blocks = toBlocks(itemsRef.current)
     const d = diffLines(linesOf(baseline.current), linesOf(blocks))
+    const formatted = formatChanges(baseline.current, blocks, d.added)
     if (savedTitle() !== baseTitle.current && !linked.current) {
       d.removed.unshift(`Title: ${baseTitle.current}`)
       d.added.unshift(`Title: ${savedTitle()}`)
     }
+    return { ...d, formatted }
+  }
+
+  const makeVersion = (summary?: string): DocVersion => {
+    const blocks = toBlocks(itemsRef.current)
+    const d = diffNow()
     const v: DocVersion = {
       id: newId('v'), authorId: ME, ts: now(),
       summary: summary ?? (aiUsed.current ? 'You edited · inserted AI-drafted text' : 'You edited'),
       ...(d.added.length ? { added: d.added } : {}),
       ...(d.removed.length ? { removed: d.removed } : {}),
+      ...(d.formatted.length ? { formatted: d.formatted } : {}),
     }
     snapshots.set(v.id, blocks)
     return v
   }
 
   /** The version this visit will add when you leave, for the history panel. */
-  const pendingVersion = (): { added: string[]; removed: string[] } | null => {
-    if (!changed()) return null
-    const d = diffLines(linesOf(baseline.current), linesOf(toBlocks(itemsRef.current)))
-    if (savedTitle() !== baseTitle.current && !linked.current) {
-      d.removed.unshift(`Title: ${baseTitle.current}`)
-      d.added.unshift(`Title: ${savedTitle()}`)
-    }
-    return d
-  }
+  const pendingVersion = (): { added: string[]; removed: string[]; formatted: string[] } | null => (changed() ? diffNow() : null)
 
   /** Restore an older version as a new one (DOC-04). Unsaved edits become their own version first. */
   const restore = (target: DocVersion) => {
@@ -205,9 +212,10 @@ export function useDocDraft(doc: Doc) {
     if (idx === -1) return
     const restored = snapshots.get(target.id) ?? versions.slice(0, idx).reduce(undoVersion, cur)
     const d = diffLines(linesOf(cur), linesOf(restored))
+    const formatted = formatChanges(cur, restored, d.added)
     const rv: DocVersion = {
       id: newId('v'), authorId: ME, ts: now(), summary: `Restored the version from ${shortDay(target.ts)}, ${clock(target.ts)}`,
-      ...(d.added.length ? { added: d.added } : {}), ...(d.removed.length ? { removed: d.removed } : {}),
+      ...(d.added.length ? { added: d.added } : {}), ...(d.removed.length ? { removed: d.removed } : {}), ...(formatted.length ? { formatted } : {}),
     }
     snapshots.set(rv.id, restored)
     const nextItems = toItems(restored)

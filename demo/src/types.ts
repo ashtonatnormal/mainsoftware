@@ -195,6 +195,7 @@ export interface DocVersion {
   summary: string
   added?: string[]
   removed?: string[]
+  formatted?: string[] // lines whose text stayed the same but whose bold/italic/underline/strikethrough changed
 }
 
 export interface DocComment {
@@ -207,9 +208,22 @@ export interface DocComment {
   resolved?: boolean
 }
 
+/** A stretch of text in one style: bold, italic, underline, strikethrough. */
+export interface DocRun {
+  text: string
+  b?: boolean
+  i?: boolean
+  u?: boolean
+  s?: boolean
+}
+
 export interface DocBlock {
   type: 'h1' | 'h2' | 'p' | 'li' | 'todo' | 'quote'
+  /** The plain text. Search, previews and the assistant read this. */
   text: string
+  /** Inline formatting, when there is any. Joined, the runs' text equals `text`;
+   *  runs that don't match it are ignored and the block reads as plain text. */
+  runs?: DocRun[]
   done?: boolean
 }
 
