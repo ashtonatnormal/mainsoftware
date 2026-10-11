@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Date** | Sunday 11 Oct 2026, for an 11:00 SGT start |
-| **Covers** | `docs/PRD.md` v0.4 (work in progress, `e8e9f32`) and the clickable demo in `demo/` at the same commit |
+| **Covers** | `docs/PRD.md` v0.4 (finished on `main`) with decisions D41–D44, and the clickable demo in `demo/`. Part 3's review was taken at `e8e9f32`, before the last demo and PRD commits on `main`. |
 | **Replaces** | `docs/BUILD-KICKOFF.md` and `docs/REVIEW-360.md` (both merged into this document) |
 | **Rule for the build** | **Core first, AI second (D41).** Build the whole suite without any model calls, AI context or assistants, and leave seams so the AI layer plugs in later without rework. Launch org-wide and sunset WhatsApp for work on the core, Sheets and Slides included, before any AI (D42, D43). |
 
@@ -28,7 +28,7 @@
 2. **Build order: C0 → C1 → C2 → C3 → C4 → C5 → C6 → A0 → A1 → A2 → A3 → A4 → A5 → A6.** The seven C-stages build the whole suite with no model calls. C5 adds Sheets and Slides, and C6 hardens the whole suite for the core launch, where the org sunsets WhatsApp for work (D42, D43). The six A-stages then add transcription, the Org Brain, built-in AI, the assistant and agents, ending in the full v1 launch.
 3. **No AI in the core, enforced from the first commit.** C0.1 adds a CI guard that fails the build on any model SDK, speech-recognition or ML package, and the egress rules leave no route to a model provider. What counts as AI is defined below.
 4. **Space for AI is built in, not bolted on.** The core builds 57 seams (Part 1D), among them an outbox event with an ACL snapshot on every write, principals that can be agents or Hearth itself, nullable transcript and notes slots with a status, AI flags that exist and are off, and recordings stored so A1 can transcribe them later.
-5. **Every PRD row has a stage.** Of the 299 rows, 164 are pure core, 50 are core with a seam (the non-AI part ships in the core, the AI part later), 81 are AI and 4 are retired. Part 2 lists each one.
+5. **Every PRD row has a stage.** Of the 301 rows, 165 are pure core, 50 are core with a seam (the non-AI part ships in the core, the AI part later), 81 are AI and 5 are retired or unused. Part 2 lists each one.
 6. **Rough size for one founder:** the core, ending in the core launch, takes about 49–65 weeks, and the AI layer about 33–42 weeks more. Because Sheets and Slides now gate the core launch (D43), C5 sits on the launch's critical path; the C5a/C5b split and the PRD's C5 cut line (§11) are the fallback if it overruns. A second maintainer is recommended before the shared sync server goes live in C4.
 7. **Paperwork changes too.** The core needs the SMS sender ID, AWS, domain, DPO contact, LiveKit and PDPA items. The OpenAI and Bedrock paperwork no longer gates any pilot (Part 1E.2).
 8. **Four decisions are made and recorded in the PRD:** core first, AI second (D41); the org-wide launch and WhatsApp-for-work sunset on the non-AI suite, before any AI (D42); Sheets and Slides are part of that core launch (D43); and transcription may later process recordings made before it existed, with safeguards (D44). The PRD's §11 shows this stage plan with its two launches. The other 17 decisions are in Part 1D; the formula engine for Sheets (PRD Q21) is settled by the spike in C3.
@@ -347,7 +347,7 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 
 | Step | What | Needs first | PRD rows |
 |---|---|---|---|
-| **C5.1** Calc engine and calc worker | IronCalc adapter (or whichever engine Q21 picks) pinned in browser and server; formulas and the 110 functions checked against an Excel-oracle corpus in CI; a calc service with no internet storing values by cell id (never browser values), ≤30 s fresh, server-seeded volatile functions, daily TODAY/NOW; an evaluate(formula, ranges) API for A3. | C3.7, C4.3, C0.6, INF-CALC | SHEET-07, SHEET-08 |
+| **C5.1** Calc engine and calc worker | IronCalc adapter (or whichever engine Q21 picks) pinned in browser and server; formulas and the SHEET-08 functions (109 in the finished v0.4) checked against an Excel-oracle corpus in CI; a calc service with no internet storing values by cell id (never browser values), ≤30 s fresh, server-seeded volatile functions, daily TODAY/NOW; an evaluate(formula, ranges) API for A3. | C3.7, C4.3, C0.6, INF-CALC | SHEET-07, SHEET-08 |
 | **C5.2** Sheets grid, formulas and formatting | Sheets as Drive items; a virtualised ARIA grid grown from the demo; keyboard, formula bar, paste special, fill, per-person undo; plain error explanations; formats, S$ and day-first dates; tabs, freeze, sort, personal filters, find and replace; size limits; P1 validation, conditional formatting, charts and named ranges; non-AI formula help (autocomplete, trace-precedents). | C5.1, C4.3, C0.8 | SHEET-01, SHEET-02, SHEET-03, SHEET-04, SHEET-05, SHEET-06, SHEET-09, SHEET-10, SHEET-11, SHEET-13, SHEET-14, SHEET-15, SHEET-16, SHEET-17, SHEET-18, SHEET-19, SHEET-20, SHEET-21, SHEET-22, SHEET-23, SHEET-33, SHEET-47 |
 | **C5.3** Sheets collaboration and phone | Co-editing on the shared sync server; cell comments outside Yjs; editor-only history with an origin field; one ACL per sheet with a reserved 'ask' capability; protected ranges (P1); range-reference links with access-aware previews; phone grid with a hidden Ask bottom sheet; a 'what changed' list from a change set, with a hidden summary slot. | C5.2, C4.5, C4.1 | SHEET-24, SHEET-25, SHEET-26, SHEET-27, SHEET-28, SHEET-29, SHEET-35, SHEET-36, SHEET-42 |
 | **C5.4** Slides model, renderer and editor | Decks as Drive items with a creation-action registry ('Draft from doc or meeting' off); positioned elements and one renderer; layouts, themes, rich text, images with alt text, editing tools, speaker notes, filmstrip; co-editing; history with reserved AI-assisted metadata; roles with a reserved deck.ai_help; P1 shapes, tables, org theme, templates and comments. | C4.3, C4.5, C1.5 | SLIDE-01, SLIDE-02, SLIDE-03, SLIDE-04, SLIDE-05, SLIDE-06, SLIDE-07, SLIDE-08, SLIDE-09, SLIDE-10, SLIDE-11, SLIDE-12, SLIDE-13, SLIDE-22, SLIDE-23, SLIDE-24, SLIDE-25 |
@@ -796,7 +796,7 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 - **Appendix B.5, §9.5, §9.6**: 'Before the M1 pilot' becomes 'before A0' (agreements) and 'before A1' (spike); the quality gate runs in A1 on a test set collected in C6; transcription and model spend start in A1 and A0; core running cost is roughly $2.5-2.7k a month at 1,000 users.
 - **Appendix B.6**: S3 lifecycle only changes storage class; the retention engine deletes after isHeld(), with tag-filtered expiry as a backstop only; recorder speech detection arrives in A1; Valkey replaces Redis wording.
 - **§12 Risks**: R11 tested in the C1.15 spike; R10 second maintainer before C4.3; add risks for the recording-to-transcription gap, back-fill scope, rotting seams and restricted reclassification.
-- **§13 Open questions**: Re-date Q3 (C1, C2, A0 parts), Q13 and Q9 (C1), Q8 and Q10 (C2), Q11, Q17, Q19 (C4), Q16 and Q18 (C3 spike), Q20 (C5), Q12 (C6), Q5 (A0), Q1 (A4), Q4 and Q7 (A5); added Q22 (Sheets and Slides at the core launch; answered by D43) and Q23 (back-fill of earlier recordings; answered by D44), and re-dated Q21 (the Sheets formula engine) to the C3.7 spike, before C4's sync server. Still to add: leavers' content in AI (A0).
+- **§13 Open questions**: Re-date Q3 (C1, C2, A0 parts), Q13 and Q9 (C1), Q8 and Q10 (C2), Q11, Q17, Q19 (C4), Q16 and Q18 (C3 spike), Q20 (C5), Q12 (C6), Q5 (A0), Q1 (A4), Q4 and Q7 (A5); added Q21 (the Sheets formula engine, decided by the C3.7 spike; it came with the finished v0.4), Q22 (Sheets and Slides at the core launch; answered by D43) and Q23 (back-fill of earlier recordings; answered by D44). Still to add: leavers' content in AI (A0).
 - **Principle 2 and §6**: AI surfaces are hidden, not shown as 'coming soon', until their A-stage.
 - **Part 1E.2 of this document (already done)**: Move OpenAI and Bedrock items to 'before A0'; add push-service PDPA-10 entries (C1 pilot) and the LiveKit DPA (C2 pilot).
 
@@ -1023,7 +1023,7 @@ Internal work suite (chat, voice rooms, meetings, calendar, tasks, Drive with do
 
 ## Part 2 — Every PRD requirement, by stage
 
-All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage that can build it. **Layer** says whether a row is pure core (no model calls), pure AI, or core with a seam: its non-AI part ships in the core stage, and the AI part named in the last column lands later. Rows the plan moved after the dependency and AI-boundary checks are marked ↻.
+All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage that can build it. **Layer** says whether a row is pure core (no model calls), pure AI, or core with a seam: its non-AI part ships in the core stage, and the AI part named in the last column lands later. Rows the plan moved after the dependency and AI-boundary checks are marked ↻.
 
 | Stage | Rows | P0 | Core | Core + seam | AI |
 |---|---|---|---|---|---|
@@ -1032,7 +1032,7 @@ All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | C2 Tasks, rooms, calls and recording (no transcription) | 35 | 32 | 25 | 10 | 0 |
 | C3 Calendar, meetings and task extras | 12 | 8 | 10 | 2 | 0 |
 | C4 Drive, Docs and wiki | 16 | 11 | 15 | 1 | 0 |
-| C5 Sheets and Slides, non-AI (part of the core launch, D43) | 71 | 53 | 62 | 9 | 0 |
+| C5 Sheets and Slides, non-AI (part of the core launch, D43) | 72 | 55 | 63 | 9 | 0 |
 | C6 Core hardening and core launch (WhatsApp sunset) | 11 | 4 | 6 | 5 | 0 |
 | A0 AI platform | 5 | 4 | 0 | 0 | 5 |
 | A1 Speech-to-text | 5 | 4 | 0 | 0 | 5 |
@@ -1041,7 +1041,7 @@ All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | A4 Personal assistant | 9 | 8 | 0 | 0 | 9 |
 | A5 Specialist agents and Agent Studio | 25 | 17 | 1 | 0 | 24 |
 | POST Post-v1 | 18 | 0 | 10 | 0 | 8 |
-| N/A Retired rows | 4 | 0 | 0 | 0 | 0 |
+| N/A Retired rows | 5 | 0 | 0 | 0 | 0 |
 
 ### C0 rows — Foundations and infrastructure (builder only)
 
@@ -1099,7 +1099,7 @@ All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | CHAT-14 | P1 | core | Forward a message with wider-audience warning | CHAT-05, INF-ACCESS, INF-AUDIT |  |
 | CHAT-15 | P0 | core | Channel browser to discover public channels | CHAT-01, ACC-07, INF-ACCESS |  |
 | FILE-08 | P0 | core | Per-conversation 'Shared files' view of chat attachments | CHAT-06, INF-FILES, INF-ACCESS |  |
-| NFR-04 | P0 | core | Weak-connection tolerance: offline message queue, adaptive voice bitrate | CHAT-05, INF-WS, INF-SHELL |  |
+| NFR-04 | P0 · P1 (open offline) | core | Weak-connection tolerance: offline message queue, adaptive voice bitrate | CHAT-05, INF-WS, INF-SHELL |  |
 | NOTIF-02 | P0 | core+seam | Default notification rules per event; channels badge-only | NOTIF-01, CHAT-02, CHAT-03, CHAT-05, INF-NOTIFY | Assistant nudges (PA-09, A4); 'meeting notes ready' (A3) and agent approval requests to owners (AGT-06, A5). (A4) |
 | NOTIF-03 | P0 | core | Per-conversation levels, do not disturb, quiet hours from working hours | NOTIF-01, NOTIF-02, ACC-08, INF-NOTIFY |  |
 | NOTIF-04 | P1 | core+seam | Smart batching of low-priority notifications into a digest | NOTIF-02, NOTIF-03, PA-05 | Grouping into the AI-written assistant digest, and any model-judged priority (A4, with PA-05's AI digest and PA-04's AI ranker). (A4) |
@@ -1197,7 +1197,7 @@ All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | SHEET-02 | P0 | core | Virtualised grid: selection, status bar, insert/resize/hide rows and columns | SHEET-01, INF-SYNC, INF-CALC |  |
 | SHEET-03 | P0 | core | Excel-style keyboard navigation and shortcuts | SHEET-02, SHEET-04 |  |
 | SHEET-04 | P0 | core | Formula bar, name box, typed-value parsing | SHEET-02, SHEET-14, SHEET-15, INF-CALC |  |
-| SHEET-05 | P0 | core | Copy, paste, paste special, fill handle and series | SHEET-02, SHEET-04, SHEET-07, SHEET-13 |  |
+| SHEET-05 | P0 · P1 (other paste sources, Paste special) | core | Copy, paste, paste special, fill handle and series | SHEET-02, SHEET-04, SHEET-07, SHEET-13 |  |
 | SHEET-06 | P0 | core | Per-person undo and redo during co-editing | SHEET-02, SHEET-25, INF-SYNC |  |
 | SHEET-07 | P0 | core | Formula language, cross-tab references, autocomplete, auto recalculation | SHEET-02, SHEET-04, SHEET-16, INF-CALC |  |
 | SHEET-08 | P0 | core | 110-function v1 set matching Excel, with test suite | SHEET-07, INF-CALC |  |
@@ -1217,7 +1217,7 @@ All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | SHEET-23 | P1 | core | Column, bar, line and pie charts | SHEET-02, INF-CALC |  |
 | SHEET-24 | P0 | core | Cell comments with mentions, replies, resolve, panel | DOC-05, NOTIF-02, SHEET-25, SHEET-27, INF-NOTIFY |  |
 | SHEET-25 | P0 | core | Real-time sheet co-editing with presence and server-side rejection | DOC-02, SHEET-01, SHEET-02, SHEET-27, INF-SYNC, INF-CALC |  |
-| SHEET-26 | P0 | core | Editor-only version history: compare, name, restore | DOC-04, SHEET-25, SHEET-27 |  |
+| SHEET-26 | P0 (browse, restore) · P1 (compare, names, and the rest) | core | Editor-only version history: compare, name, restore | DOC-04, SHEET-25, SHEET-27 |  |
 | SHEET-27 | P0 | core+seam | Per-sheet permissions; hiding is not access control | SHEET-01, DOC-03, FILE-03, INF-ACCESS | Viewers' 'Ask about this sheet' capability (SHEET-39). (A3) |
 | SHEET-28 | P1 | core | Protected tabs and ranges with named editors | SHEET-16, SHEET-25, SHEET-27 |  |
 | SHEET-29 | P0 | core+seam | Links to tabs, cells and ranges; access-aware chat preview | SHEET-02, SHEET-16, SHEET-27, CHAT-05, INF-ACCESS | AI citations (Ask SRCH-03, SHEET-39) opening the cited range, with hidden cells marked. (A3) |
@@ -1226,12 +1226,12 @@ All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | SHEET-32 | P0 (XLSX, CSV) · P1 (PDF) | core | Export to XLSX and CSV; PDF; audited | SHEET-24, SHEET-31, ADM-06, INF-CALC, INF-CONVERT, INF-AUDIT, INF-QUEUE |  |
 | SHEET-33 | P0 | core | Sheet, tab and cell size limits with warnings | SHEET-01, SHEET-16, INF-SYNC |  |
 | SHEET-34 | P0 | core | Open, recalculation, sort and convert performance targets | SHEET-02, SHEET-07, SHEET-08, SHEET-18, SHEET-19, SHEET-30, INF-CALC |  |
-| SHEET-35 | P0 | core+seam | Phone grid, touch selection, formula keys, bottom sheets | SHEET-02, SHEET-04, SHEET-16, SHEET-17, SHEET-19, SHEET-24, INF-SHELL | Ask bottom sheet on phones (SHEET-39). (A3) |
+| SHEET-35 | P0 · P1 (formatting, structure, sort, replace) | core+seam | Phone grid, touch selection, formula keys, bottom sheets | SHEET-02, SHEET-04, SHEET-16, SHEET-17, SHEET-19, SHEET-24, INF-SHELL | Ask bottom sheet on phones (SHEET-39). (A3) |
 | SHEET-36 | P1 | core | Phone row-as-card view and editor | SHEET-35 |  |
-| SHEET-42 | P0 (change list) · P1 (AI summary) | core+seam | 'What changed' list since last visit; AI summary later | SHEET-25, SHEET-26, SHEET-27 | Plain-English AI summary of the changes (AMB-01). (A3) |
+| SHEET-42 | P1 | core+seam | 'What changed' list since last visit; AI summary later | SHEET-25, SHEET-26, SHEET-27 | Plain-English AI summary of the changes (AMB-01). (A3) |
 | SHEET-44 | P0 | core+seam | Keyword search indexing of sheets; Org Brain later | FILE-06, SRCH-02, SHEET-14, SHEET-15, SHEET-24, SHEET-27, SHEET-29, INF-CALC | Org Brain indexing of sheets (BRAIN-01, BRAIN-02: embeddings, per-item ACL, AI availability within 2 minutes, BRAIN-09) and removal from the AI index within 5 minutes (Rule 7). (A2) |
 | SHEET-45 | P0 | core+seam | Sheet retention, legal hold, ownership transfer, cascading deletion | ACC-05, ADM-08, PDPA-09, FILE-02, SHEET-24, SHEET-26, SHEET-44, INF-RETENTION | Deletion propagation into the Org Brain and withdrawal of AI-derived content (Rule 7). (A2) |
-| SHEET-46 | P1 | core | Rule-based NRIC, salary and bank-data warning before wide sharing | SHEET-27, FILE-03, PDPA-17 |  |
+| SHEET-46 | P0 | core | Rule-based NRIC, salary and bank-data warning before wide sharing | SHEET-27, FILE-03, PDPA-17 |  |
 | SHEET-47 | P0 | core | Accessible grid: keyboard, screen reader, non-colour cues | SHEET-02, SHEET-03, INF-SHELL |  |
 | SHEET-48 | P1 | core | Starter sheet templates | DOC-08, SHEET-01, SHEET-07, SHEET-14, SHEET-21 |  |
 | SLIDE-01 | P0 | core+seam | Decks as Drive items: create, move, share, trash, restore | FILE-01, FILE-02, FILE-03, SLIDE-02, SLIDE-04, INF-SYNC, INF-ACCESS, INF-FLAGS | Creating a deck 'from a doc or a meeting' (AI drafting, SLIDE-31). (A3) |
@@ -1240,7 +1240,7 @@ All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | SLIDE-04 | P0 | core | Deck themes, contrast-checked, slide numbers and footer | SLIDE-02, SLIDE-03 |  |
 | SLIDE-05 | P1 | core | Admin-configured org theme with logo, palette and fonts | ADM-01, SLIDE-04, INF-SHELL, INF-AUDIT |  |
 | SLIDE-06 | P0 | core | Rich text on slides, shrink-to-fit, overflow warning, paste from Docs | SLIDE-02, DOC-01, DOC-02, INF-SYNC |  |
-| SLIDE-07 | P0 | core | Images from device/Drive/paste with crop, alt text, copy-in | SLIDE-02, SLIDE-08, FILE-01, FILE-03, INF-OBJSTORE, INF-FILES, INF-ACCESS, CHAT-14 |  |
+| SLIDE-07 | P0 · P1 (from the Drive, crop, replace) | core | Images from device/Drive/paste with crop, alt text, copy-in | SLIDE-02, SLIDE-08, FILE-01, FILE-03, INF-OBJSTORE, INF-FILES, INF-ACCESS, CHAT-14 |  |
 | SLIDE-08 | P0 | core | Select, move, resize, snap, nudge, copy/paste, own-change undo | SLIDE-02, INF-SYNC |  |
 | SLIDE-09 | P1 | core | Shapes plus arrange tools (order, align, group, rotate) | SLIDE-02, SLIDE-08, SLIDE-04 |  |
 | SLIDE-10 | P1 | core | Simple tables on slides with theme-styled header | SLIDE-02, SLIDE-04 |  |
@@ -1260,10 +1260,11 @@ All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | SLIDE-25 | P0 | core | Deck roles: Viewer, Commenter, Editor, Owner; restricted editing | DOC-03, FILE-03, INF-ACCESS, INF-SYNC |  |
 | SLIDE-26 | P0 (view, present, follow) · P1 (edit) | core | Phone layout: view, present, follow, present to room, light editing | SLIDE-12, SLIDE-14, SLIDE-15, SLIDE-16, SLIDE-17, SLIDE-07, SLIDE-11, INF-SHELL |  |
 | SLIDE-27 | P1 | core | Open an uploaded .pptx as a new deck with change report | FILE-04, SLIDE-02, SLIDE-04, SLIDE-10, SLIDE-11, SLIDE-12, INF-FILES, INF-QUEUE |  |
-| SLIDE-28 | P1 | core | Export deck to PDF and .pptx, logged | SLIDE-02, SLIDE-11, DOC-11, INF-CONVERT, INF-QUEUE, INF-AUDIT, ADM-06 |  |
+| SLIDE-28 | P0 (PDF) · P1 (PPTX) | core | Export deck to PDF and .pptx, logged | SLIDE-02, SLIDE-11, DOC-11, INF-CONVERT, INF-QUEUE, INF-AUDIT, ADM-06 |  |
 | SLIDE-29 | P1 (ranges) · P2 (charts) | core | Embed a sheet range (later charts) as an updatable copy | SHEET-01, SHEET-02, INF-CALC, SLIDE-02, SLIDE-10, INF-ACCESS, CHAT-14 |  |
 | SLIDE-34 | P0 | core+seam | Deck keyword search now; Org Brain indexing and citations later | SRCH-02, SRCH-04, FILE-06, INF-SEARCH, INF-OUTBOX, INF-ACCESS, SLIDE-07, SLIDE-10 | Org Brain indexing (embeddings) of decks and session slides, Ask and the assistant citing decks by slide number, and AI-availability freshness (BRAIN-09's 2-minute target). (A2) |
 | SLIDE-35 | P0 | core | Decks under retention, legal hold, offboarding, PDPA requests, export | PDPA-09, ADM-07, ADM-08, ACC-05, SLIDE-19, SLIDE-23, SLIDE-24, INF-RETENTION |  |
+| SLIDE-40 | P0 | core | Slide editor and present mode fully accessible (WCAG 2.2 AA): keyboard, reading order | SLIDE-02, SLIDE-14, SLIDE-15 |  |
 
 ### C6 rows — Core hardening and core launch (WhatsApp sunset)
 
@@ -1318,7 +1319,7 @@ All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 |---|---|---|---|---|---|
 | AMB-01 | P0 | ai | Catch me up on a channel, thread or doc | CHAT-03, CHAT-04, DOC-01, AMB-06, INF-MODEL, INF-RETRIEVAL, ADM-05, ADM-10 |  |
 | AMB-02 | P0 | ai | Meeting notes and action items (REC-11 - REC-14) | REC-10, REC-11, REC-12, REC-13, REC-14, TASK-06, INF-MODEL |  |
-| AMB-07 | — | ai | AI in Sheets and Slides (pointer to SHEET/SLIDE AI rows) | SHEET-37, SHEET-38, SLIDE-30, AMB-06, INF-CALC, INF-MODEL, INF-RETRIEVAL |  |
+| AMB-07 | See §8.7–8.8 | ai | AI in Sheets and Slides (pointer to SHEET/SLIDE AI rows) | SHEET-37, SHEET-38, SLIDE-30, AMB-06, INF-CALC, INF-MODEL, INF-RETRIEVAL |  |
 | BRAIN-05 | P1 | ai | Entities (people, teams, projects, decisions) linked to sources | BRAIN-01, BRAIN-02, BRAIN-08, INF-MODEL, INF-RETRIEVAL |  |
 | BRAIN-06 | P1 | ai | Decision log from meetings and threads, per team/project | BRAIN-05, BRAIN-08, REC-12, INF-RETRIEVAL |  |
 | BRAIN-07 | P1 | ai | Per-scope summaries: channel daily/weekly, team weekly | BRAIN-01, BRAIN-08, AMB-06, INF-MODEL, INF-QUEUE |  |
@@ -1412,6 +1413,7 @@ All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 
 | ID | Pri | Layer | What | Needs first | AI part deferred (to) |
 |---|---|---|---|---|---|
+| REC-09 | — | retired | Not used: the ID was never assigned |  |  |
 | AMB-04 | — | retired | Live captions (retired) |  |  |
 | DOC-12 | — | retired | Spreadsheets (retired; moved to Sheets §8.7) |  |  |
 | DOC-13 | — | retired | Slides (retired; moved to Slides §8.8) |  |  |
@@ -1421,18 +1423,20 @@ All 299 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 
 | ID | From | To | Why |
 |---|---|---|---|
-| ADM-12 | C2 | C1 | Real personal data, including DMs, flows from the C1 pilot; without a sealed Rule 9 path the founder would query prod directly (PRD-101). |
-| TASK-01 | C3 | C2 | Tasks core needs only chat, notifications and the scheduler; it gives the pilot new value during the rooms build and a non-AI home for meeting action items. |
-| TASK-02 | C3 | C2 | Part of the same cheap tasks core. |
-| TASK-03 | C3 | C2 | The list view is part of tasks core; the board is a P1 extra. |
-| TASK-04 | C3 | C2 | Task-from-message is the stand-in for meeting action items, so it must exist when recording starts. |
-| TASK-05 | C3 | C2 | Due and overdue notifications ship with tasks core and give Today its 'Due today' provider. |
+| ADM-12 | P0 | C1 | Real personal data, including DMs, flows from the C1 pilot; without a sealed Rule 9 path the founder would query prod directly (PRD-101). |
+| TASK-01 | P0 | C2 | Tasks core needs only chat, notifications and the scheduler; it gives the pilot new value during the rooms build and a non-AI home for meeting action items. |
+| TASK-02 | P0 | C2 | Part of the same cheap tasks core. |
+| TASK-03 | P0 (list) / P1 (board) | C2 | The list view is part of tasks core; the board is a P1 extra. |
+| TASK-04 | P0 | C2 | Task-from-message is the stand-in for meeting action items, so it must exist when recording starts. |
+| TASK-05 | P0 | C2 | Due and overdue notifications ship with tasks core and give Today its 'Due today' provider. |
 
 ## Part 3 — 360° review of the demo and the PRD
 
 The review behind this plan, done the morning of 11 Oct 2026. Six code reviewers took one demo area each. A runtime pass ran in a real browser: 354 captures at 320, 390 and 1440 px in light and dark, 37 interaction runs and an axe scan. A scripted plus manual audit covered `docs/PRD.md` v0.4 (work in progress). Every bug was traced through the code; items reproduced in a browser say "verified" or "confirmed", and anything uncertain says "unverified". Nothing in the demo was changed.
 
-Each finding has a stable ID (`RMS-01`, `PRD-35`, `X7`) so prompts and commits can cite it. **3C** places each finding the real build must act on into its stage; everything else is a demo or PRD fix.
+Each finding has a stable ID (`RMS-01`, `PRD-35`, `X7`) so prompts and commits can cite it.
+
+The review is a snapshot at `e8e9f32`. Later commits on `main` fix some findings: the finished PRD v0.4 (for example REC-09, version-history and comment visibility, the formula-engine question Q21), Slides undo and redo history (SLD-07), formulas that read other tabs (part of SHT-47) and inline formatting in Docs (part of DRV-53). Check a finding against the current code before acting on it. **3C** places each finding the real build must act on into its stage; everything else is a demo or PRD fix.
 
 ### Summary of the review
 

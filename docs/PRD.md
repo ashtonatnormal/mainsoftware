@@ -949,7 +949,7 @@ Sheets and Slides are part of the core launch (D43): C5 comes before C6, and C6 
 | Q18 | Do heavy Excel and PowerPoint users (e.g. finance models, customer-facing decks) keep Office after launch, with their files stored in the Drive, or is Hearth expected to replace Office for everyone? This sets the §10 target and how much import and export fidelity (Q16) matters. | M5b |
 | Q19 | Who can see version history? SHEET-26 and SLIDE-24 propose limiting it to people who can edit, so old values removed on purpose never reach Viewers or the AI (Rule 1). This matches Google Docs, where only editors see version history, which fits D19 ("Docs like Google Docs"). Should DOC-04 do the same for docs (D19 says "viewable version history")? The answer is recorded as a decision before the Docs and Sheets version-history work starts. | M5 |
 | Q20 | Who may present a deck to an audience that can't open it (SLIDE-18, "Present anyway")? Proposed: only people who can share the deck, because the slides shown are kept and searchable with the session for years (SLIDE-19), unlike screen-share video; anyone else can ask for access or share their screen. A deck owner can't block it in v1. | M5b |
-| Q21 | Formula engine and grid: IronCalc, HyperFormula, or Univer (B.7). Recorded as a decision after the B.7 spike. | Before C4's sync server |
+| Q21 | Formula engine and grid: IronCalc, HyperFormula, or Univer (B.7). Recorded as a decision after the B.7 spike. | C3 (the spike, before C4's sync server) |
 | Q22 | ~~Should Sheets and Slides (C5) be part of the core launch?~~ Resolved: yes (D43). | — |
 | Q23 | ~~May transcription process sessions and voice messages recorded before it was on?~~ Resolved: yes, with safeguards (D44). | — |
 
