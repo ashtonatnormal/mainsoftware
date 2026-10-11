@@ -103,9 +103,9 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 
 | Step | What | Needs first | PRD rows |
 |---|---|---|---|
-| **C0.1** Repo, CI and AI-free guard (day 1, 11:00-12:00) | Day-1 prompt 1 (Part 1E.4): npm-workspaces monorepo (T1), strict TypeScript, Biome, Vitest, `npm run check`; CI with demo build, gitleaks, audit, Renovate; CLAUDE.md with core-first rules (no model calls in C-stages, SDKs only in packages/model from A0, AI hooks are seams); TECH-SPEC.md (T1-T12); CI fails on any model or VAD SDK import. Done: CI green; a planted openai import fails. Day 1 covers only the Part 1E.4 prompt for this step; the extras listed here follow on days 2–4, before C0.6. The AI-free guard also bans client-side model code: the packages @livekit/krisp-noise-filter, @jitsi/rnnoise-wasm, tesseract.js, onnxruntime-*, @xenova/transformers, @huggingface/transformers, @mediapipe/* and any Whisper build, plus lint rules for SpeechRecognition, webkitSpeechRecognition, Summarizer, Translator, LanguageDetector, LanguageModel and the voiceIsolation constraint. No OCR anywhere in core. | INF-REPO, INF-ARCHLINT |  |
-| **C0.2** Local stack and server skeleton (12:00-12:30) | Day-1 prompt 2 (Part 1E.4): docker-compose with Postgres 17 (pgvector image, extension off until A2), Valkey, MinIO; Fastify with zod config, redacting pino logs, /health and /ready; one image with api, realtime and worker roles. Done: green /ready locally. Day 1 covers only the Part 1E.4 prompt for this step; the extras listed here follow on days 2–4, before C0.6. | C0.1, INF-DB-LOCAL, INF-CACHE-LOCAL, INF-OBJSTORE-LOCAL |  |
-| **C0.3** Tenant, principals and audit schema (13:30-15:00) | Day-1 prompt 3 (Part 1E.4): migrations (T3, expand/contract); orgs; principals of kind human \| agent \| assistant \| system with kind constraints; people, users, teams, departments, managers, eight roles incl. AI Admin (no AI permissions yet), team defaults, profiles, devices, sessions, notice acks; audit_events (T12) plus a data_access_events stream with on_behalf_of / via, subject index and reserved AI types; org_id + RLS; seed Tembusu. Done: RLS, constraint and audit-immutability tests. Day 1 covers only the Part 1E.4 prompt for this step; the extras listed here follow on days 2–4, before C0.6. The profile stores an IANA time zone and working hours (ACC-08 and the per-user part of CAL-06), which C0.14 quiet hours, C1.9 "replies owed" and C2.1 "due soon" all use. | C0.2, INF-DB-LOCAL, INF-MIGRATE, INF-AUDIT, INF-ACCESSEVENTS | ACC-03, ACC-07, ACC-08, ACC-10, ACC-11, ACC-12, ADM-06 |
+| **C0.1** Repo, CI and AI-free guard (day 1, 11:00-12:00) | Day-1 prompt 1 (Part 1E.4): npm-workspaces monorepo (T1), strict TypeScript, Biome, Vitest, `npm run check`; CI by extending the existing ci.yml, whose `check` job already builds the demo (gitleaks and audit go in new jobs that `check` lists in `needs:`, per CLAUDE.md); Renovate; core-first rules merged into the existing CLAUDE.md (no model calls in C-stages, SDKs only in packages/model from A0, AI hooks are seams); TECH-SPEC.md (T1-T12); CI fails on any model or VAD SDK import. Done: CI green; a planted openai import fails. Day 1 covers only the Part 1E.4 prompt for this step; the extras listed here follow on days 2–4, before C0.6. The AI-free guard also bans client-side model code: the packages @livekit/krisp-noise-filter, @jitsi/rnnoise-wasm, tesseract.js, onnxruntime-*, @xenova/transformers, @huggingface/transformers, @mediapipe/* and any Whisper build, plus lint rules for SpeechRecognition, webkitSpeechRecognition, Summarizer, Translator, LanguageDetector, LanguageModel and the voiceIsolation constraint. No OCR anywhere in core. | INF-REPO, INF-ARCHLINT |  |
+| **C0.2** Local stack and server skeleton (12:00-12:30) | Day-1 prompt 2 (Part 1E.4): docker-compose with Postgres 17 (pgvector image, extension off until A2; postgres:postgres on 127.0.0.1:5432, the DB scripts' defaults), Valkey, MinIO; Fastify with zod config, redacting pino logs, /health and /ready; one image with api, realtime and worker roles. Done: green /ready locally. Day 1 covers only the Part 1E.4 prompt for this step; the extras listed here follow on days 2–4, before C0.6. | C0.1, INF-DB-LOCAL, INF-CACHE-LOCAL, INF-OBJSTORE-LOCAL |  |
+| **C0.3** Tenant, principals and audit schema (13:30-15:00) | Day-1 prompt 3 (Part 1E.4): migrations (T3, expand/contract) in `db/migrations/`, run as `hearth_owner` with `hearth_app` as the runtime role and checked by `scripts/check-migrations.sh` (CLAUDE.md, Database); orgs; principals of kind human \| agent \| assistant \| system with kind constraints; people, users, teams, departments, managers, eight roles incl. AI Admin (no AI permissions yet), team defaults, profiles, devices, sessions, notice acks; audit_events (T12) plus a data_access_events stream with on_behalf_of / via, subject index and reserved AI types; org_id + RLS; seed Tembusu. Done: RLS, constraint and audit-immutability tests in `db/tests/` (`scripts/test-db.sh`). Day 1 covers only the Part 1E.4 prompt for this step; the extras listed here follow on days 2–4, before C0.6. The profile stores an IANA time zone and working hours (ACC-08 and the per-user part of CAL-06), which C0.14 quiet hours, C1.9 "replies owed" and C2.1 "due soon" all use. | C0.2, INF-DB-LOCAL, INF-MIGRATE, INF-AUDIT, INF-ACCESSEVENTS | ACC-03, ACC-07, ACC-08, ACC-10, ACC-11, ACC-12, ADM-06 |
 | **C0.4** Access core and rule suite (15:00-16:30) | Day-1 prompt 4 (Part 1E.4): packages/access with grants, inheritance, can() (union subject), listAccessible, filterReadable, sqlReadableBy, audienceOf per PRD-35, covers, audienceGap, indexClassOf; rules.test.ts naming every Rule 1-9 case, AI cases as tagged test.todo; fixture org kept for STU-02 and the leak suite. Done: suite lists every rule in CI. Day 1 covers only the Part 1E.4 prompt for this step; the extras listed here follow on days 2–4, before C0.6. | C0.3, INF-ACCESS |  |
 | **C0.5** Sign-in, devices, socket revocation (16:30-18:30) | Day-1 prompt 5 (Part 1E.4): SmsProvider (log-only dev; AWS SMS sandbox, SG/MY); OTP and argon2id PIN with PRD-53 limits on a Valkey limiter; identical reply for non-roster numbers; passkeys; new-device step-up; opaque sessions (T5), devices, admin reset; deactivation closes sessions and a minimal authenticated WebSocket; offboarding handler registry; auth audit. Done: day-1 plan step 5 test incl. socket closed in 60 s. Day 1 covers only the Part 1E.4 prompt for this step; the extras listed here follow on days 2–4, before C0.6. | C0.3, C0.4, INF-AUTH, INF-RATELIMIT, INF-SMS | ACC-01, ACC-02, ACC-03, ACC-04, ACC-05, ACC-06 |
 | **C0.6** Queue, scheduler, outbox, flags | pg-boss and a scheduler with an 'interrupted, awaiting review' state; transactional ids-only outbox (acl_epoch, index_class, 14 days) with checkpoints, ordering, replay, lag metric, typed catalogue with reserved events, retrofitted onto every write (contract test); server flags with cohorts, essential/optional class, ≤10 s propagation and job cancellation (PRD-65); ai.* flags registered off and locked. Done: exactly-once-in-effect; flag flip within 10 s. | C0.3, C0.5, INF-QUEUE, INF-SCHED, INF-OUTBOX, INF-FLAGS |  |
@@ -912,7 +912,7 @@ Core first changes which external items gate what. The core suite needs the AWS,
 
 ```
 mainsoftware/
-├─ CLAUDE.md                  # how to work in this repo (see §8)
+├─ CLAUDE.md                  # how to work in this repo (1E.6 adds to it)
 ├─ docs/
 │  ├─ PRD.md                  # requirements (IDs like CHAT-04)
 │  ├─ TECH-SPEC.md            # T1–T12 and later technical decisions
@@ -925,6 +925,8 @@ mainsoftware/
 │  ├─ shared/                 # domain types, zod schemas, requirement-ID helpers
 │  └─ access/                 # can(), audienceOf(), the retrieval filter; access-rules test suite
 ├─ infra/                     # AWS CDK app (ap-southeast-1)
+├─ db/                        # migrations/ (<NNNN>_<name>.sql) and tests/, per CLAUDE.md
+├─ scripts/                   # check-migrations.sh, test-db.sh
 └─ docker-compose.yml         # postgres+pgvector, valkey, minio
 ```
 
@@ -934,21 +936,21 @@ Time boxes assume an 11:00 start with AI coding tools. Each step ends green (typ
 
 #### Step 1 — Repo, tooling and CI (11:00–12:00)
 
-> Read docs/BUILD-PLAN.md Part 1E.1 and 1E.3. Convert this repo into an npm-workspaces monorepo with `apps/web`, `apps/server`, `packages/shared`, `packages/access` and `infra/` as empty, compiling TypeScript packages (strict, `noUncheckedIndexedAccess`). Leave `demo/` as its own package and don't change its source. Add Biome with the exhaustive-dependencies rule, Vitest, and a root `npm run check` that runs typecheck, lint and tests everywhere. Wire the demo's existing `demo/src/screens/sheets/formula.test.ts` into a `test` script. Add a GitHub Actions workflow that runs `npm ci` and `npm run check` and the demo's `npm run build` on every push. Write `CLAUDE.md` from BUILD-PLAN Part 1E.6.
+> Read docs/BUILD-PLAN.md Part 1E.1 and 1E.3. Convert this repo into an npm-workspaces monorepo with `apps/web`, `apps/server`, `packages/shared`, `packages/access` and `infra/` as empty, compiling TypeScript packages (strict, `noUncheckedIndexedAccess`). Leave `demo/` as its own package and don't change its source. Add Biome with the exhaustive-dependencies rule, Vitest, and a root `npm run check` that runs typecheck, lint and tests everywhere. `CLAUDE.md` and `.github/workflows/ci.yml` already exist. Merge 1E.6's Build order, Conventions and Commands sections into `CLAUDE.md` without removing any existing section. Extend ci.yml's `check` job rather than adding a workflow, and keep the job ids `check` and `migrations`: they are the required checks in `.github/rulesets/protect-main.json`.
 
 **Done when:** CI is green on the branch; `npm run check` passes locally.
 
 #### Step 2 — Local stack (12:00–12:30)
 
-> Add `docker-compose.yml` with Postgres 17 + pgvector, Valkey and MinIO, an `.env.example`, and a server `/health` route that checks all three. Document `npm run dev` in CLAUDE.md.
+> Add `docker-compose.yml` with Postgres 17 + pgvector (the `pgvector/pgvector:pg17` image CI uses, user and password `postgres`, published on 127.0.0.1:5432, which are the defaults `scripts/check-migrations.sh` and `scripts/test-db.sh` connect to), Valkey and MinIO; their variables in the existing `.env.example`, each with a comment; and a server `/health` route that checks all three. Document `npm run dev` in CLAUDE.md.
 
 **Done when:** `docker compose up` then `npm run dev` gives a green `/health`.
 
 #### Step 3 — Tenant and identity schema (13:30–15:00)
 
-> Implement the C0 data model for PRD ACC-03, ACC-07, ACC-08, ACC-10, ACC-11, ACC-12 and ADM-06: orgs, people (roster entries) and users, phone numbers, teams and team memberships (a person in several teams), departments, managers, roles (Owner, Admin, AI Admin, Leadership, DPO, Compliance Officer, Team Admin, Member; several per person), devices, sessions, notice versions and acknowledgments (with version, time and method), an append-only `audit_events` table (T12), a `principals` table whose kind is human, agent or system (agents and Hearth itself become authors later, with no migration), a transactional `outbox_events` table that every content write appends to with an ACL snapshot (the AI indexer subscribes to it in A2), and a `feature_flags` table with every AI flag present and off. Every table carries `org_id`; add row-level security keyed on a per-request org setting. Seed Tembusu Logistics from `demo/src/data/people.ts`. Migrations must run forwards from empty in CI.
+> Implement the C0 data model for PRD ACC-03, ACC-07, ACC-08, ACC-10, ACC-11, ACC-12 and ADM-06: orgs, people (roster entries) and users, phone numbers, teams and team memberships (a person in several teams), departments, managers, roles (Owner, Admin, AI Admin, Leadership, DPO, Compliance Officer, Team Admin, Member; several per person), devices, sessions, notice versions and acknowledgments (with version, time and method), an append-only `audit_events` table (T12), a `principals` table whose kind is human, agent or system (agents and Hearth itself become authors later, with no migration), a transactional `outbox_events` table that every content write appends to with an ACL snapshot (the AI indexer subscribes to it in A2), and a `feature_flags` table with every AI flag present and off. Every table carries `org_id`; add row-level security keyed on the org setting, as CLAUDE.md's Database section describes (`nullif(current_setting('app.org_id', true), '')::uuid`). Follow its migration rules: plain SQL in `db/migrations/<NNNN>_<name>.sql`, run as `hearth_owner`, with `hearth_app` as the runtime role and only the grants it needs. Seed Tembusu Logistics from `demo/src/data/people.ts`. `scripts/check-migrations.sh` must pass from an empty database.
 
-**Done when:** migrations and seed run in CI; a test proves a query without the org setting returns nothing.
+**Done when:** migrations and seed run in CI (the `migrations` job); a DB test in `db/tests/` (`scripts/test-db.sh`) proves a query as `hearth_app` without the org setting returns nothing.
 
 #### Step 4 — Access core and the access-rules suite (15:00–16:30)
 
@@ -989,7 +991,7 @@ Time boxes assume an 11:00 start with AI coding tools. Each step ends green (typ
 
 ### 1E.6 `CLAUDE.md` for AI coding sessions
 
-Paste this as the repo's `CLAUDE.md` in step 1 and grow it as you go.
+Merge these sections into the existing `CLAUDE.md` in step 1 and grow it as you go.
 
 ```markdown
 # Hearth
@@ -1014,7 +1016,7 @@ Internal work suite (chat, voice rooms, meetings, calendar, tasks, Drive with do
 - Phone-first: every flow works at 390 px (and 320 px) before desktop polish.
 
 ## Commands
-- npm run check: typecheck, lint, test (must pass before commit)
+- npm run check: typecheck, lint, test (must pass before opening a PR; the auto-push hook's checkpoint commits may be red)
 - npm run dev: local stack (docker compose up first)
 - demo/: npm run dev, npm run build, npm test, npm run shots
 ```
