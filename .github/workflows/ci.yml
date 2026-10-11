@@ -5,8 +5,13 @@ on:
     branches: [main]
 # The job ids `check` and `migrations` are the required checks in .github/rulesets/protect-main.json.
 # Don't rename them, give them a `name:`, add a matrix, or move them to another workflow: a PR then
-# waits forever for a check that never reports. Put new work in new jobs that these list in
-# `needs:`.
+# waits forever for a check that never reports. Add new work as steps in these jobs where you can.
+# A new job that must gate merging is either added to protect-main.json's required checks (and
+# the ruleset re-applied) or listed in a required job's `needs:`. Then that required job needs
+# `if: always()` and a first step
+#   - if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+#     run: exit 1
+# because a failing dependency skips it, and GitHub counts a skipped required check as passed.
 jobs:
   # Until the npm-workspaces monorepo lands, the only package is demo/, so this runs there and
   # has no lint step. With the workspace it becomes, from the root: npm ci, npm run check
@@ -49,9 +54,9 @@ jobs:
       PGPASSWORD: postgres
     steps:
       - uses: actions/checkout@v5
-      # Builds a scratch database as hearth_owner from every file in db/migrations/, in one
-      # transaction, then checks it against CLAUDE.md's Database rules (RLS, views, grants,
-      # functions, ownership, hearth_app's attributes).
+      # Builds a scratch database from every file in db/migrations/, in one transaction, from a
+      # session that can only act as hearth_owner, then checks it against CLAUDE.md's Database
+      # rules (RLS, views, grants, functions, ownership, hearth_app's attributes).
       - run: scripts/check-migrations.sh
       # DB tests in db/tests/: who can read and write what, for every role, including the ones
       # that must see nothing.

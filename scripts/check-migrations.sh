@@ -2,21 +2,27 @@
 # Build a scratch database from db/migrations/ the way production will, and check it. Fails if:
 #   - a migration file isn't named <NNNN>_<name>.sql (lower case), two share a number, a folder
 #     other than a migration tool's meta/ sits in db/migrations/ (nothing in it would be applied),
-#     or a file holds a psql meta-command (production's migrator sends plain SQL)
-#   - the migrations fail. They all run as hearth_owner (NOSUPERUSER; CLAUDE.md, Database), in
-#     name order, in one transaction on an empty database, the way Drizzle and Kysely apply a
-#     batch. A migration that ends that transaction itself (COMMIT, ROLLBACK) or changes role
-#     fails too.
+#     Drizzle's meta/_journal.json doesn't list exactly the .sql files, a file is over 120 KB, or
+#     a line starts with a psql meta-command
+#   - the migrations fail. They run in name order, in one transaction on an empty database, the
+#     way Drizzle and Kysely apply a batch, and each file goes to the server unparsed, so a psql
+#     meta-command anywhere is a syntax error, as it would be in production. The session logs in
+#     as a throwaway non-superuser role whose only power is to act as hearth_owner (NOSUPERUSER;
+#     CLAUDE.md, Database), so a migration can't fall back on superuser rights. A migration that
+#     ends the transaction itself (COMMIT, ROLLBACK) or leaves a different role in place fails.
 #   - the result breaks a Database rule in CLAUDE.md: a table with row level security off, a view
 #     without security_invoker, a materialized view or foreign table granted to anyone, a function
 #     PUBLIC can execute, a SECURITY DEFINER function without search_path = '', TRUNCATE, TRIGGER
 #     or REFERENCES held by anyone but the owner, an object not owned by hearth_owner, or a
-#     hearth_app role that could bypass RLS. Objects that belong to an extension are skipped.
+#     hearth_app role that could bypass RLS. Objects that belong to an extension, and the
+#     constructor functions Postgres makes for a range type, are skipped.
 #
 # The scratch database ($CHECK_DB, default hearth_check) is dropped and rebuilt on every run, so
 # the database you develop against is never touched; scripts/test-db.sh then runs against it.
 # Roles belong to the whole server, so this runs only on the local stack or in CI: it refuses an
-# RDS server. It creates hearth_owner when missing (in AWS, infra/ does that bootstrap).
+# RDS server. It creates hearth_owner when missing and the untrusted extensions listed below in
+# the scratch database (in AWS, infra/ does that bootstrap); migrations keep their
+# 'create extension if not exists', which is then a no-op.
 #
 # UP_TO=NNNN builds the database only up to the migration before NNNN, for an upgrade test:
 # scripts/check-<name>-upgrade.sh then loads production-shaped data and applies NNNN.
@@ -33,6 +39,10 @@ cd "$(git rev-parse --show-toplevel)"
 export PGHOST=${PGHOST:-127.0.0.1} PGPORT=${PGPORT:-5432} PGUSER=${PGUSER:-postgres} PGPASSWORD=${PGPASSWORD:-postgres}
 db=${CHECK_DB:-hearth_check}
 owner=hearth_owner
+migrator=hearth_migrate_check  # logs in for the migration run; may only act as $owner
+# Untrusted extensions hearth_owner can't create (add vector with the migration that first uses
+# it). infra/ creates the same ones as the RDS master user.
+superuser_extensions=()
 # The database gets dropped, so only accept a plain name that says it's a scratch one, short
 # enough that Postgres won't truncate it (names stop at 63 bytes) into some other database's name.
 [[ $db =~ ^[a-z_][a-z0-9_]{0,56}_check$ ]] ||
@@ -59,6 +69,10 @@ for path in db/migrations/*; do
     sed 's/^/  line /' <<<"$meta" >&2
     status=1
   fi
+  if [ "$(wc -c <"$path")" -gt 120000 ]; then
+    echo "$path is over 120 KB; split it (it goes to psql as one argument)" >&2
+    status=1
+  fi
   named+=("$path")
   # Every name starts with its own 4-digit number, so the glob's order is the migration order.
   if [ -z "$up_to" ] || [[ ${name%%_*} < $up_to ]]; then files+=("$path"); fi
@@ -69,6 +83,17 @@ if [ -n "$dupes" ]; then
   sed 's/^/  /' <<<"$dupes" >&2
   status=1
 fi
+journal=db/migrations/meta/_journal.json
+if [ -f "$journal" ]; then
+  # Drizzle applies only what its journal lists, so CI must not apply anything else.
+  listed=$(grep -o '"tag"[[:space:]]*:[[:space:]]*"[^"]*"' "$journal" | sed 's/.*"\([^"]*\)"$/\1.sql/' | LC_ALL=C sort)
+  present=$(for path in ${named[@]+"${named[@]}"}; do echo "${path##*/}"; done | LC_ALL=C sort)
+  if [ "$listed" != "$present" ]; then
+    echo "$journal doesn't list exactly the migration files (Drizzle would skip or miss some):" >&2
+    diff <(echo "$listed") <(echo "$present") | sed -n 's/^< /  in the journal only: /p; s/^> /  file only: /p' >&2
+    status=1
+  fi
+fi
 [ "$status" -eq 0 ] || exit "$status"
 
 if [ "$(sql -d postgres -Atc "select count(*) from pg_roles where rolname = 'rds_superuser'")" != 0 ]; then
@@ -78,11 +103,19 @@ fi
 [ "$(sql -d postgres -Atc "select rolsuper from pg_roles where rolname = current_user")" = t ] ||
   { echo "Connect as a superuser (PGUSER): this script creates roles and runs migrations as $owner." >&2; exit 2; }
 
+migrator_pw=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+trap 'sql -d postgres -c "alter role $migrator password null" >/dev/null 2>&1 || true' EXIT
 sql -d postgres -c "set client_min_messages = warning" \
   -c "do \$\$ begin create role $owner nologin createrole; exception when duplicate_object then null; end \$\$" \
   -c "alter role $owner nosuperuser nobypassrls createrole" \
+  -c "do \$\$ begin create role $migrator; exception when duplicate_object then null; end \$\$" \
+  -c "alter role $migrator login nosuperuser nobypassrls nocreaterole nocreatedb noinherit password '$migrator_pw'" \
+  -c "grant $owner to $migrator" \
   -c "drop database if exists $db with (force)" \
   -c "create database $db owner $owner template template0"
+for ext in ${superuser_extensions[@]+"${superuser_extensions[@]}"}; do
+  sql -d "$db" -c "create extension if not exists \"$ext\""
+done
 
 # Runs after the last migration, inside the same transaction.
 sentinel="do \$\$ begin
@@ -94,10 +127,11 @@ sentinel="do \$\$ begin
   end if;
 end \$\$"
 args=()
-for path in ${files[@]+"${files[@]}"}; do args+=(-f "$path"); done
-sql -d "$db" --single-transaction -c "set local hearth.migration_txn = 'on'" -c "set local role $owner" \
-  ${args[@]+"${args[@]}"} -c "$sentinel" ||
-  { echo "Migrations failed; see the error above." >&2; exit 1; }
+for path in ${files[@]+"${files[@]}"}; do args+=(-c "\\warn applying $path" -c "$(cat "$path")"); done
+PGUSER=$migrator PGPASSWORD=$migrator_pw \
+  sql -d "$db" --single-transaction -c "set local hearth.migration_txn = 'on'" -c "set local role $owner" \
+  ${args[@]+"${args[@]}"} -c "$sentinel" >/dev/null ||
+  { echo "Migrations failed in the last file named above." >&2; exit 1; }
 
 checks="
 with rel as (
@@ -115,7 +149,8 @@ with rel as (
   join pg_namespace n on n.oid = p.pronamespace
   where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema'
     and not exists (select 1 from pg_depend d
-                    where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
+                    where d.classid = 'pg_proc'::regclass and d.objid = p.oid
+                      and (d.deptype = 'e' or (d.deptype = 'i' and d.refclassid = 'pg_type'::regclass)))
 ), problems(problem, object) as (
   select 'Row level security is off (alter table <name> enable row level security)', name
   from rel where relkind in ('r', 'p') and not relrowsecurity

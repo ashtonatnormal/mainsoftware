@@ -24,5 +24,6 @@ blob-report/
 
 # local output that holds people's data (exports, transcript comparisons, test-set clips). This
 # repo is public and the Stop hook pushes every file that isn't ignored, so such output goes only
-# here (CLAUDE.md, Security and privacy).
-/local-data/
+# in local-data/ at the repo root (CLAUDE.md, Security and privacy). Unanchored on purpose:
+# workspace scripts run in their package folder, so a relative local-data/ is ignored there too.
+local-data/
