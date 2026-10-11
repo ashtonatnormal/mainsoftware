@@ -69,12 +69,15 @@ function changed(s: Stack) {
 
 const same = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b)
 const isNoop = (st: Pick<Step, 'before' | 'after'>) => (Object.keys(st.after) as (keyof DeckChange)[]).every(k => same(st.before[k], st.after[k]))
+/** A new slide list holding the same slides (picking the layout a slide already has) changes nothing. */
+const sameValue = (a: unknown, b: unknown) =>
+  a === b || (Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i] || same(x, b[i])))
 
 /** What a change would do to the deck: the old and new value of each part it touches. */
 export function diff(deck: Pick<Deck, 'title' | 'theme' | 'slides'>, next: DeckChange): { before: DeckChange; after: DeckChange } | null {
   const before: DeckChange = {}, after: DeckChange = {}
   for (const k of Object.keys(next) as (keyof DeckChange)[]) {
-    if (next[k] === undefined || next[k] === deck[k]) continue
+    if (next[k] === undefined || sameValue(next[k], deck[k])) continue
     ;(before as Record<string, unknown>)[k] = deck[k]
     ;(after as Record<string, unknown>)[k] = next[k]
   }

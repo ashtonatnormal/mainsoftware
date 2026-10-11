@@ -88,6 +88,9 @@ eq('decks don\'t share history', takeUndo('d10'), undefined)
 const deck = { title: 'T', theme: 'ember' as const, slides: [s1] }
 eq('diff of a no-op is null', diff(deck, { title: 'T', slides: deck.slides }), null)
 eq('diff keeps what changed', diff(deck, { title: 'U', theme: 'ember' }), { before: { title: 'T' }, after: { title: 'U' } })
+eq('a new list of the same slides is no change (picking the current layout)', diff(deck, { slides: deck.slides.map(x => x) }), null)
+eq('nor is a copy of a slide with the same content', diff(deck, { slides: deck.slides.map(x => ({ ...x })) }), null)
+eq('a changed slide in a new list is a change', diff(deck, { slides: deck.slides.map(x => ({ ...x, title: 'New' })) })?.after.slides?.[0].title, 'New')
 
 // fieldText and the caret.
 const two: Slide = { id: 'b', layout: 'two-column', title: 'X', left: { heading: 'Risks', bullets: ['A', 'B'] }, right: { bullets: ['C'] } }

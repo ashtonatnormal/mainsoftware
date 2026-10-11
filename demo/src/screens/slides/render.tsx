@@ -85,13 +85,17 @@ function Text({ field, value, edit, placeholder, className, style, list, as: Tag
   latest.current = value
   // The text this field last sent to the store while you typed.
   const sent = useRef<string | null>(null)
+  // Not only when the text changes: a layout change can swap the element (a <div>
+  // title becomes an <h2>), and restoring a deck from the trash turns a read-only
+  // field editable, both with the same text and an element that starts empty.
+  const editable = !!edit
   useLayoutEffect(() => {
     const el = ref.current
     if (!el || el.textContent === value) return
     if (document.activeElement === el && value === sent.current) return
     el.textContent = value
     sent.current = null
-  }, [value])
+  }, [value, Tag, editable])
   if (!edit) {
     if (!value) return null
     return <Tag className={className} style={style}>{value}</Tag>

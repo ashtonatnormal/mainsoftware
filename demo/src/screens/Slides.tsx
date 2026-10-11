@@ -286,6 +286,8 @@ function DeckEditor({ deck }: { deck: Deck }) {
     change({ title }, { label: 'rename deck', key: 'deck-title', undoTo: at, redoTo: at, join })
   }
   const endTyping = useCallback(() => seal(deck.id), [deck.id])
+  // Leaving the deck ends a typing run too (no blur fires when the editor goes away).
+  useEffect(() => endTyping, [endTyping])
   const present = () => {
     if (!slides.length) return
     document.documentElement.requestFullscreen?.().catch(() => {})
@@ -343,7 +345,8 @@ function DeckEditor({ deck }: { deck: Deck }) {
       if (i >= 0) setSel(i)
       setConfirmDelete(false)
       if (spot.field === 'notes') setNotesOpen(true)
-      setAnnounce(`${dir === 'undo' ? 'Undone' : 'Redone'}: ${step.label}`)
+      // The same words twice in a row wouldn't be read out again, so vary them invisibly.
+      setAnnounce(was => { const say = `${dir === 'undo' ? 'Undone' : 'Redone'}: ${step.label}`; return was === say ? `${say}\u00a0` : say })
     })
     // Text: the caret goes back into the field, where the change was. Not from a
     // keyboard press on the button itself (Enter again should undo again), and on
@@ -378,10 +381,11 @@ function DeckEditor({ deck }: { deck: Deck }) {
     const typingElsewhere = (t: EventTarget | null) => t instanceof HTMLElement && !ours(t) && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))
     const run = (dir: 'undo' | 'redo') => {
       const l = live.current
-      if (l.editable && !l.busy) l.travel(dir, 'key') // not in present mode or with a dialog open
+      // Not in present mode, or with a dialog or menu open (the deck would change behind it).
+      if (l.editable && !l.busy && !document.querySelector('[aria-modal="true"], [role="menu"]')) l.travel(dir, 'key')
     }
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.isComposing) return
       const k = e.key.toLowerCase()
       const dir = k === 'z' ? (e.shiftKey ? 'redo' : 'undo') : k === 'y' && !e.shiftKey ? 'redo' : null
       if (!dir || typingElsewhere(e.target)) return
@@ -420,10 +424,10 @@ function DeckEditor({ deck }: { deck: Deck }) {
   const fileInput = useRef<HTMLInputElement>(null)
   const imageOverlay = editable && slide?.layout === 'image' && (
     <div className="absolute" style={{ left: `${imageBox.left * 100}%`, top: `${imageBox.top * 100}%`, width: `${imageBox.width * 100}%`, height: `${imageBox.height * 100}%` }}>
-      <div className="absolute bottom-[5%] left-[4%] flex items-center gap-1.5">
+      <div className="absolute bottom-[5%] left-[4%] flex items-center gap-2">
         <button
           onClick={() => fileInput.current?.click()}
-          className="inline-flex h-8 items-center gap-1.5 rounded-full bg-surface/95 px-3 text-[13px] font-medium text-fg shadow-card transition hover:bg-surface"
+          className="relative inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-surface/95 px-3 text-[13px] font-medium whitespace-nowrap text-fg shadow-card transition after:absolute after:-inset-1 after:content-[''] hover:bg-surface"
         >
           <ImageUp size={15} aria-hidden />{slide.imageUrl ? 'Replace image' : 'Add image'}
         </button>
@@ -432,7 +436,7 @@ function DeckEditor({ deck }: { deck: Deck }) {
             onClick={() => setImage(undefined)}
             aria-label="Remove image"
             title="Remove image"
-            className="grid size-8 place-items-center rounded-full bg-surface/95 text-fg shadow-card transition hover:bg-surface hover:text-rec"
+            className="relative grid size-8 shrink-0 place-items-center rounded-full bg-surface/95 text-fg shadow-card transition after:absolute after:-inset-1 after:content-[''] hover:bg-surface hover:text-rec"
           >
             <ImageOff size={15} aria-hidden />
           </button>
