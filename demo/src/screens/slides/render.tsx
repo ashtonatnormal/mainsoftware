@@ -73,8 +73,9 @@ export interface SlideEditor {
 
 /**
  * A piece of slide text. Read-only it is a plain element; editable it is a
- * plaintext contentEditable that React leaves alone while it has focus, so the
- * caret never jumps as the store updates.
+ * plaintext contentEditable. While you type, the store only echoes back what the
+ * field sent, and React leaves the DOM alone so the caret never jumps. Any other
+ * change (undo, redo) shows straight away, even in the focused field.
  */
 function Text({ field, value, edit, placeholder, className, style, list, as: Tag = 'div', label }: {
   field: Field; value: string; edit?: SlideEditor; placeholder: string; className?: string; style?: CSSProperties; list?: boolean; as?: 'div' | 'li' | 'p' | 'h1' | 'h2'; label: string
@@ -82,9 +83,14 @@ function Text({ field, value, edit, placeholder, className, style, list, as: Tag
   const ref = useRef<HTMLElement | null>(null)
   const latest = useRef(value)
   latest.current = value
+  // The text this field last sent to the store while you typed.
+  const sent = useRef<string | null>(null)
   useLayoutEffect(() => {
     const el = ref.current
-    if (el && document.activeElement !== el && el.textContent !== value) el.textContent = value
+    if (!el || el.textContent === value) return
+    if (document.activeElement === el && value === sent.current) return
+    el.textContent = value
+    sent.current = null
   }, [value])
   if (!edit) {
     if (!value) return null
@@ -126,7 +132,8 @@ function Text({ field, value, edit, placeholder, className, style, list, as: Tag
         if (!el.textContent && el.innerHTML) el.innerHTML = '' // drop the stray <br>, so the placeholder shows
         const text = el.textContent ?? ''
         if (/[\r\n]/.test(text)) el.textContent = text.replace(/[\r\n]+/g, ' ')
-        edit.set(field, el.textContent ?? '')
+        sent.current = el.textContent ?? ''
+        edit.set(field, sent.current)
       }}
       onKeyDown={onKeyDown}
       // A list item can shift under a focused field (Backspace removes the one before
@@ -340,6 +347,32 @@ export function focusField(root: HTMLElement | null, field: Field, selectAll = f
   const range = document.createRange()
   range.selectNodeContents(el)
   if (!selectAll) range.collapse(false)
+  const sel = window.getSelection()
+  sel?.removeAllRanges()
+  sel?.addRange(range)
+}
+
+/** Focus a text field (a slide field, a textarea or an input) with the caret at `at` characters in. */
+export function placeCaret(el: HTMLElement, at: number | 'start' | 'end') {
+  el.focus()
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+    const n = at === 'start' ? 0 : at === 'end' ? el.value.length : Math.min(at, el.value.length)
+    el.setSelectionRange(n, n)
+    return
+  }
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  range.collapse(at === 'start')
+  if (typeof at === 'number') {
+    // The text can be split across several nodes after typing; walk them to the offset.
+    const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    let rest = at
+    for (let node = walk.nextNode(); node; node = walk.nextNode()) {
+      const len = node.textContent?.length ?? 0
+      if (rest <= len) { range.setStart(node, rest); range.collapse(true); break }
+      rest -= len
+    }
+  }
   const sel = window.getSelection()
   sel?.removeAllRanges()
   sel?.addRange(range)
