@@ -1,5 +1,11 @@
-import type { Actionable, AskAnswer, DigestItem, Doc, InsightRow, Memory, SuggestedTask, Task } from '../types'
+import type { Actionable, AskAnswer, DigestItem, Doc, DocRun, InsightRow, Memory, SuggestedTask, Task } from '../types'
 import { at, minutesAgo } from '../time'
+
+/** A block's text with some of it formatted: plain strings and styled runs, joined in order. */
+const styled = (...parts: (string | DocRun)[]) => {
+  const runs = parts.map(p => (typeof p === 'string' ? { text: p } : p))
+  return { text: runs.map(r => r.text).join(''), runs }
+}
 
 export const tasks: Task[] = [
   { id: 't_ot', title: 'Approve the Saturday overtime roster', assigneeIds: ['u_ashton'], due: 'Today 12:00 pm', dueSoon: true, status: 'todo', priority: 'high', team: 'Operations', source: { kind: 'meeting', label: 'Ops standup · Fri 9 Oct', route: { name: 'session', sessionId: 's_standup_fri' } } },
@@ -131,18 +137,18 @@ export const docs: Doc[] = [
     presence: ['u_priya', 'u_daniel'],
     blocks: [
       { type: 'h1', text: 'Q4 Launch Proposal' },
-      { type: 'p', text: 'We launch the Meridian Foods programme on 2 Nov with dedicated cold-room capacity at Woodlands DC and next-day delivery across the island.' },
+      { type: 'p', ...styled('We launch the Meridian Foods programme on ', { text: '2 Nov', b: true }, ' with dedicated cold-room capacity at Woodlands DC and next-day delivery across the island.') },
       { type: 'h2', text: 'Timeline (v3)' },
       { type: 'li', text: 'Week 1 (2–6 Nov): cold-room racking and staff training' },
-      { type: 'li', text: 'Week 2 (9–13 Nov): Meridian onboarding, first 300 pallets' },
+      { type: 'li', ...styled('Week 2 (9–13 Nov): Meridian onboarding, first ', { text: '300 pallets', b: true }) },
       { type: 'li', text: 'Week 3 onward: full volume, about 1,200 pallets a month' },
       { type: 'h2', text: 'What we need' },
       { type: 'todo', text: 'Movers vendor confirmed for the racking move', done: false },
       { type: 'todo', text: 'Price sheet with the new volume tier', done: false },
       { type: 'todo', text: 'Two extra forklift operators on the night shift', done: true },
       { type: 'h2', text: 'Risks' },
-      { type: 'p', text: 'Forklift capacity is the main risk. With one forklift out, picking slows by about 30%. We should line up a spare for the ramp-up.' },
-      { type: 'quote', text: 'Decision needed at the 12 Oct review: go / no-go for 2 Nov.' },
+      { type: 'p', ...styled('Forklift capacity is the main risk. With one forklift out, picking slows by about 30%. ', { text: 'We should line up a spare for the ramp-up.', i: true }) },
+      { type: 'quote', ...styled('Decision needed at the 12 Oct review: ', { text: 'go / no-go', b: true }, ' for 2 Nov.') },
     ],
     versions: [
       { id: 'v3', authorId: 'u_daniel', ts: at('2026-10-09T15:28'), summary: 'Timeline v3 and the forklift risk', added: ['Week 2 (9–13 Nov): Meridian onboarding, first 300 pallets', 'Forklift capacity is the main risk.'], removed: ['Week 2 (9–13 Nov): staff training continues'] },
