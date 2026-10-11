@@ -27,16 +27,18 @@ if [ "${#tests[@]}" -eq 0 ]; then
   exit 0
 fi
 
-# Runs after the test, inside its transaction: an error the test let through has aborted the
-# transaction, so this fails too.
-guard="do \$\$ begin if current_setting('hearth.test_txn', true) is distinct from 'on' then
+# The transaction's start time is recorded before the test and checked after it; SQL can't move
+# it, so a test that ends the transaction can't make this match again. An error the test let
+# through has aborted the transaction, so the check fails then too.
+mark="select set_config('hearth.test_txn', extract(epoch from transaction_timestamp())::text, true)"
+guard="do \$\$ begin if current_setting('hearth.test_txn', true) is distinct from extract(epoch from transaction_timestamp())::text then
   raise exception 'the test ended its own transaction (COMMIT, ROLLBACK or \\connect); its changes may have stayed in $db';
 end if; end \$\$"
 failed=0
 for path in "${tests[@]}"; do
   # -f keeps psql's file:line prefix on errors and lets \ir find files next to the test.
   if psql --no-psqlrc -w -v ON_ERROR_STOP=1 -q -d "$db" \
-       -c 'begin' -c "set local hearth.test_txn = 'on'" -f "$path" \
+       -c 'begin' -c "$mark" -f "$path" \
        -c '\set ON_ERROR_STOP 1' -c 'set constraints all immediate' -c "$guard" -c 'rollback' >/dev/null; then
     echo "ok    $path"
   else

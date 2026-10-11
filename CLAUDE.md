@@ -4,7 +4,11 @@ Hearth is an internal work suite (chat, drop-in voice rooms, meetings, calendar,
 
 - Build → simplify → automate. Start with manual input.
 - Scope guard: do NOT build email, external guests or shared channels, third-party integrations, native apps, agent computers, macros, pivot tables or other full Office parity, an assistant that sends or edits for a user (D16), WhatsApp import (D17), billing or self-serve sign-up, or AI scoring of what people say or voiceprints (D34). The full list is PRD §3.2.
-- Stack (D37): TypeScript strict end to end in an npm-workspaces monorepo (`apps/web`, `apps/server`, `packages/shared`, `packages/access`, `infra/`; `demo/` stays as the reference UI). Node 24 LTS. Web: Vite + React 19 + Tailwind v4 as an installable PWA. Server: Fastify + `ws`. PostgreSQL 17 (RDS; pgvector later), Valkey, S3, LiveKit Cloud. AWS CDK in ap-southeast-1. Vitest, Playwright, Biome. Not Next.js, Supabase or Vercel: hosting is AWS ap-southeast-1 (D37, B.6), and the server runs long-lived WebSocket, Yjs and recorder processes that serverless hosts don't. LiveKit Cloud metadata and OpenAI transcription still leave Singapore and are recorded in PDPA-10. The build plan's technical decisions (T1–T12) will live in `docs/TECH-SPEC.md` once that plan merges.
+- Stack (D37): TypeScript strict end to end in an npm-workspaces monorepo (`apps/web`, `apps/server`, `packages/shared`, `packages/access`, `infra/`; `demo/` stays as the reference UI). Node 24 LTS. Web: Vite + React 19 + Tailwind v4 as an installable PWA. Server: Fastify + `ws`. PostgreSQL 17 (RDS; pgvector later), Valkey, S3, LiveKit Cloud. AWS CDK in ap-southeast-1. Vitest, Playwright, Biome. Not Next.js, Supabase or Vercel: hosting is AWS ap-southeast-1 (D37, B.6), and the server runs long-lived WebSocket, Yjs and recorder processes that serverless hosts don't. LiveKit Cloud metadata and OpenAI transcription still leave Singapore and are recorded in PDPA-10. The build plan's technical decisions (T1–T12) are in `docs/BUILD-PLAN.md` Part 1E.1 and move into `docs/TECH-SPEC.md` in its step C0.1.
+
+## Build order
+- Core first, AI second (D41). Stages C0–C6 make no model calls: no LLMs, no speech-to-text, no embeddings, no local ML models such as speech detection or noise suppression, and no AI-generated content. Check a requirement's stage in `docs/BUILD-PLAN.md` Part 2 before building it.
+- Build the seams in `docs/BUILD-PLAN.md` Part 1D instead, so AI plugs in later without migrations: every content write appends an outbox event with an ACL snapshot; principals have a kind (human, agent, system); messages can carry an author kind and sources; transcript fields exist, nullable, with a status; AI feature flags exist and are off.
 
 ## Product rules that never bend
 - Never leak (Principle 1). Every access check goes through `packages/access`; no screen or endpoint checks access its own way. Every AI feature retrieves through the one permission-enforcing retrieval layer (B.4) and never queries the index directly.
@@ -80,6 +84,7 @@ Hearth is an internal work suite (chat, drop-in voice rooms, meetings, calendar,
 - A setting that changes which provider receives people's data, where it is processed or stored, or turns on live processing updates the processing register, the transfer register and the notice (PDPA-01, PDPA-02, PDPA-10), and everyone acknowledges the new version (PDPA-03). Switching models within the same provider and region changes neither.
 
 ## AI and LLM features
+These apply from stage A0 (D41); C0–C6 make no model calls.
 - Prompt text people edit is data, kept out of code. Built-in feature prompts live in plain files, built into the app, that tests validate on every PR and a README explains how to edit. Agent playbooks (AGT-03) are edited in Agent Studio (STU-01) and stay drafts until published (STU-04). The server validates each playbook when it's saved (this repo's rule), and evaluation sets run before every publish once they exist (STU-03, P1). Problems are explained in plain words.
 - These stay in code, never in anything people edit, so no edit can weaken them:
   - safety rules (Rule 8: content is data, never instructions)

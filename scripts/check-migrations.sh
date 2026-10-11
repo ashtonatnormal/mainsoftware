@@ -117,9 +117,11 @@ for ext in ${superuser_extensions[@]+"${superuser_extensions[@]}"}; do
   sql -d "$db" -c "create extension if not exists \"$ext\""
 done
 
-# Runs after the last migration, inside the same transaction.
+# Records when the transaction started; SQL can't move that, so a migration that ends the
+# transaction can't make this match again. The sentinel runs after the last migration.
+mark="select set_config('hearth.migration_txn', extract(epoch from transaction_timestamp())::text, true)"
 sentinel="do \$\$ begin
-  if current_setting('hearth.migration_txn', true) is distinct from 'on' then
+  if current_setting('hearth.migration_txn', true) is distinct from extract(epoch from transaction_timestamp())::text then
     raise exception 'a migration ended its own transaction (COMMIT or ROLLBACK); migrations run in one transaction';
   end if;
   if current_user <> '$owner' then
@@ -129,7 +131,7 @@ end \$\$"
 args=()
 for path in ${files[@]+"${files[@]}"}; do args+=(-c "\\warn applying $path" -c "$(cat "$path")"); done
 PGUSER=$migrator PGPASSWORD=$migrator_pw \
-  sql -d "$db" --single-transaction -c "set local hearth.migration_txn = 'on'" -c "set local role $owner" \
+  sql -d "$db" --single-transaction -c "$mark" -c "set local role $owner" \
   ${args[@]+"${args[@]}"} -c "$sentinel" >/dev/null ||
   { echo "Migrations failed in the last file named above." >&2; exit 1; }
 
@@ -143,7 +145,7 @@ with rel as (
     and not exists (select 1 from pg_depend d
                     where d.classid = 'pg_class'::regclass and d.objid = c.oid and d.deptype = 'e')
 ), fn as (
-  select p.oid, p.prosecdef, p.proconfig, p.proowner,
+  select p.oid, p.prosecdef, p.proconfig, p.proowner, p.proacl,
          format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) as name
   from pg_proc p
   join pg_namespace n on n.oid = p.pronamespace
@@ -171,7 +173,8 @@ with rel as (
     and a.privilege_type in ('TRUNCATE', 'TRIGGER', 'REFERENCES')
   union all
   select 'Function PUBLIC can execute (revoke execute on function <name> from public)', name
-  from fn where has_function_privilege('public', oid, 'execute')
+  from fn where exists (select 1 from aclexplode(coalesce(proacl, acldefault('f', proowner))) a
+                        where a.grantee = 0 and a.privilege_type = 'EXECUTE')
   union all
   select 'SECURITY DEFINER function without search_path = '''' (alter function <name> set search_path = '''')', name
   from fn where prosecdef and not coalesce('search_path=\"\"' = any(proconfig), false)

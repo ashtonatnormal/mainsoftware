@@ -163,9 +163,12 @@ done 2>/dev/null
 if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
   # Back up the index so a refusal leaves whatever the user had staged intact.
   # It gets a restorable name only once staging is done (below).
-  backup=$(mktemp "$index.autopush.tmp.XXXXXX" 2>/dev/null) || backup=
-  if [ -n "$backup" ] && ! cp "$index" "$backup" 2>/dev/null; then
+  # Without a backup a refusal could only reset the index, losing staged hunks, so skip instead.
+  backup=$(mktemp "$index.autopush.tmp.XXXXXX" 2>/dev/null) ||
+    say "nothing committed - could not back up the git index on $branch"
+  if ! cp "$index" "$backup" 2>/dev/null; then
     rm -f "$backup"; backup=
+    say "nothing committed - could not back up the git index on $branch"
   fi
   # Put the user's index back as it was before this run staged anything.
   restore() { if [ -n "$backup" ]; then mv -f "$backup" "$index"; else git reset -q; fi; }
