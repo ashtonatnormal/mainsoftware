@@ -75,9 +75,10 @@ export function Toolbar({ cell, canUndo, canRedo, onUndo, onRedo, onStyle, onQui
   const AlignIcon = align === 'center' ? AlignCenter : align === 'right' ? AlignRight : AlignLeft
   const fmtLabel = FORMATS.find(f => f.value === fmt)?.label ?? 'Automatic'
 
+  // While locked every button is inert, and a click on the toolbar doesn't take focus from the formula being typed.
   return (
-    <fieldset disabled={locked} className="contents">
-    <div role="toolbar" aria-label="Formatting" aria-disabled={locked || undefined} className={cx('flex h-11 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-line bg-surface px-2 transition-opacity [scrollbar-width:none] md:px-3', locked && 'opacity-60')}>
+    <div role="toolbar" aria-label="Formatting" aria-disabled={locked || undefined} onMouseDown={locked ? e => e.preventDefault() : undefined} className={cx('flex h-11 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-line bg-surface px-2 transition-opacity [scrollbar-width:none] md:px-3', locked && 'opacity-60')}>
+      <div className="contents" inert={locked}>
       <TB label="Undo (Ctrl+Z)" onClick={onUndo} disabled={!canUndo}><Undo2 size={17} /></TB>
       <TB label="Redo (Ctrl+Shift+Z)" onClick={onRedo} disabled={!canRedo}><Redo2 size={17} /></TB>
       <Divider />
@@ -157,7 +158,7 @@ export function Toolbar({ cell, canUndo, canRedo, onUndo, onRedo, onStyle, onQui
         <MenuItem icon={<ArrowRightToLine size={16} />} onClick={() => { onFill('right'); close() }} hint="Ctrl+R">Fill right</MenuItem>
         <p className="max-w-60 px-3 pt-1 pb-1.5 text-[11px] text-muted">Copies the top row (or left column) of the selection into the rest. References move with it; tab names stay.</p>
       </Popover>
+      </div>
     </div>
-    </fieldset>
   )
 }

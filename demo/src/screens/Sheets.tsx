@@ -74,7 +74,7 @@ type Sel = { a: Pos; f: Pos }
 /** An edit in progress, and the cell it belongs to. While typing a formula you can visit other tabs to pick cells, so the cell isn't always on the tab you're looking at. */
 type Editing = EditState & { home: { tabId: string; pos: Pos } }
 const origin: Sel = { a: { r: 0, c: 0 }, f: { r: 0, c: 0 } }
-/** Collaborators' seeded cursors are on a sheet's first tab. */
+/** Collaborators' seeded cursors are on the tab that was first when the sheet opened (they don't jump to another tab if it's deleted). */
 const noCursors: Record<PersonId, string> = {}
 const clampTo = (t: { rows: number; cols: number }, p: Pos): Pos => ({ r: Math.max(0, Math.min(t.rows - 1, p.r)), c: Math.max(0, Math.min(t.cols - 1, p.c)) })
 
@@ -102,6 +102,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
   const [moreOpen, setMoreOpen] = useState(false)
   const moreRef = useRef<HTMLButtonElement>(null)
   const [cursors, setCursors] = useState<Record<PersonId, string>>(() => ({ ...(sheet.cursors ?? {}) }))
+  const cursorTab = useRef(sheet.tabs[0]?.id)
   const gridRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -312,10 +313,13 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
     setEdit({ ...e, value })
     // The edited cell isn't on this tab, so the selection is free to show what you picked.
     if (away) setSel({ a: from, f: to })
+    // The caret goes to the end of what's there by then: typing straight after a click mustn't land before it.
+    // An edit finished in the meantime (Enter straight after the click) leaves focus where that put it.
     window.requestAnimationFrame(() => {
       const el = e.mode === 'bar' ? barRef.current : inputRef.current
-      el?.focus()
-      el?.setSelectionRange(value.length, value.length)
+      if (!el || !editRef.current) return
+      el.focus()
+      el.setSelectionRange(el.value.length, el.value.length)
     })
   }
 
@@ -586,7 +590,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
       setTabId(id)
       setWidths({})
       setSel(id === e.home.tabId ? { a: e.home.pos, f: e.home.pos } : origin)
-      window.requestAnimationFrame(() => { const el = barRef.current; el?.focus(); el?.setSelectionRange(el.value.length, el.value.length) })
+      window.requestAnimationFrame(() => { const el = barRef.current; if (!el || !editRef.current) return; el.focus(); el.setSelectionRange(el.value.length, el.value.length) })
       return
     }
     if (e) commitEdit()
@@ -878,15 +882,19 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
 
       {/* Picking cells on another tab for a formula: where it's going, and how to finish. */}
       {away && edit && homeTab && (
-        <div role="status" className="flex shrink-0 items-center gap-2 border-b border-line bg-accent-soft py-1 pr-2 pl-3 text-[13px] md:pr-3">
+        <div role="status" onMouseDown={e => e.preventDefault()} className="flex shrink-0 items-center gap-2 border-b border-line bg-accent-soft py-1 pr-2 pl-3 text-[13px] md:pr-3">
           <MousePointerClick size={16} className="shrink-0 text-accent-ink" aria-hidden />
-          <p className="min-w-0 flex-1 truncate">
-            <span className="hidden sm:inline">{desktop ? 'Click or drag cells on' : 'Tap cells on'} “{tab.name}” to add them to </span>
-            <span className="sm:hidden">Adding cells to </span>
-            <b className="font-mono font-semibold text-accent-ink">{homeTab.name}!{addrOf(edit.home.pos)}</b>
+          {/* The cell being edited stays readable on narrow phones; the words before it give way first. */}
+          <p className="flex min-w-0 flex-1 items-baseline gap-1">
+            <span className="min-w-0 truncate">
+              <span className="hidden sm:inline">{desktop ? 'Click or drag cells on' : 'Tap cells on'} “{tab.name}” to add them to</span>
+              <span className="hidden min-[360px]:inline sm:hidden">Adding cells to</span>
+              <span className="min-[360px]:hidden">For</span>
+            </span>
+            <b className="max-w-[70%] shrink-0 truncate font-mono font-semibold text-accent-ink">{homeTab.name}!{addrOf(edit.home.pos)}</b>
           </p>
-          <Button size="sm" variant="ghost" className="h-10" onMouseDown={e => e.preventDefault()} onClick={cancelEdit}>Cancel</Button>
-          <Button size="sm" variant="primary" className="h-10" icon={<Check size={15} />} onMouseDown={e => e.preventDefault()} onClick={() => commitEdit()}>Done</Button>
+          <Button size="sm" variant="ghost" className="h-10" onClick={cancelEdit}>Cancel</Button>
+          <Button size="sm" variant="primary" className="h-10" icon={<Check size={15} />} onClick={() => commitEdit()}>Done</Button>
         </div>
       )}
 
@@ -902,7 +910,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
             rowH={rowH}
             headH={headH}
             widths={widths}
-            cursors={tab.id === sheet.tabs[0]?.id ? cursors : noCursors}
+            cursors={tab.id === cursorTab.current ? cursors : noCursors}
             highlight={highlight}
             gridRef={gridRef}
             inputRef={inputRef}
@@ -910,7 +918,7 @@ function SheetEditor({ sheet }: { sheet: Sheet }) {
             onCellPointerDown={onCellPointerDown}
             onCellPointerEnter={onCellPointerEnter}
             onCellTap={onCellTap}
-            onCellDoubleClick={() => { if (editable) startEdit('inplace') }}
+            onCellDoubleClick={() => { if (editable && !editRef.current) startEdit('inplace') }}
             onHeaderSelect={onHeaderSelect}
             onEditChange={changeEdit}
             onEditKeyDown={onEditKeyDown}
