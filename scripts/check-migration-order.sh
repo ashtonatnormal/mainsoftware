@@ -19,7 +19,8 @@ base=${1:-origin/main}
 git rev-parse --verify --quiet "$base^{commit}" >/dev/null ||
   { echo "check-migration-order: no commit '$base' (fetch it first, e.g. git fetch origin main)" >&2; exit 2; }
 
-highest=$(git ls-tree --name-only "$base" db/migrations/ | sed -n 's#^db/migrations/\([0-9]\{4\}\)_.*\.sql$#\1#p' | LC_ALL=C sort | tail -n 1)
+# -r lists the folder's files whether or not the path ends in a slash.
+highest=$(git ls-tree -r --name-only "$base" db/migrations/ | sed -n 's#^db/migrations/\([0-9]\{4\}\)_.*\.sql$#\1#p' | LC_ALL=C sort | tail -n 1)
 status=0
 while IFS=$'\t' read -r change path; do
   [ -n "$path" ] || continue
