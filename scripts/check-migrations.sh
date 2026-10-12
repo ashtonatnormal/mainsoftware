@@ -124,11 +124,12 @@ done
 
 # The migrator checks around every file that the session is still hearth_owner and still in the
 # batch's one transaction, and names the file that broke either rule. It connects with the PG*
-# variables, so nothing has to be put into a URL.
+# variables, so nothing has to be put into a URL; an inherited MIGRATION_DATABASE_URL would win
+# over them, so it's dropped.
 before=()
 [ -z "$up_to" ] || before=(--before "$up_to")
 PGUSER=$migrator PGPASSWORD=$migrator_pw PGDATABASE=$db MIGRATION_ROLE=$owner \
-  node apps/server/src/db/migrate.ts ${before[@]+"${before[@]}"} >&2 ||
+  env -u MIGRATION_DATABASE_URL node apps/server/src/db/migrate.ts ${before[@]+"${before[@]}"} >&2 ||
   { echo "Migrations failed: see the migrate: lines above." >&2; exit 1; }
 
 checks="
