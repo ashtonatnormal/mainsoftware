@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Hearth, an internal work suite (docs/PRD.md). npm workspaces: apps/*, packages/*, infra and the reference demo.",
   "engines": {
-    "node": ">=24"
+    "node": ">=24.12.0"
   },
   "workspaces": [
     "apps/*",
@@ -13,6 +13,7 @@
     "demo"
   ],
   "scripts": {
+    "dev": "npm run dev -w @hearth/server",
     "check": "npm run typecheck && npm run lint && npm test",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces",
     "lint": "biome check",

@@ -7,17 +7,58 @@
 import { posix } from 'node:path'
 import { packageOf } from './imports'
 
-// A workspace's folder (ending in '/') and its package name.
+// A workspace's folder (ending in '/'), its package name, and its package.json "imports" map,
+// which can alias a #specifier to a file or to another package.
 export interface Workspace {
   dir: string
   name: string
+  imports?: unknown
 }
 
-// The workspace an import lands in, if any: by package name, or by a relative path.
+// Every target a package.json "imports" entry can resolve to: a string, a list of fallbacks, or
+// conditions ({ "types": …, "default": … }) holding either.
+export function importTargets(value: unknown): string[] {
+  if (typeof value === 'string') return [value]
+  if (Array.isArray(value)) return value.flatMap(importTargets)
+  if (value && typeof value === 'object') return Object.values(value).flatMap(importTargets)
+  return []
+}
+
+// The targets a #specifier maps to through an imports map, as Node matches keys: an exact key
+// first, otherwise the pattern key ("#src/*") with the longest prefix before its *.
+export function mapImport(imports: unknown, specifier: string): string[] {
+  if (!imports || typeof imports !== 'object') return []
+  const map = imports as Record<string, unknown>
+  if (specifier in map) return importTargets(map[specifier])
+  let best: { prefix: string; targets: string[] } | undefined
+  for (const [key, value] of Object.entries(map)) {
+    const star = key.indexOf('*')
+    if (star < 0) continue
+    const [prefix, suffix] = [key.slice(0, star), key.slice(star + 1)]
+    if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix)) continue
+    if (specifier.length < prefix.length + suffix.length || (best && best.prefix.length >= prefix.length)) continue
+    const middle = specifier.slice(prefix.length, specifier.length - suffix.length)
+    best = { prefix, targets: importTargets(value).map(target => target.replaceAll('*', middle)) }
+  }
+  return best?.targets ?? []
+}
+
+const inDir = (path: string, workspaces: Workspace[]) =>
+  workspaces.find(w => `${posix.normalize(path)}/`.startsWith(w.dir))
+
+// The workspace an import lands in, if any: by package name, by a relative path, by the app's
+// `@/` alias (its src/ folder), or through the importing workspace's imports map. When a
+// #specifier has several targets, the first that leaves the importing workspace counts.
 export function landsIn(file: string, specifier: string, workspaces: Workspace[]): Workspace | undefined {
-  if (specifier.startsWith('.')) {
-    const target = `${posix.normalize(posix.join(posix.dirname(file), specifier))}/`
-    return workspaces.find(w => target.startsWith(w.dir))
+  const from = inDir(file, workspaces)
+  if (specifier.startsWith('.')) return inDir(posix.join(posix.dirname(file), specifier), workspaces)
+  if (specifier.startsWith('@/')) return from && inDir(posix.join(from.dir, 'src', specifier.slice(2)), workspaces)
+  if (specifier.startsWith('#')) {
+    if (!from) return undefined
+    const landed = mapImport(from.imports, specifier).map(target =>
+      target.startsWith('.') ? inDir(posix.join(from.dir, target), workspaces) : landsIn(file, target, workspaces),
+    )
+    return landed.find(w => w && w.dir !== from.dir) ?? landed.find(Boolean)
   }
   const name = packageOf(specifier)
   return workspaces.find(w => w.name === name)
@@ -33,5 +74,14 @@ export function boundaryBreach(from: Workspace, to: Workspace): string | undefin
   if (from.dir.startsWith('packages/') && (to.dir.startsWith('apps/') || to.dir === 'infra/')) {
     return 'packages/ hold shared code, so they import no app and not infra/'
   }
+  return undefined
+}
+
+// Why an imports-map target is refused, or undefined. A workspace's imports map only aliases its
+// own files ("./src/*"), so a #specifier can't reach another workspace, a package, or a path
+// that climbs out of the workspace.
+export function importTargetProblem(target: string): string | undefined {
+  if (!target.startsWith('./')) return "must start with ./, since an imports map only aliases the workspace's own files"
+  if (target.split('/').includes('..')) return 'must not climb out of the workspace with ..'
   return undefined
 }

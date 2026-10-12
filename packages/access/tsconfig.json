@@ -1,3 +1,8 @@
 {
-  "extends": "../../tsconfig.base.json"
+  // The server loads this package's source on Node (T2), so tsc resolves imports as Node does.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext"
+  }
 }

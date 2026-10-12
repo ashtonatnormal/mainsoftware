@@ -13,9 +13,11 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     // Only syntax Node 24's type stripping can remove (no enums, namespaces or parameter
-    // properties). Imports are another matter: Node needs `./x.ts` and can't resolve `@/*`, so how
-    // the server runs is decided in C0.2 (docs/TECH-SPEC.md, T2).
+    // properties). Decorators and `accessor` fields pass this check but Node can't run them, so
+    // scripts/guards/server-runtime.test.ts refuses them where the server loads code (T2).
     "erasableSyntaxOnly": true,
+    // The server runs its .ts source on Node (T2), so its relative imports name the .ts file.
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,

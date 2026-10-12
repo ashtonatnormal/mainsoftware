@@ -942,9 +942,9 @@ Time boxes assume an 11:00 start with AI coding tools. Each step ends green (typ
 
 #### Step 2 — Local stack (12:00–12:30)
 
-> Add `docker-compose.yml` with Postgres 17 + pgvector (the `pgvector/pgvector:pg17` image CI uses, user and password `postgres`, published on 127.0.0.1:5432, which are the defaults `scripts/check-migrations.sh` and `scripts/test-db.sh` connect to), Valkey and MinIO; their variables in the existing `.env.example`, each with a comment; and a server `/health` route that checks all three. Document `npm run dev` in CLAUDE.md.
+> Add `docker-compose.yml` with Postgres 17 + pgvector (the `pgvector/pgvector:pg17` image CI uses, user and password `postgres`, published on 127.0.0.1:5432, which are the defaults `scripts/check-migrations.sh` and `scripts/test-db.sh` connect to), Valkey and MinIO; their variables in the existing `.env.example`, each with a comment; and a server `/health` route (the process is up) and `/ready` route that checks all three. Document `npm run dev` in CLAUDE.md.
 
-**Done when:** `docker compose up` then `npm run dev` gives a green `/health`.
+**Done when:** `docker compose up` then `npm run dev` gives a green `/ready`.
 
 #### Step 3 — Tenant and identity schema (13:30–15:00)
 

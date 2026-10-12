@@ -1,7 +1,10 @@
 {
+  // Node runs this source as it is (T2), so tsc resolves imports the way Node does: relative
+  // imports need their .ts extension, and #src/* comes from package.json's imports map.
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["node"],
-    "paths": { "@/*": ["./src/*"] }
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"]
   }
 }
