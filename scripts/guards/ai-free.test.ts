@@ -71,8 +71,27 @@ describe('D41 AI-free guard: the matcher', () => {
       `const sdk = await import('openai')`,
       `import x = require('openai')`,
       `import 'npm:openai@4'`,
+      `export * as sdk from 'openai'`,
+      'const sdk = await import(`openai`)',
+      `const re = [/'/, await import('openai')]`,
+      `type Client = import('openai').OpenAI`,
+      `const a = await import('openai' as string)`,
+      `const b = await import('openai' satisfies string)`,
+      `const c = await import('openai'!)`,
+      `const d = require(('openai') as string)`,
+      `const e = module.require('openai')`,
+      `function wrap(require) { return require('openai') }`,
     ]
     for (const source of planted) expect(importsOf(source).map(packageOf), source).toContain('openai')
+    // In JavaScript files: AMD (anonymous and named modules) and CommonJS's other require methods.
+    for (const source of [
+      `define(['openai'], sdk => sdk)`,
+      `define('chat', ['openai'], sdk => sdk)`,
+      `const sdk = require.main.require('openai')`,
+      `const sdk = module.parent.require('openai')`,
+    ]) {
+      expect(importsOf(source, 'vendor/chat.js').map(packageOf), source).toContain('openai')
+    }
   })
 
   it('ignores comments, strings, relative paths, URLs, built-ins and the @/ alias', () => {
@@ -252,7 +271,7 @@ describe('D41 AI-free guard: the repo', () => {
     const found = codeFiles.flatMap(path => {
       // A page's inline scripts are read as code too.
       return scriptsOf(path, readRepoFile(path))
-        .flatMap(importsOf)
+        .flatMap(script => importsOf(script, path))
         .flatMap(spec => {
           const name = packageOf(spec)
           const why = name && bannedReason(name)

@@ -3,8 +3,24 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The Hearth server: Fastify and ws (T2). The skeleton arrives in C0.2.",
+  "description": "The Hearth server: Fastify and ws, one image with api, realtime and worker roles. Node runs its .ts source as it is (T2).",
+  "imports": {
+    "#src/*": "./src/*"
+  },
   "scripts": {
+    "dev": "node --env-file=../../.env.example --env-file-if-exists=../../.env --watch src/main.ts",
+    "start": "node src/main.ts",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1146.0",
+    "fastify": "5.12.5",
+    "ioredis": "6.0.0",
+    "pg": "8.23.1",
+    "pino": "10.4.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1"
   }
 }

@@ -1,0 +1,19 @@
+# What the server image's build (apps/server/Dockerfile, context: the repo root) may read. Everything
+# is left out except what the Dockerfile copies, so no .env file, git history, local data or other
+# app can reach the image.
+**
+!package.json
+!package-lock.json
+!apps/server/
+!packages/
+
+# Never, even inside those folders.
+**/node_modules
+**/dist
+**/*.test.ts
+**/*.test.tsx
+**/testing
+**/.env*
+**/local-data
+**/*.pem
+**/*.log

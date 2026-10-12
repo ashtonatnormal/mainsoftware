@@ -36,13 +36,16 @@ jobs:
       - run: npm audit signatures
   # Every npm workspace from the root (apps/*, packages/*, infra and demo/): what `npm run check`
   # runs locally (typecheck, lint, test), as separate steps so a failure names its step, then the
-  # build. The tests include the guards in scripts/guards/ (no AI packages, no secret-shaped VITE_
-  # variables). Keep CLAUDE.md (Testing and CI) in step with this job. It waits for secrets and
-  # audit, so it gates merging on them too.
+  # build, then the server's start-up check (scripts/check-server.sh). The tests include the
+  # guards in scripts/guards/ (no AI packages, no secret-shaped VITE_ variables, files the server
+  # loads that Node can run). Keep CLAUDE.md (Testing and CI) in step with this job. It waits for
+  # secrets and audit, so it gates merging on them too.
   check:
     needs: [secrets, audit]
     if: always()
     runs-on: ubuntu-latest
+    # A server that hangs instead of failing would otherwise hold the runner for six hours.
+    timeout-minutes: 30
     env:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"  # only demo's local screenshot script uses it
     steps:
@@ -62,6 +65,13 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+      # Node runs the server's .ts source with no build step (T2), so prove that every role
+      # starts, answers /health and /ready against the local Compose stack, and stops cleanly on
+      # SIGTERM: first from the source, then from the production image.
+      - run: docker compose up -d --wait
+      - run: scripts/check-server.sh
+      - run: docker build -f apps/server/Dockerfile -t hearth-server .
+      - run: IMAGE=hearth-server scripts/check-server.sh
   migrations:
     runs-on: ubuntu-latest
     services:
