@@ -21,7 +21,7 @@ export interface ModuleImport {
   typeOnly: boolean
   // Declares `with { type: 'json' }`, statically or as import()'s second argument.
   json: boolean
-  // How it loads: an import, or CommonJS require (which reads JSON without an attribute).
+  // How it loads: an import, or CommonJS require (including AMD's define).
   via: 'import' | 'require'
 }
 
@@ -61,42 +61,23 @@ function literalText(node: ts.Expression | undefined): string | undefined {
   return inner && ts.isStringLiteralLike(inner) ? inner.text : undefined
 }
 
-// Whether a file declares its own `require` that isn't a module loader: a function, a parameter,
-// or a variable set to anything but createRequire(…). Its calls then load nothing.
-function bindsOwnRequire(file: ts.SourceFile): boolean {
-  let found = false
-  const visit = (node: ts.Node): void => {
-    if (
-      (ts.isFunctionDeclaration(node) || ts.isParameter(node)) &&
-      node.name &&
-      ts.isIdentifier(node.name) &&
-      node.name.text === 'require'
-    ) {
-      found = true
-    }
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'require') {
-      const init = node.initializer
-      const isLoader =
-        !!init &&
-        ts.isCallExpression(init) &&
-        ts.isIdentifier(init.expression) &&
-        init.expression.text === 'createRequire'
-      if (!isLoader) found = true
-    }
-    if (!found) ts.forEachChild(node, visit)
-  }
-  visit(file)
-  return found
-}
+// A call to require(…) or module.require(…) (but not to some other object's require method).
+const isRequire = (callee: ts.Expression): boolean =>
+  (ts.isIdentifier(callee) && callee.text === 'require') ||
+  (ts.isPropertyAccessExpression(callee) &&
+    callee.name.text === 'require' &&
+    ts.isIdentifier(callee.expression) &&
+    callee.expression.text === 'module')
 
 // Every module a source file loads: imports and re-exports of any form (`export * as ns from`
-// included), import-equals, import(), require() and module.require(), and AMD's
-// define(['x'], …), read from TypeScript's syntax tree, so comments and strings don't count. The
-// path picks the parser (TS, TSX, JS). A require function stored under another name than
-// `require` isn't followed.
+// included), import-equals, import(), require() and module.require(), and in JavaScript files
+// AMD's define(['x'], …) and define('id', ['x'], …), read from TypeScript's syntax tree, so
+// comments and strings don't count. The path picks the parser (TS, TSX, JS). Every call to a
+// function named require counts, whatever it is bound to: the AI-free scan would rather see too
+// much than too little, and the server's ES modules have no require at all.
 export function moduleImports(source: string, path = 'file.ts'): ModuleImport[] {
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, scriptKind(path))
-  const ownRequire = bindsOwnRequire(file)
+  const isJs = scriptKind(path) === ts.ScriptKind.JS || scriptKind(path) === ts.ScriptKind.JSX
   const found: ModuleImport[] = []
   const visit = (node: ts.Node): void => {
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
@@ -126,20 +107,17 @@ export function moduleImports(source: string, path = 'file.ts'): ModuleImport[] 
         json: !!withClause && ts.isPropertyAssignment(withClause) && isJsonType(withClause.initializer),
         via: 'import',
       })
-    } else if (
-      ts.isCallExpression(node) &&
-      ((ts.isIdentifier(node.expression) && node.expression.text === 'require' && !ownRequire) ||
-        (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'require'))
-    ) {
+    } else if (ts.isCallExpression(node) && isRequire(node.expression)) {
       found.push({ specifier: literalText(node.arguments[0]), typeOnly: false, json: false, via: 'require' })
     } else if (
+      isJs &&
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
-      node.expression.text === 'define' &&
-      node.arguments[0] &&
-      ts.isArrayLiteralExpression(node.arguments[0])
+      node.expression.text === 'define'
     ) {
-      for (const element of node.arguments[0].elements) {
+      const [first, second] = node.arguments
+      const deps = first && ts.isStringLiteralLike(first) ? second : first
+      for (const element of deps && ts.isArrayLiteralExpression(deps) ? deps.elements : []) {
         const specifier = literalText(element)
         if (specifier) found.push({ specifier, typeOnly: false, json: false, via: 'require' })
       }

@@ -35,6 +35,11 @@ export function importProblem(entry: ModuleImport, from: Manifest): string | und
   }
   // Erased before the code runs, so Node never resolves it (tsc still checks it).
   if (typeOnly) return undefined
+  // tsc accepts require (@types/node declares it), but the server's .ts files are ES modules, where
+  // it doesn't exist and the call throws when it runs.
+  if (entry.via === 'require') {
+    return "uses require, which ES modules don't have: use import (with { type: 'json' } for JSON)"
+  }
   if (specifier === undefined) {
     return 'loads a module chosen at run time, which no check can see: import a literal path'
   }
@@ -53,10 +58,7 @@ export function importProblem(entry: ModuleImport, from: Manifest): string | und
       ? 'names a .js file, but Node runs the .ts source: import the .ts file'
       : 'has no file extension, which Node needs: add .ts'
   }
-  // CommonJS require (createRequire's) reads JSON with no attribute; import needs one.
-  if (target.endsWith('.json') && !json && entry.via === 'import') {
-    return "is JSON, which Node loads only with { type: 'json' }"
-  }
+  if (target.endsWith('.json') && !json) return "is JSON, which Node loads only with { type: 'json' }"
   return undefined
 }
 
@@ -81,7 +83,7 @@ export function manifestProblems(m: Manifest): string[] {
     problems.push('has no exports, so Node would fall back to main or index.js, not the .ts source')
   }
   const maps: Array<[string, unknown]> = [
-    ['exports', typeof m.exports === 'string' ? { '.': m.exports } : m.exports],
+    ['exports', exportsMap(m.exports)],
     ['imports', m.imports],
   ]
   for (const [field, map] of maps) {
@@ -114,9 +116,18 @@ export function importedPaths(entry: ModuleImport, path: string, from: Manifest,
   const name = packageOf(specifier)
   const target = workspaces.find(w => w.name === name)
   if (!target || !name) return []
-  const exports = typeof target.exports === 'string' ? { '.': target.exports } : target.exports
   const subpath = `.${specifier.slice(name.length)}`
-  return mapImport(exports, subpath, { skipTypes: true }).map(t => posix.join(target.dir, t))
+  return mapImport(exportsMap(target.exports), subpath, { skipTypes: true }).map(t => posix.join(target.dir, t))
+}
+
+// A package.json "exports" value as a map from subpath to target. Node also accepts the target
+// alone (a string, an array, or conditions with no subpath keys) for ".".
+export function exportsMap(exports: unknown): unknown {
+  const sugar =
+    typeof exports === 'string' ||
+    Array.isArray(exports) ||
+    (!!exports && typeof exports === 'object' && !Object.keys(exports).some(key => key.startsWith('.')))
+  return sugar ? { '.': exports } : exports
 }
 
 // Syntax tsc accepts that Node's type stripping can't run, with the line it's on.

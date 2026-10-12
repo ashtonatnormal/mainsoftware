@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { landsIn } from './boundaries'
 import { type ModuleImport, moduleImports } from './imports'
@@ -67,19 +67,28 @@ describe('T2 server runtime: the rules', () => {
   it("needs { type: 'json' } on a JSON import, which tsc checks only on static imports", () => {
     expect(importProblem(load('./d.json', { json: true }), pkg)).toBeUndefined()
     expect(importProblem(load('./d.json'), pkg)).toMatch(/type: 'json'/)
-    expect(importProblem(load('./d.json', { via: 'require' }), pkg)).toBeUndefined()
   })
 
-  it('reads createRequire as a loader, but not a local function that happens to be called require', () => {
+  it("refuses require in the server's ES modules, where it doesn't exist (tsc accepts it)", () => {
+    for (const via of ['./d.json', './x.ts', 'fastify', undefined]) {
+      expect(importProblem(load(via, { via: 'require' }), pkg), String(via)).toMatch(/require/)
+    }
     const loader =
       "import { createRequire } from 'node:module'\nconst require = createRequire(import.meta.url)\nrequire('./data.json')"
     expect(moduleImports(loader).map(i => [i.specifier, i.via])).toEqual([
       ['node:module', 'import'],
       ['./data.json', 'require'],
     ])
-    const helper =
-      "function require(ok: boolean, message: string) { if (!ok) throw new Error(message) }\nrequire(1 > 0, 'fine')"
-    expect(moduleImports(helper)).toEqual([])
+    expect(moduleImports("module.require('./a.cjs')")).toEqual([load('./a.cjs', { via: 'require' })])
+  })
+
+  it("doesn't read another object's require method, or a define() outside JavaScript, as a load", () => {
+    expect(moduleImports("env.require('PORT')\nthis.require(name)")).toEqual([])
+    expect(moduleImports("const define = (f: string[]) => f\ndefine(['title', 'body'])")).toEqual([])
+    expect(moduleImports("define(['a'], f)\ndefine('id', ['b'], f)", 'vendor.js').map(i => i.specifier)).toEqual([
+      'a',
+      'b',
+    ])
   })
 
   it('finds the files an import loads, so a test-only one can be refused', () => {
@@ -203,7 +212,10 @@ describe('T2 server runtime: the repo', () => {
         return moduleImports(readRepoFile(path), path).flatMap(entry => {
           const name = runtimePackage(entry, from)
           return name && !Object.hasOwn(from.dependencies ?? {}, name)
-            ? [`${path}: '${name}' isn't in ${from.dir}package.json dependencies`]
+            ? [
+                `${path}: '${name}' isn't in ${from.dir}package.json dependencies (test-only code goes in a ` +
+                  'testing/ folder or a *.test.ts file, which the image leaves out)',
+              ]
             : []
         })
       })
@@ -224,14 +236,23 @@ describe('T2 server runtime: the repo', () => {
   })
 
   it('a relative or #specifier stays inside its own workspace (another workspace is imported by name)', () => {
-    // Otherwise a package's source would load without being a dependency, so neither these rules
-    // nor the image would cover it.
+    // Otherwise a file would load without being part of a dependency, so neither these rules nor
+    // the image would cover it.
     const found = serverScripts.flatMap(path =>
       moduleImports(readRepoFile(path), path).flatMap(entry => {
         const spec = entry.specifier
         if (entry.typeOnly || !spec || !(spec.startsWith('.') || spec.startsWith('#'))) return []
+        const own = workspaceOf(path)
+        if (spec.startsWith('.') && !posix.join(posix.dirname(path), spec).startsWith(own.dir)) {
+          const to = landsIn(path, spec, manifests)
+          return [
+            to
+              ? `${path}: '${spec}' reaches into ${to.dir}: import ${to.name} by name and list it in dependencies`
+              : `${path}: '${spec}' leaves its workspace for a folder the image doesn't hold`,
+          ]
+        }
         const to = landsIn(path, spec, manifests)
-        return to && to.dir !== workspaceOf(path).dir
+        return to && to.dir !== own.dir
           ? [`${path}: '${spec}' reaches into ${to.dir}: import ${to.name} by name and list it in dependencies`]
           : []
       }),
