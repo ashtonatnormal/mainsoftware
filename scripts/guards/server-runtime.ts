@@ -53,7 +53,10 @@ export function importProblem(entry: ModuleImport, from: Manifest): string | und
       ? 'names a .js file, but Node runs the .ts source: import the .ts file'
       : 'has no file extension, which Node needs: add .ts'
   }
-  if (target.endsWith('.json') && !json) return "is JSON, which Node loads only with { type: 'json' }"
+  // CommonJS require (createRequire's) reads JSON with no attribute; import needs one.
+  if (target.endsWith('.json') && !json && entry.via === 'import') {
+    return "is JSON, which Node loads only with { type: 'json' }"
+  }
   return undefined
 }
 
@@ -95,6 +98,27 @@ export function manifestProblems(m: Manifest): string[] {
   return problems
 }
 
+// Files that run under Vitest only and that the image leaves out (Dockerfile.dockerignore):
+// tests, and helpers in a testing/ folder.
+export const TEST_ONLY = /(^|\/)testing(\/|$)|\.test\.tsx?$/
+
+// The repo paths a runtime import can load, for imports that name a file: relative, through
+// the importing workspace's imports map, or by name into a workspace package's exports.
+export function importedPaths(entry: ModuleImport, path: string, from: Manifest, workspaces: Manifest[]): string[] {
+  const { specifier } = entry
+  if (entry.typeOnly || specifier === undefined) return []
+  if (specifier.startsWith('.')) return [posix.join(posix.dirname(path), specifier)]
+  if (specifier.startsWith('#')) {
+    return mapImport(from.imports, specifier, { skipTypes: true }).map(t => posix.join(from.dir, t))
+  }
+  const name = packageOf(specifier)
+  const target = workspaces.find(w => w.name === name)
+  if (!target || !name) return []
+  const exports = typeof target.exports === 'string' ? { '.': target.exports } : target.exports
+  const subpath = `.${specifier.slice(name.length)}`
+  return mapImport(exports, subpath, { skipTypes: true }).map(t => posix.join(target.dir, t))
+}
+
 // Syntax tsc accepts that Node's type stripping can't run, with the line it's on.
 export function unstrippableSyntax(path: string, source: string): string[] {
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
@@ -110,8 +134,9 @@ export function unstrippableSyntax(path: string, source: string): string[] {
 }
 
 // The workspaces whose source Node loads when the server runs: apps/server and every workspace
-// in its runtime dependencies, directly or through another workspace. (The test refuses a
-// workspace imported at run time without being a dependency, so this list is complete.)
+// in its runtime dependencies, directly or through another workspace. The repo tests keep it
+// complete: they refuse a workspace imported at run time without being a dependency, and a
+// relative or #specifier that reaches into another workspace.
 export function serverWorkspaces(manifests: Manifest[]): Manifest[] {
   const byName = new Map(manifests.map(m => [m.name, m]))
   const server = byName.get('@hearth/server')

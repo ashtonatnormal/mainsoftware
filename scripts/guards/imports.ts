@@ -21,6 +21,8 @@ export interface ModuleImport {
   typeOnly: boolean
   // Declares `with { type: 'json' }`, statically or as import()'s second argument.
   json: boolean
+  // How it loads: an import, or CommonJS require (which reads JSON without an attribute).
+  via: 'import' | 'require'
 }
 
 // How TypeScript should parse a file, from its extension (a page's inline scripts are JavaScript).
@@ -59,12 +61,42 @@ function literalText(node: ts.Expression | undefined): string | undefined {
   return inner && ts.isStringLiteralLike(inner) ? inner.text : undefined
 }
 
+// Whether a file declares its own `require` that isn't a module loader: a function, a parameter,
+// or a variable set to anything but createRequire(…). Its calls then load nothing.
+function bindsOwnRequire(file: ts.SourceFile): boolean {
+  let found = false
+  const visit = (node: ts.Node): void => {
+    if (
+      (ts.isFunctionDeclaration(node) || ts.isParameter(node)) &&
+      node.name &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === 'require'
+    ) {
+      found = true
+    }
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'require') {
+      const init = node.initializer
+      const isLoader =
+        !!init &&
+        ts.isCallExpression(init) &&
+        ts.isIdentifier(init.expression) &&
+        init.expression.text === 'createRequire'
+      if (!isLoader) found = true
+    }
+    if (!found) ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return found
+}
+
 // Every module a source file loads: imports and re-exports of any form (`export * as ns from`
-// included), import-equals, require() and import(), read from TypeScript's syntax tree, so
-// comments and strings don't count. The path picks the parser (TS, TSX, JS). Not read: a require
-// function stored under another name (createRequire's), and AMD's define([...]) arrays.
+// included), import-equals, import(), require() and module.require(), and AMD's
+// define(['x'], …), read from TypeScript's syntax tree, so comments and strings don't count. The
+// path picks the parser (TS, TSX, JS). A require function stored under another name than
+// `require` isn't followed.
 export function moduleImports(source: string, path = 'file.ts'): ModuleImport[] {
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, scriptKind(path))
+  const ownRequire = bindsOwnRequire(file)
   const found: ModuleImport[] = []
   const visit = (node: ts.Node): void => {
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
@@ -73,24 +105,16 @@ export function moduleImports(source: string, path = 'file.ts'): ModuleImport[] 
         a => a.name.text === 'type' && ts.isStringLiteralLike(a.value) && a.value.text === 'json',
       )
       if (ts.isStringLiteralLike(node.moduleSpecifier))
-        found.push({ specifier: node.moduleSpecifier.text, typeOnly, json })
+        found.push({ specifier: node.moduleSpecifier.text, typeOnly, json, via: 'import' })
     } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
       const target = node.moduleReference.expression
-      found.push({
-        specifier: literalText(target),
-        typeOnly: node.isTypeOnly,
-        json: false,
-      })
+      found.push({ specifier: literalText(target), typeOnly: node.isTypeOnly, json: false, via: 'require' })
     } else if (ts.isImportTypeNode(node)) {
       const arg = node.argument
       if (ts.isLiteralTypeNode(arg) && ts.isStringLiteralLike(arg.literal)) {
-        found.push({ specifier: arg.literal.text, typeOnly: true, json: false })
+        found.push({ specifier: arg.literal.text, typeOnly: true, json: false, via: 'import' })
       }
-    } else if (
-      ts.isCallExpression(node) &&
-      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(node.expression) && node.expression.text === 'require'))
-    ) {
+    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
       const [first, options] = node.arguments
       const withClause =
         options && ts.isObjectLiteralExpression(options)
@@ -100,7 +124,25 @@ export function moduleImports(source: string, path = 'file.ts'): ModuleImport[] 
         specifier: literalText(first),
         typeOnly: false,
         json: !!withClause && ts.isPropertyAssignment(withClause) && isJsonType(withClause.initializer),
+        via: 'import',
       })
+    } else if (
+      ts.isCallExpression(node) &&
+      ((ts.isIdentifier(node.expression) && node.expression.text === 'require' && !ownRequire) ||
+        (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'require'))
+    ) {
+      found.push({ specifier: literalText(node.arguments[0]), typeOnly: false, json: false, via: 'require' })
+    } else if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'define' &&
+      node.arguments[0] &&
+      ts.isArrayLiteralExpression(node.arguments[0])
+    ) {
+      for (const element of node.arguments[0].elements) {
+        const specifier = literalText(element)
+        if (specifier) found.push({ specifier, typeOnly: false, json: false, via: 'require' })
+      }
     }
     ts.forEachChild(node, visit)
   }

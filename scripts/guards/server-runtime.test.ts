@@ -1,14 +1,17 @@
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { landsIn } from './boundaries'
 import { type ModuleImport, moduleImports } from './imports'
 import { readRepoFile, repoFiles, root } from './repo-files'
 import {
+  importedPaths,
   importProblem,
   type Manifest,
   manifestProblems,
   moduleSettings,
   runtimePackage,
   serverWorkspaces,
+  TEST_ONLY,
   unstrippableSyntax,
 } from './server-runtime'
 
@@ -20,8 +23,7 @@ const server = serverWorkspaces(manifests)
 const serverFiles = files.filter(path => server.some(w => path.startsWith(w.dir)))
 const serverScripts = serverFiles.filter(path => /\.[cm]?tsx?$/.test(path) && !path.endsWith('.d.ts'))
 const workspaceOf = (path: string) => server.find(w => path.startsWith(w.dir)) as Manifest
-// Tests, and helpers kept in a testing/ folder, run under Vitest only; the image leaves them out.
-const isTest = (path: string) => /\.test\.tsx?$|\/testing\//.test(path)
+const isTest = (path: string) => TEST_ONLY.test(path)
 
 const serverApp: Manifest = { dir: 'apps/server/', name: '@hearth/server', imports: { '#src/*': './src/*' } }
 const pkg: Manifest = { dir: 'packages/access/', name: '@hearth/access' }
@@ -29,6 +31,7 @@ const load = (specifier: string | undefined, extra: Partial<ModuleImport> = {}):
   specifier,
   typeOnly: false,
   json: false,
+  via: 'import',
   ...extra,
 })
 
@@ -64,6 +67,41 @@ describe('T2 server runtime: the rules', () => {
   it("needs { type: 'json' } on a JSON import, which tsc checks only on static imports", () => {
     expect(importProblem(load('./d.json', { json: true }), pkg)).toBeUndefined()
     expect(importProblem(load('./d.json'), pkg)).toMatch(/type: 'json'/)
+    expect(importProblem(load('./d.json', { via: 'require' }), pkg)).toBeUndefined()
+  })
+
+  it('reads createRequire as a loader, but not a local function that happens to be called require', () => {
+    const loader =
+      "import { createRequire } from 'node:module'\nconst require = createRequire(import.meta.url)\nrequire('./data.json')"
+    expect(moduleImports(loader).map(i => [i.specifier, i.via])).toEqual([
+      ['node:module', 'import'],
+      ['./data.json', 'require'],
+    ])
+    const helper =
+      "function require(ok: boolean, message: string) { if (!ok) throw new Error(message) }\nrequire(1 > 0, 'fine')"
+    expect(moduleImports(helper)).toEqual([])
+  })
+
+  it('finds the files an import loads, so a test-only one can be refused', () => {
+    const access: Manifest = { ...pkg, exports: { '.': './src/index.ts', './testing': './src/testing/index.ts' } }
+    const all = [serverApp, access]
+    const from = 'apps/server/src/jobs/a.ts'
+    expect(importedPaths(load('#src/testing/fixture.ts'), from, serverApp, all)).toEqual([
+      'apps/server/src/testing/fixture.ts',
+    ])
+    expect(importedPaths(load('./x.test.ts'), from, serverApp, all)).toEqual(['apps/server/src/jobs/x.test.ts'])
+    expect(importedPaths(load('@hearth/access/testing'), from, serverApp, all)).toEqual([
+      'packages/access/src/testing/index.ts',
+    ])
+    expect(importedPaths(load('fastify'), from, serverApp, all)).toEqual([])
+    for (const path of [
+      'apps/server/src/testing/fixture.ts',
+      'apps/server/src/jobs/x.test.ts',
+      'packages/access/src/testing/index.ts',
+    ]) {
+      expect(TEST_ONLY.test(path), path).toBe(true)
+    }
+    expect(TEST_ONLY.test('apps/server/src/jobs/testing-ground.ts')).toBe(false)
   })
 
   it('refuses a module chosen at run time, and ignores imports erased before the code runs', () => {
@@ -93,7 +131,7 @@ describe('T2 server runtime: the rules', () => {
       load('./u', { typeOnly: true }),
       load('./v', { typeOnly: true }),
       load(undefined),
-      load('./r.cjs'),
+      load('./r.cjs', { via: 'require' }),
       load('./cast.js'),
     ])
   })
@@ -169,6 +207,35 @@ describe('T2 server runtime: the repo', () => {
             : []
         })
       })
+    expect(found).toEqual([])
+  })
+
+  it('runtime code never loads a test-only file, which the image leaves out', () => {
+    const found = serverScripts
+      .filter(path => !isTest(path))
+      .flatMap(path =>
+        moduleImports(readRepoFile(path), path).flatMap(entry =>
+          importedPaths(entry, path, workspaceOf(path), server)
+            .filter(target => TEST_ONLY.test(target))
+            .map(target => `${path}: '${entry.specifier}' loads ${target}, which is test-only`),
+        ),
+      )
+    expect(found).toEqual([])
+  })
+
+  it('a relative or #specifier stays inside its own workspace (another workspace is imported by name)', () => {
+    // Otherwise a package's source would load without being a dependency, so neither these rules
+    // nor the image would cover it.
+    const found = serverScripts.flatMap(path =>
+      moduleImports(readRepoFile(path), path).flatMap(entry => {
+        const spec = entry.specifier
+        if (entry.typeOnly || !spec || !(spec.startsWith('.') || spec.startsWith('#'))) return []
+        const to = landsIn(path, spec, manifests)
+        return to && to.dir !== workspaceOf(path).dir
+          ? [`${path}: '${spec}' reaches into ${to.dir}: import ${to.name} by name and list it in dependencies`]
+          : []
+      }),
+    )
     expect(found).toEqual([])
   })
 
