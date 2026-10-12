@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Build a scratch database from db/migrations/ the way production will, and check it. Fails if:
-#   - a migration file isn't named <NNNN>_<name>.sql (lower case), two share a number, a folder
-#     sits in db/migrations/ (nothing in it would be applied), a file is over 120 KB, or a line
-#     starts with a psql meta-command
+#   - a migration file isn't named <NNNN>_<name>.sql (lower case), two share a number, a folder or
+#     a hidden file sits in db/migrations/ (nothing in it would be applied), a file is over 120 KB,
+#     or a line starts with a psql meta-command
 #   - the migrations fail. They run in name order, in one transaction on an empty database, the
-#     way Kysely's migrator applies a batch on Postgres, and each file goes to the server unparsed, so a psql
-#     meta-command anywhere is a syntax error, as it would be in production. The session logs in
-#     as a throwaway non-superuser role whose only power is to act as hearth_owner (NOSUPERUSER;
+#     way Kysely's migrator applies a batch on Postgres, and each file goes to the server unparsed,
+#     so a psql meta-command anywhere is a syntax error, as it would be in production. The session
+#     logs in as a throwaway non-superuser role whose only power is to act as hearth_owner (NOSUPERUSER;
 #     CLAUDE.md, Database), so a migration can't fall back on superuser rights. A migration that
 #     ends the transaction itself (COMMIT, ROLLBACK) or leaves a different role in place fails.
 #   - the result breaks a Database rule in CLAUDE.md: a table with row level security off, a view
@@ -28,8 +28,9 @@
 #
 # The migration tool is Kysely (docs/TECH-SPEC.md, T3). When C0.3 adds its migrator (a provider
 # that reads these .sql files), apply the migrations here with it instead of psql, keep refusing
-# any file it would skip or apply out of order, and leave its ledger tables (kysely_migration,
-# kysely_migration_lock) out of the checks by name.
+# any file it would skip or not see, and leave its ledger tables (kysely_migration,
+# kysely_migration_lock) out of the checks by name. This scratch build starts empty, so it can't see
+# a migration numbered below one production already applied; C0.3's CI check against main does.
 #
 # Usage: scripts/check-migrations.sh && scripts/test-db.sh
 # Needs psql. Connects as a superuser with the standard PG* variables; any that are unset default
@@ -52,7 +53,7 @@ up_to=${UP_TO:-}
 [[ -z $up_to || $up_to =~ ^[0-9]{4}$ ]] || { echo "UP_TO must be a 4-digit migration number, not '$up_to'" >&2; exit 2; }
 sql() { psql --no-psqlrc -w -v ON_ERROR_STOP=1 -q "$@"; }  # -w: fail rather than prompt
 
-shopt -s nullglob
+shopt -s nullglob dotglob  # hidden entries are listed too, so they're refused
 named=() files=() status=0
 for path in db/migrations/*; do
   name=${path##*/}
