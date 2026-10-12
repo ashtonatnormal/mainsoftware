@@ -20,7 +20,8 @@ const server = serverWorkspaces(manifests)
 const serverFiles = files.filter(path => server.some(w => path.startsWith(w.dir)))
 const serverScripts = serverFiles.filter(path => /\.[cm]?tsx?$/.test(path) && !path.endsWith('.d.ts'))
 const workspaceOf = (path: string) => server.find(w => path.startsWith(w.dir)) as Manifest
-const isTest = (path: string) => /\.test\.tsx?$/.test(path)
+// Tests, and helpers kept in a testing/ folder, run under Vitest only; the image leaves them out.
+const isTest = (path: string) => /\.test\.tsx?$|\/testing\//.test(path)
 
 const serverApp: Manifest = { dir: 'apps/server/', name: '@hearth/server', imports: { '#src/*': './src/*' } }
 const pkg: Manifest = { dir: 'packages/access/', name: '@hearth/access' }
@@ -54,6 +55,9 @@ describe('T2 server runtime: the rules', () => {
 
   it('makes the server leave a folder through #src/, not ../, while packages may use ../', () => {
     expect(importProblem(load('../config.ts'), serverApp)).toMatch(/#src/)
+    expect(importProblem(load('./../config.ts'), serverApp)).toMatch(/#src/)
+    expect(importProblem(load('../config.ts', { typeOnly: true }), serverApp)).toMatch(/#src/)
+    expect(importProblem(load('./a/../b.ts'), serverApp)).toBeUndefined()
     expect(importProblem(load('../config.ts'), pkg)).toBeUndefined()
   })
 
@@ -78,6 +82,7 @@ describe('T2 server runtime: the rules', () => {
       "type V = import('./v').V",
       'const pick = await import(name)',
       "const r = require('./r.cjs')",
+      "const cast = await import('./cast.js' as string)",
     ].join('\n')
     expect(moduleImports(source)).toEqual([
       load('./config.js'),
@@ -89,6 +94,7 @@ describe('T2 server runtime: the rules', () => {
       load('./v', { typeOnly: true }),
       load(undefined),
       load('./r.cjs'),
+      load('./cast.js'),
     ])
   })
 
@@ -102,6 +108,7 @@ describe('T2 server runtime: the rules', () => {
 
   it('refuses folder keys, export patterns and targets Node would read as JavaScript', () => {
     expect(manifestProblems({ ...pkg, exports: { '.': './src/index.ts' } })).toEqual([])
+    expect(manifestProblems(pkg)).toEqual([expect.stringMatching(/has no exports/)])
     expect(manifestProblems({ ...pkg, exports: './src/index.ts' })).toEqual([])
     expect(manifestProblems(serverApp)).toEqual([])
     expect(manifestProblems({ ...pkg, exports: { './rules': './src/rules.js' } })).toHaveLength(1)
@@ -139,6 +146,8 @@ describe('T2 server runtime: the repo', () => {
   it('every import in the server and its packages names a file Node can load', () => {
     const found = serverScripts.flatMap(path =>
       moduleImports(readRepoFile(path), path).flatMap(entry => {
+        // Vitest, not Node, resolves a test's computed import.
+        if (isTest(path) && entry.specifier === undefined) return []
         const problem = importProblem(entry, workspaceOf(path))
         return problem ? [`${path}: '${entry.specifier ?? '(computed)'}' ${problem}`] : []
       }),

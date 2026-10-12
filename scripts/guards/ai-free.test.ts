@@ -75,6 +75,10 @@ describe('D41 AI-free guard: the matcher', () => {
       'const sdk = await import(`openai`)',
       `const re = [/'/, await import('openai')]`,
       `type Client = import('openai').OpenAI`,
+      `const a = await import('openai' as string)`,
+      `const b = await import('openai' satisfies string)`,
+      `const c = await import('openai'!)`,
+      `const d = require(('openai') as string)`,
     ]
     for (const source of planted) expect(importsOf(source).map(packageOf), source).toContain('openai')
   })

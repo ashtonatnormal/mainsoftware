@@ -63,6 +63,15 @@ describe('C0.2 config', () => {
     expect(loadConfig({ ...env, VALKEY_URL: 'rediss://default:p%2Fw@cache:6379' }).valkeyUrl).toContain('p%2Fw')
   })
 
+  it('reports a Valkey URL that is not a URL once', () => {
+    try {
+      loadConfig({ ...env, VALKEY_URL: 'not a url' })
+      expect.unreachable()
+    } catch (error) {
+      expect((error as Error).message.match(/VALKEY_URL:/g)).toHaveLength(1)
+    }
+  })
+
   it('treats an empty variable as unset', () => {
     expect(loadConfig({ ...env, PORT: '', ROLE: '' })).toMatchObject({ port: 3000, role: 'api' })
   })

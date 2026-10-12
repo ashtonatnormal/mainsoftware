@@ -106,12 +106,16 @@ describe('INF-ARCHLINT import boundaries: the repo', () => {
     expect(found).toEqual([])
   })
 
-  it('no tracked symlink lies inside a workspace, where it could lead an import into another one', () => {
-    const links = execFileSync('git', ['ls-files', '-s'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-      .split('\n')
-      .filter(line => line.startsWith('120000 '))
-      .map(line => line.split('\t')[1] ?? '')
-    expect(links.filter(path => workspaces.some(w => path.startsWith(w.dir)))).toEqual([])
+  it('the repo tracks no symlinks, which could lead an import into another workspace unseen', () => {
+    const links = execFileSync('git', ['ls-files', '-s', '-z'], {
+      cwd: root,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    })
+      .split('\0')
+      .filter(entry => entry.startsWith('120000 '))
+      .map(entry => entry.slice(entry.indexOf('\t') + 1))
+    expect(links).toEqual([])
   })
 
   it('no workspace imports across a boundary', () => {

@@ -12,6 +12,7 @@
 **/dist
 **/*.test.ts
 **/*.test.tsx
+**/testing
 **/.env*
 **/local-data
 **/*.pem

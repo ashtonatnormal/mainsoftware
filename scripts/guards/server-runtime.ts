@@ -8,6 +8,7 @@
 // package the server depends on. The CI start-up check (scripts/check-server.sh) covers
 // whatever this misses at start.
 import { builtinModules } from 'node:module'
+import { posix } from 'node:path'
 import ts from 'typescript'
 import { importTargets, mapImport } from './boundaries'
 import { type ModuleImport, packageOf } from './imports'
@@ -28,6 +29,10 @@ const BUILTINS = new Set(builtinModules)
 // Why Node can't load this import from a file in `from`, or undefined if it can.
 export function importProblem(entry: ModuleImport, from: Manifest): string | undefined {
   const { specifier, typeOnly, json } = entry
+  // A house rule rather than a Node one, so it covers type-only imports too.
+  if (from.dir === 'apps/server/' && specifier?.startsWith('.') && posix.normalize(specifier).startsWith('../')) {
+    return "climbs out of its folder: use #src/… from the server's imports map"
+  }
   // Erased before the code runs, so Node never resolves it (tsc still checks it).
   if (typeOnly) return undefined
   if (specifier === undefined) {
@@ -42,8 +47,6 @@ export function importProblem(entry: ModuleImport, from: Manifest): string | und
     target = targets[0] ?? specifier
   } else if (!specifier.startsWith('.')) {
     return undefined // a package by name or a built-in: checked through package.json
-  } else if (from.dir === 'apps/server/' && specifier.startsWith('../')) {
-    return "climbs out of its folder: use #src/… from the server's imports map"
   }
   if (!RUNNABLE.test(target)) {
     return /\.[cm]?jsx?$/.test(target)
@@ -64,11 +67,16 @@ export function runtimePackage(entry: ModuleImport, from: Manifest): string | un
 }
 
 // Problems with a server workspace's package.json exports and imports, which Node follows
-// exactly as written: no folder keys (Node dropped them), no export patterns (a subpath import by
-// package name couldn't be checked), and every target outside the "types" condition names a .ts
-// or .json file, except an imports pattern ("#src/*": "./src/*"), whose specifier names the file.
+// exactly as written: a package the server imports by name declares exports (without them Node
+// falls back to main or index.js, never the .ts source), no folder keys (Node dropped them), no
+// export patterns (a subpath import by package name couldn't be checked), and every target
+// outside the "types" condition names a .ts or .json file, except an imports pattern
+// ("#src/*": "./src/*"), whose specifier names the file.
 export function manifestProblems(m: Manifest): string[] {
   const problems: string[] = []
+  if (m.exports === undefined && m.name !== '@hearth/server') {
+    problems.push('has no exports, so Node would fall back to main or index.js, not the .ts source')
+  }
   const maps: Array<[string, unknown]> = [
     ['exports', typeof m.exports === 'string' ? { '.': m.exports } : m.exports],
     ['imports', m.imports],

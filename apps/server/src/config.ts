@@ -16,6 +16,8 @@ const origin = z.string().refine(value => URL.canParse(value) && new URL(value).
 const flag = z.enum(['true', 'false']).transform(value => value === 'true')
 
 function percentEncoded(value: string): boolean {
+  // Not a URL at all is reported once, by the URL check.
+  if (!URL.canParse(value)) return true
   try {
     const url = new URL(value)
     decodeURIComponent(url.username)

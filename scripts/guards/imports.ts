@@ -42,10 +42,27 @@ const isJsonType = (node: ts.Node | undefined): boolean =>
       p.initializer.text === 'json',
   )
 
+// The text of a string literal, seen through the wrappers TypeScript allows around it:
+// ('x'), 'x' as string, 'x' satisfies string, <string>'x' and 'x'!.
+function literalText(node: ts.Expression | undefined): string | undefined {
+  let inner = node
+  while (
+    inner &&
+    (ts.isParenthesizedExpression(inner) ||
+      ts.isAsExpression(inner) ||
+      ts.isSatisfiesExpression(inner) ||
+      ts.isTypeAssertionExpression(inner) ||
+      ts.isNonNullExpression(inner))
+  ) {
+    inner = inner.expression
+  }
+  return inner && ts.isStringLiteralLike(inner) ? inner.text : undefined
+}
+
 // Every module a source file loads: imports and re-exports of any form (`export * as ns from`
 // included), import-equals, require() and import(), read from TypeScript's syntax tree, so
-// comments and strings don't count. The path picks the parser (TS, TSX, JS). A function stored
-// under another name, such as createRequire's, isn't followed.
+// comments and strings don't count. The path picks the parser (TS, TSX, JS). Not read: a require
+// function stored under another name (createRequire's), and AMD's define([...]) arrays.
 export function moduleImports(source: string, path = 'file.ts'): ModuleImport[] {
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, scriptKind(path))
   const found: ModuleImport[] = []
@@ -60,7 +77,7 @@ export function moduleImports(source: string, path = 'file.ts'): ModuleImport[] 
     } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
       const target = node.moduleReference.expression
       found.push({
-        specifier: ts.isStringLiteralLike(target) ? target.text : undefined,
+        specifier: literalText(target),
         typeOnly: node.isTypeOnly,
         json: false,
       })
@@ -80,7 +97,7 @@ export function moduleImports(source: string, path = 'file.ts'): ModuleImport[] 
           ? options.properties.find(p => ts.isPropertyAssignment(p) && p.name.getText() === 'with')
           : undefined
       found.push({
-        specifier: first && ts.isStringLiteralLike(first) ? first.text : undefined,
+        specifier: literalText(first),
         typeOnly: false,
         json: !!withClause && ts.isPropertyAssignment(withClause) && isJsonType(withClause.initializer),
       })
