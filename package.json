@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "check": "npm run typecheck && npm run lint && npm test",
-    "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
+    "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces",
     "lint": "biome check",
     "fix": "biome check --write",
     "test": "vitest run && npm run test --workspaces --if-present",

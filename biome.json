@@ -24,7 +24,10 @@
               "Summarizer": "The browser's built-in AI is AI: stages C0–C6 make no model calls (D41). See scripts/guards/ai-free.ts.",
               "Translator": "The browser's built-in AI is AI: stages C0–C6 make no model calls (D41). See scripts/guards/ai-free.ts.",
               "LanguageDetector": "The browser's built-in AI is AI: stages C0–C6 make no model calls (D41). See scripts/guards/ai-free.ts.",
-              "LanguageModel": "The browser's built-in AI is AI: stages C0–C6 make no model calls (D41). See scripts/guards/ai-free.ts."
+              "LanguageModel": "The browser's built-in AI is AI: stages C0–C6 make no model calls (D41). See scripts/guards/ai-free.ts.",
+              "Writer": "The browser's built-in AI is AI: stages C0–C6 make no model calls (D41). See scripts/guards/ai-free.ts.",
+              "Rewriter": "The browser's built-in AI is AI: stages C0–C6 make no model calls (D41). See scripts/guards/ai-free.ts.",
+              "Proofreader": "The browser's built-in AI is AI: stages C0–C6 make no model calls (D41). See scripts/guards/ai-free.ts."
             }
           }
         }

@@ -2,18 +2,13 @@
 // package each one names.
 import ts from 'typescript'
 
-// The npm package an import specifier loads: 'openai/resources' and 'npm:openai@4' load openai,
-// and so do CDN URLs such as https://esm.sh/openai. Relative paths, node: built-ins, # subpath
-// imports and the @/ alias load no package.
+// The npm package an import specifier loads: 'openai/resources' and 'npm:openai@4' load openai.
+// Relative paths, URLs, node: built-ins, # subpath imports and the @/ alias load no package by
+// name; ai-free.test.ts refuses code from CDN URLs separately.
 export function packageOf(specifier: string): string | undefined {
-  let spec = specifier.replace(/^npm:/, '')
-  const cdn = spec.match(
-    /^https?:\/\/(?:esm\.sh|esm\.run|cdn\.skypack\.dev|unpkg\.com|cdn\.jsdelivr\.net\/npm|ga\.jspm\.io\/npm:)\/?(.+)$/,
-  )
-  if (cdn?.[1]) spec = cdn[1]
-  else if (/^(?:[a-z][a-z0-9+.-]*:|[./#]|@\/)/i.test(spec)) return undefined
-  const match = spec.match(/^(@[^/@]+\/[^/@]+|[^/@]+)/)
-  return match?.[1]
+  const spec = specifier.replace(/^npm:/, '')
+  if (/^(?:[a-z][a-z0-9+.-]*:|[./#]|@\/)/i.test(spec)) return undefined
+  return spec.match(/^(@[^/@]+\/[^/@]+|[^/@]+)/)?.[1]
 }
 
 // Every module a source file loads: imports, re-exports, import-equals, require() and import().

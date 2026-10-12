@@ -1,15 +1,30 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Dependency updates for Hearth (BUILD-PLAN C0.1, TECH-SPEC). Nothing merges automatically: every update goes through CI, CodeRabbit and Qodo like any PR (CLAUDE.md, Git).",
+  "description": "Dependency updates for Hearth (BUILD-PLAN C0.1, TECH-SPEC). Nothing merges automatically: every update goes through CI, CodeRabbit and Qodo like any PR (CLAUDE.md, Git). npmrc's min-release-age makes the weekly lock file refresh keep the same 7-day rule as minimumReleaseAge.",
   "extends": ["config:recommended", ":semanticCommits", "helpers:pinGitHubActionDigests"],
   "timezone": "Asia/Singapore",
   "schedule": ["before 9am on monday"],
   "minimumReleaseAge": "7 days",
+  "npmrc": "min-release-age=7\n",
   "internalChecksFilter": "strict",
   "prConcurrentLimit": 5,
   "labels": ["dependencies"],
-  "lockFileMaintenance": { "enabled": true, "schedule": ["before 9am on monday"] },
-  "major": { "dependencyDashboardApproval": true },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 9am on monday"]
+  },
+  "major": {
+    "dependencyDashboardApproval": true
+  },
+  "customManagers": [
+    {
+      "description": "The gitleaks version that ci.yml's secrets job installs through the Go module proxy.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": ["go install (?<depName>github\\.com/zricethezav/gitleaks/v8)@(?<currentValue>v[0-9.]+)"],
+      "datasourceTemplate": "go"
+    }
+  ],
   "packageRules": [
     {
       "description": "Node stays on 24 LTS (T2, D37): moving to the next LTS is a decision, not an update.",

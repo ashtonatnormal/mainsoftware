@@ -15,6 +15,8 @@ describe('VITE_ guard: no server secret reaches the browser (CLAUDE.md, Database
       'VITE_PGHOST',
       'VITE_ADMIN_PASSWORD',
       'VITE_PRIVATE_BUCKET',
+      'VITE_apiKey',
+      'VITE_Db_Password',
     ]) {
       expect(isSecretShaped(name), name).toBe(true)
     }
@@ -26,11 +28,21 @@ describe('VITE_ guard: no server secret reaches the browser (CLAUDE.md, Database
     }
   })
 
-  it('finds names in code and env files', () => {
-    expect(viteNames('const k = import.meta.env.VITE_API_KEY\nVITE_RELEASE=1\n')).toEqual([
+  it('finds names in code and env files, whatever their case', () => {
+    expect(viteNames('const k = import.meta.env.VITE_API_KEY\nVITE_RELEASE=1\nVITE_apiKey=x\n')).toEqual([
       'VITE_API_KEY',
       'VITE_RELEASE',
+      'VITE_apiKey',
     ])
+  })
+
+  it('reads Dockerfiles, env examples and config, but not docs or lockfiles', () => {
+    for (const path of ['apps/server/Dockerfile', 'Dockerfile.web', 'infra/web.dockerfile', '.env.example', 'ci.yml']) {
+      expect(mayNameVariables(path), path).toBe(true)
+    }
+    for (const path of ['docs/PRD.md', 'package-lock.json', 'spike/x/package-lock.json']) {
+      expect(mayNameVariables(path), path).toBe(false)
+    }
   })
 
   it('no source, config or .env.example file names a secret-shaped VITE_ variable', () => {

@@ -12,8 +12,9 @@
     "noFallthroughCasesInSwitch": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    // Only syntax Node 24 can strip (no enums, namespaces or parameter properties), so any
-    // package's TypeScript runs as is in Node and in Vite.
+    // Only syntax Node 24's type stripping can remove (no enums, namespaces or parameter
+    // properties). Imports are another matter: Node needs `./x.ts` and can't resolve `@/*`, so how
+    // the server runs is decided in C0.2 (docs/TECH-SPEC.md, T2).
     "erasableSyntaxOnly": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
