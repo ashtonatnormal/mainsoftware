@@ -6,7 +6,8 @@
 # as a test, in name order; keep shared fixtures in a subfolder and include them with \ir.
 #
 # Each test runs inside a transaction that is rolled back afterwards, with deferred constraints
-# checked at the end. A test that ends that transaction itself (COMMIT, ROLLBACK, \connect) or
+# checked at the end. The transaction is READ COMMITTED, Postgres's default, unless the test's
+# first line is exactly `-- test-db: repeatable read`, for a test of what happens at that level. A test that ends that transaction itself (COMMIT, ROLLBACK, \connect) or
 # turns ON_ERROR_STOP off fails, and its changes may stay in the scratch database until
 # check-migrations.sh rebuilds it.
 #
@@ -37,8 +38,10 @@ end if; end \$\$"
 failed=0
 for path in "${tests[@]}"; do
   # -f keeps psql's file:line prefix on errors and lets \ir find files next to the test.
+  begin=begin
+  [ "$(head -n 1 "$path")" != '-- test-db: repeatable read' ] || begin='begin isolation level repeatable read'
   if psql --no-psqlrc -w -v ON_ERROR_STOP=1 -q -d "$db" \
-       -c 'begin' -c "$mark" -f "$path" \
+       -c "$begin" -c "$mark" -f "$path" \
        -c '\set ON_ERROR_STOP 1' -c 'set constraints all immediate' -c "$guard" -c 'rollback' >/dev/null; then
     echo "ok    $path"
   else

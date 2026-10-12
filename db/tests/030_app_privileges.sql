@@ -1,14 +1,16 @@
 -- CLAUDE.md Database: hearth_app gets only the grants each table needs. This pins every privilege
--- it holds on the public schema's tables, columns, sequences and functions, so any new grant (or
--- a table that gets one) must be added here on purpose, and anything not listed (UPDATE or
--- DELETE on audit_events, SELECT on data_access_events, any grant on a partition) fails.
+-- it can use on every table, column, sequence and function outside Postgres's own schemas,
+-- however it got it (a grant to it, to PUBLIC, or through a role), so any new grant must be added
+-- here on purpose. Anything not listed (UPDATE or DELETE on audit_events, SELECT on
+-- data_access_events, choosing a log entry's time, any grant on a partition) fails. Nothing may be
+-- granted to PUBLIC at all, and hearth_app can create no schema object or temporary table.
 \ir fixtures/two_orgs.sql
 
 do $$
 declare
   expected text[] := array[
     'orgs: SELECT',
-    'principals: INSERT', 'principals: SELECT', 'principals.archived_at: UPDATE',
+    'principals: INSERT', 'principals: SELECT',
     'departments: INSERT', 'departments: SELECT',
     'departments.archived_at: UPDATE', 'departments.archived_by: UPDATE', 'departments.name: UPDATE',
     'teams: INSERT', 'teams: SELECT',
@@ -31,15 +33,18 @@ declare
     'sessions: INSERT', 'sessions: SELECT',
     'sessions.last_seen_at: UPDATE', 'sessions.revoke_reason: UPDATE', 'sessions.revoked_at: UPDATE', 'sessions.revoked_by: UPDATE',
     'notice_versions: INSERT', 'notice_versions: SELECT',
-    'notice_acknowledgments: INSERT', 'notice_acknowledgments: SELECT',
-    -- The logs: add rows, nothing else.
-    'audit_events.action: INSERT', 'audit_events.actor_id: INSERT', 'audit_events.at: INSERT',
+    'notice_acknowledgments: SELECT',
+    'notice_acknowledgments.device_id: INSERT', 'notice_acknowledgments.method: INSERT',
+    'notice_acknowledgments.notice_version_id: INSERT', 'notice_acknowledgments.org_id: INSERT',
+    'notice_acknowledgments.person_id: INSERT', 'notice_acknowledgments.recorded_by: INSERT',
+    -- The logs: add rows, nothing else, and never choose an entry's id or time.
+    'audit_events.action: INSERT', 'audit_events.actor_id: INSERT',
     'audit_events.case_id: INSERT', 'audit_events.details: INSERT', 'audit_events.device_id: INSERT',
     'audit_events.ip: INSERT', 'audit_events.on_behalf_of_id: INSERT',
     'audit_events.org_id: INSERT', 'audit_events.reason: INSERT', 'audit_events.request_id: INSERT',
     'audit_events.target_id: INSERT', 'audit_events.target_type: INSERT', 'audit_events.via: INSERT',
-    'data_access_events.actor_id: INSERT', 'data_access_events.at: INSERT', 'data_access_events.data_type: INSERT',
-    'data_access_events.details: INSERT', 'data_access_events.id: INSERT', 'data_access_events.object_id: INSERT',
+    'data_access_events.actor_id: INSERT', 'data_access_events.case_id: INSERT', 'data_access_events.data_type: INSERT',
+    'data_access_events.details: INSERT', 'data_access_events.object_id: INSERT',
     'data_access_events.object_type: INSERT', 'data_access_events.on_behalf_of_id: INSERT',
     'data_access_events.org_id: INSERT', 'data_access_events.provider: INSERT', 'data_access_events.request_id: INSERT',
     'data_access_events.subject_id: INSERT', 'data_access_events.type: INSERT', 'data_access_events.via: INSERT',
@@ -51,24 +56,36 @@ declare
   missing text[];
   extra text[];
 begin
+  with rel as (
+    select c.oid, c.relkind,
+           case n.nspname when 'public' then c.relname::text else format('%I.%I', n.nspname, c.relname) end as name
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema' and c.relkind in ('r', 'p', 'v', 'm', 'f', 'S')
+  ), table_level as (
+    select r.oid, r.name, p.priv
+    from rel r cross join unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) as p (priv)
+    where r.relkind <> 'S' and has_table_privilege('hearth_app', r.oid, p.priv)
+  )
   select coalesce(array_agg(g order by g), '{}') into actual from (
-    -- Table-wide grants.
-    select format('%s: %s', c.relname, a.privilege_type) as g
-    from pg_class c join pg_namespace s on s.oid = c.relnamespace
-    cross join lateral aclexplode(c.relacl) a
-    where s.nspname = 'public' and a.grantee = 'hearth_app'::regrole
+    select format('%s: %s', name, priv) as g from table_level
     union all
-    -- Column grants.
-    select format('%s.%s: %s', c.relname, att.attname, a.privilege_type)
-    from pg_class c join pg_namespace s on s.oid = c.relnamespace
-    join pg_attribute att on att.attrelid = c.oid and att.attnum > 0 and not att.attisdropped
-    cross join lateral aclexplode(att.attacl) a
-    where s.nspname = 'public' and a.grantee = 'hearth_app'::regrole
+    -- Column privileges it holds only for some columns.
+    select format('%s.%s: %s', r.name, a.attname, p.priv)
+    from rel r
+    join pg_attribute a on a.attrelid = r.oid and a.attnum > 0 and not a.attisdropped
+    cross join unnest(array['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']) as p (priv)
+    where r.relkind <> 'S' and has_column_privilege('hearth_app', r.oid, a.attnum, p.priv)
+      and not exists (select 1 from table_level t where t.oid = r.oid and t.priv = p.priv)
     union all
-    -- Functions it can run, by any route (a grant to it or to PUBLIC).
+    select format('sequence %s: %s', r.name, p.priv)
+    from rel r cross join unnest(array['USAGE', 'SELECT', 'UPDATE']) as p (priv)
+    where r.relkind = 'S' and has_sequence_privilege('hearth_app', r.oid, p.priv)
+    union all
+    -- Functions it can run, by any route.
     select format('function %s: EXECUTE', p.oid::regprocedure)
-    from pg_proc p join pg_namespace s on s.oid = p.pronamespace
-    where s.nspname = 'public' and has_function_privilege('hearth_app', p.oid, 'EXECUTE')
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema'
+      and has_function_privilege('hearth_app', p.oid, 'EXECUTE')
   ) grants;
 
   select coalesce(array_agg(e order by e), '{}') into missing from unnest(expected) e where e <> all (actual);
@@ -79,11 +96,43 @@ begin
 end
 $$;
 
--- And the role itself: no superuser, no BYPASSRLS, no CREATEROLE or CREATEDB, a member of nothing
--- that matters (scripts/check-migrations.sh checks the RLS part on every build).
+-- Nothing in the schema is granted to PUBLIC, table or column.
+select pg_temp.check(count(*) = 0, format('granted to PUBLIC: %s', string_agg(what, ', ')))
+from (
+  select format('%I.%I %s', n.nspname, c.relname, a.privilege_type) as what
+  from pg_class c join pg_namespace n on n.oid = c.relnamespace cross join lateral aclexplode(c.relacl) a
+  where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema' and a.grantee = 0
+  union all
+  select format('%I.%I.%I %s', n.nspname, c.relname, att.attname, a.privilege_type)
+  from pg_class c join pg_namespace n on n.oid = c.relnamespace
+  join pg_attribute att on att.attrelid = c.oid and att.attnum > 0
+  cross join lateral aclexplode(att.attacl) a
+  where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema' and a.grantee = 0
+) public_grants;
+
+-- It can create nothing: no schema, no object in one, no temporary table.
+select pg_temp.check(not has_database_privilege('hearth_app', current_database(), 'CREATE'), 'hearth_app can create schemas');
+select pg_temp.check(not has_database_privilege('hearth_app', current_database(), 'TEMPORARY'), 'hearth_app can create temporary tables');
+select pg_temp.check(not exists (
+  select 1 from pg_namespace n
+  where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema' and has_schema_privilege('hearth_app', n.oid, 'CREATE')),
+  'hearth_app can create objects in a schema');
+
+-- And the role itself: no superuser, no BYPASSRLS, no CREATEROLE or CREATEDB, not the database's
+-- owner, and a member of no role (rds_iam aside, on RDS, if it has no powers of its own).
 select pg_temp.check(not (rolsuper or rolbypassrls or rolcreaterole or rolcreatedb or rolreplication),
                      'hearth_app has a power it must not have')
 from pg_roles where rolname = 'hearth_app';
+select pg_temp.check(pg_get_userbyid(datdba) = 'hearth_owner', 'hearth_owner does not own the database')
+from pg_database where datname = current_database();
 select pg_temp.check(not exists (
   select 1 from pg_auth_members m join pg_roles g on g.oid = m.roleid
-  where m.member = 'hearth_app'::regrole and g.rolname <> 'rds_iam'), 'hearth_app is a member of another role');
+  where m.member = 'hearth_app'::regrole
+    and not (g.rolname = 'rds_iam' and not g.rolsuper and not g.rolbypassrls
+             and not exists (select 1 from pg_auth_members r where r.member = g.oid))),
+  'hearth_app is a member of another role');
+
+-- A temporary type can't stand in for the one the time zone check names (pg_catalog.timestamptz),
+-- even for a role that could make one.
+create domain pg_temp.timestamptz as text;
+select pg_temp.check(not public.is_iana_time_zone('Mars/Olympus_Mons'), 'a temporary type changed is_iana_time_zone');

@@ -1,6 +1,7 @@
 -- ACC-11, CLAUDE.md Database: a transaction with no org set (or an empty one) sees no row of any
--- table hearth_app can read, and can't write one. Every table is covered without listing them, so
--- a new table is checked the day it lands.
+-- table hearth_app can read, and can't write one. Every table in every schema is covered, found
+-- from the catalogue (any SELECT, whole-table or on some columns), so a new table is checked the
+-- day it lands.
 \ir fixtures/two_orgs.sql
 
 do $$
@@ -15,13 +16,15 @@ begin
       perform set_config('app.org_id', setting, true);
     end if;
     for t in
-      select c.relname from pg_class c join pg_namespace s on s.oid = c.relnamespace
-      where s.nspname = 'public' and c.relkind in ('r', 'p') and has_table_privilege('hearth_app', c.oid, 'SELECT')
+      select format('%I.%I', n.nspname, c.relname) as name
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema' and c.relkind in ('r', 'p', 'v', 'm', 'f')
+        and has_any_column_privilege('hearth_app', c.oid, 'SELECT')
     loop
       perform set_config('role', 'hearth_app', true);
-      execute format('select count(*) from public.%I', t.relname) into seen;
+      execute format('select count(*) from %s', t.name) into seen;
       perform set_config('role', 'none', true);
-      perform pg_temp.check(seen = 0, format('%s: hearth_app saw %s row(s) with app.org_id %s', t.relname, seen, setting));
+      perform pg_temp.check(seen = 0, format('%s: hearth_app saw %s row(s) with app.org_id %s', t.name, seen, setting));
     end loop;
   end loop;
 end
@@ -36,5 +39,6 @@ select pg_temp.expect_error($$insert into public.audit_events (org_id, action)
   values ('f1000000-0000-4000-8000-000000000000', 'test.no_org')$$, '42501');
 select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id)
   values ('f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a8')$$, '42501');
-select pg_temp.expect_rows($$update public.teams set name = 'Renamed' where id = 'f1000000-0000-4000-8000-0000000000d1'$$, 0);
+select pg_temp.expect_rows($$update public.teams set name = 'Renamed'$$, 0);
+select pg_temp.expect_rows($$update public.people set full_name = 'Renamed'$$, 0);
 select pg_temp.expect_rows($$delete from public.working_hours$$, 0);

@@ -21,9 +21,19 @@ select pg_temp.expect_error($$delete from public.audit_events$$, '42501');
 select pg_temp.expect_error($$truncate public.audit_events$$, '42501');
 select pg_temp.expect_error($$insert into public.audit_events (org_id, action)
   values ('f1000000-0000-4000-8000-000000000000', 'test.returning') returning id$$, '42501');
--- Ids come from the sequence, in order (the hash chain C0.16 adds relies on it).
+-- Ids come from the sequence in order, and the time is the write's (C0.16's hash chain relies on
+-- both): an entry can't be backdated or given a chosen id.
 select pg_temp.expect_error($$insert into public.audit_events (id, org_id, action)
   values (1, 'f1000000-0000-4000-8000-000000000000', 'test.chosen_id')$$, '428C9');
+select pg_temp.expect_error($$insert into public.audit_events (org_id, action, at)
+  values ('f1000000-0000-4000-8000-000000000000', 'test.backdated', now() - interval '1 year')$$, '42501');
+-- Privileged access (Rule 9) names its case and reason.
+select pg_temp.expect_error($$insert into public.audit_events (org_id, actor_id, action, target_type, target_id)
+  values ('f1000000-0000-4000-8000-000000000000', 'f1000000-0000-4000-8000-0000000000a5', 'privileged.read', 'message', 'm-1')$$,
+  '23514', '%audit_events_privileged_has_case%');
+insert into public.audit_events (org_id, actor_id, action, target_type, target_id, case_id, reason)
+values ('f1000000-0000-4000-8000-000000000000', 'f1000000-0000-4000-8000-0000000000a5', 'privileged.read', 'message', 'm-1',
+        gen_random_uuid(), 'Access request 2026-04');
 
 select pg_temp.expect_error($$select count(*) from public.data_access_events$$, '42501');
 select pg_temp.expect_error($$update public.data_access_events set type = 'share'$$, '42501');
@@ -32,6 +42,13 @@ select pg_temp.expect_error($$truncate public.data_access_events$$, '42501');
 select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id)
   values ('f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a2')
   returning id$$, '42501');
+select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id, at)
+  values ('f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a2', now() - interval '1 day')$$, '42501');
+select pg_temp.expect_error($$insert into public.data_access_events (id, org_id, type, subject_id, actor_id)
+  values (gen_random_uuid(), 'f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a2')$$, '42501');
+-- Nor a notice acknowledgment's time (PDPA-03 records when it was given).
+select pg_temp.expect_error($$insert into public.notice_acknowledgments (org_id, person_id, notice_version_id, method, acknowledged_at)
+  values ('f1000000-0000-4000-8000-000000000000', 'f1000000-0000-4000-8000-0000000000a7', 'f1000000-0000-4000-8000-0000000000e3', 'in_app', '2020-01-01')$$, '42501');
 
 -- Every partition, directly.
 do $$

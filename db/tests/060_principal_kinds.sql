@@ -51,3 +51,12 @@ select pg_temp.expect_error($$insert into public.principals (org_id, kind, syste
 select pg_temp.expect_error($$insert into public.principals (org_id, kind, owner_id)
   values ('f1000000-0000-4000-8000-000000000000', 'assistant', 'f1000000-0000-4000-8000-0000000000a6')$$, '42501');
 select pg_temp.expect_error($$update public.principals set kind = 'system'$$, '42501');
+-- Nor archive one (A4 and A5 bring that, with who did it).
+select pg_temp.expect_error($$update public.principals set archived_at = now(), archived_by = 'f1000000-0000-4000-8000-0000000000a2'$$, '42501');
+reset role;
+
+-- Archiving records who and when together, once.
+select pg_temp.expect_error($$update public.principals set archived_at = now() where id = 'f1000000-0000-4000-8000-0000000000ab'$$, '23514');
+update public.principals set archived_at = now(), archived_by = 'f1000000-0000-4000-8000-0000000000a3' where id = 'f1000000-0000-4000-8000-0000000000ab';
+select pg_temp.expect_error($$update public.principals set archived_at = null, archived_by = null where id = 'f1000000-0000-4000-8000-0000000000ab'$$,
+  '23514', 'That has already ended%');

@@ -68,8 +68,32 @@ select pg_temp.expect_error($$select count(*) from public.read_audit_events(now(
 select pg_temp.expect_error($$select count(*) from public.read_audit_events(now() - interval '1 day', now(), null, 0)$$, '22023');
 select pg_temp.expect_error($$select count(*) from public.read_audit_events(now() - interval '1 day', now(), null, 1001)$$, '22023');
 
--- Paging: before_id returns older rows only, newest first.
-select pg_temp.check(
-  (select bool_and(id < 1000000000000) and count(*) <= 1
-   from public.read_audit_events(now() - interval '1 day', now() + interval '1 day', 1000000000000, 1)),
-  'max_rows or before_id was not applied');
+-- The period and the paging: rows outside [from, to) stay out, results come newest first, and
+-- before_id returns only older rows. (As the superuser, add an old row and two more recent ones.)
+reset role;
+insert into public.audit_events (org_id, action, at) values
+  ('f1000000-0000-4000-8000-000000000000', 'test.old', now() - interval '3 days'),
+  ('f1000000-0000-4000-8000-000000000000', 'test.page_a', now()),
+  ('f1000000-0000-4000-8000-000000000000', 'test.page_b', now());
+select pg_temp.act_as('1', 'a1');
+do $$
+declare
+  page bigint[];
+  next_page bigint[];
+  everything bigint[];
+begin
+  select array_agg(r.id order by r.ordinality) into everything
+  from public.read_audit_events(now() - interval '1 day', now() + interval '1 day') with ordinality as r;
+  perform pg_temp.check(everything = (select array_agg(x order by x desc) from unnest(everything) x), 'rows are not newest first');
+  perform pg_temp.check(not exists (
+    select 1 from public.read_audit_events(now() - interval '1 day', now() + interval '1 day') r where r.action = 'test.old'),
+    'a row from before the period was returned');
+
+  select array_agg(r.id order by r.ordinality) into page
+  from public.read_audit_events(now() - interval '1 day', now() + interval '1 day', null, 2) with ordinality as r;
+  perform pg_temp.check(cardinality(page) = 2 and page[1] > page[2], format('max_rows or the order is wrong: %s', page));
+  select array_agg(r.id order by r.ordinality) into next_page
+  from public.read_audit_events(now() - interval '1 day', now() + interval '1 day', page[1], 1) with ordinality as r;
+  perform pg_temp.check(next_page = array[page[2]], format('before_id %s returned %s, not %s', page[1], next_page, page[2]));
+end
+$$;

@@ -89,7 +89,6 @@ begin
   end loop;
   insert into public.people (id, org_id, full_name, manager_id, created_by)
     values (pg_temp.id(o, 'a8'), org, 'Mel Member ' || o, pg_temp.id(o, 'a7'), owner);
-  update public.people set deactivated_at = now(), deactivated_by = owner where id = pg_temp.id(o, 'a9');
 
   -- +65 <org> 00000 <two digits>, e.g. +6510000001 for org 1's Owner and +6510000010 for aa.
   insert into public.phone_numbers (org_id, person_id, e164, created_by)
@@ -108,23 +107,26 @@ begin
   insert into public.team_memberships (org_id, team_id, person_id, created_by)
     values (org, pg_temp.id(o, 'd1'), pg_temp.id(o, 'a7'), owner), (org, pg_temp.id(o, 'd1'), pg_temp.id(o, 'a8'), owner);
 
-  insert into public.role_assignments (org_id, person_id, role, team_id, created_by, approved_by, revoked_at, revoked_by) values
-    (org, owner, 'owner', null, hearth, null, null, null),
-    (org, admin, 'admin', null, owner, null, null, null),
-    (org, pg_temp.id(o, 'a3'), 'ai_admin', null, owner, null, null, null),
-    (org, pg_temp.id(o, 'a4'), 'leadership', null, owner, null, null, null),
-    (org, pg_temp.id(o, 'a5'), 'dpo', null, owner, admin, null, null),
-    (org, pg_temp.id(o, 'a6'), 'compliance_officer', null, owner, admin, null, null),
-    (org, pg_temp.id(o, 'a7'), 'team_admin', pg_temp.id(o, 'd1'), admin, null, null, null),
-    (org, pg_temp.id(o, 'a9'), 'dpo', null, owner, admin, null, null),
-    (org, pg_temp.id(o, 'aa'), 'admin', null, owner, null, now(), owner);
+  insert into public.role_assignments (org_id, person_id, role, team_id, created_by, approved_by, approved_at, revoked_at, revoked_by) values
+    (org, owner, 'owner', null, hearth, null, null, null, null),
+    (org, admin, 'admin', null, owner, null, null, null, null),
+    (org, pg_temp.id(o, 'a3'), 'ai_admin', null, owner, null, null, null, null),
+    (org, pg_temp.id(o, 'a4'), 'leadership', null, owner, null, null, null, null),
+    (org, pg_temp.id(o, 'a5'), 'dpo', null, owner, admin, now(), null, null),
+    (org, pg_temp.id(o, 'a6'), 'compliance_officer', null, owner, admin, now(), null, null),
+    (org, pg_temp.id(o, 'a7'), 'team_admin', pg_temp.id(o, 'd1'), admin, null, null, null, null),
+    (org, pg_temp.id(o, 'aa'), 'admin', null, owner, null, null, now(), owner);
+  -- a9 was a DPO and has left; the role was never revoked.
+  insert into public.role_assignments (org_id, person_id, role, created_by, approved_by, approved_at)
+    values (org, pg_temp.id(o, 'a9'), 'dpo', owner, admin, now());
+  update public.people set deactivated_at = now(), deactivated_by = owner where id = pg_temp.id(o, 'a9');
 
   insert into public.devices (id, org_id, user_id, label) values (pg_temp.id(o, 'e1'), org, pg_temp.id(o, 'a8'), 'Test phone');
   insert into public.sessions (id, org_id, user_id, device_id, token_hash, expires_at)
     values (pg_temp.id(o, 'e2'), org, pg_temp.id(o, 'a8'), pg_temp.id(o, 'e1'),
             decode(md5('session ' || o) || md5('token ' || o), 'hex'), now() + interval '30 days');
   insert into public.notice_versions (id, org_id, version, body, published_by)
-    values (pg_temp.id(o, 'e3'), org, 1, 'Test notice ' || o, pg_temp.id(o, 'a5'));
+    values (pg_temp.id(o, 'e3'), org, 0, 'Test notice ' || o, pg_temp.id(o, 'a5'));
   insert into public.notice_acknowledgments (org_id, person_id, notice_version_id, method, device_id)
     values (org, pg_temp.id(o, 'a8'), pg_temp.id(o, 'e3'), 'in_app', pg_temp.id(o, 'e1'));
 

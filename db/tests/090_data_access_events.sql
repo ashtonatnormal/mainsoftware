@@ -6,9 +6,10 @@
 select pg_temp.act_as('1', 'a2');
 
 -- Every type, including those reserved for A1 and A2.
-insert into public.data_access_events (org_id, type, subject_id, actor_id, object_type, object_id, provider, data_type)
+insert into public.data_access_events (org_id, type, subject_id, actor_id, object_type, object_id, provider, data_type, case_id)
 select 'f1000000-0000-4000-8000-000000000000', t, 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a2',
-       'session', 's-1', case t when 'provider.send' then 'livekit' end, case t when 'provider.send' then 'audio' end
+       'session', 's-1', case t when 'provider.send' then 'livekit' end, case t when 'provider.send' then 'audio' end,
+       case t when 'privileged.read' then gen_random_uuid() end
 from unnest(array['export', 'share', 'recording.view', 'privileged.read', 'provider.send', 'ai.retrieval', 'transcript.view']) as t;
 -- An assistant reading for its person (A4).
 insert into public.data_access_events (org_id, type, subject_id, actor_id, on_behalf_of_id, via, object_type, object_id)
@@ -22,17 +23,27 @@ select pg_temp.expect_error($$insert into public.data_access_events (org_id, typ
   values ('f1000000-0000-4000-8000-000000000000', 'provider.send', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a2')$$, '23514');
 select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id, provider, data_type)
   values ('f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a2', 'livekit', 'audio')$$, '23514');
+-- A privileged read names its Rule 9 case (C1.11), and only a privileged read has one.
+select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id)
+  values ('f1000000-0000-4000-8000-000000000000', 'privileged.read', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a5')$$,
+  '23514', '%data_access_events_privileged_has_case%');
+select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id, case_id)
+  values ('f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a5', gen_random_uuid())$$,
+  '23514', '%data_access_events_privileged_has_case%');
 -- The subject is a person of the org: not an agent, not another org's person.
 select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id)
   values ('f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000ab', 'f1000000-0000-4000-8000-0000000000a2')$$, '23503');
 select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id)
   values ('f1000000-0000-4000-8000-000000000000', 'export', 'f2000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a2')$$, '23503');
--- A row dated before the first partition, or past the last, fails rather than vanishing.
-select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id, at)
-  values ('f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a2', now() - interval '20 years')$$, '23514');
-select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id, at)
-  values ('f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a2', now() + interval '20 years')$$, '23514');
 reset role;
+-- A row dated before the first partition, or past the last, fails rather than vanishing. (Only
+-- the owner can date a row; hearth_app's rows take the time of the write.)
+select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id, at)
+  values ('f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a2', now() - interval '20 years')$$,
+  '23514', 'no partition of relation%');
+select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id, at)
+  values ('f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a2', now() + interval '20 years')$$,
+  '23514', 'no partition of relation%');
 
 -- Partitions: whole UTC months back to back, from this month to at least 12 months on, each with
 -- row level security on and no grants.
