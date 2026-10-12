@@ -155,7 +155,8 @@ export const BROWSER_AI = new RegExp(
 
 // The getUserMedia constraint for the browser's ML voice isolation, unless it turns it off.
 // Matched in code with comments stripped. Allowed: a property read (`settings.voiceIsolation`),
-// setting it to false (`voiceIsolation: false`, `{ exact: false }`, `{ ideal: false }`, or `= false`),
+// setting it to a plain false that ends the expression (`voiceIsolation: false`, `{ exact: false }`,
+// `{ ideal: false }`, or `= false`; not `false || x`),
 // and declaring it as an optional property in a type (`voiceIsolation?: boolean`), which strict
 // TypeScript needs because the DOM types don't declare it. Refused: any other key, shorthand,
 // assignment (`??=`, `||=` and `&&=` included), destructuring, bracket read or `in` check.
@@ -165,7 +166,7 @@ export const BROWSER_AI = new RegExp(
 // usePreviewTracks call, which use the library's own defaults. The stock components-react PreJoin
 // can't turn it off, so C2 doesn't use it.
 export const BANNED_CONSTRAINT =
-  /(?<!\.\s*)\bvoiceIsolation\b(?!['"]?\s*:\s*(?:false\b|\{\s*(?:exact|ideal)\s*:\s*false\s*\})|['"]?\?\s*:(?![^;}\n]*=))|\.\s*voiceIsolation\s*(?:\?\?|\|\||&&)?=(?![=>])(?!\s*false\b)/
+  /(?<!\.\s*)\bvoiceIsolation\b(?!['"]?\s*:\s*(?:false\b|\{\s*(?:exact|ideal)\s*:\s*false\s*\})(?=\s*(?:[,;})\]]|$))|['"]?\?\s*:(?![^;}\n]*=))|\.\s*voiceIsolation\s*(?:\?\?|\|\||&&)?=(?![=>])(?!\s*false\b(?=\s*(?:[,;})\]]|$)))/
 
 // Public CDNs that serve npm packages as browser code, with any subdomain (jsDelivr has several).
 // Hearth's code comes through npm, where the lockfile check and npm audit see it, so nothing loads

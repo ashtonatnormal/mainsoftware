@@ -37,7 +37,16 @@ describe('VITE_ guard: no server secret reaches the browser (CLAUDE.md, Database
   })
 
   it('reads Dockerfiles, env examples and config, but not docs or lockfiles', () => {
-    for (const path of ['apps/server/Dockerfile', 'Dockerfile.web', 'infra/web.dockerfile', '.env.example', 'ci.yml']) {
+    for (const path of [
+      'apps/server/Dockerfile',
+      'Dockerfile.web',
+      'infra/web.dockerfile',
+      '.env.example',
+      'ci.yml',
+      '.env',
+      'apps/web/.env.production',
+      '.env.development.local',
+    ]) {
       expect(mayNameVariables(path), path).toBe(true)
     }
     for (const path of ['docs/PRD.md', 'package-lock.json', 'spike/x/package-lock.json']) {

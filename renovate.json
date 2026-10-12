@@ -17,9 +17,9 @@
   },
   "customManagers": [
     {
-      "description": "The gitleaks version that ci.yml's secrets job installs through the Go module proxy.",
+      "description": "The gitleaks version that secrets.yml installs through the Go module proxy.",
       "customType": "regex",
-      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "managerFilePatterns": ["/^\\.github/workflows/secrets\\.yml$/"],
       "matchStrings": ["go install (?<depName>github\\.com/zricethezav/gitleaks/v8)@(?<currentValue>v[0-9.]+)"],
       "datasourceTemplate": "go"
     }

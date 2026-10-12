@@ -156,6 +156,9 @@ describe('D41 AI-free guard: the matcher', () => {
       'c.audio.voiceIsolation &&= true',
       'class O { voiceIsolation?: boolean = true }',
       'const { voiceIsolation } = settings',
+      'voiceIsolation: false || true',
+      'c.audio.voiceIsolation = false || wanted',
+      'voiceIsolation: { exact: false } && x',
     ]) {
       expect(BANNED_CONSTRAINT.test(source), source).toBe(true)
     }
@@ -168,6 +171,9 @@ describe('D41 AI-free guard: the matcher', () => {
       'expect(track.mediaStreamTrack.getSettings().voiceIsolation).not.toBe(true)',
       'const on = room.options.audioCaptureDefaults?.voiceIsolation === true',
       'c.audio.voiceIsolation ??= false',
+      'const audio = { voiceIsolation: false, echoCancellation: true }',
+      'createLocalAudioTrack({ voiceIsolation: false })',
+      'c.audio.voiceIsolation = false;',
       'interface MediaTrackSettings { voiceIsolation?: boolean }',
       'interface MediaTrackConstraintSet {\n  voiceIsolation?: ConstrainBoolean\n}',
       'const on = (s as { voiceIsolation?: boolean }).voiceIsolation',

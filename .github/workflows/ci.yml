@@ -15,46 +15,9 @@ permissions:
 #     run: exit 1
 # because a failing dependency skips it, and GitHub counts a skipped required check as passed.
 jobs:
-  # Secret scan of every commit on every branch (gitleaks), including what a two-parent merge commit
-  # itself adds (--remerge-diff, which can't show an octopus merge, so those are refused), with
-  # secrets redacted from this public log. The repo is public, so a secret that reached any branch is
-  # already exposed. When this fails, rotate the secret first. Then:
-  # - only on a feature branch: rewrite or delete that branch;
-  # - already on main, which can't be rewritten: add the finding's full Fingerprint from main's run
-  #   (commit:path:rule:line) to the root .gitleaksignore; it matches that one commit only;
-  # - a false positive: rewrite the value so no rule flags it (an obviously fake placeholder), or add
-  #   an [[allowlists]] entry to GITLEAKS_CONFIG_TOML below for that file's path and that exact value
-  #   (condition = "AND", paths, regexTarget = "match", regexes). It holds wherever the line moves and
-  #   matches nothing else. Never use a path:rule:line entry: it would hide any later real secret
-  #   that lands on the same line.
-  # The owner reads every change to .gitleaksignore and to GITLEAKS_CONFIG_TOML before merge
-  # (CLAUDE.md, Git). The PR under scan can't silence itself any other way: gitleaks:allow comments
-  # are ignored, and GITLEAKS_CONFIG_TOML pins gitleaks' default rules over any .gitleaks.toml in the
-  # repo. gitleaks is installed through the Go module proxy, which checks it against Go's checksum
-  # database; Renovate updates the version (renovate.json).
+  # Secret scan (gitleaks), defined in secrets.yml, which also runs on every push to another branch.
   secrets:
-    runs-on: ubuntu-latest
-    env:
-      GITLEAKS_CONFIG_TOML: |
-        [extend]
-        useDefault = true
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-go@v5
-        with:
-          go-version: stable
-          cache: false
-      - name: Refuse octopus merges, which --remerge-diff can't show
-        run: |
-          octopus=$(git rev-list --all --min-parents=3)
-          if [ -n "$octopus" ]; then echo "::error::Octopus merges can't be scanned for secrets: $octopus"; exit 1; fi
-      - run: go install github.com/zricethezav/gitleaks/v8@v8.30.1
-      - run: >-
-          $(go env GOPATH)/bin/gitleaks git --no-banner --redact --verbose --ignore-gitleaks-allow
-          --log-opts="--all --full-history --remerge-diff --diff-filter=tuxdb" .
+    uses: ./.github/workflows/secrets.yml
   # Known vulnerabilities in any installed package, high or critical (npm audit), and the npm
   # registry's signatures and provenance attestations (npm audit signatures). npm has no ignore
   # list: fix a finding by upgrading or with an `overrides` entry in the root package.json.
