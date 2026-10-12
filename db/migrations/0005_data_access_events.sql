@@ -7,9 +7,11 @@
 -- hearth_app; the readers that need it (C1.11, C2.8, C6.2) come with SECURITY DEFINER functions.
 --
 -- It is the busiest log (AI retrievals are recorded once per item, A2), so it is partitioned by
--- month: retention (ADM-06, PDPA-09: at least 12 months) drops whole months. This migration
--- creates this month and the next 12; create_data_access_partitions() adds more and the C0.6
--- scheduler runs it monthly. A row dated outside every partition fails to insert, loudly.
+-- month. Retention (ADM-06, PDPA-09; the retention engine, C0.10) deletes rows past their period
+-- except those under a legal or access-request hold, logging what it deletes, and can drop a
+-- month's partition once nothing in it is held. This migration creates this month and the next
+-- 12; create_data_access_partitions() adds more and the C0.6 scheduler runs it monthly. A row
+-- dated outside every partition fails to insert, loudly.
 create table public.data_access_events (
   id uuid not null default gen_random_uuid(),
   org_id uuid not null references public.orgs (id),
@@ -37,10 +39,13 @@ create table public.data_access_events (
   provider text check (provider ~ '^[a-z][a-z0-9_-]{0,62}$'),
   data_type text check (data_type ~ '^[a-z][a-z0-9_]{0,62}$'),
   request_id text check (length(request_id) between 1 and 200),
+  -- For privileged.read: the Rule 9 case it was read under (C1.11), a plain id like audit_events'.
+  case_id uuid,
   details jsonb not null default '{}' check (jsonb_typeof(details) = 'object'),
   primary key (id, at),
   check ((object_type is null) = (object_id is null)),
   check ((type = 'provider.send') = (provider is not null and data_type is not null)),
+  constraint data_access_events_privileged_has_case check ((type = 'privileged.read') = (case_id is not null)),
   foreign key (org_id, subject_id) references public.people (org_id, id),
   foreign key (org_id, actor_id) references public.principals (org_id, id),
   foreign key (org_id, on_behalf_of_id) references public.principals (org_id, id)
@@ -53,7 +58,9 @@ create index data_access_events_object on public.data_access_events (org_id, obj
 alter table public.data_access_events enable row level security;
 create policy org_isolation on public.data_access_events for insert
   with check (org_id = nullif(current_setting('app.org_id', true), '')::uuid);
-grant insert (id, org_id, at, type, subject_id, actor_id, on_behalf_of_id, via, object_type, object_id, provider, data_type, request_id, details)
+-- Not id or at: each row takes a new id and the time of the write. A time that differs from the
+-- write (a provider send's window, say) goes in details.
+grant insert (org_id, type, subject_id, actor_id, on_behalf_of_id, via, object_type, object_id, provider, data_type, request_id, case_id, details)
   on public.data_access_events to hearth_app;
 
 -- Creates the month partitions from this month to months_ahead months on, skipping any that

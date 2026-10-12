@@ -44,6 +44,7 @@ export interface DataAccessEvents {
   provider: string | null
   data_type: string | null
   request_id: string | null
+  case_id: string | null
   details: Generated<Json>
 }
 
@@ -128,6 +129,7 @@ export interface Principals {
   owner_kind: Generated<string>
   created_at: Generated<Timestamp>
   archived_at: Timestamp | null
+  archived_by: string | null
 }
 
 export interface Profiles {
@@ -150,6 +152,7 @@ export interface RoleAssignments {
   created_at: Generated<Timestamp>
   created_by: string
   approved_by: string | null
+  approved_at: Timestamp | null
   revoked_at: Timestamp | null
   revoked_by: string | null
 }

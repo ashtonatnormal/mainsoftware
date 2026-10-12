@@ -1,7 +1,8 @@
 -- Tembusu Logistics: the fictional org the demo shows (demo/src/data/people.ts), as local and CI
--- data. Never production: scripts/db-local.sh loads it into the local stack's database, and CI's
--- migrations job into the scratch one, and both refuse any server but a local one. Production's
--- first Owner comes from the reviewed bootstrap script instead (CLAUDE.md, Database).
+-- data. Never production: scripts/db-local.sh loads it into the local stack's database, refusing
+-- any server but a local one, and CI's migrations job into its scratch database. It also checks
+-- for itself, below. Production's first Owner comes from the reviewed bootstrap script instead
+-- (CLAUDE.md, Database).
 --
 -- The phone numbers are made up, and the local SMS provider only logs (C0.5). The ids are fixed,
 -- so local links and tests can name them: the org ends 0001, principals start b0, departments
@@ -9,6 +10,17 @@
 --
 -- It runs as hearth_owner, which owns the tables and so is not held to row level security, in
 -- one transaction on an empty database: run it twice and the second run fails on the first row.
+
+do $$
+begin
+  if exists (select 1 from pg_catalog.pg_roles where rolname = 'rds_superuser') then
+    raise exception 'The Tembusu seed is for the local stack and CI, never an RDS database';
+  end if;
+  if exists (select 1 from public.orgs) then
+    raise exception 'The Tembusu seed loads only into a database with no org yet';
+  end if;
+end
+$$;
 
 insert into public.orgs (id, name) values ('a0000000-0000-4000-8000-000000000001', 'Tembusu Logistics');
 
@@ -106,27 +118,27 @@ from (values
 
 -- Roles (ACC-10). Ashton is the first Owner and the DPO (D35), granted by Hearth as the bootstrap
 -- would. Wei Ling's Compliance Officer grant has its second approver (PRD-85).
-insert into public.role_assignments (org_id, person_id, role, team_id, created_by, approved_by) values
-  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000001', 'owner', null, 'b0000000-0000-4000-8000-000000000000', null),
-  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000001', 'dpo', null, 'b0000000-0000-4000-8000-000000000000', null),
-  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000010', 'admin', null, 'b0000000-0000-4000-8000-000000000001', null),
-  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000010', 'ai_admin', null, 'b0000000-0000-4000-8000-000000000001', null),
-  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002', 'leadership', null, 'b0000000-0000-4000-8000-000000000001', null),
-  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000005', 'leadership', null, 'b0000000-0000-4000-8000-000000000001', null),
-  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000006', 'leadership', null, 'b0000000-0000-4000-8000-000000000001', null),
-  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000005', 'compliance_officer', null, 'b0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000010'),
-  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000009', 'team_admin', 'd0000000-0000-4000-8000-000000000006', 'b0000000-0000-4000-8000-000000000010', null),
-  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000003', 'team_admin', 'd0000000-0000-4000-8000-000000000002', 'b0000000-0000-4000-8000-000000000010', null);
+insert into public.role_assignments (org_id, person_id, role, team_id, created_by, approved_by, approved_at) values
+  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000001', 'owner', null, 'b0000000-0000-4000-8000-000000000000', null, null),
+  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000001', 'dpo', null, 'b0000000-0000-4000-8000-000000000000', null, null),
+  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000010', 'admin', null, 'b0000000-0000-4000-8000-000000000001', null, null),
+  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000010', 'ai_admin', null, 'b0000000-0000-4000-8000-000000000001', null, null),
+  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002', 'leadership', null, 'b0000000-0000-4000-8000-000000000001', null, null),
+  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000005', 'leadership', null, 'b0000000-0000-4000-8000-000000000001', null, null),
+  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000006', 'leadership', null, 'b0000000-0000-4000-8000-000000000001', null, null),
+  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000005', 'compliance_officer', null, 'b0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000010', now()),
+  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000009', 'team_admin', 'd0000000-0000-4000-8000-000000000006', 'b0000000-0000-4000-8000-000000000010', null, null),
+  ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000003', 'team_admin', 'd0000000-0000-4000-8000-000000000002', 'b0000000-0000-4000-8000-000000000010', null, null);
 
 -- Accounts for everyone who has signed in: all but Nadia, who joined today.
 insert into public.users (id, org_id)
 select ('b0000000-0000-4000-8000-0000000000' || n)::uuid, 'a0000000-0000-4000-8000-000000000001'
 from unnest(array['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11']) as n;
 
--- A stand-in for notice v1 (C0.9 generates the real text from the processing register), and the
+-- A stand-in for notice v0 (C0.9 generates the real text from the processing register), and the
 -- acknowledgments everyone who has signed in gave in the app.
 insert into public.notice_versions (id, org_id, version, body, published_by) values
-  ('e0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000001', 1,
+  ('e0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000001', 0,
    'Local stand-in for the privacy and recording notice. C0.9 generates the real one from the processing register.',
    'b0000000-0000-4000-8000-000000000001');
 insert into public.notice_acknowledgments (org_id, person_id, notice_version_id, method)

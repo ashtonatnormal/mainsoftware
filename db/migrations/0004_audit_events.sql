@@ -23,7 +23,8 @@ create table public.audit_events (
   target_id text check (length(target_id) between 1 and 200),
   -- The reason the actor gave, which privileged access always has (Rule 9).
   reason text check (length(reason) between 1 and 2000),
-  -- The logged case a privileged read belongs to (Rule 9, C1.11).
+  -- The logged case a privileged read belongs to (Rule 9, C1.11). Its table comes with the Rule 9
+  -- module and has no hearth_app grants, so this is a plain id.
   case_id uuid,
   -- The request that made the change, to tie the entry to the server's logs, and where it came
   -- from: the device (devices.id, kept as a plain id so the retention engine can delete devices
@@ -35,6 +36,8 @@ create table public.audit_events (
   details jsonb not null default '{}' check (jsonb_typeof(details) = 'object'),
   check ((target_type is null) = (target_id is null)),
   check (on_behalf_of_id is null or actor_id is not null),
+  -- Privileged access (Rule 9; actions named privileged.*) always names its case and reason.
+  constraint audit_events_privileged_has_case check (action !~ '^privileged\.' or (case_id is not null and reason is not null)),
   foreign key (org_id, actor_id) references public.principals (org_id, id),
   foreign key (org_id, on_behalf_of_id) references public.principals (org_id, id)
 );
@@ -45,7 +48,9 @@ create index audit_events_target on public.audit_events (org_id, target_type, ta
 alter table public.audit_events enable row level security;
 create policy org_isolation on public.audit_events for insert
   with check (org_id = nullif(current_setting('app.org_id', true), '')::uuid);
-grant insert (org_id, at, actor_id, on_behalf_of_id, via, action, target_type, target_id, reason, case_id, request_id, device_id, ip, details)
+-- Not id or at: entries take the sequence's next id and the time of the write, so none can be
+-- backdated or slotted in among earlier ones.
+grant insert (org_id, actor_id, on_behalf_of_id, via, action, target_type, target_id, reason, case_id, request_id, device_id, ip, details)
   on public.audit_events to hearth_app;
 
 -- Reads the org's audit log, newest first, for the person the server set as app.user_id, who

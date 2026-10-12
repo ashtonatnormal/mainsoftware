@@ -22,9 +22,12 @@ create table public.departments (
 );
 create unique index departments_name_unique on public.departments (org_id, lower(name))
   where archived_at is null;
+create trigger departments_keep_history before update of archived_at, archived_by on public.departments
+  for each row execute function public.keep_history('archived_at', 'archived_by');
 
 -- Teams (ACC-07). A person can be in several. Team defaults (the channels and rooms a new member
--- joins) arrive with channels and rooms (C1.10); the admin console stores none until then (C0.16).
+-- joins) arrive with what they name: default channels with channels (C1.1), default rooms with
+-- rooms (C2.3); nothing is stored until then.
 create table public.teams (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.orgs (id),
@@ -39,6 +42,8 @@ create table public.teams (
   foreign key (org_id, archived_by) references public.principals (org_id, id)
 );
 create unique index teams_name_unique on public.teams (org_id, lower(name)) where archived_at is null;
+create trigger teams_keep_history before update of archived_at, archived_by on public.teams
+  for each row execute function public.keep_history('archived_at', 'archived_by');
 
 -- The roster (ACC-03): the people an admin added, with what the CSV import carries (name,
 -- department, manager; phone numbers, teams and roles have their own tables). Deactivating
@@ -65,6 +70,27 @@ create table public.people (
 );
 create index people_manager on public.people (org_id, manager_id);
 create index people_department on public.people (org_id, department_id);
+-- Someone who has left stays left: reactivating a person isn't an edit (C0.16 decides whether it
+-- exists at all), so nobody regains access, a role included, by clearing deactivated_at.
+create trigger people_keep_history before update of deactivated_at, deactivated_by on public.people
+  for each row execute function public.keep_history('deactivated_at', 'deactivated_by');
+
+-- Nobody joins an archived department. The message can be shown as it is.
+create function public.people_check_department() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  if new.department_id is not null
+     and (tg_op = 'INSERT' or new.department_id is distinct from old.department_id)
+     and exists (select 1 from public.departments d
+                 where d.org_id = new.org_id and d.id = new.department_id and d.archived_at is not null) then
+    raise exception 'That department is archived, so nobody can be added to it.' using errcode = 'check_violation';
+  end if;
+  return new;
+end
+$$;
+revoke execute on function public.people_check_department() from public;
+create trigger people_check_department before insert or update of department_id on public.people
+  for each row execute function public.people_check_department();
 
 -- Reporting lines form a tree: nobody manages themselves, directly or through others, and a new
 -- manager must still be at the org. Two changes made at once could each look fine alone and
@@ -119,7 +145,7 @@ create table public.phone_numbers (
   org_id uuid not null references public.orgs (id),
   person_id uuid not null,
   -- E.164: a plus, a country code and up to 15 digits in all.
-  e164 text not null check (e164 ~ '^\+[1-9][0-9]{6,14}$'),
+  e164 text not null constraint phone_numbers_e164 check (e164 ~ '^\+[1-9][0-9]{6,14}$'),
   created_at timestamptz not null default now(),
   created_by uuid not null,
   removed_at timestamptz,
@@ -132,6 +158,8 @@ create table public.phone_numbers (
 );
 create unique index phone_numbers_current_number on public.phone_numbers (org_id, e164) where removed_at is null;
 create unique index phone_numbers_current_person on public.phone_numbers (org_id, person_id) where removed_at is null;
+create trigger phone_numbers_keep_history before update of removed_at, removed_by on public.phone_numbers
+  for each row execute function public.keep_history('removed_at', 'removed_by');
 
 -- The account a person gets at first sign-in (ACC-01). Its id is the person's id. C0.5 adds the
 -- PIN, passkeys and lockout state.
@@ -163,6 +191,8 @@ create table public.team_memberships (
 create unique index team_memberships_current on public.team_memberships (org_id, team_id, person_id)
   where removed_at is null;
 create index team_memberships_person on public.team_memberships (org_id, person_id) where removed_at is null;
+create trigger team_memberships_keep_history before update of removed_at, removed_by on public.team_memberships
+  for each row execute function public.keep_history('removed_at', 'removed_by');
 
 -- Nobody joins an archived team, and nobody who has left joins a team. The messages can be shown
 -- as they are.
@@ -191,8 +221,10 @@ create trigger team_memberships_check before insert on public.team_memberships
 -- Roles are set only through ADM-02's role assignment and the roster import (ACC-03), plus the
 -- Owner bootstrap (CLAUDE.md, Database), so hearth_app may read them but not write them: C0.16
 -- adds the SECURITY DEFINER functions that re-check who may grant what (Owner-only roles, the
--- second approver for DPO and Compliance Officer, PRD-85) and write the audit event. Nobody
--- grants, approves or revokes their own role.
+-- second approver for DPO and Compliance Officer, PRD-85) and write the audit event. A row is a
+-- role held: a grant waiting for its second approver lives elsewhere (C0.16) and is added here
+-- once approved. Nobody grants, approves or revokes their own role; the constraints are named so
+-- the server can turn a refusal into words.
 create table public.role_assignments (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.orgs (id),
@@ -201,17 +233,19 @@ create table public.role_assignments (
   team_id uuid,
   created_at timestamptz not null default now(),
   created_by uuid not null,
-  -- The second approver DPO and Compliance Officer grants need (PRD-85); the bootstrap's first
-  -- Owner and DPO (D35) has none.
+  -- The second approver DPO and Compliance Officer grants need (PRD-85), and when they approved;
+  -- the bootstrap's first Owner and DPO (D35) has none.
   approved_by uuid,
+  approved_at timestamptz,
   revoked_at timestamptz,
   revoked_by uuid,
   unique (org_id, id),
-  check ((role = 'team_admin') = (team_id is not null)),
+  constraint role_assignments_team_admin_has_team check ((role = 'team_admin') = (team_id is not null)),
+  check ((approved_at is null) = (approved_by is null)),
   check ((revoked_at is null) = (revoked_by is null)),
-  check (created_by <> person_id),
-  check (approved_by <> person_id and approved_by <> created_by),
-  check (revoked_by <> person_id),
+  constraint role_assignments_not_self_granted check (created_by <> person_id),
+  constraint role_assignments_not_self_approved check (approved_by <> person_id and approved_by <> created_by),
+  constraint role_assignments_not_self_revoked check (revoked_by <> person_id),
   foreign key (org_id, person_id) references public.people (org_id, id),
   foreign key (org_id, team_id) references public.teams (org_id, id),
   foreign key (org_id, created_by) references public.principals (org_id, id),
@@ -220,6 +254,27 @@ create table public.role_assignments (
 );
 create unique index role_assignments_current on public.role_assignments (org_id, person_id, role, team_id)
   nulls not distinct where revoked_at is null;
+create trigger role_assignments_keep_history before update of revoked_at, revoked_by on public.role_assignments
+  for each row execute function public.keep_history('revoked_at', 'revoked_by');
+
+-- Nobody who has left gets a role, and nobody becomes Team Admin of an archived team.
+create function public.role_assignments_check() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  if exists (select 1 from public.people p
+             where p.org_id = new.org_id and p.id = new.person_id and p.deactivated_at is not null) then
+    raise exception 'That person has left the organisation, so they can''t be given a role.' using errcode = 'check_violation';
+  end if;
+  if new.team_id is not null and exists (select 1 from public.teams t
+             where t.org_id = new.org_id and t.id = new.team_id and t.archived_at is not null) then
+    raise exception 'That team is archived, so nobody can be its Team Admin.' using errcode = 'check_violation';
+  end if;
+  return new;
+end
+$$;
+revoke execute on function public.role_assignments_check() from public;
+create trigger role_assignments_check before insert on public.role_assignments
+  for each row execute function public.role_assignments_check();
 
 -- What a person sets about themselves (ACC-08): the name they go by, their title, time zone and
 -- status. Their full name, department, manager and teams come from the roster; the photo arrives
@@ -230,7 +285,7 @@ create table public.profiles (
   org_id uuid not null references public.orgs (id),
   display_name text check (display_name = btrim(display_name) and length(display_name) between 1 and 100),
   title text check (title = btrim(title) and length(title) between 1 and 200),
-  time_zone text not null default 'Asia/Singapore' check (public.is_iana_time_zone(time_zone)),
+  time_zone text not null default 'Asia/Singapore' constraint profiles_time_zone check (public.is_iana_time_zone(time_zone)),
   custom_status text check (custom_status = btrim(custom_status) and length(custom_status) between 1 and 100),
   custom_status_until timestamptz,
   updated_at timestamptz not null default now(),
