@@ -15,16 +15,20 @@ permissions:
 #     run: exit 1
 # because a failing dependency skips it, and GitHub counts a skipped required check as passed.
 jobs:
-  # Secret scan of every commit on every branch (gitleaks), including what a merge commit itself
-  # adds (--remerge-diff), with secrets redacted from this public log. The repo is public, so a
-  # secret that reached any branch is already exposed. When this fails, rotate the secret first.
-  # Then, if it is only on a feature branch, rewrite or delete that branch; if it is on main (which
-  # can't be rewritten) or the finding is a false positive, add the Fingerprint line from this log to
-  # the root .gitleaksignore, a change the owner reads before merge (CLAUDE.md, Git). The PR under
-  # scan can't silence itself any other way: gitleaks:allow comments are ignored, and
-  # GITLEAKS_CONFIG_TOML pins gitleaks' default rules over any .gitleaks.toml in the repo. gitleaks
-  # is installed through the Go module proxy, which checks it against Go's checksum database;
-  # Renovate updates the version (renovate.json).
+  # Secret scan of every commit on every branch (gitleaks), including what a two-parent merge commit
+  # itself adds (--remerge-diff, which can't show an octopus merge, so those are refused), with
+  # secrets redacted from this public log. The repo is public, so a secret that reached any branch is
+  # already exposed. When this fails, rotate the secret first. Then:
+  # - only on a feature branch: rewrite or delete that branch;
+  # - already on main, which can't be rewritten: add the finding's full Fingerprint from main's run
+  #   (commit:path:rule:line) to the root .gitleaksignore;
+  # - a false positive: add the Fingerprint without its leading commit (path:rule:line), because the
+  #   squash merge gives main a new commit and a commit-specific entry would stop matching.
+  # The owner reads every .gitleaksignore change before merge (CLAUDE.md, Git). The PR under scan
+  # can't silence itself any other way: gitleaks:allow comments are ignored, and GITLEAKS_CONFIG_TOML
+  # pins gitleaks' default rules over any .gitleaks.toml in the repo. gitleaks is installed through
+  # the Go module proxy, which checks it against Go's checksum database; Renovate updates the
+  # version (renovate.json).
   secrets:
     runs-on: ubuntu-latest
     env:
@@ -40,6 +44,10 @@ jobs:
         with:
           go-version: stable
           cache: false
+      - name: Refuse octopus merges, which --remerge-diff can't show
+        run: |
+          octopus=$(git rev-list --all --min-parents=3)
+          if [ -n "$octopus" ]; then echo "::error::Octopus merges can't be scanned for secrets: $octopus"; exit 1; fi
       - run: go install github.com/zricethezav/gitleaks/v8@v8.30.1
       - run: >-
           $(go env GOPATH)/bin/gitleaks git --no-banner --redact --verbose --ignore-gitleaks-allow

@@ -8,7 +8,7 @@ import {
   CDN_URL,
   lockfilePackages,
 } from './ai-free'
-import { importsOf, packageOf } from './imports'
+import { codeOf, importsOf, packageOf, scriptsOf } from './imports'
 import { isScript, readRepoFile, repoFiles } from './repo-files'
 
 const files = repoFiles()
@@ -37,6 +37,9 @@ describe('D41 AI-free guard: the matcher', () => {
       'tesseract.js': 'OCR',
       'node-tesseract-ocr': 'OCR',
       '@aws-sdk/client-rekognitionstreaming': 'OCR',
+      'ibm-watson': 'a model SDK',
+      '@soniox/speech-to-text-web': 'speech-to-text or speech detection',
+      onnxjs: 'on-device ML or noise suppression',
     }
     for (const [name, why] of Object.entries(cases)) expect(bannedReason(name), name).toBe(why)
   })
@@ -109,26 +112,71 @@ describe('D41 AI-free guard: the matcher', () => {
       'const writer = await Writer.create({ tone: "formal" })',
       'await Proofreader.availability()',
       'const lm = await window.ai.languageModel.create()',
+      'const api = (self as unknown as AiGlobals).Summarizer',
+      "const LM = (window as any)['LanguageModel']",
+      'await (globalThis as any).LanguageModel?.create()',
+      "if ('Summarizer' in self) {}",
+      'declare const LanguageModel: unknown',
+      'const t = (self as any).Translator',
+      'await Translator?.create({ sourceLanguage: "en" })',
+      "if ('Writer' in self) {}",
+      'const s = await (window as any).ai.summarizer.create()',
     ]
     for (const source of planted) expect(BROWSER_AI.test(source), source).toBe(true)
-    for (const source of ['type R = SpeechRecognitionResultList', 'class Translator {}', 'new Writer(stream)']) {
+    for (const source of [
+      'type R = SpeechRecognitionResultList',
+      'class Translator {}',
+      'new Writer(stream)',
+      'const w = stream.getWriter()',
+      'new HTMLRewriter()',
+      "const flags = { 'ai.assistant': { default: false } }",
+      'if (flags.ai.assistant) {}',
+      'const on = settings.ai.summarizer.enabled',
+    ]) {
       expect(BROWSER_AI.test(source), source).toBe(false)
     }
   })
 
-  it('allows only voice isolation turned off', () => {
-    for (const source of ['voiceIsolation: true', 'voiceIsolation: { ideal: true }', '{ voiceIsolation }']) {
+  it('refuses any request for voice isolation, and allows turning it off or reading it', () => {
+    for (const source of [
+      'voiceIsolation: true',
+      'voiceIsolation: { ideal: true }',
+      '{ voiceIsolation }',
+      'track.applyConstraints({ voiceIsolation: true })',
+      'c.audio.voiceIsolation = true',
+      "c['voiceIsolation'] = true",
+    ]) {
       expect(BANNED_CONSTRAINT.test(source), source).toBe(true)
     }
-    for (const source of ['voiceIsolation: false', '"voiceIsolation": false', 'voiceIsolation: { exact: false }']) {
+    for (const source of [
+      'voiceIsolation: false',
+      '"voiceIsolation": false',
+      'voiceIsolation: { exact: false }',
+      'voiceIsolation: { ideal: false }',
+      'c.audio.voiceIsolation = false',
+      'expect(track.mediaStreamTrack.getSettings().voiceIsolation).not.toBe(true)',
+      'const on = room.options.audioCaptureDefaults?.voiceIsolation === true',
+    ]) {
       expect(BANNED_CONSTRAINT.test(source), source).toBe(false)
     }
+  })
+
+  it('reads code without its comments, in scripts and in pages', () => {
+    const script = '// livekit-client turns voiceIsolation on by default\nconst audio = { voiceIsolation: false }\n'
+    expect(BANNED_CONSTRAINT.test(codeOf('apps/web/src/room.ts', script))).toBe(false)
+    expect(BROWSER_AI.test(codeOf('apps/web/src/a.ts', '/* no LanguageModel before A0 */ export {}'))).toBe(false)
+    expect(codeOf('apps/web/src/a.ts', "const s = '// LanguageModel'")).toContain('LanguageModel')
+    const page = '<!-- Summarizer --><script type="module">await Summarizer.create()</script>'
+    expect(BROWSER_AI.test(codeOf('apps/web/index.html', page))).toBe(true)
+    expect(scriptsOf('apps/web/index.html', page)).toEqual(['await Summarizer.create()'])
   })
 
   it('finds code loaded from a public CDN, in a script or a page', () => {
     expect(cdnUrls(`import OpenAI from 'https://esm.sh/openai@4'`)).toEqual(['https://esm.sh/openai@4'])
     expect(cdnUrls(`importScripts('https://cdn.jsdelivr.net/npm/@ricky0123/vad-web')`)).toHaveLength(1)
     expect(cdnUrls(`<script src="//unpkg.com/tesseract.js"></script>`)).toEqual(['//unpkg.com/tesseract.js'])
+    expect(cdnUrls(`import 'https://UNPKG.COM/tesseract.js'`)).toEqual(['https://UNPKG.COM/tesseract.js'])
+    expect(cdnUrls(`import 'https://testingcf.jsdelivr.net/npm/@ricky0123/vad-web'`)).toHaveLength(1)
     expect(cdnUrls(`<link href="https://fonts.googleapis.com/css2?family=Inter" rel="stylesheet">`)).toEqual([])
   })
 })
@@ -173,26 +221,24 @@ describe('D41 AI-free guard: the repo', () => {
 
   it('no script or page imports one', () => {
     const found = codeFiles.flatMap(path => {
-      const text = readRepoFile(path)
       // A page's inline scripts are read as code too.
-      const sources = /\.html?$/.test(path)
-        ? [...text.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)].map(match => match[1] ?? '')
-        : [text]
-      return sources.flatMap(importsOf).flatMap(spec => {
-        const name = packageOf(spec)
-        const why = name && bannedReason(name)
-        return why ? [`${path}: imports '${spec}' (${why})`] : []
-      })
+      return scriptsOf(path, readRepoFile(path))
+        .flatMap(importsOf)
+        .flatMap(spec => {
+          const name = packageOf(spec)
+          const why = name && bannedReason(name)
+          return why ? [`${path}: imports '${spec}' (${why})`] : []
+        })
     })
     expect(found).toEqual([])
   })
 
   it("no script or page uses the browser's speech recognition or built-in AI", () => {
-    expect(textChecked.filter(path => BROWSER_AI.test(readRepoFile(path)))).toEqual([])
+    expect(textChecked.filter(path => BROWSER_AI.test(codeOf(path, readRepoFile(path))))).toEqual([])
   })
 
   it('no script or page asks the browser for voice isolation', () => {
-    expect(textChecked.filter(path => BANNED_CONSTRAINT.test(readRepoFile(path)))).toEqual([])
+    expect(textChecked.filter(path => BANNED_CONSTRAINT.test(codeOf(path, readRepoFile(path))))).toEqual([])
   })
 
   it('no script or page loads code from a public CDN', () => {

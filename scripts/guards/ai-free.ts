@@ -30,6 +30,9 @@ export const BANNED_PACKAGES: Record<string, string[]> = {
     '@google-cloud/aiplatform',
     '@google-cloud/translate',
     '@google-cloud/text-to-speech',
+    '@google-cloud/language',
+    '@google-cloud/dialogflow*',
+    'ibm-watson',
     '@aws-sdk/client-bedrock*',
     '@aws-sdk/client-sagemaker*',
     '@aws-sdk/client-comprehend*',
@@ -68,6 +71,10 @@ export const BANNED_PACKAGES: Record<string, string[]> = {
     '@aws-sdk/client-transcribe*',
     'microsoft-cognitiveservices-speech-sdk',
     '@speechmatics/*',
+    '@soniox/*',
+    '@gladiaio/*',
+    'revai-node-sdk',
+    '@google-cloud/video-intelligence',
     'vosk*',
     'sherpa-onnx*',
     '@picovoice/*',
@@ -82,6 +89,8 @@ export const BANNED_PACKAGES: Record<string, string[]> = {
   ],
   'on-device ML or noise suppression': [
     'onnxruntime-*',
+    'onnxjs',
+    'cld3-asm', // a neural language detector
     '@tensorflow/*',
     '@tensorflow-models/*',
     '@mediapipe/*',
@@ -112,9 +121,9 @@ export const BANNED_PACKAGES: Record<string, string[]> = {
 }
 
 // The browser's own speech recognition and built-in AI. TypeScript's DOM types declare none of
-// these, so code reaches them through window or globalThis, or through types from a package such as
-// @types/dom-speech-recognition (banned above). BROWSER_AI finds those uses in source; Biome also
-// refuses the bare names (biome.json).
+// these, so typed code reaches them through window, globalThis or self, a cast, a local `declare`,
+// or types from a package such as @types/dom-speech-recognition (banned above). BROWSER_AI finds
+// those uses in code, with comments stripped; Biome also refuses the bare globals (biome.json).
 export const BANNED_GLOBALS = [
   'SpeechRecognition',
   'webkitSpeechRecognition',
@@ -128,26 +137,36 @@ export const BANNED_GLOBALS = [
 ]
 export const BROWSER_AI = new RegExp(
   [
-    // Speech recognition, by name in any form: SpeechRecognitionResult and the like don't match.
+    // Names no ordinary code of ours uses, anywhere: SpeechRecognitionResult and the like don't match.
     String.raw`\b(?:webkit)?SpeechRecognition\b`,
-    // The built-in AI APIs through window, globalThis or self, by property or by key.
-    String.raw`\b(?:window|globalThis|self)\s*(?:\??\.\s*|\[\s*['"\x60])(?:${BANNED_GLOBALS.join('|')})\b`,
-    // Their entry points, which classes of ours that share a name don't have.
-    String.raw`\b(?:LanguageModel|Summarizer|Translator|LanguageDetector|Writer|Rewriter|Proofreader)\s*\.\s*(?:create|availability|capabilities)\s*\(`,
-    // Chrome's earlier window.ai namespace.
-    String.raw`\bai\s*\??\.\s*(?:languageModel|summarizer|translator|languageDetector|writer|rewriter|assistant)\b`,
+    String.raw`\b(?:LanguageModel|Summarizer|LanguageDetector|Rewriter|Proofreader)\b`,
+    // Translator and Writer are common words, so only as the browser's: through window, globalThis
+    // or self, after a cast, as an `in` check, or by their entry points.
+    String.raw`\b(?:window|globalThis|self)\s*(?:\??\.\s*|\[\s*['"\x60])(?:Translator|Writer)\b`,
+    String.raw`\)\s*(?:\??\.\s*|\[\s*['"\x60])(?:Translator|Writer)\b`,
+    String.raw`['"\x60](?:Translator|Writer)['"\x60]\s+in\b`,
+    String.raw`\b(?:Translator|Writer)\s*\??\.\s*(?:create|availability|capabilities)\s*\(`,
+    // Chrome's earlier window.ai namespace, by its entry points (ai.* feature flags don't match).
+    String.raw`\bai\s*\??\.\s*(?:languageModel|summarizer|translator|languageDetector|writer|rewriter|assistant)\s*\??\.\s*(?:create|capabilities|availability)\s*\(`,
   ].join('|'),
 )
 
 // The getUserMedia constraint for the browser's ML voice isolation, unless it turns it off.
-// livekit-client asks for it by default, so C2's rooms must set `voiceIsolation: false` (in
-// audioCaptureDefaults), which this allows; `{ exact: false }` is allowed too.
-export const BANNED_CONSTRAINT = /\bvoiceIsolation\b(?!['"]?\s*:\s*(?:false\b|\{\s*exact\s*:\s*false\s*\}))/
+// Matched in code with comments stripped: reading the setting (`.voiceIsolation`) is allowed, and so
+// is setting it to false (`voiceIsolation: false`, `{ exact: false }` or `{ ideal: false }`); any
+// other key, shorthand or assignment is refused. livekit-client asks for it by default and this
+// guard can't see library defaults, so every C2 capture path passes `voiceIsolation: false`: the
+// Room's audioCaptureDefaults (which reach only room.localParticipant) and every standalone
+// createLocalTracks, createLocalAudioTrack or usePreviewTracks call, which use the library's own
+// defaults. The stock components-react PreJoin can't turn it off, so C2 doesn't use it.
+export const BANNED_CONSTRAINT =
+  /(?<!\.\s*)\bvoiceIsolation\b(?!['"]?\s*:\s*(?:false\b|\{\s*(?:exact|ideal)\s*:\s*false\s*\}))|\.\s*voiceIsolation\s*=(?![=>])(?!\s*false\b)/
 
-// Public CDNs that serve npm packages as browser code. Hearth's code comes through npm, where the
-// lockfile check and npm audit see it, so nothing loads code from these.
+// Public CDNs that serve npm packages as browser code, with any subdomain (jsDelivr has several).
+// Hearth's code comes through npm, where the lockfile check and npm audit see it, so nothing loads
+// code from these. A denylist can't name every CDN; C0.8's Content Security Policy is the backstop.
 export const CDN_URL =
-  /(?:https?:)?\/\/(?:esm\.sh|esm\.run|cdn\.skypack\.dev|unpkg\.com|(?:cdn|fastly|gcore)\.jsdelivr\.net|jspm\.dev|ga\.jspm\.io|cdnjs\.cloudflare\.com|deno\.land|cdn\.esm\.sh)\b[^\s'"`)<>]*/g
+  /(?:https?:)?\/\/(?:[\w-]+\.)*(?:esm\.sh|esm\.run|skypack\.dev|unpkg\.com|npmcdn\.com|jsdelivr\.net|jspm\.dev|jspm\.io|cdnjs\.cloudflare\.com|deno\.land)\b[^\s'"`)<>]*/gi
 
 const banned = Object.entries(BANNED_PACKAGES).flatMap(([why, globs]) =>
   globs.map(glob => ({ why, glob, re: new RegExp(`^${glob.split('*').map(escapeRegExp).join('.*')}$`) })),
