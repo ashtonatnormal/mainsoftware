@@ -1,6 +1,8 @@
+import { Writable } from 'node:stream'
 import { pino } from 'pino'
 import { describe, expect, it } from 'vitest'
 import { buildApp } from '#src/app.ts'
+import { createLogger } from '#src/logger.ts'
 import type { Check } from '#src/ready.ts'
 
 const APP_ORIGIN = 'https://hearth.example.com'
@@ -56,6 +58,34 @@ describe('C0.2 probes', () => {
 
 describe('Origin check on state changes (CLAUDE.md, Security and privacy)', () => {
   const post = (headers: Record<string, string>) => app().inject({ method: 'POST', url: '/echo', headers })
+
+  it('does not log query strings containing credentials', async () => {
+    const lines: string[] = []
+    const stream = new Writable({
+      write(chunk, _encoding, done) {
+        lines.push(String(chunk))
+        done()
+      },
+    })
+    const instance = buildApp({
+      appOrigin: APP_ORIGIN,
+      logger: createLogger({ logLevel: 'info', role: 'api' }, stream),
+      checks: {},
+    })
+
+    await instance.inject('/health?token=query-secret')
+    await instance.inject({
+      method: 'POST',
+      url: '/nowhere?token=rejected-secret',
+      headers: { origin: 'https://evil.example' },
+    })
+
+    const output = lines.join('')
+    expect(output).not.toContain('query-secret')
+    expect(output).not.toContain('rejected-secret')
+    expect(output).toContain('"url":"/health"')
+    expect(output).toContain('"url":"/nowhere"')
+  })
 
   it('refuses a cross-origin POST', async () => {
     expect((await post({ origin: 'https://evil.example' })).statusCode).toBe(403)

@@ -2,6 +2,7 @@
 // routes (C0.5 on), the realtime gateway (C0.7) and the worker's jobs register on top of it.
 import { type FastifyBaseLogger, type FastifyInstance, fastify } from 'fastify'
 import type { LevelWithSilent, Logger } from 'pino'
+import { requestSerializer } from '#src/logger.ts'
 import { refuseCrossSiteWrites } from '#src/origin.ts'
 import { type Check, checkReadiness } from '#src/ready.ts'
 
@@ -12,7 +13,7 @@ export interface AppOptions {
 }
 
 export function buildApp({ appOrigin, logger, checks }: AppOptions): FastifyInstance {
-  const loggerInstance: FastifyBaseLogger = logger
+  const loggerInstance: FastifyBaseLogger = logger.child({}, { serializers: { req: requestSerializer } })
   const app = fastify({ loggerInstance })
   refuseCrossSiteWrites(app, appOrigin)
 

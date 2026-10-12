@@ -47,11 +47,29 @@ export const REDACT_PATHS = [
 
 export const CENSOR = '[redacted]'
 
+// Fastify passes requests to Pino for its automatic request logs. Keep the useful request
+// metadata, but never include the query string: URLs are not covered by key-based redaction.
+export const requestSerializer = (request: {
+  method?: string
+  url?: string
+  hostname?: string
+  ip?: string
+  remoteAddress?: string
+  remotePort?: number
+}) => ({
+  method: request.method,
+  url: request.url?.split('?')[0],
+  hostname: request.hostname,
+  remoteAddress: request.remoteAddress ?? request.ip,
+  remotePort: request.remotePort,
+})
+
 export function loggerOptions(config: Pick<Config, 'logLevel'> & { role: Role }): LoggerOptions {
   return {
     level: config.logLevel,
     base: { role: config.role },
     redact: { paths: REDACT_PATHS, censor: CENSOR },
+    serializers: { req: requestSerializer },
   }
 }
 

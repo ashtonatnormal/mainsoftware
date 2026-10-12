@@ -18,7 +18,10 @@ export function refuseCrossSiteWrites(app: FastifyInstance, appOrigin: string): 
   app.addHook('onRequest', async (request, reply) => {
     if (SAFE_METHODS.has(request.method)) return
     if (isAppOrigin(request.headers.origin, appOrigin)) return
-    request.log.warn({ method: request.method, url: request.url }, 'refused a request from another origin')
+    request.log.warn(
+      { method: request.method, url: request.url.split('?')[0] },
+      'refused a request from another origin',
+    )
     return reply.code(403).send({ error: 'Forbidden' })
   })
 }
