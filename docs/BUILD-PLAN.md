@@ -869,7 +869,7 @@ Record the ones you accept as `T1`–`T12` in a new `docs/TECH-SPEC.md` so promp
 |---|---|---|---|
 | T1 | Repo shape | Monorepo in this repo with npm workspaces: `apps/web`, `apps/server`, `packages/shared` (types, zod schemas), `packages/access` (permission model and retrieval rules), `infra/`. Keep `demo/` untouched as the reference. | PRD, demo and code in one place (R10, bus factor). The demo already uses npm. |
 | T2 | Runtime and server | Node 24 LTS, TypeScript strict, one modular server (B.2): Fastify for HTTP plus `ws` for WebSockets. | Simple to run alone; split later. |
-| T3 | Database access | PostgreSQL 17 with SQL migrations through Drizzle (or Kysely). `org_id` on every table (ACC-11), plus Postgres row-level security keyed on the request's org as a second line of defence. | ACC-11 from day one; RLS catches a forgotten `where org_id`. |
+| T3 | Database access | PostgreSQL 17 with SQL migrations through Kysely (decided 12 Oct 2026; `docs/TECH-SPEC.md`). `org_id` on every table (ACC-11), plus Postgres row-level security keyed on the request's org as a second line of defence. | ACC-11 from day one; RLS catches a forgotten `where org_id`. |
 | T4 | Background jobs | pg-boss (a Postgres-backed queue). | B.2 asks for a Postgres-backed queue; no extra service. |
 | T5 | Sessions | Server-side sessions with opaque, revocable tokens (not long-lived JWTs). Every WebSocket re-checks its session and is closed on revoke. | ACC-04 and ACC-05 need "signed out everywhere within 60 seconds". |
 | T6 | Sign-in | Own SMS one-time code + PIN (argon2id, rate limited) + passkeys through SimpleWebAuthn. A log-only SMS provider in dev. | ACC-01, ACC-02, ACC-06. |
