@@ -73,13 +73,20 @@ const isRequire = (callee: ts.Expression): boolean =>
 // included), import-equals, import(), require() and module.require(), and in JavaScript files
 // AMD's define(['x'], …) and define('id', ['x'], …), read from TypeScript's syntax tree, so
 // comments and strings don't count. The path picks the parser (TS, TSX, JS). Every call to a
-// function named require counts, whatever it is bound to: the AI-free scan would rather see too
-// much than too little, and the server's ES modules have no require at all.
+// function named require counts, whatever it is bound to, and so does any use of createRequire:
+// the AI-free scan would rather see too much than too little, and the server's ES modules don't
+// use require. A require reached by a computed name (m['create' + 'Require']) isn't followed.
 export function moduleImports(source: string, path = 'file.ts'): ModuleImport[] {
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, scriptKind(path))
   const isJs = scriptKind(path) === ts.ScriptKind.JS || scriptKind(path) === ts.ScriptKind.JSX
   const found: ModuleImport[] = []
+  const isCommonJs = isJs || /\.c[jt]s$/.test(path)
   const visit = (node: ts.Node): void => {
+    // createRequire makes a require that can be stored under any name, so its use counts as one
+    // run-time load (with no specifier) wherever the name appears outside a type.
+    if (ts.isIdentifier(node) && node.text === 'createRequire' && !ts.isTypeNode(node.parent)) {
+      found.push({ specifier: undefined, typeOnly: false, json: false, via: 'require' })
+    }
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
       const typeOnly = ts.isImportDeclaration(node) ? !!node.importClause?.isTypeOnly : node.isTypeOnly
       const json = !!node.attributes?.elements.some(
@@ -107,7 +114,12 @@ export function moduleImports(source: string, path = 'file.ts'): ModuleImport[] 
         json: !!withClause && ts.isPropertyAssignment(withClause) && isJsonType(withClause.initializer),
         via: 'import',
       })
-    } else if (ts.isCallExpression(node) && isRequire(node.expression)) {
+    } else if (
+      ts.isCallExpression(node) &&
+      (isRequire(node.expression) ||
+        // In CommonJS any require method loads a module (require.main.require, module.parent.require).
+        (isCommonJs && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'require'))
+    ) {
       found.push({ specifier: literalText(node.arguments[0]), typeOnly: false, json: false, via: 'require' })
     } else if (
       isJs &&

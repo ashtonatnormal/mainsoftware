@@ -69,7 +69,7 @@ describe('T2 server runtime: the rules', () => {
     expect(importProblem(load('./d.json'), pkg)).toMatch(/type: 'json'/)
   })
 
-  it("refuses require in the server's ES modules, where it doesn't exist (tsc accepts it)", () => {
+  it("refuses require in the server's ES modules, which load with import", () => {
     for (const via of ['./d.json', './x.ts', 'fastify', undefined]) {
       expect(importProblem(load(via, { via: 'require' }), pkg), String(via)).toMatch(/require/)
     }
@@ -77,8 +77,13 @@ describe('T2 server runtime: the rules', () => {
       "import { createRequire } from 'node:module'\nconst require = createRequire(import.meta.url)\nrequire('./data.json')"
     expect(moduleImports(loader).map(i => [i.specifier, i.via])).toEqual([
       ['node:module', 'import'],
+      [undefined, 'require'],
+      [undefined, 'require'],
       ['./data.json', 'require'],
     ])
+    const renamed =
+      "import { createRequire as make } from 'node:module'\nconst load = make(import.meta.url)\nload('./x.js')"
+    expect(moduleImports(renamed).some(i => i.via === 'require')).toBe(true)
     expect(moduleImports("module.require('./a.cjs')")).toEqual([load('./a.cjs', { via: 'require' })])
   })
 
@@ -271,8 +276,8 @@ describe('T2 server runtime: the repo', () => {
     expect(found).toEqual([])
   })
 
-  it('no .tsx or .jsx files where the server loads code: Node can only strip types from .ts', () => {
-    expect(serverFiles.filter(path => /\.[jt]sx$/.test(path))).toEqual([])
+  it('no .tsx, .jsx, .cts or .cjs files where the server loads code: its files are ES modules Node strips', () => {
+    expect(serverFiles.filter(path => /\.(?:[jt]sx|c[jt]s)$/.test(path))).toEqual([])
   })
 
   it('tsc resolves imports as Node does in the server and its packages (nodenext)', () => {

@@ -23,7 +23,7 @@ export interface Manifest {
   exports?: unknown
 }
 
-const RUNNABLE = /\.(?:[cm]?ts|json)$/
+const RUNNABLE = /\.(?:m?ts|json)$/
 const BUILTINS = new Set(builtinModules)
 
 // Why Node can't load this import from a file in `from`, or undefined if it can.
@@ -35,10 +35,10 @@ export function importProblem(entry: ModuleImport, from: Manifest): string | und
   }
   // Erased before the code runs, so Node never resolves it (tsc still checks it).
   if (typeOnly) return undefined
-  // tsc accepts require (@types/node declares it), but the server's .ts files are ES modules, where
-  // it doesn't exist and the call throws when it runs.
+  // The server's files are ES modules, which load with import. A function named require, and any
+  // use of createRequire, counts as a CommonJS load, so a helper needs another name.
   if (entry.via === 'require') {
-    return "uses require, which ES modules don't have: use import (with { type: 'json' } for JSON)"
+    return "calls require or createRequire: the server's files are ES modules, so use import (with { type: 'json' } for JSON)"
   }
   if (specifier === undefined) {
     return 'loads a module chosen at run time, which no check can see: import a literal path'
@@ -54,6 +54,7 @@ export function importProblem(entry: ModuleImport, from: Manifest): string | und
     return undefined // a package by name or a built-in: checked through package.json
   }
   if (!RUNNABLE.test(target)) {
+    if (/\.c[jt]s$/.test(target)) return "is CommonJS, but the server's files are ES modules"
     return /\.[cm]?jsx?$/.test(target)
       ? 'names a .js file, but Node runs the .ts source: import the .ts file'
       : 'has no file extension, which Node needs: add .ts'

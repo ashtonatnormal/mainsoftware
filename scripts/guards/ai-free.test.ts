@@ -83,8 +83,13 @@ describe('D41 AI-free guard: the matcher', () => {
       `function wrap(require) { return require('openai') }`,
     ]
     for (const source of planted) expect(importsOf(source).map(packageOf), source).toContain('openai')
-    // AMD, in JavaScript files: anonymous and named modules.
-    for (const source of [`define(['openai'], sdk => sdk)`, `define('chat', ['openai'], sdk => sdk)`]) {
+    // In JavaScript files: AMD (anonymous and named modules) and CommonJS's other require methods.
+    for (const source of [
+      `define(['openai'], sdk => sdk)`,
+      `define('chat', ['openai'], sdk => sdk)`,
+      `const sdk = require.main.require('openai')`,
+      `const sdk = module.parent.require('openai')`,
+    ]) {
       expect(importsOf(source, 'vendor/chat.js').map(packageOf), source).toContain('openai')
     }
   })
