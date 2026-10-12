@@ -21,14 +21,17 @@ jobs:
   # already exposed. When this fails, rotate the secret first. Then:
   # - only on a feature branch: rewrite or delete that branch;
   # - already on main, which can't be rewritten: add the finding's full Fingerprint from main's run
-  #   (commit:path:rule:line) to the root .gitleaksignore;
-  # - a false positive: add the Fingerprint without its leading commit (path:rule:line), because the
-  #   squash merge gives main a new commit and a commit-specific entry would stop matching.
-  # The owner reads every .gitleaksignore change before merge (CLAUDE.md, Git). The PR under scan
-  # can't silence itself any other way: gitleaks:allow comments are ignored, and GITLEAKS_CONFIG_TOML
-  # pins gitleaks' default rules over any .gitleaks.toml in the repo. gitleaks is installed through
-  # the Go module proxy, which checks it against Go's checksum database; Renovate updates the
-  # version (renovate.json).
+  #   (commit:path:rule:line) to the root .gitleaksignore; it matches that one commit only;
+  # - a false positive: rewrite the value so no rule flags it (an obviously fake placeholder), or add
+  #   an [[allowlists]] entry to GITLEAKS_CONFIG_TOML below for that file's path and that exact value
+  #   (condition = "AND", paths, regexTarget = "match", regexes). It holds wherever the line moves and
+  #   matches nothing else. Never use a path:rule:line entry: it would hide any later real secret
+  #   that lands on the same line.
+  # The owner reads every change to .gitleaksignore and to GITLEAKS_CONFIG_TOML before merge
+  # (CLAUDE.md, Git). The PR under scan can't silence itself any other way: gitleaks:allow comments
+  # are ignored, and GITLEAKS_CONFIG_TOML pins gitleaks' default rules over any .gitleaks.toml in the
+  # repo. gitleaks is installed through the Go module proxy, which checks it against Go's checksum
+  # database; Renovate updates the version (renovate.json).
   secrets:
     runs-on: ubuntu-latest
     env:

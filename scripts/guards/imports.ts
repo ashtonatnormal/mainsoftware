@@ -37,9 +37,15 @@ export function withoutComments(path: string, source: string): string {
   return ts.createPrinter({ removeComments: true }).printFile(file)
 }
 
-// The code a script or page runs, comments stripped.
+// The code a script or page runs, comments stripped. A page runs code from attributes too (onclick,
+// javascript: and data: URLs), so a page is kept whole, minus HTML comments and the comments inside
+// each inline script.
 export function codeOf(path: string, text: string): string {
-  return scriptsOf(path, text)
-    .map(script => withoutComments(path, script))
-    .join('\n')
+  if (!/\.html?$/.test(path)) return withoutComments(path, text)
+  return text
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(
+      /(<script\b[^>]*>)([\s\S]*?)(<\/script\s*>)/gi,
+      (_, open: string, body: string, close: string) => open + withoutComments(path, body) + close,
+    )
 }

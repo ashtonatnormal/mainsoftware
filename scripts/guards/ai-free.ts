@@ -145,22 +145,27 @@ export const BROWSER_AI = new RegExp(
     String.raw`\b(?:window|globalThis|self)\s*(?:\??\.\s*|\[\s*['"\x60])(?:Translator|Writer)\b`,
     String.raw`\)\s*(?:\??\.\s*|\[\s*['"\x60])(?:Translator|Writer)\b`,
     String.raw`['"\x60](?:Translator|Writer)['"\x60]\s+in\b`,
-    String.raw`\b(?:Translator|Writer)\s*\??\.\s*(?:create|availability|capabilities)\s*\(`,
-    // Chrome's earlier window.ai namespace, by its entry points (ai.* feature flags don't match).
-    String.raw`\bai\s*\??\.\s*(?:languageModel|summarizer|translator|languageDetector|writer|rewriter|assistant)\s*\??\.\s*(?:create|capabilities|availability)\s*\(`,
+    String.raw`\b(?:Translator|Writer)\s*\??\.\s*(?:create|availability|capabilities)\s*(?:\?\.\s*)?\(`,
+    // Chrome's earlier window.ai namespace: off the globals, or by its entry points anywhere (so
+    // ai.* feature flags such as flags.ai.assistant don't match).
+    String.raw`\b(?:window|globalThis|self)\s*\??\.\s*ai\s*\??\.\s*(?:languageModel|summarizer|translator|languageDetector|writer|rewriter|assistant)\b`,
+    String.raw`\bai\s*\??\.\s*(?:languageModel|summarizer|translator|languageDetector|writer|rewriter|assistant)\s*\??\.\s*(?:create|capabilities|availability)\s*(?:\?\.\s*)?\(`,
   ].join('|'),
 )
 
 // The getUserMedia constraint for the browser's ML voice isolation, unless it turns it off.
-// Matched in code with comments stripped: reading the setting (`.voiceIsolation`) is allowed, and so
-// is setting it to false (`voiceIsolation: false`, `{ exact: false }` or `{ ideal: false }`); any
-// other key, shorthand or assignment is refused. livekit-client asks for it by default and this
-// guard can't see library defaults, so every C2 capture path passes `voiceIsolation: false`: the
-// Room's audioCaptureDefaults (which reach only room.localParticipant) and every standalone
-// createLocalTracks, createLocalAudioTrack or usePreviewTracks call, which use the library's own
-// defaults. The stock components-react PreJoin can't turn it off, so C2 doesn't use it.
+// Matched in code with comments stripped. Allowed: a property read (`settings.voiceIsolation`),
+// setting it to false (`voiceIsolation: false`, `{ exact: false }`, `{ ideal: false }`, or `= false`),
+// and declaring it as an optional property in a type (`voiceIsolation?: boolean`), which strict
+// TypeScript needs because the DOM types don't declare it. Refused: any other key, shorthand,
+// assignment (`??=`, `||=` and `&&=` included), destructuring, bracket read or `in` check.
+// livekit-client asks for it by default and this guard can't see library defaults, so every C2
+// capture path passes `voiceIsolation: false`: the Room's audioCaptureDefaults (which reach only
+// room.localParticipant) and every standalone createLocalTracks, createLocalAudioTrack or
+// usePreviewTracks call, which use the library's own defaults. The stock components-react PreJoin
+// can't turn it off, so C2 doesn't use it.
 export const BANNED_CONSTRAINT =
-  /(?<!\.\s*)\bvoiceIsolation\b(?!['"]?\s*:\s*(?:false\b|\{\s*(?:exact|ideal)\s*:\s*false\s*\}))|\.\s*voiceIsolation\s*=(?![=>])(?!\s*false\b)/
+  /(?<!\.\s*)\bvoiceIsolation\b(?!['"]?\s*:\s*(?:false\b|\{\s*(?:exact|ideal)\s*:\s*false\s*\})|['"]?\?\s*:(?![^;}\n]*=))|\.\s*voiceIsolation\s*(?:\?\?|\|\||&&)?=(?![=>])(?!\s*false\b)/
 
 // Public CDNs that serve npm packages as browser code, with any subdomain (jsDelivr has several).
 // Hearth's code comes through npm, where the lockfile check and npm audit see it, so nothing loads

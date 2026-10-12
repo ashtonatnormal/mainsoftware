@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Dependency updates for Hearth (BUILD-PLAN C0.1, TECH-SPEC). Nothing merges automatically: every update goes through CI, CodeRabbit and Qodo like any PR (CLAUDE.md, Git). minimumReleaseAge also holds the weekly lockfile refresh to 7 days (Renovate runs npm with --before); security fixes skip the wait.",
+  "description": "Dependency updates for Hearth (BUILD-PLAN C0.1, TECH-SPEC). Nothing merges automatically: every update goes through CI, CodeRabbit and Qodo like any PR (CLAUDE.md, Git). minimumReleaseAge also holds the weekly lockfile refresh to 7 days (Renovate runs npm with --before) while every pinned version is at least that old; when one is younger, Renovate drops the hold and says so in the PR, which then isn't merged (CLAUDE.md, Testing and CI). Security fixes skip the wait.",
   "extends": ["config:recommended", ":semanticCommits", "helpers:pinGitHubActionDigests"],
   "timezone": "Asia/Singapore",
   "schedule": ["before 9am on monday"],

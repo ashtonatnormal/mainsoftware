@@ -121,6 +121,10 @@ describe('D41 AI-free guard: the matcher', () => {
       'await Translator?.create({ sourceLanguage: "en" })',
       "if ('Writer' in self) {}",
       'const s = await (window as any).ai.summarizer.create()',
+      'const lm = window.ai.languageModel',
+      'await window.ai?.languageModel?.create?.()',
+      'await (self as any).ai?.languageModel?.capabilities?.()',
+      'await Translator?.create?.({ sourceLanguage: "en" })',
     ]
     for (const source of planted) expect(BROWSER_AI.test(source), source).toBe(true)
     for (const source of [
@@ -132,6 +136,8 @@ describe('D41 AI-free guard: the matcher', () => {
       "const flags = { 'ai.assistant': { default: false } }",
       'if (flags.ai.assistant) {}',
       'const on = settings.ai.summarizer.enabled',
+      'const on = useFlags().ai.assistant',
+      'const on = getFlags().ai.summarizer',
     ]) {
       expect(BROWSER_AI.test(source), source).toBe(false)
     }
@@ -145,6 +151,11 @@ describe('D41 AI-free guard: the matcher', () => {
       'track.applyConstraints({ voiceIsolation: true })',
       'c.audio.voiceIsolation = true',
       "c['voiceIsolation'] = true",
+      'c.audio.voiceIsolation ??= true',
+      'c.audio.voiceIsolation ||= true',
+      'c.audio.voiceIsolation &&= true',
+      'class O { voiceIsolation?: boolean = true }',
+      'const { voiceIsolation } = settings',
     ]) {
       expect(BANNED_CONSTRAINT.test(source), source).toBe(true)
     }
@@ -156,6 +167,10 @@ describe('D41 AI-free guard: the matcher', () => {
       'c.audio.voiceIsolation = false',
       'expect(track.mediaStreamTrack.getSettings().voiceIsolation).not.toBe(true)',
       'const on = room.options.audioCaptureDefaults?.voiceIsolation === true',
+      'c.audio.voiceIsolation ??= false',
+      'interface MediaTrackSettings { voiceIsolation?: boolean }',
+      'interface MediaTrackConstraintSet {\n  voiceIsolation?: ConstrainBoolean\n}',
+      'const on = (s as { voiceIsolation?: boolean }).voiceIsolation',
     ]) {
       expect(BANNED_CONSTRAINT.test(source), source).toBe(false)
     }
@@ -169,6 +184,14 @@ describe('D41 AI-free guard: the matcher', () => {
     const page = '<!-- Summarizer --><script type="module">await Summarizer.create()</script>'
     expect(BROWSER_AI.test(codeOf('apps/web/index.html', page))).toBe(true)
     expect(scriptsOf('apps/web/index.html', page)).toEqual(['await Summarizer.create()'])
+    // A page's attributes run code too, so they stay in view.
+    expect(BROWSER_AI.test(codeOf('a.html', '<button onclick="new webkitSpeechRecognition().start()">'))).toBe(true)
+    expect(
+      BROWSER_AI.test(codeOf('a.html', '<script src="data:text/javascript,LanguageModel.create()"></script>')),
+    ).toBe(true)
+    const onload = '<body onload="navigator.mediaDevices.getUserMedia({ audio: { voiceIsolation: true } })">'
+    expect(BANNED_CONSTRAINT.test(codeOf('a.html', onload))).toBe(true)
+    expect(BROWSER_AI.test(codeOf('a.html', '<!-- no Summarizer here --><p>Hello</p>'))).toBe(false)
   })
 
   it('finds code loaded from a public CDN, in a script or a page', () => {
