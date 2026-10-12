@@ -5,8 +5,9 @@
 //
 //   npm run db:types        after scripts/check-migrations.sh has built the scratch database
 //
-// Connects with the PG* variables (default: the local stack's scratch database, hearth_check)
-// and refuses any host but this machine. CI regenerates the file and fails if it differs from
+// Connects with PGHOST, PGPORT, PGUSER and PGPASSWORD (default: the local stack) to the database
+// CHECK_DB names (default hearth_check), as scripts/check-migrations.sh does, and refuses any host
+// but this machine. CI regenerates the file and fails if it differs from
 // the one committed. Tables come in name order and columns in table order, so the output only
 // changes when the schema does.
 import { writeFile } from 'node:fs/promises'

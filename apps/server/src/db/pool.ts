@@ -14,11 +14,25 @@ export function createPool(databaseUrl: string, logger: Logger): Pool {
   return pool
 }
 
-export function postgresCheck(pool: Pool): Check {
+// RLS is the second line of defence (CLAUDE.md, Database), and a superuser, a role with
+// BYPASSRLS, the tables' owner or any member of it skips it silently. So readiness also refuses
+// a connection made as such a role (a DATABASE_URL left over from before C0.3, say).
+const ROLE_CHECK = `
+  select r.rolsuper or r.rolbypassrls
+      or exists (select 1 from pg_class c where c.relowner = r.oid)
+      or exists (select 1 from pg_database d where d.datname = current_database() and d.datdba = r.oid)
+      or exists (select 1 from pg_roles o where o.rolname = 'hearth_owner' and pg_has_role(r.oid, o.oid, 'member'))
+    as bypasses_rls
+  from pg_roles r where r.rolname = current_user`
+
+export function postgresCheck(pool: Pick<Pool, 'query'>): Check {
   // pg can't abort a query, so this one gives up by itself when /ready does, and the pool then
   // discards its connection instead of leaving it waiting on a database that isn't answering.
-  const query = { text: 'select 1', query_timeout: CHECK_TIMEOUT_MS }
+  const query = { text: ROLE_CHECK, query_timeout: CHECK_TIMEOUT_MS }
   return async () => {
-    await pool.query(query)
+    const result = await pool.query<{ bypasses_rls: boolean }>(query)
+    if (result.rows[0]?.bypasses_rls !== false) {
+      throw new Error('DATABASE_URL connects as a role that bypasses row level security; it must be hearth_app')
+    }
   }
 }

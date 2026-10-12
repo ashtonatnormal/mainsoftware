@@ -36,7 +36,8 @@ jobs:
       - run: npm audit signatures
   # Every npm workspace from the root (apps/*, packages/*, infra and demo/): what `npm run check`
   # runs locally (typecheck, lint, test), as separate steps so a failure names its step, then the
-  # build, then the server's start-up check (scripts/check-server.sh). The tests include the
+  # build, the local database (npm run db:reset), the server's start-up check
+  # (scripts/check-server.sh) from source and from the image, and the image's migrate step. The tests include the
   # guards in scripts/guards/ (no AI packages, no secret-shaped VITE_ variables, files the server
   # loads that Node can run). Keep CLAUDE.md (Testing and CI) in step with this job. It waits for
   # secrets and audit, so it gates merging on them too.
@@ -82,6 +83,8 @@ jobs:
           hearth-server node src/db/migrate.ts
   migrations:
     runs-on: ubuntu-latest
+    # A migration or test that hangs would otherwise hold the runner for six hours.
+    timeout-minutes: 20
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -122,6 +125,10 @@ jobs:
       # against CLAUDE.md's Database rules (org_id, RLS, views, grants, functions, ownership,
       # hearth_app's attributes).
       - run: scripts/check-migrations.sh
+      # The migrator itself, against throwaway databases: it refuses a migration that commits or
+      # leaves another role in place, rolls a failed batch back, fails fast on a role it can't
+      # take, and refuses a migration numbered below one already applied.
+      - run: node apps/server/scripts/check-migrator.ts
       # The Tembusu seed (local and CI data only) loads into it.
       - run: >-
           psql --no-psqlrc -w -v ON_ERROR_STOP=1 -q -d hearth_check --single-transaction

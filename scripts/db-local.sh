@@ -35,6 +35,10 @@ case "$PGHOST" in
   127.0.0.1 | localhost | ::1) ;;
   *) echo "Refusing to touch $PGHOST: this sets up the local stack's database only." >&2; exit 2 ;;
 esac
+# These would send psql somewhere other than PGHOST says.
+for var in PGHOSTADDR PGSERVICE PGSERVICEFILE; do
+  [ -z "${!var:-}" ] || { echo "Unset $var: this sets up the local stack's database only, at PGHOST." >&2; exit 2; }
+done
 rds=$(sql -d postgres -Atc "select count(*) from pg_roles where rolname = 'rds_superuser'") ||
   { echo "Can't connect to Postgres: is the local stack up (docker compose up -d --wait)?" >&2; exit 2; }
 [ "$rds" = 0 ] || { echo "Refusing to run on an RDS server." >&2; exit 2; }
@@ -56,8 +60,8 @@ else
   sql -d postgres -c "alter database $db owner to $owner"
 fi
 
-MIGRATION_DATABASE_URL="postgres://$PGUSER:$PGPASSWORD@$PGHOST:$PGPORT/$db" MIGRATION_ROLE=$owner \
-  node apps/server/src/db/migrate.ts
+# The migrator connects with the PG* variables, so nothing has to be put into a URL.
+PGDATABASE=$db MIGRATION_ROLE=$owner node apps/server/src/db/migrate.ts
 
 # The migrations created hearth_app without a login; locally it signs in with a password.
 sql -d postgres -c "alter role hearth_app login password '$app_password'"

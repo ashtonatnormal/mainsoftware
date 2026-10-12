@@ -5,13 +5,17 @@
 // applied (allowUnorderedMigrations stays false), so two PRs whose migrations merge out of order
 // fail here as well as in CI.
 //
-// Every migration runs as the owner role (hearth_owner). The provider below checks, around each
-// file, that the session still is that role and still in the batch's transaction, so a migration
-// that ends the transaction itself (COMMIT, ROLLBACK) or changes role fails, naming the file.
+// Every migration runs as the owner role (hearth_owner), which the connection takes at start-up,
+// so a RESET ROLE in a file goes back to it. The provider below checks, around each file, that
+// the session is still that role and still in the batch's transaction, so a migration that ends
+// the transaction itself (COMMIT, ROLLBACK) or leaves another role in place fails, naming the
+// file. A file that switches role and back again is caught only where the login has no rights of
+// its own: CI's (scripts/check-migrations.sh) has none, and production's must not either
+// (hearth_owner itself, or a NOINHERIT login whose only membership is hearth_owner).
 // Kysely 0.29 has no transactionMode setting; one transaction per run is how it always works on
 // Postgres. From 0.30, set transactionMode: 'per-run' here explicitly.
 import { readdir, readFile } from 'node:fs/promises'
-import { CompiledQuery, Kysely, PostgresDialect, sql } from 'kysely'
+import { Kysely, PostgresDialect, sql } from 'kysely'
 import { type Migration, type MigrationProvider, type MigrationResultSet, Migrator } from 'kysely/migration'
 import { Pool } from 'pg'
 
@@ -26,8 +30,9 @@ export class MigrationFilesError extends Error {
   override name = 'MigrationFilesError'
 }
 
-// A migration ended the batch's transaction itself, so what ran before its COMMIT is committed
-// and Postgres can't roll it back.
+// A migration ended the batch's transaction itself (COMMIT or ROLLBACK). The statements after it
+// in that file ran outside the batch and are committed; after a COMMIT, so is everything before
+// it in the run, and after a ROLLBACK, that was undone. The file isn't recorded as applied.
 export class TransactionEndedError extends Error {
   override name = 'TransactionEndedError'
 }
@@ -65,8 +70,12 @@ interface SessionState {
 }
 
 async function sessionState(db: Kysely<unknown>): Promise<SessionState> {
+  // The transaction's start as a number, which a migration's SET TIME ZONE or DateStyle can't
+  // change the way it changes a timestamp's text.
   const result =
-    await sql<SessionState>`select transaction_timestamp()::text as txn, current_user::text as role`.execute(db)
+    await sql<SessionState>`select extract(epoch from transaction_timestamp())::text as txn, current_user::text as role`.execute(
+      db,
+    )
   const state = result.rows[0]
   if (!state) throw new Error('Postgres returned no row for the session check')
   return state
@@ -101,7 +110,7 @@ async function apply(db: Kysely<unknown>, file: string, text: string, role: stri
     )
   }
   if (after.role !== role) {
-    throw new Error(`${file} changed role to ${after.role}; migrations run as ${role} and never change role`)
+    throw new Error(`${file} left the session as ${after.role}; migrations run as ${role} and never change role`)
   }
 }
 
@@ -125,8 +134,9 @@ export class SqlFileMigrationProvider implements MigrationProvider {
 }
 
 export interface MigrateOptions {
-  // A connection that may act as the owner role, e.g. a login role that is a member of it.
-  databaseUrl: string
+  // A connection that may act as the owner role (hearth_owner itself, or a login that is a member
+  // of it). Without one, the standard PG* variables say where to connect.
+  databaseUrl?: string
   // The role that owns the schema and runs every migration (CLAUDE.md: hearth_owner).
   role: string
   dir?: URL
@@ -143,18 +153,16 @@ export async function migrate(options: MigrateOptions): Promise<MigrationResultS
   const dir = options.dir ?? MIGRATIONS_DIR
   if (!ROLE_NAME.test(role)) throw new Error(`Not a role name: ${role}`)
   // One connection, so the ledger setup, the lock and the batch all run as the owner role in one
-  // session. A migration waits at most 10 s for a lock, rather than queue the app's queries
-  // behind it in production; Kysely raises it for its own lock.
-  const pool = new Pool({ connectionString: options.databaseUrl, max: 1 })
-  const db = new Kysely<unknown>({
-    dialect: new PostgresDialect({
-      pool,
-      onCreateConnection: async connection => {
-        await connection.executeQuery(CompiledQuery.raw(`set role ${role}`))
-        await connection.executeQuery(CompiledQuery.raw(`set lock_timeout = '10s'`))
-      },
-    }),
+  // session. The role and the lock timeout are start-up options, so a login that can't take the
+  // role fails to connect, with Postgres's reason, rather than leaving a half-set-up session. A
+  // migration waits at most 10 s for a lock, rather than queue the app's queries behind it in
+  // production; Kysely raises it for its own lock.
+  const pool = new Pool({
+    ...(options.databaseUrl === undefined ? {} : { connectionString: options.databaseUrl }),
+    max: 1,
+    options: `-c role=${role} -c lock_timeout=10s`,
   })
+  const db = new Kysely<unknown>({ dialect: new PostgresDialect({ pool }) })
   try {
     const migrator = new Migrator({
       db,
