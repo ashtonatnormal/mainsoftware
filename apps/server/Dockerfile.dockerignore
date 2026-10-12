@@ -14,3 +14,5 @@
 **/*.test.tsx
 **/.env*
 **/local-data
+**/*.pem
+**/*.log

@@ -24,6 +24,8 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+      start_period: 30s
+      start_interval: 500ms
 
   # Valkey 9.1, the line ElastiCache for Valkey runs. Nothing is persisted: it holds only caches,
   # rate-limit counters and fan-out.
@@ -38,6 +40,8 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+      start_period: 30s
+      start_interval: 500ms
 
   # RustFS, an S3-compatible store (Apache-2.0), in place of MinIO, whose images are no longer
   # published and whose community edition is unmaintained (TECH-SPEC T9).
@@ -47,6 +51,11 @@ services:
       RUSTFS_ACCESS_KEY: hearth-local
       RUSTFS_SECRET_KEY: hearth-local-secret
       RUSTFS_REGION: ap-southeast-1
+      # No update check over the internet at start (only "false" turns it off), no web console
+      # (where RustFS's past XSS advisories were), and logs on stdout for `docker compose logs`.
+      RUSTFS_CHECK_UPDATE: "false"
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_OBS_LOG_DIRECTORY: ""
     ports:
       - "127.0.0.1:9000:9000"
     volumes:
@@ -56,6 +65,8 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+      start_period: 30s
+      start_interval: 500ms
 
   # Creates the server's bucket, then stays up doing nothing, healthy once the bucket exists. A
   # container that exits, even cleanly, makes `docker compose up --wait` fail. Uses the RustFS
@@ -87,6 +98,8 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+      start_period: 30s
+      start_interval: 500ms
 
 volumes:
   postgres-data:
