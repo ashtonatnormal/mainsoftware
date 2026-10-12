@@ -23,7 +23,7 @@ try {
 }
 
 const logger = createLogger(config)
-const pool = createPool(config.databaseUrl)
+const pool = createPool(config.databaseUrl, logger)
 const valkey = createValkey(config.valkeyUrl, logger)
 const s3 = createS3(config.s3)
 

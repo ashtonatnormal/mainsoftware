@@ -16,6 +16,14 @@ export function createValkey(url: string, logger: Logger): Redis {
     commandTimeout: 1000,
     enableOfflineQueue: false,
     maxRetriesPerRequest: 1,
+    // A connection whose peer vanished without closing it (a failover, a network partition)
+    // would otherwise stay "ready" with every command timing out until the kernel gives up,
+    // about 15 minutes. This drops it when a reply is 2 s late; idle and subscribed
+    // connections aren't affected, since the timer runs only while a reply is awaited.
+    socketTimeout: 2000,
+    // Reconnect at least once a second, so service resumes soon after an outage ends (the default
+    // backs off to 5 s).
+    retryStrategy: times => Math.min(2 ** times * 50, 1000),
   })
   // ioredis reports why a connection failed only through this event; a command just fails with
   // "Connection is closed". Without a listener the error would crash the process. It fires on
