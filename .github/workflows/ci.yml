@@ -44,6 +44,8 @@ jobs:
     needs: [secrets, audit]
     if: always()
     runs-on: ubuntu-latest
+    # A server that hangs instead of failing would otherwise hold the runner for six hours.
+    timeout-minutes: 30
     env:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"  # only demo's local screenshot script uses it
     steps:

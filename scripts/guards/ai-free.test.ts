@@ -71,6 +71,10 @@ describe('D41 AI-free guard: the matcher', () => {
       `const sdk = await import('openai')`,
       `import x = require('openai')`,
       `import 'npm:openai@4'`,
+      `export * as sdk from 'openai'`,
+      'const sdk = await import(`openai`)',
+      `const re = [/'/, await import('openai')]`,
+      `type Client = import('openai').OpenAI`,
     ]
     for (const source of planted) expect(importsOf(source).map(packageOf), source).toContain('openai')
   })
@@ -252,7 +256,7 @@ describe('D41 AI-free guard: the repo', () => {
     const found = codeFiles.flatMap(path => {
       // A page's inline scripts are read as code too.
       return scriptsOf(path, readRepoFile(path))
-        .flatMap(importsOf)
+        .flatMap(script => importsOf(script, path))
         .flatMap(spec => {
           const name = packageOf(spec)
           const why = name && bannedReason(name)

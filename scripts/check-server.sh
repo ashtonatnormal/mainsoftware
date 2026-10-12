@@ -12,7 +12,8 @@
 #
 # Both read their settings from .env.example (ENV_FILE to change it), so the dependencies it
 # names must be up: `docker compose up -d --wait` starts them. EXPECT_READY=0 skips the /ready
-# check, for running without them.
+# check, for running without them. The image mode uses host networking, so it needs Docker on
+# Linux, as in CI (Docker Desktop only with host networking turned on in its settings).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -27,6 +28,8 @@ fail() {
 }
 
 [ -f "$env_file" ] || fail "no $env_file"
+# Absolute, since the source-mode server starts in apps/server.
+env_file=$(cd "$(dirname "$env_file")" && pwd)/$(basename "$env_file")
 
 # Whatever happens, leave no server running: a failed check exits early, and a server left on
 # the port would answer the next run's probes.
@@ -41,7 +44,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Refuse to start if something already answers on the port, rather than check that instead.
-if curl -fsS -o /dev/null "http://127.0.0.1:$port/health" 2>/dev/null; then
+if curl -fsS --max-time 2 -o /dev/null "http://127.0.0.1:$port/health" 2>/dev/null; then
   fail "something is already listening on port $port"
 fi
 
@@ -53,7 +56,7 @@ for role in api realtime worker; do
     # the task will run in AWS, proves the server writes nothing at run time.
     container=$(docker run -d --read-only --network host --env-file "$env_file" -e ROLE="$role" -e PORT="$port" "$image")
   else
-    (cd apps/server && ROLE=$role PORT=$port exec node --env-file="../../$env_file" src/main.ts) >"$log" 2>&1 &
+    (cd apps/server && ROLE=$role PORT=$port exec node --env-file="$env_file" src/main.ts) >"$log" 2>&1 &
     pid=$!
   fi
 
@@ -70,8 +73,9 @@ for role in api realtime worker; do
   }
 
   up=
-  for _ in $(seq 1 100); do
-    if curl -fsS -o /dev/null "http://127.0.0.1:$port/health" 2>/dev/null; then
+  deadline=$((SECONDS + 20))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if curl -fsS --max-time 2 -o /dev/null "http://127.0.0.1:$port/health" 2>/dev/null; then
       up=1
       break
     fi
@@ -81,7 +85,7 @@ for role in api realtime worker; do
   [ -n "$up" ] || { show_log; fail "$role didn't answer /health within 20 s"; }
 
   if [ "$expect_ready" = 1 ]; then
-    status=$(curl -sS -o "$log.ready" -w '%{http_code}' "http://127.0.0.1:$port/ready" || true)
+    status=$(curl -sS --max-time 5 -o "$log.ready" -w '%{http_code}' "http://127.0.0.1:$port/ready" || true)
     [ "$status" = 200 ] || { show_log; cat "$log.ready" >&2; fail "$role /ready answered $status, not 200"; }
   fi
 
@@ -101,7 +105,8 @@ for role in api realtime worker; do
   fi
   [ "$code" = 0 ] || { show_log; fail "$role exited with code $code after SIGTERM"; }
 
-  if grep -v '^{' "$log" | grep -q .; then
+  # One grep, no pipeline: under pipefail a pipeline can pass falsely once the log is large.
+  if grep -qvE '^(\{|$)' "$log"; then
     show_log
     fail "$role wrote something other than JSON log lines (a Node warning?)"
   fi

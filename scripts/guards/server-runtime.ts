@@ -1,21 +1,90 @@
 // The server runs its .ts source on Node with no build step (T2, docs/TECH-SPEC.md), so every
-// file it loads must be one Node can run as it is. tsc and Vitest pass two things Node refuses:
-// an import that names a .js file or no extension (nodenext accepts `./x.js` for x.ts), and
-// syntax that type stripping can't remove (decorators and `accessor` fields pass
-// erasableSyntaxOnly). server-runtime.test.ts refuses both in apps/server and every workspace
-// package the server depends on, and checks the settings that make tsc resolve imports as Node
-// does. The CI start-up check (scripts/check-server.sh) covers whatever this misses at start.
+// file it loads must be one Node can run as it is. tsc and Vitest pass several things Node
+// refuses: an import naming a .js file or no extension (nodenext accepts `./x.js` for x.ts), a
+// #specifier or package export whose target isn't a .ts file, a JSON import without its
+// attribute, syntax type stripping can't remove (decorators and `accessor` fields pass
+// erasableSyntaxOnly), and a package that works in development only because npm links every
+// workspace. server-runtime.test.ts refuses all of these in apps/server and every workspace
+// package the server depends on. The CI start-up check (scripts/check-server.sh) covers
+// whatever this misses at start.
+import { builtinModules } from 'node:module'
 import ts from 'typescript'
+import { importTargets, mapImport } from './boundaries'
+import { type ModuleImport, packageOf } from './imports'
 
-// Why Node can't load this import specifier from a server file, or undefined if it can. Packages
-// by name (fastify, @hearth/access) and node: built-ins resolve through package.json, so only
-// relative and #imports-map specifiers must name the file, with a .ts (or .json) extension.
-export function importProblem(specifier: string): string | undefined {
-  if (!/^(?:\.{1,2}\/|#)/.test(specifier)) return undefined
-  if (/\.(?:[cm]?ts|json)$/.test(specifier)) return undefined
-  return /\.[cm]?jsx?$/.test(specifier)
-    ? 'names a .js file, but Node runs the .ts source: import the .ts file'
-    : 'has no file extension, which Node needs: add .ts'
+export interface Manifest {
+  dir: string
+  name: string
+  type?: string
+  dependencies?: Record<string, string>
+  devDependencies?: Record<string, string>
+  imports?: unknown
+  exports?: unknown
+}
+
+const RUNNABLE = /\.(?:[cm]?ts|json)$/
+const BUILTINS = new Set(builtinModules)
+
+// Why Node can't load this import from a file in `from`, or undefined if it can.
+export function importProblem(entry: ModuleImport, from: Manifest): string | undefined {
+  const { specifier, typeOnly, json } = entry
+  // Erased before the code runs, so Node never resolves it (tsc still checks it).
+  if (typeOnly) return undefined
+  if (specifier === undefined) {
+    return 'loads a module chosen at run time, which no check can see: import a literal path'
+  }
+  let target = specifier
+  if (specifier.startsWith('#')) {
+    const targets = mapImport(from.imports, specifier, { skipTypes: true })
+    if (targets.length === 0) return `isn't in ${from.dir}package.json's imports map`
+    const bad = targets.find(t => !RUNNABLE.test(t))
+    if (bad) return `maps to ${bad}, which isn't a .ts file`
+    target = targets[0] ?? specifier
+  } else if (!specifier.startsWith('.')) {
+    return undefined // a package by name or a built-in: checked through package.json
+  } else if (from.dir === 'apps/server/' && specifier.startsWith('../')) {
+    return "climbs out of its folder: use #src/… from the server's imports map"
+  }
+  if (!RUNNABLE.test(target)) {
+    return /\.[cm]?jsx?$/.test(target)
+      ? 'names a .js file, but Node runs the .ts source: import the .ts file'
+      : 'has no file extension, which Node needs: add .ts'
+  }
+  if (target.endsWith('.json') && !json) return "is JSON, which Node loads only with { type: 'json' }"
+  return undefined
+}
+
+// The package a runtime import names, if it must be in the importing workspace's dependencies:
+// any package by name except Node's built-ins and the workspace itself.
+export function runtimePackage(entry: ModuleImport, from: Manifest): string | undefined {
+  if (entry.typeOnly || entry.specifier === undefined) return undefined
+  const name = packageOf(entry.specifier)
+  if (!name || name === from.name || BUILTINS.has(name)) return undefined
+  return name
+}
+
+// Problems with a server workspace's package.json exports and imports, which Node follows
+// exactly as written: no folder keys (Node dropped them), no export patterns (a subpath import by
+// package name couldn't be checked), and every target outside the "types" condition names a .ts
+// or .json file, except an imports pattern ("#src/*": "./src/*"), whose specifier names the file.
+export function manifestProblems(m: Manifest): string[] {
+  const problems: string[] = []
+  const maps: Array<[string, unknown]> = [
+    ['exports', typeof m.exports === 'string' ? { '.': m.exports } : m.exports],
+    ['imports', m.imports],
+  ]
+  for (const [field, map] of maps) {
+    if (!map || typeof map !== 'object') continue
+    for (const [key, value] of Object.entries(map)) {
+      if (key.endsWith('/')) problems.push(`${field} "${key}" maps a folder, which Node no longer supports`)
+      if (field === 'exports' && key.includes('*')) problems.push(`exports "${key}" is a pattern`)
+      for (const target of importTargets(value, { skipTypes: true })) {
+        const pattern = field === 'imports' && key.endsWith('*') && target.endsWith('*')
+        if (!pattern && !RUNNABLE.test(target)) problems.push(`${field} "${key}" → "${target}" isn't a .ts file`)
+      }
+    }
+  }
+  return problems
 }
 
 // Syntax tsc accepts that Node's type stripping can't run, with the line it's on.
@@ -32,15 +101,9 @@ export function unstrippableSyntax(path: string, source: string): string[] {
   return found
 }
 
-interface Manifest {
-  dir: string
-  name: string
-  dependencies?: Record<string, string>
-  devDependencies?: Record<string, string>
-}
-
 // The workspaces whose source Node loads when the server runs: apps/server and every workspace
-// in its runtime dependencies, directly or through another workspace.
+// in its runtime dependencies, directly or through another workspace. (The test refuses a
+// workspace imported at run time without being a dependency, so this list is complete.)
 export function serverWorkspaces(manifests: Manifest[]): Manifest[] {
   const byName = new Map(manifests.map(m => [m.name, m]))
   const server = byName.get('@hearth/server')

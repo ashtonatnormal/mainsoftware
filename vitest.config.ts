@@ -4,8 +4,8 @@ import { defaultExclude, defineConfig } from 'vitest/config'
 // in its workspace (src/, test/ or the root, such as packages/access/rules.test.ts). demo/ keeps its
 // own node:test suite, which `npm test` runs after this one.
 export default defineConfig({
-  // Each file resolves `@/*` through its own app's tsconfig, so `@/` is apps/server/src in the
-  // server and apps/web/src in the web app.
+  // apps/web resolves `@/*` through its tsconfig; the server's `#src/*` resolves from its
+  // package.json `imports` map, as Node does (T2).
   resolve: { tsconfigPaths: true },
   test: {
     include: ['{apps,packages}/*/**/*.test.{ts,tsx}', 'infra/**/*.test.ts', 'scripts/**/*.test.ts'],

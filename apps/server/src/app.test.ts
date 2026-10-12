@@ -107,6 +107,14 @@ describe('Origin check on state changes (CLAUDE.md, Security and privacy)', () =
     expect(res.statusCode).toBe(403)
   })
 
+  it('lets GET and HEAD through from anywhere, since neither changes state', async () => {
+    const instance = app()
+    for (const method of ['GET', 'HEAD'] as const) {
+      const res = await instance.inject({ method, url: '/health', headers: { origin: 'https://evil.example' } })
+      expect(res.statusCode, method).toBe(200)
+    }
+  })
+
   it('allows a POST from the app origin, and GETs from anywhere', async () => {
     expect((await post({ origin: APP_ORIGIN })).statusCode).toBe(200)
     const get = await app().inject({ method: 'GET', url: '/health', headers: { origin: 'https://evil.example' } })

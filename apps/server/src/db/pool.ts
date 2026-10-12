@@ -3,7 +3,7 @@
 // readiness check.
 import { Pool } from 'pg'
 import type { Logger } from 'pino'
-import type { Check } from '#src/ready.ts'
+import { CHECK_TIMEOUT_MS, type Check } from '#src/ready.ts'
 
 export function createPool(databaseUrl: string, logger: Logger): Pool {
   // A new connection that can't be made in 2 s fails rather than queueing behind /ready.
@@ -15,7 +15,10 @@ export function createPool(databaseUrl: string, logger: Logger): Pool {
 }
 
 export function postgresCheck(pool: Pool): Check {
+  // pg can't abort a query, so this one gives up by itself when /ready does, and the pool then
+  // discards its connection instead of leaving it waiting on a database that isn't answering.
+  const query = { text: 'select 1', query_timeout: CHECK_TIMEOUT_MS }
   return async () => {
-    await pool.query('select 1')
+    await pool.query(query)
   }
 }

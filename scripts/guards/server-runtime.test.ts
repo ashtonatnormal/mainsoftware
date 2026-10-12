@@ -1,28 +1,115 @@
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { importsOf } from './imports'
+import { type ModuleImport, moduleImports } from './imports'
 import { readRepoFile, repoFiles, root } from './repo-files'
-import { importProblem, moduleSettings, serverWorkspaces, unstrippableSyntax } from './server-runtime'
+import {
+  importProblem,
+  type Manifest,
+  manifestProblems,
+  moduleSettings,
+  runtimePackage,
+  serverWorkspaces,
+  unstrippableSyntax,
+} from './server-runtime'
 
 const files = repoFiles()
-const manifests = files
+const manifests: Manifest[] = files
   .filter(path => /^(?:apps\/[^/]+|packages\/[^/]+|infra|demo)\/package\.json$/.test(path))
   .map(path => ({ dir: path.slice(0, -'package.json'.length), ...JSON.parse(readRepoFile(path)) }))
 const server = serverWorkspaces(manifests)
 const serverFiles = files.filter(path => server.some(w => path.startsWith(w.dir)))
 const serverScripts = serverFiles.filter(path => /\.[cm]?tsx?$/.test(path) && !path.endsWith('.d.ts'))
+const workspaceOf = (path: string) => server.find(w => path.startsWith(w.dir)) as Manifest
+const isTest = (path: string) => /\.test\.tsx?$/.test(path)
+
+const serverApp: Manifest = { dir: 'apps/server/', name: '@hearth/server', imports: { '#src/*': './src/*' } }
+const pkg: Manifest = { dir: 'packages/access/', name: '@hearth/access' }
+const load = (specifier: string | undefined, extra: Partial<ModuleImport> = {}): ModuleImport => ({
+  specifier,
+  typeOnly: false,
+  json: false,
+  ...extra,
+})
 
 describe('T2 server runtime: the rules', () => {
-  it('lets packages by name, built-ins and .ts or .json files through', () => {
-    for (const spec of ['fastify', '@hearth/access', 'node:fs', './a.ts', '../b/c.mts', '#src/config.ts', './d.json']) {
-      expect(importProblem(spec), spec).toBeUndefined()
+  it('lets packages by name, built-ins, .ts files and #src/ .ts files through', () => {
+    for (const spec of ['fastify', '@hearth/access', 'node:fs', './a.ts', './b/c.mts', '#src/config.ts']) {
+      expect(importProblem(load(spec), serverApp), spec).toBeUndefined()
     }
   })
 
-  it('refuses relative and #src imports that name a .js file or no extension', () => {
-    for (const spec of ['./a.js', '../b/c', '#src/config', '#src/config.js', './x.tsx', './y.jsx']) {
-      expect(importProblem(spec), spec).toBeDefined()
+  it('refuses .js, extensionless and .tsx imports, directly or through the imports map', () => {
+    for (const spec of ['./a.js', './b/c', '#src/config', '#src/config.js', './x.tsx', './y.jsx']) {
+      expect(importProblem(load(spec), serverApp), spec).toBeDefined()
     }
+  })
+
+  it('judges a #specifier by where the imports map sends it, ignoring the types condition', () => {
+    const exact: Manifest = { ...serverApp, imports: { '#config': './src/config.ts' } }
+    expect(importProblem(load('#config'), exact)).toBeUndefined()
+    const toJs: Manifest = { ...serverApp, imports: { '#lib/*.ts': { types: './src/*.ts', default: './src/*.js' } } }
+    expect(importProblem(load('#lib/a.ts'), toJs)).toMatch(/isn't a \.ts file/)
+    expect(importProblem(load('#nowhere/a.ts'), serverApp)).toMatch(/isn't in .*imports map/)
+  })
+
+  it('makes the server leave a folder through #src/, not ../, while packages may use ../', () => {
+    expect(importProblem(load('../config.ts'), serverApp)).toMatch(/#src/)
+    expect(importProblem(load('../config.ts'), pkg)).toBeUndefined()
+  })
+
+  it("needs { type: 'json' } on a JSON import, which tsc checks only on static imports", () => {
+    expect(importProblem(load('./d.json', { json: true }), pkg)).toBeUndefined()
+    expect(importProblem(load('./d.json'), pkg)).toMatch(/type: 'json'/)
+  })
+
+  it('refuses a module chosen at run time, and ignores imports erased before the code runs', () => {
+    expect(importProblem(load(undefined), pkg)).toMatch(/run time/)
+    expect(importProblem(load('./types', { typeOnly: true }), pkg)).toBeUndefined()
+  })
+
+  it('reads every import form, including export * as and import() with options', () => {
+    const source = [
+      "export * as config from './config.js'",
+      "const re = [/'/, await import('./late.js')]",
+      "const data = await import('./d.json', { with: { type: 'json' } })",
+      "import seed from './seed.json' with { type: 'json' }",
+      "import type { T } from './t'",
+      "export type { U } from './u'",
+      "type V = import('./v').V",
+      'const pick = await import(name)',
+      "const r = require('./r.cjs')",
+    ].join('\n')
+    expect(moduleImports(source)).toEqual([
+      load('./config.js'),
+      load('./late.js'),
+      load('./d.json', { json: true }),
+      load('./seed.json', { json: true }),
+      load('./t', { typeOnly: true }),
+      load('./u', { typeOnly: true }),
+      load('./v', { typeOnly: true }),
+      load(undefined),
+      load('./r.cjs'),
+    ])
+  })
+
+  it('names the packages a runtime import needs listed: not built-ins, itself or type-only imports', () => {
+    expect(runtimePackage(load('fastify/types'), serverApp)).toBe('fastify')
+    expect(runtimePackage(load('@hearth/shared'), pkg)).toBe('@hearth/shared')
+    for (const entry of [load('fs'), load('node:fs'), load('@hearth/access'), load('pino', { typeOnly: true })]) {
+      expect(runtimePackage(entry, pkg), entry.specifier).toBeUndefined()
+    }
+  })
+
+  it('refuses folder keys, export patterns and targets Node would read as JavaScript', () => {
+    expect(manifestProblems({ ...pkg, exports: { '.': './src/index.ts' } })).toEqual([])
+    expect(manifestProblems({ ...pkg, exports: './src/index.ts' })).toEqual([])
+    expect(manifestProblems(serverApp)).toEqual([])
+    expect(manifestProblems({ ...pkg, exports: { './rules': './src/rules.js' } })).toHaveLength(1)
+    expect(manifestProblems({ ...pkg, exports: { './*': './src/*.ts' } })).toHaveLength(1)
+    expect(manifestProblems({ ...serverApp, imports: { '#lib/': './src/' } })).toHaveLength(2)
+    expect(
+      manifestProblems({ ...pkg, exports: { '.': { types: './src/index.d.ts', default: './src/index.ts' } } }),
+    ).toEqual([])
   })
 
   it('finds decorators and accessor fields, and passes plain classes', () => {
@@ -51,12 +138,33 @@ describe('T2 server runtime: the repo', () => {
 
   it('every import in the server and its packages names a file Node can load', () => {
     const found = serverScripts.flatMap(path =>
-      importsOf(readRepoFile(path)).flatMap(spec => {
-        const problem = importProblem(spec)
-        return problem ? [`${path}: '${spec}' ${problem}`] : []
+      moduleImports(readRepoFile(path), path).flatMap(entry => {
+        const problem = importProblem(entry, workspaceOf(path))
+        return problem ? [`${path}: '${entry.specifier ?? '(computed)'}' ${problem}`] : []
       }),
     )
     expect(found).toEqual([])
+  })
+
+  it('every package the server and its packages load at run time is in their dependencies', () => {
+    // Otherwise it works only because npm links every workspace and hoists dev dependencies, and
+    // the image, which installs the server's production dependencies alone, doesn't have it.
+    const found = serverScripts
+      .filter(path => !isTest(path))
+      .flatMap(path => {
+        const from = workspaceOf(path)
+        return moduleImports(readRepoFile(path), path).flatMap(entry => {
+          const name = runtimePackage(entry, from)
+          return name && !Object.hasOwn(from.dependencies ?? {}, name)
+            ? [`${path}: '${name}' isn't in ${from.dir}package.json dependencies`]
+            : []
+        })
+      })
+    expect(found).toEqual([])
+  })
+
+  it("the server's packages export and map only files Node can run", () => {
+    expect(server.flatMap(w => manifestProblems(w).map(problem => `${w.dir}package.json: ${problem}`))).toEqual([])
   })
 
   it('no decorators or accessor fields where the server loads code', () => {

@@ -15,21 +15,26 @@ export interface Workspace {
   imports?: unknown
 }
 
-// Every target a package.json "imports" entry can resolve to: a string, a list of fallbacks, or
-// conditions ({ "types": …, "default": … }) holding either.
-export function importTargets(value: unknown): string[] {
+// Every target a package.json "imports" or "exports" entry can resolve to: a string, a list of
+// fallbacks, or conditions ({ "types": …, "default": … }) holding either. With skipTypes, the
+// "types" condition is left out: only tsc reads it, never Node.
+export function importTargets(value: unknown, options: { skipTypes?: boolean } = {}): string[] {
   if (typeof value === 'string') return [value]
-  if (Array.isArray(value)) return value.flatMap(importTargets)
-  if (value && typeof value === 'object') return Object.values(value).flatMap(importTargets)
+  if (Array.isArray(value)) return value.flatMap(v => importTargets(v, options))
+  if (value && typeof value === 'object') {
+    return Object.entries(value).flatMap(([condition, v]) =>
+      options.skipTypes && condition === 'types' ? [] : importTargets(v, options),
+    )
+  }
   return []
 }
 
 // The targets a #specifier maps to through an imports map, as Node matches keys: an exact key
 // first, otherwise the pattern key ("#src/*") with the longest prefix before its *.
-export function mapImport(imports: unknown, specifier: string): string[] {
+export function mapImport(imports: unknown, specifier: string, options: { skipTypes?: boolean } = {}): string[] {
   if (!imports || typeof imports !== 'object') return []
   const map = imports as Record<string, unknown>
-  if (specifier in map) return importTargets(map[specifier])
+  if (Object.hasOwn(map, specifier)) return importTargets(map[specifier], options)
   let best: { prefix: string; targets: string[] } | undefined
   for (const [key, value] of Object.entries(map)) {
     const star = key.indexOf('*')
@@ -38,13 +43,22 @@ export function mapImport(imports: unknown, specifier: string): string[] {
     if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix)) continue
     if (specifier.length < prefix.length + suffix.length || (best && best.prefix.length >= prefix.length)) continue
     const middle = specifier.slice(prefix.length, specifier.length - suffix.length)
-    best = { prefix, targets: importTargets(value).map(target => target.replaceAll('*', middle)) }
+    best = { prefix, targets: importTargets(value, options).map(target => target.replaceAll('*', middle)) }
   }
   return best?.targets ?? []
 }
 
-const inDir = (path: string, workspaces: Workspace[]) =>
-  workspaces.find(w => `${posix.normalize(path)}/`.startsWith(w.dir))
+// The workspace a repo path lies in. A path through node_modules/ (where npm links every
+// workspace) counts as the package it names, which is where Node would follow the link.
+function inDir(path: string, workspaces: Workspace[]): Workspace | undefined {
+  const normal = posix.normalize(path)
+  const linked = normal.split('/node_modules/').at(-1) ?? normal
+  if (normal.startsWith('node_modules/') || linked !== normal) {
+    const name = packageOf(linked.replace(/^node_modules\//, ''))
+    return workspaces.find(w => w.name === name)
+  }
+  return workspaces.find(w => `${normal}/`.startsWith(w.dir))
+}
 
 // The workspace an import lands in, if any: by package name, by a relative path, by the app's
 // `@/` alias (its src/ folder), or through the importing workspace's imports map. When a

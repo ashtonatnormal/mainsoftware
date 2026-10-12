@@ -45,6 +45,31 @@ describe('C0.2 redacting logs', () => {
     expect(line).toContain(CENSOR)
   })
 
+  it("drops a failed Valkey command's arguments, which carry the password when AUTH fails", () => {
+    const { logger, lines } = capture()
+    const error = Object.assign(new Error('WRONGPASS invalid username-password pair'), {
+      command: { name: 'hello', args: ['3', 'AUTH', 'hearth', 'valkey-password'] },
+    })
+    logger.warn({ err: error }, 'valkey connection error')
+    logger.child({ reqId: 'req-1' }).warn({ check: 'valkey', err: error }, 'readiness check failed')
+    const out = lines.join('')
+    expect(out).not.toContain('valkey-password')
+    expect(out).toContain('WRONGPASS')
+    expect(JSON.parse(lines[0] ?? '{}').err.command).toEqual({ name: 'hello', args: CENSOR })
+  })
+
+  it('drops every credential in a whole config object', () => {
+    const { logger, lines } = capture()
+    logger.info({
+      config: {
+        databaseUrl: 'postgres://u:pg-secret@h/d',
+        valkeyUrl: 'rediss://default:valkey-secret@cache:6379',
+        s3: { credentials: { accessKeyId: 'hearth-local', secretAccessKey: 's3-secret' } },
+      },
+    })
+    for (const secret of ['pg-secret', 'valkey-secret', 's3-secret']) expect(lines.join('')).not.toContain(secret)
+  })
+
   it('keeps ordinary fields, and tags every line with the role', () => {
     const { logger, lines } = capture()
     logger.info({ method: 'GET', url: '/ready', statusCode: 200 }, 'done')

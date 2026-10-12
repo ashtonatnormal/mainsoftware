@@ -15,6 +15,17 @@ const origin = z.string().refine(value => URL.canParse(value) && new URL(value).
 
 const flag = z.enum(['true', 'false']).transform(value => value === 'true')
 
+function percentEncoded(value: string): boolean {
+  try {
+    const url = new URL(value)
+    decodeURIComponent(url.username)
+    decodeURIComponent(url.password)
+    return true
+  } catch {
+    return false
+  }
+}
+
 const schema = z.object({
   ROLE: z.enum(ROLES).default('api'),
   HOST: z.string().min(1).default('127.0.0.1'),
@@ -22,8 +33,11 @@ const schema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   APP_ORIGIN: origin,
   DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/, error: 'must be a postgres:// URL' }),
-  // redis:// locally, rediss:// (TLS) for ElastiCache. ioredis reads only these two schemes.
-  VALKEY_URL: z.url({ protocol: /^rediss?$/, error: 'must be a redis:// or rediss:// URL' }),
+  // redis:// locally, rediss:// (TLS) for ElastiCache. ioredis reads only these two schemes, and
+  // it decodes the user name and password itself, throwing at start on a bare % in either.
+  VALKEY_URL: z
+    .url({ protocol: /^rediss?$/, error: 'must be a redis:// or rediss:// URL' })
+    .refine(percentEncoded, { message: 'the user name and password must be percent-encoded' }),
   S3_BUCKET: z.string().min(3),
   S3_REGION: z.string().min(1).default('ap-southeast-1'),
   // Only for a local S3-compatible store; unset in AWS, where the SDK uses S3's own endpoint.

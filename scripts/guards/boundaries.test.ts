@@ -1,7 +1,8 @@
+import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { boundaryBreach, importTargetProblem, importTargets, landsIn, mapImport, type Workspace } from './boundaries'
 import { importsOf } from './imports'
-import { isScript, readRepoFile, repoFiles } from './repo-files'
+import { isScript, readRepoFile, repoFiles, root } from './repo-files'
 
 const files = repoFiles()
 const workspaces: Workspace[] = files
@@ -26,6 +27,12 @@ describe('INF-ARCHLINT import boundaries: the rules', () => {
     expect(landsIn('apps/web/src/a.ts', '../../../demo/src/ui', fixture)).toBe(demo)
     expect(landsIn('apps/web/src/a.ts', './b', fixture)).toBe(web)
     expect(landsIn('apps/web/src/a.ts', 'react', fixture)).toBeUndefined()
+  })
+
+  it('follows a path through node_modules/ to the workspace npm links there', () => {
+    expect(landsIn('apps/server/src/a.ts', '../../../node_modules/@hearth/web/src/brand.ts', fixture)).toBe(web)
+    expect(landsIn('apps/server/src/a.ts', '../node_modules/@hearth/access/src/x.ts', fixture)).toBe(access)
+    expect(landsIn('apps/server/src/a.ts', '../../../node_modules/fastify/fastify.js', fixture)).toBeUndefined()
   })
 
   it("resolves an app's @/ alias against its own src/, so climbing out of it is seen", () => {
@@ -99,11 +106,19 @@ describe('INF-ARCHLINT import boundaries: the repo', () => {
     expect(found).toEqual([])
   })
 
+  it('no tracked symlink lies inside a workspace, where it could lead an import into another one', () => {
+    const links = execFileSync('git', ['ls-files', '-s'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+      .split('\n')
+      .filter(line => line.startsWith('120000 '))
+      .map(line => line.split('\t')[1] ?? '')
+    expect(links.filter(path => workspaces.some(w => path.startsWith(w.dir)))).toEqual([])
+  })
+
   it('no workspace imports across a boundary', () => {
     const found = files.filter(isScript).flatMap(path => {
       const from = workspaces.find(w => path.startsWith(w.dir))
       if (!from) return []
-      return importsOf(readRepoFile(path)).flatMap(spec => {
+      return importsOf(readRepoFile(path), path).flatMap(spec => {
         const to = landsIn(path, spec, workspaces)
         const why = to && boundaryBreach(from, to)
         return why ? [`${path}: imports '${spec}' (${why})`] : []

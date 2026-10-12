@@ -23,17 +23,27 @@ const SENSITIVE_KEYS = [
   'phone',
   'phoneNumber',
   'databaseUrl',
+  'valkeyUrl',
   'connectionString',
+  'secretAccessKey',
 ]
 
 const key = (name: string) => (/^[A-Za-z_$][\w$]*$/.test(name) ? `.${name}` : `["${name}"]`)
 
-export const REDACT_PATHS = SENSITIVE_KEYS.flatMap(name => [
-  key(name).replace(/^\./, ''),
-  `*${key(name)}`,
-  `*.*${key(name)}`,
-  `*.*.*${key(name)}`,
-])
+export const REDACT_PATHS = [
+  ...SENSITIVE_KEYS.flatMap(name => [
+    key(name).replace(/^\./, ''),
+    `*${key(name)}`,
+    `*.*${key(name)}`,
+    `*.*.*${key(name)}`,
+  ]),
+  // ioredis attaches a failed command to its error as `command.args`. When Valkey refuses the
+  // connection's HELLO, those are `3 AUTH <user> <password>`; from C0.5 they are rate-limit and
+  // session keys. Logged as `err` (or under any key), they are dropped.
+  'command.args',
+  '*.command.args',
+  '*.*.command.args',
+]
 
 export const CENSOR = '[redacted]'
 

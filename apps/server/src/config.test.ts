@@ -58,6 +58,11 @@ describe('C0.2 config', () => {
     expect(() => loadConfig({ ...env, VALKEY_URL: 'valkeys://cache.example:6379' })).toThrow(/VALKEY_URL/)
   })
 
+  it('refuses a Valkey URL whose password has a bare %, which ioredis would throw on at start', () => {
+    expect(() => loadConfig({ ...env, VALKEY_URL: 'redis://:ab%zz@127.0.0.1:6379' })).toThrow(/percent-encoded/)
+    expect(loadConfig({ ...env, VALKEY_URL: 'rediss://default:p%2Fw@cache:6379' }).valkeyUrl).toContain('p%2Fw')
+  })
+
   it('treats an empty variable as unset', () => {
     expect(loadConfig({ ...env, PORT: '', ROLE: '' })).toMatchObject({ port: 3000, role: 'api' })
   })
