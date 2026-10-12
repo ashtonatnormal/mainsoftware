@@ -10,7 +10,7 @@
 import { builtinModules } from 'node:module'
 import { posix } from 'node:path'
 import ts from 'typescript'
-import { importTargets, mapImport } from './boundaries'
+import { importTargets, mapImport, type TargetOptions } from './boundaries'
 import { type ModuleImport, packageOf } from './imports'
 
 export interface Manifest {
@@ -107,18 +107,24 @@ export const TEST_ONLY = /(^|\/)testing(\/|$)|\.test\.tsx?$/
 
 // The repo paths a runtime import can load, for imports that name a file: relative, through
 // the importing workspace's imports map, or by name into a workspace package's exports.
-export function importedPaths(entry: ModuleImport, path: string, from: Manifest, workspaces: Manifest[]): string[] {
+export function importedPaths(
+  entry: ModuleImport,
+  path: string,
+  from: Manifest,
+  workspaces: Manifest[],
+  options: TargetOptions = { skipTypes: true },
+): string[] {
   const { specifier } = entry
   if (entry.typeOnly || specifier === undefined) return []
   if (specifier.startsWith('.')) return [posix.join(posix.dirname(path), specifier)]
   if (specifier.startsWith('#')) {
-    return mapImport(from.imports, specifier, { skipTypes: true }).map(t => posix.join(from.dir, t))
+    return mapImport(from.imports, specifier, options).map(t => posix.join(from.dir, t))
   }
   const name = packageOf(specifier)
   const target = workspaces.find(w => w.name === name)
   if (!target || !name) return []
   const subpath = `.${specifier.slice(name.length)}`
-  return mapImport(exportsMap(target.exports), subpath, { skipTypes: true }).map(t => posix.join(target.dir, t))
+  return mapImport(exportsMap(target.exports), subpath, options).map(t => posix.join(target.dir, t))
 }
 
 // A package.json "exports" value as a map from subpath to target. Node also accepts the target
@@ -140,7 +146,8 @@ export function packageJsonProblem(
   workspaces: Manifest[],
 ): string | undefined {
   if (entry.json || entry.via !== 'import' || !entry.specifier || /^[.#]/.test(entry.specifier)) return undefined
-  return importedPaths(entry, path, from, workspaces).some(target => target.endsWith('.json'))
+  // Judged by the target Node actually loads, not by a fallback or a condition it never picks.
+  return importedPaths(entry, path, from, workspaces, { nodeImport: true }).some(target => target.endsWith('.json'))
     ? "loads a JSON export, which Node loads only with { type: 'json' }"
     : undefined
 }

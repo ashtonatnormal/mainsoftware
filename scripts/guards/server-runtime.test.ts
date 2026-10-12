@@ -110,6 +110,17 @@ describe('T2 server runtime: the rules', () => {
     expect(packageJsonProblem(load('@hearth/data'), from, serverApp, all)).toBeUndefined()
   })
 
+  it('judges a JSON export by the target Node picks: the first fallback, the first matching condition', () => {
+    const from = 'apps/server/src/a.ts'
+    const withExports = (exports: unknown): Manifest[] => [serverApp, { ...pkg, name: '@hearth/data', exports }]
+    const problem = (exports: unknown) =>
+      packageJsonProblem(load('@hearth/data/d'), from, serverApp, withExports(exports))
+    expect(problem({ './d': ['./src/d.ts', './src/d.json'] })).toBeUndefined()
+    expect(problem({ './d': { browser: './src/d.json', default: './src/d.ts' } })).toBeUndefined()
+    expect(problem({ './d': { types: './src/d.d.ts', import: './src/d.json', default: './src/d.ts' } })).toMatch(/json/)
+    expect(problem({ './d': { browser: './src/d.ts', default: './src/d.json' } })).toMatch(/json/)
+  })
+
   it('finds the files an import loads, so a test-only one can be refused', () => {
     const access: Manifest = { ...pkg, exports: { '.': './src/index.ts', './testing': './src/testing/index.ts' } }
     const all = [serverApp, access]

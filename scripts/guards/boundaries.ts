@@ -15,11 +15,30 @@ export interface Workspace {
   imports?: unknown
 }
 
+// The conditions Node matches when Node itself imports a file, in no particular order: it takes
+// the first key, in the object's own order, that is one of these.
+const NODE_IMPORT_CONDITIONS = new Set(['node', 'import', 'module-sync', 'default'])
+
+export interface TargetOptions {
+  // Leave out the "types" condition: only tsc reads it, never Node.
+  skipTypes?: boolean
+  // Only the target Node itself loads for an import: the first element of a fallback list, and
+  // the first condition Node matches.
+  nodeImport?: boolean
+}
+
 // Every target a package.json "imports" or "exports" entry can resolve to: a string, a list of
-// fallbacks, or conditions ({ "types": …, "default": … }) holding either. With skipTypes, the
-// "types" condition is left out: only tsc reads it, never Node.
-export function importTargets(value: unknown, options: { skipTypes?: boolean } = {}): string[] {
+// fallbacks, or conditions ({ "types": …, "default": … }) holding either.
+export function importTargets(value: unknown, options: TargetOptions = {}): string[] {
   if (typeof value === 'string') return [value]
+  if (options.nodeImport) {
+    if (Array.isArray(value)) return value.length > 0 ? importTargets(value[0], options) : []
+    if (value && typeof value === 'object') {
+      const match = Object.entries(value).find(([condition]) => NODE_IMPORT_CONDITIONS.has(condition))
+      return match ? importTargets(match[1], options) : []
+    }
+    return []
+  }
   if (Array.isArray(value)) return value.flatMap(v => importTargets(v, options))
   if (value && typeof value === 'object') {
     return Object.entries(value).flatMap(([condition, v]) =>
@@ -31,7 +50,7 @@ export function importTargets(value: unknown, options: { skipTypes?: boolean } =
 
 // The targets a #specifier maps to through an imports map, as Node matches keys: an exact key
 // first, otherwise the pattern key ("#src/*") with the longest prefix before its *.
-export function mapImport(imports: unknown, specifier: string, options: { skipTypes?: boolean } = {}): string[] {
+export function mapImport(imports: unknown, specifier: string, options: TargetOptions = {}): string[] {
   if (!imports || typeof imports !== 'object') return []
   const map = imports as Record<string, unknown>
   if (Object.hasOwn(map, specifier)) return importTargets(map[specifier], options)
