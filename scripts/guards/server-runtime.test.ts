@@ -119,6 +119,20 @@ describe('T2 server runtime: the rules', () => {
     expect(problem({ './d': { browser: './src/d.json', default: './src/d.ts' } })).toBeUndefined()
     expect(problem({ './d': { types: './src/d.d.ts', import: './src/d.json', default: './src/d.ts' } })).toMatch(/json/)
     expect(problem({ './d': { browser: './src/d.ts', default: './src/d.json' } })).toMatch(/json/)
+    // Node 24 matches node-addons by default.
+    expect(problem({ './d': { 'node-addons': './src/d.json', default: './src/d.ts' } })).toMatch(/json/)
+  })
+
+  it('goes on to the next condition or fallback when one holds nothing Node matches, as Node does', () => {
+    const from = 'apps/server/src/a.ts'
+    const withExports = (exports: unknown): Manifest[] => [serverApp, { ...pkg, name: '@hearth/data', exports }]
+    const problem = (exports: unknown) =>
+      packageJsonProblem(load('@hearth/data/d'), from, serverApp, withExports(exports))
+    expect(problem({ './d': { node: { require: './src/d.ts' }, default: './src/d.json' } })).toMatch(/json/)
+    expect(problem({ './d': [{ require: './src/d.ts' }, './src/d.json'] })).toMatch(/json/)
+    expect(problem({ './d': [null, './src/d.json'] })).toMatch(/json/)
+    // null means "not exported": Node stops there, so nothing loads.
+    expect(problem({ './d': { node: null, default: './src/d.json' } })).toBeUndefined()
   })
 
   it('finds the files an import loads, so a test-only one can be refused', () => {
@@ -183,13 +197,16 @@ describe('T2 server runtime: the rules', () => {
     }
   })
 
-  it('refuses folder keys, export patterns and targets Node would read as JavaScript', () => {
+  it('refuses folder keys, export patterns, and targets Node would read as JavaScript or refuse', () => {
     expect(manifestProblems({ ...pkg, exports: { '.': './src/index.ts' } })).toEqual([])
     expect(manifestProblems(pkg)).toEqual([expect.stringMatching(/has no exports/)])
     expect(manifestProblems({ ...pkg, exports: './src/index.ts' })).toEqual([])
     expect(manifestProblems(serverApp)).toEqual([])
     expect(manifestProblems({ ...pkg, exports: { './rules': './src/rules.js' } })).toHaveLength(1)
     expect(manifestProblems({ ...pkg, exports: { './*': './src/*.ts' } })).toHaveLength(1)
+    expect(manifestProblems({ ...pkg, exports: { '.': 'src/index.ts' } })).toEqual([
+      expect.stringMatching(/start with \.\//),
+    ])
     expect(manifestProblems({ ...serverApp, imports: { '#lib/': './src/' } })).toHaveLength(2)
     expect(
       manifestProblems({ ...pkg, exports: { '.': { types: './src/index.d.ts', default: './src/index.ts' } } }),

@@ -75,9 +75,9 @@ export function runtimePackage(entry: ModuleImport, from: Manifest): string | un
 // Problems with a server workspace's package.json exports and imports, which Node follows
 // exactly as written: a package the server imports by name declares exports (without them Node
 // falls back to main or index.js, never the .ts source), no folder keys (Node dropped them), no
-// export patterns (a subpath import by package name couldn't be checked), and every target
-// outside the "types" condition names a .ts or .json file, except an imports pattern
-// ("#src/*": "./src/*"), whose specifier names the file.
+// export patterns (a subpath import by package name couldn't be checked), every exports target
+// starts with ./, and every target outside the "types" condition names a .ts or .json file,
+// except an imports pattern ("#src/*": "./src/*"), whose specifier names the file.
 export function manifestProblems(m: Manifest): string[] {
   const problems: string[] = []
   if (m.exports === undefined && m.name !== '@hearth/server') {
@@ -95,6 +95,10 @@ export function manifestProblems(m: Manifest): string[] {
       for (const target of importTargets(value, { skipTypes: true })) {
         const pattern = field === 'imports' && key.endsWith('*') && target.endsWith('*')
         if (!pattern && !RUNNABLE.test(target)) problems.push(`${field} "${key}" → "${target}" isn't a .ts file`)
+        // Node treats any other exports target as invalid (boundaries.test.ts checks imports).
+        if (field === 'exports' && !target.startsWith('./')) {
+          problems.push(`exports "${key}" → "${target}" doesn't start with ./, so Node refuses it`)
+        }
       }
     }
   }

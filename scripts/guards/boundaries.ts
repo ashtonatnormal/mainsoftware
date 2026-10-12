@@ -15,30 +15,26 @@ export interface Workspace {
   imports?: unknown
 }
 
-// The conditions Node matches when Node itself imports a file, in no particular order: it takes
-// the first key, in the object's own order, that is one of these.
-const NODE_IMPORT_CONDITIONS = new Set(['node', 'import', 'module-sync', 'default'])
+// The conditions Node 24 matches when it imports a file, as the server's start commands run it
+// (no --conditions or --no-addons flag). The order here doesn't matter: Node goes through an
+// object's keys in their own order.
+const NODE_IMPORT_CONDITIONS = new Set(['node', 'node-addons', 'import', 'module-sync', 'default'])
 
 export interface TargetOptions {
   // Leave out the "types" condition: only tsc reads it, never Node.
   skipTypes?: boolean
-  // Only the target Node itself loads for an import: the first element of a fallback list, and
-  // the first condition Node matches.
+  // Only the target Node itself loads for an import (see nodeTarget).
   nodeImport?: boolean
 }
 
 // Every target a package.json "imports" or "exports" entry can resolve to: a string, a list of
 // fallbacks, or conditions ({ "types": …, "default": … }) holding either.
 export function importTargets(value: unknown, options: TargetOptions = {}): string[] {
-  if (typeof value === 'string') return [value]
   if (options.nodeImport) {
-    if (Array.isArray(value)) return value.length > 0 ? importTargets(value[0], options) : []
-    if (value && typeof value === 'object') {
-      const match = Object.entries(value).find(([condition]) => NODE_IMPORT_CONDITIONS.has(condition))
-      return match ? importTargets(match[1], options) : []
-    }
-    return []
+    const target = nodeTarget(value)
+    return typeof target === 'string' ? [target] : []
   }
+  if (typeof value === 'string') return [value]
   if (Array.isArray(value)) return value.flatMap(v => importTargets(v, options))
   if (value && typeof value === 'object') {
     return Object.entries(value).flatMap(([condition, v]) =>
@@ -46,6 +42,34 @@ export function importTargets(value: unknown, options: TargetOptions = {}): stri
     )
   }
   return []
+}
+
+// The target Node loads for an import, following its PACKAGE_TARGET_RESOLVE: a string as it is;
+// in conditions, the first key it matches whose value resolves; in a fallback list, the first
+// entry that resolves. null means "not exported", which ends the search in conditions, while
+// undefined means nothing matched, so Node goes on to the next condition or entry. (Node also
+// skips a list entry that is an invalid target, such as one without ./ in front; manifestProblems
+// refuses those.)
+function nodeTarget(value: unknown): string | null | undefined {
+  if (typeof value === 'string' || value === null) return value
+  if (Array.isArray(value)) {
+    if (value.length === 0) return null
+    let last: null | undefined
+    for (const entry of value) {
+      const target = nodeTarget(entry)
+      if (typeof target === 'string') return target
+      if (target === null) last = null
+    }
+    return last
+  }
+  if (typeof value === 'object') {
+    for (const [condition, entry] of Object.entries(value)) {
+      if (!NODE_IMPORT_CONDITIONS.has(condition)) continue
+      const target = nodeTarget(entry)
+      if (target !== undefined) return target
+    }
+  }
+  return undefined
 }
 
 // The targets a #specifier maps to through an imports map, as Node matches keys: an exact key
