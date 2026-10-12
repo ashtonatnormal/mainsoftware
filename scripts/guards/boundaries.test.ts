@@ -43,7 +43,12 @@ describe('INF-ARCHLINT import boundaries: the rules', () => {
   })
 
   it('matches imports-map keys as Node does: exact first, then the longest pattern prefix', () => {
-    const map = { '#a': './exact.ts', '#a/*': './star/*', '#a/deep/*': './deep/*', '#c': { types: './t.ts', default: ['./d.ts'] } }
+    const map = {
+      '#a': './exact.ts',
+      '#a/*': './star/*',
+      '#a/deep/*': './deep/*',
+      '#c': { types: './t.ts', default: ['./d.ts'] },
+    }
     expect(mapImport(map, '#a')).toEqual(['./exact.ts'])
     expect(mapImport(map, '#a/x.ts')).toEqual(['./star/x.ts'])
     expect(mapImport(map, '#a/deep/y.ts')).toEqual(['./deep/y.ts'])

@@ -84,13 +84,17 @@ describe('Origin check on state changes (CLAUDE.md, Security and privacy)', () =
     }
   })
 
-  it('refuses other unsafe methods too, and requests to routes that don\'t exist', async () => {
+  it("refuses other unsafe methods too, and requests to routes that don't exist", async () => {
     const instance = app()
     for (const method of ['PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const) {
       const res = await instance.inject({ method, url: '/echo', headers: { origin: 'https://evil.example' } })
       expect(res.statusCode, method).toBe(403)
     }
-    const missing = await instance.inject({ method: 'POST', url: '/nowhere', headers: { origin: 'https://evil.example' } })
+    const missing = await instance.inject({
+      method: 'POST',
+      url: '/nowhere',
+      headers: { origin: 'https://evil.example' },
+    })
     expect(missing.statusCode).toBe(403)
   })
 

@@ -138,7 +138,7 @@ These apply from stage A0 (D41); C0–C6 make no model calls.
 Run these from the root, on Node 24.
 - `npm run check`: typecheck, lint and test across every workspace. It must pass before you open a PR; the auto-push hook's checkpoints may be red.
 - `npm run build`: build every workspace that has a build step (today only `demo/`; the server has none, T2).
-- `docker compose up -d --wait`: the local stack (`docker-compose.yml`): Postgres 17 with pgvector, Valkey and an S3-compatible store, on 127.0.0.1 with the values in `.env.example`. `docker compose down -v` removes it and its data.
+- `docker compose up -d --wait`: the local stack (`docker-compose.yml`): Postgres 17 with pgvector, Valkey 9.1 and RustFS (S3-compatible, TECH-SPEC T9), on 127.0.0.1 with the values in `.env.example`. `docker compose down -v` removes it and its data.
 - `npm run dev`: the server's api role with `node --watch`, reading `.env.example` and then `.env` (git-ignored) for overrides. `ROLE=realtime npm run dev` or `ROLE=worker npm run dev` runs another role. `curl localhost:3000/ready` answers 200 once the stack is up.
 - `scripts/check-server.sh`: CI's start-up check of every role (`IMAGE=hearth-server` checks the image instead, after `docker build -f apps/server/Dockerfile -t hearth-server .`).
 - `npm run fix`: apply Biome's formatting and safe fixes.

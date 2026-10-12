@@ -28,12 +28,30 @@ fail() {
 
 [ -f "$env_file" ] || fail "no $env_file"
 
+# Whatever happens, leave no server running: a failed check exits early, and a server left on
+# the port would answer the next run's probes.
+pid=
+container=
+log=
+cleanup() {
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null || true; fi
+  if [ -n "$container" ]; then docker rm -f "$container" >/dev/null 2>&1 || true; fi
+  if [ -n "$log" ]; then rm -f "$log" "$log.ready"; fi
+}
+trap cleanup EXIT
+
+# Refuse to start if something already answers on the port, rather than check that instead.
+if curl -fsS -o /dev/null "http://127.0.0.1:$port/health" 2>/dev/null; then
+  fail "something is already listening on port $port"
+fi
+
 for role in api realtime worker; do
   log=$(mktemp)
   if [ -n "$image" ]; then
     # Host networking, so the container reaches the Compose stack on 127.0.0.1 as .env.example
-    # says, and the check reaches the server on the same port.
-    container=$(docker run -d --network host --env-file "$env_file" -e ROLE="$role" -e PORT="$port" "$image")
+    # says, and the check reaches the server on the same port. A read-only root filesystem, as
+    # the task will run in AWS, proves the server writes nothing at run time.
+    container=$(docker run -d --read-only --network host --env-file "$env_file" -e ROLE="$role" -e PORT="$port" "$image")
   else
     (cd apps/server && ROLE=$role PORT=$port exec node --env-file="../../$env_file" src/main.ts) >"$log" 2>&1 &
     pid=$!
@@ -72,12 +90,14 @@ for role in api realtime worker; do
     code=$(docker inspect -f '{{.State.ExitCode}}' "$container")
     docker logs "$container" >"$log" 2>&1
     docker rm "$container" >/dev/null
+    container=
   else
     kill -TERM "$pid"
     for _ in $(seq 1 75); do running || break; sleep 0.2; done
     running && { kill -KILL "$pid"; show_log; fail "$role didn't stop within 15 s of SIGTERM"; }
     code=0
     wait "$pid" || code=$?
+    pid=
   fi
   [ "$code" = 0 ] || { show_log; fail "$role exited with code $code after SIGTERM"; }
 
@@ -89,4 +109,5 @@ for role in api realtime worker; do
 
   echo "check-server: $role ok${image:+ (image $image)}"
   rm -f "$log" "$log.ready"
+  log=
 done

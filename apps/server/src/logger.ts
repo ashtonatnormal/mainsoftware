@@ -45,6 +45,9 @@ export function loggerOptions(config: Pick<Config, 'logLevel'> & { role: Role })
   }
 }
 
-export function createLogger(config: Pick<Config, 'logLevel'> & { role: Role }, destination?: DestinationStream): Logger {
+export function createLogger(
+  config: Pick<Config, 'logLevel'> & { role: Role },
+  destination?: DestinationStream,
+): Logger {
   return pino(loggerOptions(config), destination)
 }

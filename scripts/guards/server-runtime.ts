@@ -61,12 +61,16 @@ export function serverWorkspaces(manifests: Manifest[]): Manifest[] {
 
 // The module settings tsc applies to a workspace, after following `extends`.
 export function moduleSettings(tsconfigPath: string): { module: string; moduleResolution: string } {
-  const parsed = ts.getParsedCommandLineOfConfigFile(tsconfigPath, {}, {
-    ...ts.sys,
-    onUnRecoverableConfigFileDiagnostic: diagnostic => {
-      throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))
+  const parsed = ts.getParsedCommandLineOfConfigFile(
+    tsconfigPath,
+    {},
+    {
+      ...ts.sys,
+      onUnRecoverableConfigFileDiagnostic: diagnostic => {
+        throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))
+      },
     },
-  })
+  )
   const options = parsed?.options ?? {}
   return {
     module: ts.ModuleKind[options.module ?? ts.ModuleKind.None],

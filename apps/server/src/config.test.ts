@@ -18,7 +18,13 @@ describe('C0.2 config', () => {
       appOrigin: 'http://localhost:5173',
       databaseUrl: env.DATABASE_URL,
       valkeyUrl: env.VALKEY_URL,
-      s3: { bucket: 'hearth-local', region: 'ap-southeast-1', endpoint: undefined, forcePathStyle: false },
+      s3: {
+        bucket: 'hearth-local',
+        region: 'ap-southeast-1',
+        endpoint: undefined,
+        forcePathStyle: false,
+        credentials: undefined,
+      },
     })
   })
 
@@ -29,10 +35,27 @@ describe('C0.2 config', () => {
       PORT: '3002',
       S3_ENDPOINT: 'http://127.0.0.1:9000',
       S3_FORCE_PATH_STYLE: 'true',
+      S3_ACCESS_KEY_ID: 'hearth-local',
+      S3_SECRET_ACCESS_KEY: 'hearth-local-secret',
     })
     expect(config.role).toBe('worker')
     expect(config.port).toBe(3002)
-    expect(config.s3).toMatchObject({ endpoint: 'http://127.0.0.1:9000', forcePathStyle: true })
+    expect(config.s3).toMatchObject({
+      endpoint: 'http://127.0.0.1:9000',
+      forcePathStyle: true,
+      credentials: { accessKeyId: 'hearth-local', secretAccessKey: 'hearth-local-secret' },
+    })
+  })
+
+  it('needs both S3 keys or neither', () => {
+    expect(() => loadConfig({ ...env, S3_ACCESS_KEY_ID: 'hearth-local' })).toThrow(/S3_SECRET_ACCESS_KEY/)
+  })
+
+  it('accepts only the Valkey URL schemes ioredis reads, so TLS is never silently dropped', () => {
+    expect(loadConfig({ ...env, VALKEY_URL: 'rediss://cache.example:6379' }).valkeyUrl).toBe(
+      'rediss://cache.example:6379',
+    )
+    expect(() => loadConfig({ ...env, VALKEY_URL: 'valkeys://cache.example:6379' })).toThrow(/VALKEY_URL/)
   })
 
   it('treats an empty variable as unset', () => {

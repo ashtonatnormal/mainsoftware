@@ -22,12 +22,16 @@ const schema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   APP_ORIGIN: origin,
   DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/, error: 'must be a postgres:// URL' }),
-  VALKEY_URL: z.url({ protocol: /^(valkeys?|rediss?)$/, error: 'must be a valkey:// or rediss:// URL' }),
+  // redis:// locally, rediss:// (TLS) for ElastiCache. ioredis reads only these two schemes.
+  VALKEY_URL: z.url({ protocol: /^rediss?$/, error: 'must be a redis:// or rediss:// URL' }),
   S3_BUCKET: z.string().min(3),
   S3_REGION: z.string().min(1).default('ap-southeast-1'),
   // Only for a local S3-compatible store; unset in AWS, where the SDK uses S3's own endpoint.
   S3_ENDPOINT: z.url({ protocol: /^https?$/ }).optional(),
   S3_FORCE_PATH_STYLE: flag.default(false),
+  // Only for the local store's dummy keys; unset in AWS, where the ECS task role signs requests.
+  S3_ACCESS_KEY_ID: z.string().min(1).optional(),
+  S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
 })
 
 export interface Config {
@@ -38,7 +42,13 @@ export interface Config {
   appOrigin: string
   databaseUrl: string
   valkeyUrl: string
-  s3: { bucket: string; region: string; endpoint: string | undefined; forcePathStyle: boolean }
+  s3: {
+    bucket: string
+    region: string
+    endpoint: string | undefined
+    forcePathStyle: boolean
+    credentials: { accessKeyId: string; secretAccessKey: string } | undefined
+  }
 }
 
 export class ConfigError extends Error {
@@ -48,7 +58,12 @@ export class ConfigError extends Error {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   // An empty variable counts as unset, so a blank line in .env falls back to the default.
   const present = Object.fromEntries(Object.entries(env).filter(([, value]) => value !== ''))
-  const parsed = schema.safeParse(present)
+  const parsed = schema
+    .refine(e => (e.S3_ACCESS_KEY_ID === undefined) === (e.S3_SECRET_ACCESS_KEY === undefined), {
+      message: 'set both S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, or neither',
+      path: ['S3_SECRET_ACCESS_KEY'],
+    })
+    .safeParse(present)
   if (!parsed.success) {
     const problems = parsed.error.issues.map(issue => `  ${issue.path.join('.')}: ${issue.message}`)
     throw new ConfigError(`Invalid configuration (see .env.example):\n${problems.join('\n')}`)
@@ -62,6 +77,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     appOrigin: e.APP_ORIGIN,
     databaseUrl: e.DATABASE_URL,
     valkeyUrl: e.VALKEY_URL,
-    s3: { bucket: e.S3_BUCKET, region: e.S3_REGION, endpoint: e.S3_ENDPOINT, forcePathStyle: e.S3_FORCE_PATH_STYLE },
+    s3: {
+      bucket: e.S3_BUCKET,
+      region: e.S3_REGION,
+      endpoint: e.S3_ENDPOINT,
+      forcePathStyle: e.S3_FORCE_PATH_STYLE,
+      credentials:
+        e.S3_ACCESS_KEY_ID && e.S3_SECRET_ACCESS_KEY
+          ? { accessKeyId: e.S3_ACCESS_KEY_ID, secretAccessKey: e.S3_SECRET_ACCESS_KEY }
+          : undefined,
+    },
   }
 }
