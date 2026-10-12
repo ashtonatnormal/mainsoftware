@@ -76,14 +76,23 @@ create trigger people_keep_history before update of deactivated_at, deactivated_
   for each row execute function public.keep_history('deactivated_at', 'deactivated_by');
 
 -- Nobody joins an archived department. The message can be shown as it is.
+--
+-- This check and the others below that refuse because something has ended (archived, left,
+-- signed out) read that row FOR SHARE. An archive or deactivation running at the same time holds
+-- the row, so the check waits for it and then reads what it committed; otherwise both could
+-- succeed, each unaware of the other (apps/server/scripts/check-concurrency.ts shows this).
 create function public.people_check_department() returns trigger
 language plpgsql set search_path = '' as $$
+declare
+  archived timestamptz;
 begin
   if new.department_id is not null
-     and (tg_op = 'INSERT' or new.department_id is distinct from old.department_id)
-     and exists (select 1 from public.departments d
-                 where d.org_id = new.org_id and d.id = new.department_id and d.archived_at is not null) then
-    raise exception 'That department is archived, so nobody can be added to it.' using errcode = 'check_violation';
+     and (tg_op = 'INSERT' or new.department_id is distinct from old.department_id) then
+    select d.archived_at into archived from public.departments d
+    where d.org_id = new.org_id and d.id = new.department_id for share;
+    if archived is not null then
+      raise exception 'That department is archived, so nobody can be added to it.' using errcode = 'check_violation';
+    end if;
   end if;
   return new;
 end
@@ -100,7 +109,9 @@ create trigger people_check_department before insert or update of department_id 
 create function public.people_check_manager() returns trigger
 language plpgsql set search_path = '' as $$
 declare
+  manager_left timestamptz;
   loops boolean;
+  too_long boolean;
 begin
   if new.manager_id is null or (tg_op = 'UPDATE' and new.manager_id is not distinct from old.manager_id) then
     return new;
@@ -113,21 +124,29 @@ begin
       using errcode = 'invalid_transaction_state';
   end if;
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('hearth.people.manager_id:' || new.org_id::text, 0));
-  if exists (select 1 from public.people m
-             where m.org_id = new.org_id and m.id = new.manager_id and m.deactivated_at is not null) then
+  -- The advisory lock doesn't stop a deactivation, so the manager's row is read FOR SHARE.
+  select m.deactivated_at into manager_left from public.people m
+  where m.org_id = new.org_id and m.id = new.manager_id for share;
+  if manager_left is not null then
     raise exception 'That manager has left the organisation. Choose someone who is still here.'
       using errcode = 'check_violation';
   end if;
+  -- Walk up from the new manager. The walk stops after 10,000 managers, and a line longer than
+  -- that is refused rather than passed unchecked, so no loop can hide past the limit.
   with recursive chain (id, depth) as (
     select new.manager_id, 1
     union all
     select p.manager_id, c.depth + 1
     from public.people p join chain c on p.org_id = new.org_id and p.id = c.id
-    where p.manager_id is not null and c.depth < 10000
+    where p.manager_id is not null and c.depth <= 10000
   )
-  select exists (select 1 from chain where chain.id = new.id) into loops;
+  select coalesce(bool_or(chain.id = new.id), false), max(chain.depth) > 10000 into loops, too_long from chain;
   if loops then
     raise exception 'That would make a loop in the reporting lines: this person already manages their new manager, directly or through others.'
+      using errcode = 'check_violation';
+  end if;
+  if too_long then
+    raise exception 'That would put more than 10,000 managers above this person, too many to check for loops.'
       using errcode = 'check_violation';
   end if;
   return new;
@@ -195,16 +214,20 @@ create trigger team_memberships_keep_history before update of removed_at, remove
   for each row execute function public.keep_history('removed_at', 'removed_by');
 
 -- Nobody joins an archived team, and nobody who has left joins a team. The messages can be shown
--- as they are.
+-- as they are. The rows are read FOR SHARE (see people_check_department).
 create function public.team_memberships_check() returns trigger
 language plpgsql set search_path = '' as $$
+declare
+  ended timestamptz;
 begin
-  if exists (select 1 from public.teams t
-             where t.org_id = new.org_id and t.id = new.team_id and t.archived_at is not null) then
+  select t.archived_at into ended from public.teams t
+  where t.org_id = new.org_id and t.id = new.team_id for share;
+  if ended is not null then
     raise exception 'That team is archived, so nobody can join it.' using errcode = 'check_violation';
   end if;
-  if exists (select 1 from public.people p
-             where p.org_id = new.org_id and p.id = new.person_id and p.deactivated_at is not null) then
+  select p.deactivated_at into ended from public.people p
+  where p.org_id = new.org_id and p.id = new.person_id for share;
+  if ended is not null then
     raise exception 'That person has left the organisation, so they can''t join a team.' using errcode = 'check_violation';
   end if;
   return new;
@@ -257,17 +280,24 @@ create unique index role_assignments_current on public.role_assignments (org_id,
 create trigger role_assignments_keep_history before update of revoked_at, revoked_by on public.role_assignments
   for each row execute function public.keep_history('revoked_at', 'revoked_by');
 
--- Nobody who has left gets a role, and nobody becomes Team Admin of an archived team.
+-- Nobody who has left gets a role, and nobody becomes Team Admin of an archived team. The rows
+-- are read FOR SHARE (see people_check_department).
 create function public.role_assignments_check() returns trigger
 language plpgsql set search_path = '' as $$
+declare
+  ended timestamptz;
 begin
-  if exists (select 1 from public.people p
-             where p.org_id = new.org_id and p.id = new.person_id and p.deactivated_at is not null) then
+  select p.deactivated_at into ended from public.people p
+  where p.org_id = new.org_id and p.id = new.person_id for share;
+  if ended is not null then
     raise exception 'That person has left the organisation, so they can''t be given a role.' using errcode = 'check_violation';
   end if;
-  if new.team_id is not null and exists (select 1 from public.teams t
-             where t.org_id = new.org_id and t.id = new.team_id and t.archived_at is not null) then
-    raise exception 'That team is archived, so nobody can be its Team Admin.' using errcode = 'check_violation';
+  if new.team_id is not null then
+    select t.archived_at into ended from public.teams t
+    where t.org_id = new.org_id and t.id = new.team_id for share;
+    if ended is not null then
+      raise exception 'That team is archived, so nobody can be its Team Admin.' using errcode = 'check_violation';
+    end if;
   end if;
   return new;
 end

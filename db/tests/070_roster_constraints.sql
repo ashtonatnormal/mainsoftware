@@ -228,6 +228,31 @@ select pg_temp.expect_error($$insert into public.sessions (org_id, user_id, devi
   values ('f1000000-0000-4000-8000-000000000000', 'f1000000-0000-4000-8000-0000000000a7', 'f2000000-0000-4000-8000-0000000000e1',
           sha256('another org''s device'), now() + interval '1 day')$$, '23503');
 
+-- Signing a device out ends its open sessions with the device's when and who; a session already
+-- ended keeps its own. No session starts on a signed-out device (ACC-04).
+insert into public.devices (id, org_id, user_id, label)
+values ('f2000000-0000-4000-8000-0000000000e4', 'f2000000-0000-4000-8000-000000000000', 'f2000000-0000-4000-8000-0000000000a8', 'Laptop');
+insert into public.sessions (id, org_id, user_id, device_id, token_hash, expires_at, revoked_at, revoked_by, revoke_reason) values
+  ('f2000000-0000-4000-8000-0000000000e5', 'f2000000-0000-4000-8000-000000000000', 'f2000000-0000-4000-8000-0000000000a8',
+   'f2000000-0000-4000-8000-0000000000e4', sha256('open on the laptop'), now() + interval '1 day', null, null, null),
+  ('f2000000-0000-4000-8000-0000000000e6', 'f2000000-0000-4000-8000-000000000000', 'f2000000-0000-4000-8000-0000000000a8',
+   'f2000000-0000-4000-8000-0000000000e4', sha256('ended on the laptop'), now() + interval '1 day',
+   now() - interval '1 hour', 'f2000000-0000-4000-8000-0000000000a8', 'sign_out');
+select pg_temp.act_as('2', 'a2');
+update public.devices set signed_out_at = now(), signed_out_by = 'f2000000-0000-4000-8000-0000000000a2'
+where id = 'f2000000-0000-4000-8000-0000000000e4';
+select pg_temp.check((select s.revoked_at = d.signed_out_at and s.revoked_by = d.signed_out_by and s.revoke_reason = 'device_sign_out'
+                      from public.sessions s join public.devices d on d.id = s.device_id
+                      where s.id = 'f2000000-0000-4000-8000-0000000000e5'),
+                     'signing the device out did not end its open session');
+select pg_temp.check((select revoked_at < now() and revoked_by = 'f2000000-0000-4000-8000-0000000000a8' and revoke_reason = 'sign_out'
+                      from public.sessions where id = 'f2000000-0000-4000-8000-0000000000e6'),
+                     'signing the device out changed a session that had already ended');
+select pg_temp.expect_error($$insert into public.sessions (org_id, user_id, device_id, token_hash, expires_at)
+  values ('f2000000-0000-4000-8000-000000000000', 'f2000000-0000-4000-8000-0000000000a8', 'f2000000-0000-4000-8000-0000000000e4',
+          sha256('after the sign-out'), now() + interval '1 day')$$, '23514', 'That device has been signed out.%');
+reset role;
+
 -- Notices (PDPA-02, PDPA-03, ACC-12): numbered from v0, each above the last; an acknowledgment is
 -- once per version, in the app on the person's own device or recorded by the DPO (never for
 -- themselves), and outlives the device.

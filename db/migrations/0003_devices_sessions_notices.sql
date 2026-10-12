@@ -56,6 +56,45 @@ create index sessions_device on public.sessions (org_id, device_id);
 create trigger sessions_keep_history before update of revoked_at, revoked_by, revoke_reason on public.sessions
   for each row execute function public.keep_history('revoked_at', 'revoked_by', 'revoke_reason');
 
+-- Signing a device out ends its sessions: those still open are revoked with the device's when and
+-- who, and the reason device_sign_out.
+create function public.devices_end_sessions() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  update public.sessions s
+  set revoked_at = new.signed_out_at, revoked_by = new.signed_out_by, revoke_reason = 'device_sign_out'
+  where s.org_id = new.org_id and s.device_id = new.id and s.revoked_at is null;
+  return null;
+end
+$$;
+revoke execute on function public.devices_end_sessions() from public;
+create trigger devices_end_sessions after update of signed_out_at on public.devices
+  for each row when (old.signed_out_at is null and new.signed_out_at is not null)
+  execute function public.devices_end_sessions();
+
+-- And no session starts on a device that's been signed out. The device row is read FOR SHARE, so
+-- a sign-out running at the same time either finishes first and the session is refused, or waits
+-- for the session and then ends it (apps/server/scripts/check-concurrency.ts shows both). The
+-- message can be shown as it is.
+create function public.sessions_check_device() returns trigger
+language plpgsql set search_path = '' as $$
+declare
+  signed_out timestamptz;
+begin
+  -- The row the foreign key names, so a device that isn't the person's own is left to it.
+  select d.signed_out_at into signed_out from public.devices d
+  where d.org_id = new.org_id and d.user_id = new.user_id and d.id = new.device_id for share;
+  if signed_out is not null then
+    raise exception 'That device has been signed out. Sign in again to add it as a new device.'
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end
+$$;
+revoke execute on function public.sessions_check_device() from public;
+create trigger sessions_check_device before insert on public.sessions
+  for each row execute function public.sessions_check_device();
+
 -- Versions of the privacy and recording notice (PDPA-02), numbered from 0 as the build plan
 -- numbers them (v0 in C0, v1 at C1.13). A published version never changes: a change of purposes
 -- publishes a new one, numbered above every earlier one, which everyone acknowledges again

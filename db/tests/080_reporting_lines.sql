@@ -30,6 +30,29 @@ update public.people set deactivated_at = now(), deactivated_by = 'f1000000-0000
 where id = 'f1000000-0000-4000-8000-0000000000a1';
 update public.people set full_name = 'Mel Member renamed' where id = 'f1000000-0000-4000-8000-0000000000a8';
 
--- The trigger also refuses to change a manager outside READ COMMITTED, where the loop check
--- couldn't see a concurrent commit. That needs its own transaction, which a test here can't
--- start (scripts/test-db.sh runs each in one), so it isn't covered here.
+-- The loop check walks at most 10,000 managers up, and refuses a longer line rather than pass it
+-- unchecked. A line of 10,001 people (n reports to n - 1) is built without the triggers, which
+-- would walk it once per person.
+set local session_replication_role = replica;
+insert into public.principals (id, org_id, kind)
+select ('f1000000-0000-4000-9000-' || lpad(to_hex(n), 12, '0'))::uuid, 'f1000000-0000-4000-8000-000000000000', 'human'
+from generate_series(1, 10001) as n;
+insert into public.people (id, org_id, full_name, manager_id, created_by)
+select ('f1000000-0000-4000-9000-' || lpad(to_hex(n), 12, '0'))::uuid, 'f1000000-0000-4000-8000-000000000000', 'In line ' || n,
+       case when n > 1 then ('f1000000-0000-4000-9000-' || lpad(to_hex(n - 1), 12, '0'))::uuid end,
+       'f1000000-0000-4000-8000-0000000000a2'
+from generate_series(1, 10001) as n;
+set local session_replication_role = origin;
+select pg_temp.act_as('1', 'a2');
+-- Under person 10,000: 10,000 managers above, all checked.
+update public.people set manager_id = 'f1000000-0000-4000-9000-000000002710' where id = 'f1000000-0000-4000-8000-0000000000a8';
+-- Under person 10,001: one too many.
+select pg_temp.expect_error($$update public.people set manager_id = 'f1000000-0000-4000-9000-000000002711' where id = 'f1000000-0000-4000-8000-0000000000a8'$$,
+  '23514', 'That would put more than 10,000 managers above this person%');
+-- A loop right at the limit is still found: person 1, at the top, under a8 (who is under 10,000).
+select pg_temp.expect_error($$update public.people set manager_id = 'f1000000-0000-4000-8000-0000000000a8' where id = 'f1000000-0000-4000-9000-000000000001'$$,
+  '23514', 'That would make a loop in the reporting lines%');
+reset role;
+
+-- 085_reporting_lines_isolation.sql covers the refusal outside READ COMMITTED, and
+-- apps/server/scripts/check-concurrency.ts a manager who leaves while someone is moved under them.

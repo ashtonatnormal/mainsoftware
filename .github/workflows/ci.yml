@@ -136,6 +136,9 @@ jobs:
       # DB tests in db/tests/: who can read and write what, for every role, including the ones
       # that must see nothing.
       - run: scripts/test-db.sh
+      # Refusals that must hold when two transactions race (someone leaving while given a role,
+      # a device signed out while a session starts), in two connections to a throwaway database.
+      - run: node apps/server/scripts/check-concurrency.ts
       # The Kysely types (apps/server/src/db/schema.ts) match the schema the migrations build.
       - run: npm run db:types
       - run: git diff --exit-code -- apps/server/src/db/schema.ts
