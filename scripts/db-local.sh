@@ -60,8 +60,17 @@ else
   sql -d postgres -c "alter database $db owner to $owner"
 fi
 
-# The migrator connects with the PG* variables, so nothing has to be put into a URL.
-PGDATABASE=$db MIGRATION_ROLE=$owner node apps/server/src/db/migrate.ts
+# The migrate login, like CI's (scripts/check-migrations.sh): a NOINHERIT login whose only right
+# is to take hearth_owner, so a migration that switches role gains nothing here either. It's
+# dropped afterwards. The migrator connects with the PG* variables, so nothing goes into a URL.
+migrator=hearth_local_m
+migrator_pw=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+trap 'sql -d postgres -c "drop role if exists $migrator" >/dev/null 2>&1 || true' EXIT
+sql -d postgres -c "set client_min_messages = warning" \
+  -c "do \$\$ begin create role $migrator; exception when duplicate_object then null; end \$\$" \
+  -c "alter role $migrator login nosuperuser nobypassrls nocreaterole nocreatedb noinherit password '$migrator_pw'" \
+  -c "grant $owner to $migrator"
+PGUSER=$migrator PGPASSWORD=$migrator_pw PGDATABASE=$db MIGRATION_ROLE=$owner node apps/server/src/db/migrate.ts
 
 # The migrations created hearth_app without a login; locally it signs in with a password.
 sql -d postgres -c "alter role hearth_app login password '$app_password'"
