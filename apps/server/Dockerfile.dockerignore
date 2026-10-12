@@ -6,8 +6,10 @@
 !package-lock.json
 !apps/server/
 !packages/
+!db/migrations/
 
-# Never, even inside those folders.
+# Never, even inside those folders. apps/server/scripts/ holds development tools (db:types).
+apps/server/scripts
 **/node_modules
 **/dist
 **/*.test.ts
