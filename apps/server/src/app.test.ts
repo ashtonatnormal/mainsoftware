@@ -1,6 +1,8 @@
+import { Writable } from 'node:stream'
 import { pino } from 'pino'
 import { describe, expect, it } from 'vitest'
 import { buildApp } from '#src/app.ts'
+import { createLogger } from '#src/logger.ts'
 import type { Check } from '#src/ready.ts'
 
 const APP_ORIGIN = 'https://hearth.example.com'
@@ -51,6 +53,34 @@ describe('C0.2 probes', () => {
     expect(res.json().checks.postgres).toBe('timed out')
     expect(aborted).toBe(true)
     expect(Date.now() - started).toBeLessThan(3000)
+  })
+})
+
+describe('C0.2 request logs', () => {
+  it('never write a query string, which can carry a token or a phone number', async () => {
+    const lines: string[] = []
+    const stream = new Writable({
+      write(chunk, _encoding, done) {
+        lines.push(String(chunk))
+        done()
+      },
+    })
+    const instance = buildApp({
+      appOrigin: APP_ORIGIN,
+      logger: createLogger({ logLevel: 'info', role: 'api' }, stream),
+      checks: {},
+    })
+    const missing = await instance.inject('/nowhere?token=query-secret&phone=%2B6591234567')
+    await instance.inject({
+      method: 'POST',
+      url: '/echo?token=refused-secret',
+      headers: { origin: 'https://evil.example' },
+    })
+    const logs = lines.join('')
+    for (const secret of ['query-secret', '6591234567', 'refused-secret']) expect(logs).not.toContain(secret)
+    expect(logs).toContain('"url":"/nowhere"')
+    expect(missing.statusCode).toBe(404)
+    expect(missing.body).not.toContain('query-secret')
   })
 })
 

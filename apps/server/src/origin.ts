@@ -5,6 +5,7 @@
 // accepting. Provider webhooks (LiveKit, SMS) will be the only exemption, and they verify the
 // provider's signature instead; none exist yet.
 import type { FastifyInstance } from 'fastify'
+import { pathOf } from '#src/logger.ts'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD'])
 
@@ -18,7 +19,7 @@ export function refuseCrossSiteWrites(app: FastifyInstance, appOrigin: string): 
   app.addHook('onRequest', async (request, reply) => {
     if (SAFE_METHODS.has(request.method)) return
     if (isAppOrigin(request.headers.origin, appOrigin)) return
-    request.log.warn({ method: request.method, url: request.url }, 'refused a request from another origin')
+    request.log.warn({ method: request.method, url: pathOf(request.url) }, 'refused a request from another origin')
     return reply.code(403).send({ error: 'Forbidden' })
   })
 }

@@ -131,6 +131,20 @@ export function exportsMap(exports: unknown): unknown {
   return sugar ? { '.': exports } : exports
 }
 
+// Why an import by package name can't load, when the package's exports send it to a JSON file
+// and the import lacks { type: 'json' } (tsc checks that only on static imports).
+export function packageJsonProblem(
+  entry: ModuleImport,
+  path: string,
+  from: Manifest,
+  workspaces: Manifest[],
+): string | undefined {
+  if (entry.json || entry.via !== 'import' || !entry.specifier || /^[.#]/.test(entry.specifier)) return undefined
+  return importedPaths(entry, path, from, workspaces).some(target => target.endsWith('.json'))
+    ? "loads a JSON export, which Node loads only with { type: 'json' }"
+    : undefined
+}
+
 // Syntax tsc accepts that Node's type stripping can't run, with the line it's on.
 export function unstrippableSyntax(path: string, source: string): string[] {
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)

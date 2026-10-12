@@ -16,6 +16,10 @@ export function buildApp({ appOrigin, logger, checks }: AppOptions): FastifyInst
   const app = fastify({ loggerInstance })
   refuseCrossSiteWrites(app, appOrigin)
 
+  // Fastify's own 404 logs and returns the whole URL, query string included; this answers without
+  // echoing it, and the request log line already records the path.
+  app.setNotFoundHandler(async (_request, reply) => reply.code(404).send({ error: 'Not Found' }))
+
   // The probes are called every few seconds, so their requests are logged only at warn and
   // above, unless the configured level is quieter still.
   const probeLogLevel = logger.isLevelEnabled('warn') ? 'warn' : (logger.level as LevelWithSilent)

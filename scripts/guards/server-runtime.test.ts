@@ -9,6 +9,7 @@ import {
   type Manifest,
   manifestProblems,
   moduleSettings,
+  packageJsonProblem,
   runtimePackage,
   serverWorkspaces,
   TEST_ONLY,
@@ -94,6 +95,19 @@ describe('T2 server runtime: the rules', () => {
       'a',
       'b',
     ])
+  })
+
+  it("needs { type: 'json' } on an import by name that a package's exports send to JSON", () => {
+    const data: Manifest = {
+      ...pkg,
+      name: '@hearth/data',
+      exports: { '.': './src/index.ts', './countries': './src/countries.json' },
+    }
+    const all = [serverApp, data]
+    const from = 'apps/server/src/a.ts'
+    expect(packageJsonProblem(load('@hearth/data/countries'), from, serverApp, all)).toMatch(/type: 'json'/)
+    expect(packageJsonProblem(load('@hearth/data/countries', { json: true }), from, serverApp, all)).toBeUndefined()
+    expect(packageJsonProblem(load('@hearth/data'), from, serverApp, all)).toBeUndefined()
   })
 
   it('finds the files an import loads, so a test-only one can be refused', () => {
@@ -200,7 +214,8 @@ describe('T2 server runtime: the repo', () => {
       moduleImports(readRepoFile(path), path).flatMap(entry => {
         // Vitest, not Node, resolves a test's computed import.
         if (isTest(path) && entry.specifier === undefined) return []
-        const problem = importProblem(entry, workspaceOf(path))
+        const problem =
+          importProblem(entry, workspaceOf(path)) ?? packageJsonProblem(entry, path, workspaceOf(path), server)
         return problem ? [`${path}: '${entry.specifier ?? '(computed)'}' ${problem}`] : []
       }),
     )

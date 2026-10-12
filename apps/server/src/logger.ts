@@ -47,11 +47,33 @@ export const REDACT_PATHS = [
 
 export const CENSOR = '[redacted]'
 
+// A request's path, without the query string or fragment. Redaction matches field names, so a
+// token or phone number in a query (?token=…) would reach the logs whole; logs keep the path only.
+export const pathOf = (url: string | undefined): string => (url ?? '').split(/[?#]/, 1)[0] ?? ''
+
+interface LoggedRequest {
+  method?: string
+  url?: string
+  host?: string
+  ip?: string
+  socket?: { remotePort?: number }
+}
+
 export function loggerOptions(config: Pick<Config, 'logLevel'> & { role: Role }): LoggerOptions {
   return {
     level: config.logLevel,
     base: { role: config.role },
     redact: { paths: REDACT_PATHS, censor: CENSOR },
+    // Fastify's request serializer, which it takes over from this logger, without the query string.
+    serializers: {
+      req: (req: LoggedRequest) => ({
+        method: req.method,
+        url: pathOf(req.url),
+        host: req.host,
+        remoteAddress: req.ip,
+        remotePort: req.socket?.remotePort,
+      }),
+    },
   }
 }
 
