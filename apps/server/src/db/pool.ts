@@ -1,6 +1,6 @@
-// The Postgres connection pool. C0.3 adds the helper every query goes through, which sets the
-// org and user inside a transaction (CLAUDE.md, Database); until then the pool only answers the
-// readiness check.
+// The Postgres connection pool, as hearth_app. Queries go through withOrg() in database.ts, which
+// sets the org and user inside a transaction (CLAUDE.md, Database); the readiness check below is
+// the one query outside it, and it reads no table.
 import { Pool } from 'pg'
 import type { Logger } from 'pino'
 import { CHECK_TIMEOUT_MS, type Check } from '#src/ready.ts'
