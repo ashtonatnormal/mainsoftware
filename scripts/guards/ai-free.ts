@@ -5,7 +5,6 @@
 // noRestrictedGlobals (biome.json) refuses the browser's own speech recognition and built-in AI.
 // From A0, packages/model becomes the one place a model SDK may live, and this guard gets an
 // exception for it then.
-import ts from 'typescript'
 
 // `*` stands for any run of characters, so '@ai-sdk/*' is the whole scope and '*whisper*' any
 // name containing "whisper". Add to the group a package belongs to.
@@ -95,26 +94,6 @@ function escapeRegExp(text: string) {
 // Why a package is banned, e.g. 'a model SDK', or undefined if it's allowed.
 export function bannedReason(name: string): string | undefined {
   return banned.find(b => b.re.test(name))?.why
-}
-
-// The npm package an import specifier loads: 'openai/resources' and 'npm:openai@4' load openai,
-// and so do CDN URLs such as https://esm.sh/openai. Relative paths, node: built-ins, # subpath
-// imports and the @/ alias load no package.
-export function packageOf(specifier: string): string | undefined {
-  let spec = specifier.replace(/^npm:/, '')
-  const cdn = spec.match(
-    /^https?:\/\/(?:esm\.sh|esm\.run|cdn\.skypack\.dev|unpkg\.com|cdn\.jsdelivr\.net\/npm|ga\.jspm\.io\/npm:)\/?(.+)$/,
-  )
-  if (cdn?.[1]) spec = cdn[1]
-  else if (/^(?:[a-z][a-z0-9+.-]*:|[./#]|@\/)/i.test(spec)) return undefined
-  const match = spec.match(/^(@[^/@]+\/[^/@]+|[^/@]+)/)
-  return match?.[1]
-}
-
-// Every module a source file loads: imports, re-exports, import-equals, require() and import().
-// TypeScript's own pre-processor reads them, so comments and string contents don't count.
-export function importsOf(source: string): string[] {
-  return ts.preProcessFile(source, true, true).importedFiles.map(file => file.fileName)
 }
 
 // Every package name a package-lock.json installs, including nested copies.

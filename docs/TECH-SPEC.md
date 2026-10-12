@@ -1,0 +1,56 @@
+# Hearth — technical decisions
+
+The technical decisions behind the build, numbered `T1`, `T2`, … so prompts, commits and tests can cite them the way they cite the PRD's `Dn`. T1–T12 come from the build plan (`docs/BUILD-PLAN.md` Part 1E.1) and confirm the PRD's non-binding building blocks (Appendix B.2). The rules for how the code uses them are in `CLAUDE.md`, which wins where the two disagree; fix this file in the same PR.
+
+Each decision has a status:
+
+- **Decided**: settled by `CLAUDE.md` (Stack, Database, Security and privacy) or the PRD. Changing it means changing those too.
+- **Default**: the build plan's recommendation. It stands unless the owner changes it before the step that first builds it.
+- **Open**: needs the owner's choice before the step named.
+
+## T1–T12
+
+| # | Decision | Status | Built in |
+|---|---|---|---|
+| T1 | **Repo shape.** One npm-workspaces monorepo: `apps/web`, `apps/server`, `packages/shared` (domain types, zod schemas), `packages/access` (the permission model), `infra/`, with `demo/` kept as the reference UI and still type-checked, tested and built. Packages are imported by name (`@hearth/access`); `apps/web` never imports from `apps/server`. | Decided (`CLAUDE.md`, Stack) | C0.1 (done) |
+| T2 | **Runtime and server.** Node 24 LTS, TypeScript strict end to end, one modular server: Fastify for HTTP and `ws` for WebSockets, in one image with api, realtime and worker roles. Long-lived processes, so no serverless host. | Decided (`CLAUDE.md`, Stack; D37) | C0.2 |
+| T3 | **Database access.** PostgreSQL 17 on RDS, with `org_id` on every table and org-scoped RLS behind `packages/access` (ACC-11). Plain SQL migrations in `db/migrations/<NNNN>_<name>.sql`, expand/contract (INF-MIGRATE), applied in name order in one transaction as `hearth_owner` and checked by `scripts/check-migrations.sh`. **The migrator and query layer, Drizzle or Kysely, is open** (see below). | Decided, except the tool: Open | C0.3 (choose before it starts) |
+| T4 | **Background jobs.** pg-boss, a Postgres-backed queue (PRD B.2), plus a scheduler with an "interrupted, awaiting review" state. No extra service to run. | Default | C0.6 |
+| T5 | **Sessions.** Server-side sessions with opaque, revocable tokens in a `__Host-` cookie, never long-lived JWTs. Every WebSocket re-checks its session and is closed on revoke, so "signed out everywhere" takes effect within 60 seconds (ACC-04, ACC-05). | Decided (`CLAUDE.md`, Database and Security) | C0.5 |
+| T6 | **Sign-in.** Hearth's own SMS one-time code plus a PIN (argon2id, rate limited to the numbers in BUILD-PLAN Part 3B, PRD-53), and passkeys through SimpleWebAuthn. A log-only SMS provider in development, behind the `SmsProvider` interface (ACC-01, ACC-02, ACC-06). | Decided in the PRD (SMS, PIN, passkeys); libraries are a Default | C0.5 |
+| T7 | **SMS provider.** AWS End User Messaging SMS in ap-southeast-1, with Twilio Verify as the fallback if its OTP fraud controls disappoint. Singapore destinations only (and Malaysia if needed), which stops SMS-pumping fraud. Keeping it inside the AWS agreement saves a PDPA-10 entry; a fallback provider gets no egress route or secret until it has its own cleared entry. | Default | C0.5 (sandbox), C0.19 (live) |
+| T8 | **Web app.** Vite, React 19 and Tailwind v4 as an installable PWA (D14), as in the demo, so its tokens and UI kit port directly. TanStack Router and TanStack Query over REST, one WebSocket for live events, `vite-plugin-pwa` (Workbox) for install, and Web Push with VAPID keys (no Apple developer account needed). | Decided (`CLAUDE.md`, Stack); router, data and PWA libraries are a Default | C0.8, C0.14 |
+| T9 | **Infrastructure.** AWS CDK in TypeScript, in ap-southeast-1 (D37), with separate non-prod and prod accounts. Docker Compose locally: Postgres 17 with pgvector (the image CI uses), Valkey and MinIO. | Decided (`CLAUDE.md`, Stack; D37) | C0.2 (local), C0.11 (AWS) |
+| T10 | **Tests.** Vitest for unit tests, Playwright for end to end (growing from the demo's screenshot harness), and the access-rules suite in `packages/access` from day one, with every Rule 1–9 case as a named test (`test.todo` until its feature exists). DB tests in `db/tests/`. | Decided (`CLAUDE.md`, Stack and Testing) | Vitest in C0.1 (done); rules suite C0.4; Playwright C0.8 |
+| T11 | **Lint and format.** Biome, with `useExhaustiveDependencies` as an error (the demo review found effect-dependency bugs it catches). It skips `demo/` and `spike/`. | Decided (`CLAUDE.md`, Stack) | C0.1 (done) |
+| T12 | **Audit log.** One append-only `audit_events` table (actor, action, target, org, reason, case id, request id, at), written in the same transaction as the change. `hearth_app` gets INSERT only; reads go through a `SECURITY DEFINER` function (ADM-06, Rule 9, PDPA-06). | Decided (`CLAUDE.md`, Database) | C0.3 |
+
+## T3: Drizzle or Kysely
+
+Both are TypeScript libraries for talking to Postgres, and either can apply the migrations. The rest of T3 holds whichever is chosen. The differences below were checked against the published packages (drizzle-orm 0.45.4 and drizzle-kit 0.31.11 with 1.0.0-rc.4, and kysely 0.29.6) in October 2026.
+
+| | Drizzle | Kysely |
+|---|---|---|
+| What it is | An ORM: the schema is written in TypeScript, `drizzle-kit` generates SQL migrations from changes to it, and queries are typed from that schema. | A typed SQL query builder: no schema in TypeScript. The SQL migrations are the source of truth, and types are generated from the database (`kysely-codegen`) or written by hand. |
+| What its schema covers | Tables, indexes, RLS policies, roles, views (with `security_invoker`) and sequences. Not grants, `revoke execute`, functions (`SECURITY DEFINER` included) or triggers. `CLAUDE.md`'s Database rules lean on all four, so those migrations are written by hand either way, and the TypeScript schema shows only part of the database. | Nothing. Every migration is written by hand, which is what `CLAUDE.md` already asks for. |
+| How the migrator picks files | Stable (0.45): the files listed in `meta/_journal.json`, applied only if their journal timestamp is newer than the last migration applied. A migration made earlier on another branch and merged later is skipped without an error. | Sorted by name and tracked by name. By default it fails, rather than skipping, when a new migration sorts before one already applied or an applied one has gone missing. |
+| Transaction and locking | The whole batch in one transaction. | The whole run in one transaction on Postgres, under an advisory lock so two deploys can't migrate at once. |
+| Fit with `<NNNN>_<name>.sql` | Stable writes exactly that layout, which is where `CLAUDE.md`'s naming rule and the journal check in `scripts/check-migrations.sh` come from. Version 1, still a release candidate, replaces the journal with a folder per migration named `<14-digit timestamp>_<name>/migration.sql` and refuses old folders until `drizzle-kit up` converts them. Adopting Drizzle means changing the naming rule and the check script at or before that upgrade. | Migrations are TypeScript modules by default, so reading the `.sql` files takes a small provider (about 30 lines). The naming rule and the check script stay as they are. |
+| Day-to-day queries | `db.select().from(users).where(eq(users.orgId, id))`, plus a relational query API for nested reads. Friendly for simple reads; joins and raw SQL are possible. | `db.selectFrom('users').where('org_id', '=', id)`, close to the SQL it produces. This suits hand-tuned queries such as the access filter (`sqlReadableBy`) and keyword search. |
+| Maturity | More widely used, with a larger community. Its 1.0 has been in beta since November 2025 and in release candidates since April 2026. | Smaller but steady, with a stable API for years; 0.30 is in beta. |
+
+**Recommendation: Kysely.** Much of Hearth's schema is the part Drizzle can't model (grants, `revoke execute`, definer functions and triggers, all written to `CLAUDE.md`'s rules), and every migration gets a human read before merge. Generating migrations would cover only the easy part, while adding a second source of truth and a file layout that is about to change. Kysely's migrator already works the way `check-migrations.sh` assumes (name order, one transaction), and it fails loudly on an out-of-order migration where stable Drizzle skips it. The cost is writing table SQL by hand and regenerating types after each migration, which a `db:types` script run against the scratch database covers.
+
+Once the owner chooses, record the tool here, set T3 to Decided, and point `scripts/check-migrations.sh` at that tool's migrator (`CLAUDE.md`, Database).
+
+## Later decisions (T13 onwards)
+
+Recorded as each substep starts. The build plan's candidates (Part 1D, decision 21) are: model-layer code only from A0 (C0 builds the fences); an ids-only outbox kept 14 days; a separate `data_access_events` table; AWS-native error tracking; no disaster-recovery copy outside Singapore; GuardDuty malware scanning with a ClamAV fallback; on-demand ffmpeg playback mixing with a 24-hour cache; and browser-native noise suppression only until A0.
+
+## Tooling that enforces these
+
+- `npm run check` (typecheck, Biome, Vitest and the demo's own tests) and `npm run build`, in CI's `check` job.
+- `scripts/guards/ai-free.test.ts`: no model, speech, ML or OCR package before A0 (D41).
+- `scripts/guards/vite-env.test.ts`: no secret-shaped `VITE_` variable reaches the browser.
+- CI's `secrets` job (gitleaks over the whole history) and `audit` job (`npm audit` and registry signatures), which `check` waits on.
+- Renovate (`renovate.json`): weekly dependency updates, a week after release; major versions wait for the owner's approval on the Dependency Dashboard; Node stays on 24 and Postgres on 17.

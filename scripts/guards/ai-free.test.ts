@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { BANNED_CONSTRAINT, BANNED_GLOBALS, bannedReason, importsOf, lockfilePackages, packageOf } from './ai-free'
+import { BANNED_CONSTRAINT, BANNED_GLOBALS, bannedReason, lockfilePackages } from './ai-free'
+import { importsOf, packageOf } from './imports'
 import { isScript, readRepoFile, repoFiles } from './repo-files'
 
 const files = repoFiles()
