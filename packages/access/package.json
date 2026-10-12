@@ -1,0 +1,13 @@
+{
+  "name": "@hearth/access",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The permission model every access check goes through (PRD §7.2, B.4). Built in C0.4.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

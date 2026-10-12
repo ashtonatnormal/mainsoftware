@@ -1,0 +1,10 @@
+{
+  "name": "@hearth/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The Hearth PWA: Vite, React 19 and Tailwind v4 (T8). The web shell arrives in C0.8.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

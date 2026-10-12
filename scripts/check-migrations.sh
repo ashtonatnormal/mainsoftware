@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Build a scratch database from db/migrations/ the way production will, and check it. Fails if:
-#   - a migration file isn't named <NNNN>_<name>.sql (lower case), two share a number, a folder
-#     other than a migration tool's meta/ sits in db/migrations/ (nothing in it would be applied),
-#     Drizzle's meta/_journal.json doesn't list exactly the .sql files, a file is over 120 KB, or
-#     a line starts with a psql meta-command
+#   - a migration file isn't named <NNNN>_<name>.sql (lower case), two share a number, a folder or
+#     a hidden file sits in db/migrations/ (nothing in it would be applied), a file is over 120 KB,
+#     or a line starts with a psql meta-command
 #   - the migrations fail. They run in name order, in one transaction on an empty database, the
-#     way Drizzle and Kysely apply a batch, and each file goes to the server unparsed, so a psql
-#     meta-command anywhere is a syntax error, as it would be in production. The session logs in
-#     as a throwaway non-superuser role whose only power is to act as hearth_owner (NOSUPERUSER;
+#     way Kysely's migrator applies a batch on Postgres, and each file goes to the server unparsed,
+#     so a psql meta-command anywhere is a syntax error, as it would be in production. The session
+#     logs in as a throwaway non-superuser role whose only power is to act as hearth_owner (NOSUPERUSER;
 #     CLAUDE.md, Database), so a migration can't fall back on superuser rights. A migration that
 #     ends the transaction itself (COMMIT, ROLLBACK) or leaves a different role in place fails.
 #   - the result breaks a Database rule in CLAUDE.md: a table with row level security off, a view
@@ -27,8 +26,11 @@
 # UP_TO=NNNN builds the database only up to the migration before NNNN, for an upgrade test:
 # scripts/check-<name>-upgrade.sh then loads production-shaped data and applies NNNN.
 #
-# When the migration tool is chosen, apply the migrations here with that tool's migrator instead
-# of psql, and leave its ledger table out of the checks by name.
+# The migration tool is Kysely (docs/TECH-SPEC.md, T3). When C0.3 adds its migrator (a provider
+# that reads these .sql files), apply the migrations here with it instead of psql, keep refusing
+# any file it would skip or not see, and leave its ledger tables (kysely_migration,
+# kysely_migration_lock) out of the checks by name. This scratch build starts empty, so it can't see
+# a migration numbered below one production already applied; C0.3's CI check against main does.
 #
 # Usage: scripts/check-migrations.sh && scripts/test-db.sh
 # Needs psql. Connects as a superuser with the standard PG* variables; any that are unset default
@@ -51,12 +53,11 @@ up_to=${UP_TO:-}
 [[ -z $up_to || $up_to =~ ^[0-9]{4}$ ]] || { echo "UP_TO must be a 4-digit migration number, not '$up_to'" >&2; exit 2; }
 sql() { psql --no-psqlrc -w -v ON_ERROR_STOP=1 -q "$@"; }  # -w: fail rather than prompt
 
-shopt -s nullglob
+shopt -s nullglob dotglob  # hidden entries are listed too, so they're refused
 named=() files=() status=0
 for path in db/migrations/*; do
   name=${path##*/}
   if [ -d "$path" ]; then
-    [ "$name" = meta ] && continue  # e.g. Drizzle Kit's journal
     echo "Unexpected folder in db/migrations/ (nothing in it would be applied): $path" >&2
     status=1; continue
   fi
@@ -82,17 +83,6 @@ if [ -n "$dupes" ]; then
   echo "Two migrations share a number:" >&2
   sed 's/^/  /' <<<"$dupes" >&2
   status=1
-fi
-journal=db/migrations/meta/_journal.json
-if [ -f "$journal" ]; then
-  # Drizzle applies only what its journal lists, so CI must not apply anything else.
-  listed=$(grep -o '"tag"[[:space:]]*:[[:space:]]*"[^"]*"' "$journal" | sed 's/.*"\([^"]*\)"$/\1.sql/' | LC_ALL=C sort)
-  present=$(for path in ${named[@]+"${named[@]}"}; do echo "${path##*/}"; done | LC_ALL=C sort)
-  if [ "$listed" != "$present" ]; then
-    echo "$journal doesn't list exactly the migration files (Drizzle would skip or miss some):" >&2
-    diff <(echo "$listed") <(echo "$present") | sed -n 's/^< /  in the journal only: /p; s/^> /  file only: /p' >&2
-    status=1
-  fi
 fi
 [ "$status" -eq 0 ] || exit "$status"
 if [ -n "$up_to" ]; then
