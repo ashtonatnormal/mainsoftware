@@ -100,13 +100,16 @@ begin
   if org is null or reader is null then
     raise exception 'No org or user is set for this transaction' using errcode = 'insufficient_privilege';
   end if;
-  if not exists (
-    select 1
-    from public.role_assignments r
-    join public.people p on p.org_id = r.org_id and p.id = r.person_id
-    join public.audit_log_readers a on a.org_id = r.org_id and a.role = r.role and a.removed_at is null
-    where r.org_id = org and r.person_id = reader and r.revoked_at is null and p.deactivated_at is null
-  ) then
+  -- The reader's role, the person and the list entry are read FOR SHARE (CLAUDE.md, Database): a
+  -- revocation, deactivation or removal in progress makes this wait and then see it, and one that
+  -- starts later waits for this read's transaction, so no rows go out once access has ended.
+  perform 1
+  from public.role_assignments r
+  join public.people p on p.org_id = r.org_id and p.id = r.person_id
+  join public.audit_log_readers a on a.org_id = r.org_id and a.role = r.role and a.removed_at is null
+  where r.org_id = org and r.person_id = reader and r.revoked_at is null and p.deactivated_at is null
+  for share;
+  if not found then
     raise exception 'None of your roles can read the audit log. The roles that can are chosen in the admin console.'
       using errcode = 'insufficient_privilege';
   end if;

@@ -27,8 +27,9 @@ const connection = {
   password: process.env.PGPASSWORD ?? 'postgres',
 }
 
-// One org with Hearth, an admin (a1), people b1-b8 (b8 has an account and two devices), teams
-// d1-d3 and a department c1.
+// One org with Hearth, an admin (a1), people b1-b9 and ba (b8 has an account and two devices),
+// teams d1-d3 and a department c1. b7 is a DPO, b9 a Compliance Officer and ba in Leadership, and
+// those three roles may read the audit log (D45).
 const id = (suffix: string) => `c0000000-0000-4000-8000-0000000000${suffix}`
 const ORG = id('00')
 const ADMIN = id('a1')
@@ -36,7 +37,7 @@ const FIXTURE = `
   insert into public.orgs (id, name) values ('${ORG}', 'Concurrency check');
   insert into public.principals (id, org_id, kind, system_key) values ('${id('a0')}', '${ORG}', 'system', 'hearth');
   insert into public.principals (id, org_id, kind)
-  select s.id, '${ORG}', 'human' from unnest(array['${id('a1')}', ${[1, 2, 3, 4, 5, 6, 7, 8].map(n => `'${id(`b${n}`)}'`).join(', ')}]::uuid[]) as s (id);
+  select s.id, '${ORG}', 'human' from unnest(array['${id('a1')}', ${['b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9', 'ba'].map(s => `'${id(s)}'`).join(', ')}]::uuid[]) as s (id);
   insert into public.people (id, org_id, full_name, created_by)
   select p.id, '${ORG}', 'Person ' || p.id, '${id('a0')}' from public.principals p where p.kind = 'human';
   insert into public.users (id, org_id) values ('${id('b8')}', '${ORG}');
@@ -46,6 +47,11 @@ const FIXTURE = `
     ('${id('d3')}', '${ORG}', 'Day crew', '${ADMIN}');
   insert into public.devices (id, org_id, user_id, label) values
     ('${id('e1')}', '${ORG}', '${id('b8')}', 'Phone'), ('${id('e2')}', '${ORG}', '${id('b8')}', 'Laptop');
+  insert into public.role_assignments (org_id, person_id, role, created_by) values
+    ('${ORG}', '${id('b7')}', 'dpo', '${ADMIN}'), ('${ORG}', '${id('b9')}', 'compliance_officer', '${ADMIN}'),
+    ('${ORG}', '${id('ba')}', 'leadership', '${ADMIN}');
+  insert into public.audit_log_readers (org_id, role, created_by) values
+    ('${ORG}', 'dpo', '${ADMIN}'), ('${ORG}', 'compliance_officer', '${ADMIN}'), ('${ORG}', 'leadership', '${ADMIN}');
 `
 
 function url(database: string): string {
@@ -67,19 +73,24 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-// A transaction as the server makes one (hearth_app, with the org and user set) or as the owner,
-// which the role-writing SECURITY DEFINER functions run as.
+// A transaction as the server makes one (hearth_app, with the org and the user set, the admin
+// unless the step names someone) or as the owner, which the role-writing SECURITY DEFINER
+// functions run as.
 type Actor = 'app' | 'owner'
 interface Step {
   as: Actor
   sql: string
+  user?: string
 }
 
-async function begin(client: Client, actor: Actor): Promise<void> {
+async function begin(client: Client, step: Step): Promise<void> {
   await client.query('begin')
   await client.query("set local lock_timeout = '10s'")
-  if (actor === 'app') {
-    await client.query("select set_config('app.org_id', $1, true), set_config('app.user_id', $2, true)", [ORG, ADMIN])
+  if (step.as === 'app') {
+    await client.query("select set_config('app.org_id', $1, true), set_config('app.user_id', $2, true)", [
+      ORG,
+      step.user ?? ADMIN,
+    ])
     await client.query('set local role hearth_app')
   } else {
     await client.query('set local role hearth_owner')
@@ -107,9 +118,9 @@ async function race(watcher: Client, first: Step, second: Step): Promise<{ waite
   const b = await connect(DB)
   try {
     const pid = (await b.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]?.pid ?? 0
-    await begin(a, first.as)
+    await begin(a, first)
     await a.query(first.sql)
-    await begin(b, second.as)
+    await begin(b, second)
     const pending = b.query(second.sql).then(
       () => undefined,
       (error: unknown) => message(error),
@@ -141,9 +152,9 @@ function refused(first: Step, second: Step, refusal: string): (watcher: Client) 
   }
 }
 
-const deactivate = (n: number): Step => ({
+const deactivate = (person: string): Step => ({
   as: 'app',
-  sql: `update public.people set deactivated_at = now(), deactivated_by = '${ADMIN}' where id = '${id(`b${n}`)}'`,
+  sql: `update public.people set deactivated_at = now(), deactivated_by = '${ADMIN}' where id = '${id(person)}'`,
 })
 const archive = (table: 'teams' | 'departments', suffix: string): Step => ({
   as: 'app',
@@ -169,23 +180,29 @@ const signIn = (device: string, session: string): Step => ({
         values ('${id(session)}', '${ORG}', '${id('b8')}', '${id(device)}', sha256('${session}'::bytea), now() + interval '1 day')`,
 })
 
+const readAuditLog = (reader: string): Step => ({
+  as: 'app',
+  user: id(reader),
+  sql: "select count(*) from public.read_audit_events(now() - interval '1 day', now() + interval '1 day')",
+})
+
 const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
   [
     'ACC-10: someone leaving is not given a role at the same time',
     refused(
-      deactivate(1),
+      deactivate('b1'),
       grant(1, 'leadership'),
       "That person has left the organisation, so they can't be given a role.",
     ),
   ],
   [
     'ACC-07: someone leaving does not join a team at the same time',
-    refused(deactivate(2), join('d1', 2), "That person has left the organisation, so they can't join a team."),
+    refused(deactivate('b2'), join('d1', 2), "That person has left the organisation, so they can't join a team."),
   ],
   [
     'ACC-07: nobody starts reporting to a manager who is leaving at the same time',
     refused(
-      deactivate(3),
+      deactivate('b3'),
       { as: 'app', sql: `update public.people set manager_id = '${id('b3')}' where id = '${id('b4')}'` },
       'That manager has left the organisation.',
     ),
@@ -213,6 +230,34 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
   [
     'ACC-04: no session starts on a device being signed out at the same time',
     refused(signOut('e1'), signIn('e1', 'f1'), 'That device has been signed out.'),
+  ],
+  [
+    'ADM-06, D45: the audit log is not read by someone whose reading role is being revoked',
+    refused(
+      {
+        as: 'owner',
+        sql: `update public.role_assignments set revoked_at = now(), revoked_by = '${ADMIN}'
+              where org_id = '${ORG}' and person_id = '${id('b7')}' and role = 'dpo'`,
+      },
+      readAuditLog('b7'),
+      'None of your roles can read the audit log.',
+    ),
+  ],
+  [
+    'ADM-06, D45: the audit log is not read through a role being taken off the readers list',
+    refused(
+      {
+        as: 'owner',
+        sql: `update public.audit_log_readers set removed_at = now(), removed_by = '${ADMIN}'
+              where org_id = '${ORG}' and role = 'compliance_officer' and removed_at is null`,
+      },
+      readAuditLog('b9'),
+      'None of your roles can read the audit log.',
+    ),
+  ],
+  [
+    'ADM-06, D45: the audit log is not read by someone being deactivated',
+    refused(deactivate('ba'), readAuditLog('ba'), 'None of your roles can read the audit log.'),
   ],
   [
     'ACC-04: a device signed out while a session starts on it ends that session',
