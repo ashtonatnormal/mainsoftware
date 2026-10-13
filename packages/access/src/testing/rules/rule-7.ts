@@ -175,8 +175,8 @@ export const RULE_7: readonly RuleCase[] = [
     'R7-01c',
     'Rule 7 CHAT-05 CHAT-06: an attachment of a deleted message is readable by nobody, its owner and anyone it was shared with included',
     () => {
-      // Arjun attached a screenshot to the #it-help message he later deleted, and shared it with
-      // Nadia; he attached a log to the message that is still there.
+      // Arjun attached a screenshot to the #it-help message they later deleted, and shared it with
+      // Nadia; Arjun attached a log to the message that is still there.
       const screenshot = ref.file('up-it-screenshot')
       const log = ref.file('up-it-log')
       const w = changed(
@@ -187,7 +187,7 @@ export const RULE_7: readonly RuleCase[] = [
       for (const s of askers) expect(canRead(w, s, screenshot), label(s)).toBe(false)
       expectReaders(w, log, [P.arjun, P.nadia, P.cfo], [P.formerDpo])
       expect(canRead(w, agent(AG.it), log)).toBe(true)
-      // Marcus deletes the #ops-north-site message that carries the OT roster PDF he owns: the PDF
+      // Marcus deletes the #ops-north-site message that carries the OT roster PDF they own: the PDF
       // goes for everyone, Marcus included, and nothing more can be done with it.
       const otPdf = ref.file(FI.otPdf)
       expectReaders(world, otPdf, [P.marcus, P.nadia], [P.formerDpo])
@@ -295,7 +295,7 @@ export const RULE_7: readonly RuleCase[] = [
           for (const p of everyone) expect(reads(w, p, copy), `${p} ${copy.id}`).toBe(reads(world, p, copy))
         }
       }
-      // Rachel took part in the pricing review, so she reads its slide copy, though she can't open
+      // Rachel took part in the pricing review, so they read its slide copy, though they can't open
       // the Q4 deck; Nadia, who wasn't there, can open the all-hands deck but not the copy.
       expect(reads(world, P.rachel, ref.slideCopy(SC.pricing))).toBe(true)
       expect(reads(world, P.rachel, ref.file(FI.q4Deck))).toBe(false)
@@ -363,8 +363,8 @@ export const RULE_7: readonly RuleCase[] = [
     'R7-05c',
     'Rule 7 DRV-01: a whole-org share on a folder stops reaching what is inside once the folder is in the Trash, in can() and in the stored rows',
     () => {
-      // Ashton shares his vendor-quotes folder with the whole org; Priya's quotes sit in it. Then
-      // he trashes the folder.
+      // Ashton shares their vendor-quotes folder with the whole org; Priya's quotes sit in it. Then
+      // Ashton trashes the folder.
       const shared = editFolder(F.vendor, x => ({
         ...x,
         grants: [...x.grants, { grantee: { kind: 'org', id: world.orgId }, role: 'viewer' }],
@@ -496,7 +496,7 @@ export const RULE_7: readonly RuleCase[] = [
     'Rule 7 FILE-02 DRV-01 DRV-67: only an item’s own owner purges it; owning the folder it is in, trashing it or holding an org role isn’t enough',
     () => {
       const kranji = ref.file(FI.kranji)
-      // Ashton owns the vendor folder, so he may edit and trash Priya's Kranji quote inside it.
+      // Ashton owns the vendor folder, so they may edit and trash Priya's Kranji quote inside it.
       expect(can(world, human(P.ashton), { action: 'trash', resource: kranji })).toBe(true)
       for (const by of [P.ashton, P.priya]) {
         const w = changed(trashFile(FI.kranji, by))
@@ -511,7 +511,7 @@ export const RULE_7: readonly RuleCase[] = [
           }),
         ).toBe(false)
       }
-      // Ashton, who trashed it, still restores it as its Editor; he just can't destroy it.
+      // Ashton, who trashed it, still restores it as its Editor; they just can't destroy it.
       expect(
         can(changed(trashFile(FI.kranji, P.ashton)), human(P.ashton), { action: 'restore', resource: kranji }),
       ).toBe(true)
@@ -588,7 +588,7 @@ export const RULE_7: readonly RuleCase[] = [
           expect(can(w, human(p), { action, resource: message }), `${p} ${action}`).toBe(false)
         }
       }
-      // Daniel deletes his own comment on the Q4 proposal; its owner Priya can't.
+      // Daniel deletes their own comment on the Q4 proposal; its owner Priya can't.
       for (const p of everyone) {
         expect(can(world, human(p), { action: 'delete', resource: ref.comment(CM.q4Daniel) }), p).toBe(p === P.daniel)
       }

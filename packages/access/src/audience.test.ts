@@ -167,7 +167,7 @@ describe('holdersOf: the active people who hold a token now', () => {
 
   test('e: is an era’s person while they are a current member of its group DM (decision 10)', () => {
     expect(holdersOf(world, q4Era(P.ashton))).toEqual([P.ashton])
-    // Ahmad's first era closed, but he rejoined: he still reads the messages it covers.
+    // Ahmad's first era closed, but they rejoined: Ahmad still reads the messages it covers.
     expect(holdersOf(world, q4Era(P.ahmad, 1))).toEqual([P.ahmad])
     expect(holdersOf(ahmadLeft(), q4Era(P.ahmad, 1))).toEqual([])
     expect(holdersOf(ahmadLeft(), q4Era(P.ahmad, 2))).toEqual([])

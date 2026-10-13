@@ -313,9 +313,9 @@ export const RULE_1: readonly RuleCase[] = [
     'R1-12',
     'Rule 1 DRV-09: an item’s own grants add to its folder’s, and a folder’s grant is changed on the folder',
     () => {
-      // Daniel edits the Q4 proposal through his own grant on top of the Q4 team's Commenter.
+      // Daniel edits the Q4 proposal through their own grant on top of the Q4 team's Commenter.
       expect(can(world, human(P.daniel), { action: 'edit', resource: ref.file(FI.q4Proposal) })).toBe(true)
-      // Removing his own grant leaves the folder's: he can still comment, not edit.
+      // Removing Daniel's own grant leaves the folder's: they can still comment, not edit.
       const removed = changed(f => ({
         ...f,
         files: f.files.map(x =>
@@ -374,8 +374,8 @@ export const RULE_1: readonly RuleCase[] = [
     'R1-14b',
     'Rule 1 decision 10: a message sequenced at a member’s join is closed to them; one at their leave is open',
     () => {
-      // Daniel's span is (2, now]: message 2 (at his join) is closed, 3 is open. Ahmad's first span
-      // is (0, 3]: message 3 (at his leave) is open, 4 is closed.
+      // Daniel's span is (2, now]: message 2 (at their join) is closed, 3 is open. Ahmad's first span
+      // is (0, 3]: message 3 (at their leave) is open, 4 is closed.
       expect(reads(world, P.daniel, ref.message(M.q4Second))).toBe(false)
       expect(reads(world, P.daniel, ref.message(M.q4Third))).toBe(true)
       expect(reads(world, P.ahmad, ref.message(M.q4Third))).toBe(true)
@@ -394,17 +394,19 @@ export const RULE_1: readonly RuleCase[] = [
       expect(reads(world, P.daniel, attachment)).toBe(false)
       // A reader of the message is a Viewer of the attachment, so only its owner shares it further.
       const rachel = { kind: 'person' as const, id: P.rachel }
-      expect(allows(world, P.priya, { action: 'share.set', resource: attachment, grantee: rachel, role: 'viewer' })).toBe(
-        false,
-      )
-      expect(allows(world, P.ashton, { action: 'share.set', resource: attachment, grantee: rachel, role: 'viewer' })).toBe(
-        true,
-      )
+      expect(
+        allows(world, P.priya, { action: 'share.set', resource: attachment, grantee: rachel, role: 'viewer' }),
+      ).toBe(false)
+      expect(
+        allows(world, P.ashton, { action: 'share.set', resource: attachment, grantee: rachel, role: 'viewer' }),
+      ).toBe(true)
       const shared = changed(f => ({
         ...f,
-        files: f.files.map(x => (x.id === FI.q4Attachment ? { ...x, grants: [{ grantee: rachel, role: 'viewer' }] } : x)),
+        files: f.files.map(x =>
+          x.id === FI.q4Attachment ? { ...x, grants: [{ grantee: rachel, role: 'viewer' }] } : x,
+        ),
       }))
-      // The share reaches only Rachel: she reads the attachment, not the message, and it stays a DM item.
+      // The share reaches only Rachel: they read the attachment, not the message, and it stays a DM item.
       expect(reads(shared, P.rachel, attachment)).toBe(true)
       expect(reads(shared, P.rachel, ref.message(M.q4First))).toBe(false)
       expect(reads(shared, P.marcus, attachment)).toBe(false)
@@ -412,7 +414,7 @@ export const RULE_1: readonly RuleCase[] = [
     },
   ),
   c0('R1-16', 'Rule 1 SHEET-29: knowing an item’s id or link opens nothing', () => {
-    // Rachel asks for the CFO's sheet by id; nothing about holding the id lets her in.
+    // Rachel asks for the CFO's sheet by id; nothing about holding the id lets Rachel in.
     expect(reads(world, P.rachel, ref.file(FI.q3Numbers))).toBe(false)
     expect(can(world, human(P.rachel), { action: 'comment', resource: ref.file(FI.q3Numbers) })).toBe(false)
   }),
@@ -477,9 +479,9 @@ export const RULE_1: readonly RuleCase[] = [
   ),
   c0('R1-21', 'Rule 1 §7.1: built-in AI for a viewer uses only what that viewer can read', () => {
     const own = audienceOfPeople(world, [P.rachel])
-    expect(sourceAllowed(world, { run: 'built_in', viewer: human(P.rachel), audience: own }, ref.file(FI.rachelNotes))).toBe(
-      true,
-    )
+    expect(
+      sourceAllowed(world, { run: 'built_in', viewer: human(P.rachel), audience: own }, ref.file(FI.rachelNotes)),
+    ).toBe(true)
     // Wei Ling, the audience, can open the CFO's sheet; Rachel, the viewer, can't, so it's out.
     const weiling = audienceOfPeople(world, [P.weiling])
     expect(covers(world, weiling, ref.file(FI.q3Numbers))).toBe(true)
@@ -582,11 +584,15 @@ export const RULE_1: readonly RuleCase[] = [
       expect(reads(granted, P.farah, doc)).toBe(true)
       // The Operations wiki folder grants the team Editor: Marcus narrows it or removes it.
       const wiki = ref.folder(F.ops)
-      expect(allows(world, P.marcus, { action: 'share.set', resource: wiki, grantee: operations, role: 'viewer' })).toBe(
+      expect(
+        allows(world, P.marcus, { action: 'share.set', resource: wiki, grantee: operations, role: 'viewer' }),
+      ).toBe(true)
+      expect(allows(world, P.marcus, { action: 'share.set', resource: wiki, grantee: operations, role: null })).toBe(
         true,
       )
-      expect(allows(world, P.marcus, { action: 'share.set', resource: wiki, grantee: operations, role: null })).toBe(true)
-      expect(allows(world, P.huimin, { action: 'share.set', resource: wiki, grantee: operations, role: null })).toBe(false)
+      expect(allows(world, P.huimin, { action: 'share.set', resource: wiki, grantee: operations, role: null })).toBe(
+        false,
+      )
     },
   ),
   c0(
@@ -705,7 +711,9 @@ export const RULE_1: readonly RuleCase[] = [
       // Ashton owns private #leadership and the private Board room; Wei Ling is a member of both
       // and owns neither.
       for (const space of [ref.channel(C.leadership), ref.room(R.board)]) {
-        expect(allows(world, P.ashton, { action: 'member.add', resource: space, principal: rachel }), space.id).toBe(true)
+        expect(allows(world, P.ashton, { action: 'member.add', resource: space, principal: rachel }), space.id).toBe(
+          true,
+        )
         expect(allows(world, P.weiling, { action: 'member.add', resource: space, principal: rachel }), space.id).toBe(
           false,
         )
@@ -720,6 +728,27 @@ export const RULE_1: readonly RuleCase[] = [
       const cfo = { kind: 'human' as const, id: P.cfo }
       expect(allows(world, P.ashton, { action: 'member.remove', resource: board, principal: cfo })).toBe(true)
       expect(allows(world, P.weiling, { action: 'member.remove', resource: board, principal: cfo })).toBe(false)
+      // In a public channel or room, any current member may add someone; a non-member can't.
+      const newHire = 'b0000000-0000-4000-8000-0000000000e1'
+      const open = changed(f => ({
+        ...f,
+        people: [...f.people, { id: newHire, deactivatedAt: null }],
+        memberships: [
+          ...f.memberships,
+          { id: `mb:${R.lounge}:${P.farah}`, spaceId: R.lounge, principalId: P.farah, afterSeq: 0, throughSeq: null },
+        ],
+      }))
+      const hire = { kind: 'human' as const, id: newHire }
+      // Wei Ling is in #general and Farah in the lounge; neither owns it.
+      expect(allows(open, P.weiling, { action: 'member.add', resource: ref.channel(C.general), principal: hire })).toBe(
+        true,
+      )
+      expect(allows(open, P.farah, { action: 'member.add', resource: ref.room(R.lounge), principal: rachel })).toBe(
+        true,
+      )
+      expect(allows(open, P.nadia, { action: 'member.add', resource: ref.room(R.lounge), principal: rachel })).toBe(
+        false,
+      )
     },
   ),
 ]

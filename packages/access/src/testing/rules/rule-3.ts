@@ -1,6 +1,5 @@
 import { expect } from 'vitest'
 import {
-  type AclRow,
   aclOf,
   audienceGap,
   audienceOf,
@@ -57,7 +56,6 @@ const derivedFrom = (id: Id, sources: readonly Ref[]): DerivedRow => ({ id, sour
 function withDerived(items: readonly DerivedRow[], also: (facts: Facts) => Facts = f => f): World {
   return changed(f => also({ ...f, derived: [...f.derived, ...items] }))
 }
-
 
 // Membership changes: they change who holds which keys, never a stored row.
 const leaveSpace =
@@ -204,7 +202,7 @@ export const RULE_3: readonly RuleCase[] = [
 
       const changes: { what: string; w: World; person: Id; expected: [Ref, boolean][] }[] = [
         {
-          // Ahmad leaves #leadership: he loses the item drawn from it, not the one drawn from the
+          // Ahmad leaves #leadership: they lose the item drawn from it, not the one drawn from the
           // forecast alone.
           what: 'Ahmad leaves #leadership',
           w: withDerived(items, leaveSpace(C.leadership, P.ahmad, 2)),
@@ -235,8 +233,8 @@ export const RULE_3: readonly RuleCase[] = [
           ],
         },
         {
-          // Joining works the same way: Hui Min, already in #leadership, gains the item when she
-          // joins the Q4 team, from the same row.
+          // Joining works the same way: Hui Min, already in #leadership, gains the item when they
+          // join the Q4 team, from the same row.
           what: 'Hui Min joins the Q4 team',
           w: withDerived(items, joinTeam(T.q4, P.huimin)),
           person: P.huimin,
@@ -343,7 +341,7 @@ export const RULE_3: readonly RuleCase[] = [
       // In the fixture #ops-north-site is public, so the pricing review alone opens the gap: Daniel
       // and Priya weren't in it, and nor will be anyone who joins the Q4 team later.
       expect(gap).toEqual({ count: 2, people: [P.priya, P.daniel].sort(), includesFuture: true })
-      // As in the demo, with #ops-north-site private and Daniel not in it, each source flags him.
+      // As in the demo, with #ops-north-site private and Daniel not in it, each source flags Daniel.
       const demo = withDerived([paragraph], f => ({
         ...f,
         channels: f.channels.map(c => (c.id === C.ops ? { ...c, visibility: 'private' as const } : c)),
@@ -393,7 +391,7 @@ export const RULE_3: readonly RuleCase[] = [
       people: [P.weiling, P.ahmad, P.huimin].sort(),
       includesFuture: true,
     })
-    // A group-DM message from before Daniel joined, forwarded back into the group, flags him.
+    // A group-DM message from before Daniel joined, forwarded back into the group, flags them.
     expect(into(ref.groupDm(CV.q4), M.q4First)).toEqual({ count: 1, people: [P.daniel], includesFuture: false })
     // Into a narrower or equal audience: no warning.
     expect(covers(world, audienceOf(world, ref.dm(CV.ashtonPriya)), ref.message(M.leadership))).toBe(true)
@@ -476,7 +474,7 @@ export const RULE_3: readonly RuleCase[] = [
         }
       }
       // Say the Q4 review deck was shown in the Q3 pricing review: Rachel, who took part, reads the
-      // copies though she can't open the deck; Priya, who owns the deck but wasn't there, can't.
+      // copies though they can't open the deck; Priya, who owns the deck but wasn't there, can't.
       expect(reads(world, P.rachel, ref.slideCopy(SC.pricing))).toBe(true)
       expect(reads(world, P.rachel, ref.file(FI.q4Deck))).toBe(false)
       expect(reads(world, P.priya, ref.file(FI.q4Deck))).toBe(true)
@@ -501,7 +499,7 @@ export const RULE_3: readonly RuleCase[] = [
       const roles = [P.priya, P.daniel, P.ashton, P.weiling, P.ahmad]
       expect(roles.map(p => asks(world, p, 'present'))).toEqual([true, true, true, true, true])
       expect(roles.map(p => asks(world, p, 'present_anyway'))).toEqual([true, true, true, false, false])
-      // Once Priya stops Editors sharing it, only she may present it anyway.
+      // Once Priya stops Editors sharing it, only Priya may present it anyway.
       const noSharing = changed(f => ({
         ...f,
         files: f.files.map(x => (x.id === FI.q4Deck ? { ...x, editorsCanShare: false } : x)),

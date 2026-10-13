@@ -218,7 +218,7 @@ export const M = {
   q4First: 'm-q4-1', // seq 1, with the sketch attached
   q4Second: 'm-q4-2', // seq 2; Daniel joins after it
   q4Third: 'm-q4-3', // seq 3; Ahmad leaves after it
-  q4Fourth: 'm-q4-4', // seq 4, while Ahmad was out; he rejoins after it
+  q4Fourth: 'm-q4-4', // seq 4, while Ahmad was out; they rejoin after it
   q4Fifth: 'm-q4-5', // seq 5
   q4Deleted: 'm-q4-6', // seq 6, deleted
   floor: 'm-floor-1',

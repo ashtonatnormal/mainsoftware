@@ -359,7 +359,7 @@ export const RULE_6: readonly RuleCase[] = [
         expect(can(left, human(P.rachel), { action, resource: crit }), action).toBe(false)
         expect(can(left, human(P.daniel), { action, resource: crit }), action).toBe(true)
       }
-      // Marcus leaves the People 1:1s room, where he took part in a session recorded before the
+      // Marcus leaves the People 1:1s room, where they took part in a session recorded before the
       // room was restricted.
       const roomLeft = changed(leave(R.people, P.marcus, 1))
       const before = ref.session(S.peopleBefore)
@@ -389,7 +389,7 @@ export const RULE_6: readonly RuleCase[] = [
     },
   ),
   c0('R6-02', 'Rule 6 FILE-03 DOC-03: removal from a doc, sheet or deck ends access on the next call', () => {
-    // A doc: Rachel shares her notes with Nadia as an Editor, then takes it back.
+    // A doc: Rachel shares their notes with Nadia as an Editor, then takes it back.
     const notes = ref.file(FI.rachelNotes)
     const shared = changed(
       editFile(FI.rachelNotes, x => ({ ...x, grants: [{ grantee: person(P.nadia), role: 'editor' }] })),
@@ -430,7 +430,7 @@ export const RULE_6: readonly RuleCase[] = [
     for (const request of powers)
       expect(beforeAfter(world, gone, P.arjun, request), request.action).toEqual([true, false])
     expect(beforeAfter(world, gone, P.arjun, { action: 'devices.sign_out_own' }, {})).toEqual([true, false])
-    // Ashton, Owner and DPO, is offboarded: his assistant goes dark and the DPO console closes to him.
+    // Ashton, Owner and DPO, is offboarded: their assistant goes dark and the DPO console closes to them.
     const ownerGone = changed(deactivate(P.ashton))
     expect(keysOf(world, assistant(AS.ashton)).length).toBeGreaterThan(0)
     expect(keysOf(ownerGone, assistant(AS.ashton))).toEqual([])
@@ -477,7 +477,7 @@ export const RULE_6: readonly RuleCase[] = [
   ),
   c0('R6-04', 'Rule 6 ACC-07 DOC-03: leaving a team ends what was shared with the team, at once', () => {
     // Kelvin leaves Operations: Editor on the Operations wiki drops to the org's Viewer, and the
-    // team's task closes to him.
+    // team's task closes to them.
     const kelvin = changed(leaveTeam(T.operations, P.kelvin))
     expect(keysOf(kelvin, human(P.kelvin))).not.toContain(`t:${T.operations}`)
     expect(beforeAfter(world, kelvin, P.kelvin, { action: 'edit', resource: ref.file(FI.otRoster) }, {})).toEqual([
@@ -490,15 +490,15 @@ export const RULE_6: readonly RuleCase[] = [
     expect(reads(kelvin, P.kelvin, ref.file(FI.otRoster))).toBe(true)
     expect(reads(world, P.kelvin, ref.task(TK.ot))).toBe(true)
     expect(reads(kelvin, P.kelvin, ref.task(TK.ot))).toBe(false)
-    // Wei Ling leaves the Q4 launch team: the Q4 folder's grant no longer reaches her, though she
-    // still owns her forecast in it.
+    // Wei Ling leaves the Q4 launch team: the Q4 folder's grant no longer reaches them, though they
+    // still own their forecast in it.
     const weiling = changed(leaveTeam(T.q4, P.weiling))
     for (const file of [FI.q4Proposal, FI.q4Deck, FI.msa]) {
       expect(reads(world, P.weiling, ref.file(file)), file).toBe(true)
       expect(reads(weiling, P.weiling, ref.file(file)), file).toBe(false)
     }
     expect(reads(weiling, P.weiling, ref.file(FI.forecast))).toBe(true)
-    // Farah leaves the archived Night shift team: its rota closes to her, not to Kelvin.
+    // Farah leaves the archived Night shift team: its rota closes to them, not to Kelvin.
     const farah = changed(leaveTeam(T.nightShift, P.farah))
     expect(reads(world, P.farah, ref.file(FI.nightRota))).toBe(true)
     expectReaders(farah, ref.file(FI.nightRota), [P.kelvin], [P.farah])
@@ -540,7 +540,7 @@ export const RULE_6: readonly RuleCase[] = [
       const w = changed(trashed)
       expectReaders(w, sheet, [P.ashton, P.priya], [P.nadia, P.weiling])
       expect(can(w, human(P.priya), { action: 'restore', resource: sheet })).toBe(true)
-      // Ashton removes both of her grants.
+      // Ashton removes both of Priya's grants.
       const ungranted = changed(
         steps(
           trashed,
@@ -588,7 +588,7 @@ export const RULE_6: readonly RuleCase[] = [
     },
   ),
   c0('R6-06', 'Rule 6 ACC-10 ADM-02: a revoked role’s powers end on the next request', () => {
-    // Arjun's Admin role is revoked; he keeps AI Admin, which grants nothing yet.
+    // Arjun's Admin role is revoked; they keep AI Admin, which grants nothing yet.
     const admin = changed(revoke(P.arjun, 'admin'))
     const adminPowers: Request[] = [
       { action: 'team.create' },
@@ -617,7 +617,7 @@ export const RULE_6: readonly RuleCase[] = [
     for (const request of coPowers) {
       expect(beforeAfter(world, co, P.weiling, request), request.action).toEqual([true, false])
     }
-    // Marcus's Team Admin role for Operations is revoked: he no longer acts as Owner of the team's
+    // Marcus's Team Admin role for Operations is revoked: they no longer act as Owner of the team's
     // items or changes its members.
     const ta = changed(revoke(P.marcus, 'team_admin'))
     expect(keysOf(ta, human(P.marcus))).not.toContain(`ta:${T.operations}`)
@@ -642,7 +642,7 @@ export const RULE_6: readonly RuleCase[] = [
     'Rule 6 decision 10 PRD-79: leaving a group DM ends every era of it at once; rejoining reopens only the person’s own eras',
     () => {
       const q4 = [M.q4First, M.q4Second, M.q4Third, M.q4Fourth, M.q4Fifth].map(ref.message)
-      // Ahmad, in his second era (his first ran to message 3), leaves after message 6.
+      // Ahmad, in their second era (their first ran to message 3), leaves after message 6.
       const left = changed(leave(CV.q4, P.ahmad, 6))
       expect(q4.map(m => reads(world, P.ahmad, m))).toEqual([true, true, true, false, true])
       expect(q4.map(m => reads(left, P.ahmad, m))).toEqual([false, false, false, false, false])
@@ -651,7 +651,7 @@ export const RULE_6: readonly RuleCase[] = [
       expect(keysOf(left, human(P.ahmad)).filter(t => t.startsWith('e:') || t === `m:${CV.q4}`)).toEqual([])
       expect(can(left, human(P.ahmad), { action: 'post', resource: ref.groupDm(CV.q4) })).toBe(false)
       expect(q4.map(m => reads(left, P.priya, m))).toEqual([true, true, true, true, true])
-      // He's added back later: his own earlier eras open again; what was posted while he was out
+      // Ahmad is added back later: their own earlier eras open again; what was posted while they were out
       // stays closed.
       const back = changed(steps(leave(CV.q4, P.ahmad, 6), join(CV.q4, P.ahmad, 7)))
       expect(q4.map(m => reads(back, P.ahmad, m))).toEqual([true, true, true, false, true])
@@ -667,7 +667,7 @@ export const RULE_6: readonly RuleCase[] = [
     'R6-08',
     'Rule 6 BRAIN-02 SRCH-04: a stored row written before a grant was removed is dropped by the live re-check',
     () => {
-      // Rachel shared her notes with Nadia, and the row was stored then; she has since removed Nadia.
+      // Rachel shared their notes with Nadia, and the row was stored then; Rachel has since removed Nadia.
       const doc = ref.file(FI.rachelNotes)
       const shared = changed(
         editFile(FI.rachelNotes, x => ({ ...x, grants: [{ grantee: person(P.nadia), role: 'viewer' }] })),
@@ -677,7 +677,7 @@ export const RULE_6: readonly RuleCase[] = [
       // Until C4.1's re-ACL job rewrites it, the row still names Nadia, so the SQL pre-filter alone
       // would let it through ...
       expect(rowReadable(stale, nadiaNow)).toBe(true)
-      // ... and the live re-check after it drops it, so she never sees it.
+      // ... and the live re-check after it drops it, so Nadia never sees it.
       expect(filterReadable(world, human(P.nadia), [doc])).toEqual([])
       expect(filterReadable(world, human(P.rachel), [doc])).toEqual([doc])
       // Rewritten, the row agrees.

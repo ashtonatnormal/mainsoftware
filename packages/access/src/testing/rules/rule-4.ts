@@ -187,7 +187,7 @@ export const RULE_4: readonly RuleCase[] = [
           ref.message(M.priya1),
         ),
       ).toBe(false)
-      // Delegated by Ashton's assistant (PA-11), answering in his assistant conversation: still out.
+      // Delegated by Ashton's assistant (PA-11), answering in Ashton's assistant conversation: still out.
       expect(
         sourceAllowed(
           w,
@@ -201,7 +201,7 @@ export const RULE_4: readonly RuleCase[] = [
         ),
       ).toBe(false)
       // The CFO asks the Finance agent in their own DM with it: the Q3 numbers in its scope are in,
-      // her DM with Wei Ling about them is out.
+      // the CFO's DM with Wei Ling about them is out.
       const cfoAsks = {
         run: 'agent_asked' as const,
         agentId: AG.finance,
@@ -471,7 +471,7 @@ export const RULE_4: readonly RuleCase[] = [
       expect(q4.map(m => canRead(world, assistant(AS.daniel), m))).toEqual([false, false, true, true, true])
       expect(q4.map(m => canRead(world, assistant(AS.ashton), m))).toEqual([true, true, true, true, true])
       expect(canRead(world, assistant(AS.daniel), ref.file(FI.q4Attachment))).toBe(false)
-      // Once Daniel leaves, his assistant reads none of it.
+      // Once Daniel leaves, their assistant reads none of it.
       const left = changed(f => ({
         ...f,
         memberships: f.memberships.map(m =>

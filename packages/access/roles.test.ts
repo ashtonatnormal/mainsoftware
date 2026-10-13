@@ -415,7 +415,7 @@ const SECTIONS: readonly Section[] = [
     rows: [
       { name: 'only an Owner removes Leadership', request: revoke(P.priya, 'leadership'), allowed: OWNERS },
       {
-        name: 'only an Owner removes Admin, and Arjun never removes his own',
+        name: 'only an Owner removes Admin, and Arjun never removes their own',
         request: revoke(P.arjun, 'admin'),
         allowed: OWNERS,
       },
@@ -558,12 +558,12 @@ const SECTIONS: readonly Section[] = [
         allowed: ADMINS,
       },
       {
-        name: 'an Admin signs out the Owner and DPO after a lost phone, and he may sign out his own',
+        name: 'an Admin signs out the Owner and DPO after a lost phone, and Ashton may sign out their own',
         request: { action: 'person.sign_out_devices', person: P.ashton },
         allowed: ADMINS,
       },
       {
-        name: 'an Admin signs out a Compliance Officer, and she may sign out her own',
+        name: 'an Admin signs out a Compliance Officer, and Wei Ling may sign out their own',
         request: { action: 'person.sign_out_devices', person: P.weiling },
         allowed: plus(ADMINS, ['weiling']),
       },
@@ -626,7 +626,7 @@ const SECTIONS: readonly Section[] = [
         allowed: plus(ADMINS, OPS_TEAM_ADMINS),
       },
       {
-        name: 'Hui Min changes People, her own team',
+        name: 'Hui Min changes People, their own team',
         request: teamChange(T.people, P.nadia, 'add'),
         allowed: plus(ADMINS, ['huimin']),
       },
@@ -636,7 +636,7 @@ const SECTIONS: readonly Section[] = [
         allowed: plus(ADMINS, ['marcus']),
       },
       {
-        name: 'Arjun never adds himself to Finance; another Admin or the Owner does',
+        name: 'Arjun never adds themselves to Finance; another Admin or the Owner does',
         request: teamChange(T.finance, P.arjun, 'add'),
         allowed: ['owner', 'admin', 'ashton'],
       },
@@ -972,7 +972,7 @@ const SECTIONS: readonly Section[] = [
         allowed: ADMINS,
       },
       {
-        name: 'Arjun can’t take #leadership: he isn’t in it',
+        name: 'Arjun can’t take #leadership: they aren’t in it',
         request: transfer(C.leadership, P.arjun),
         allowed: NOBODY,
       },
@@ -1307,7 +1307,7 @@ describe('ADM-02 CLAUDE.md Database: nobody changes their own roles or teams', (
   })
 
   test('D45: no Admin gives themselves the log; another person putting their role on the list is what opens it', () => {
-    // Arjun can't add AI Admin; the Leadership he can add isn't his, so he still can't read it.
+    // Arjun can't add AI Admin; the Leadership they can add isn't theirs, so they still can't read it.
     expect(can(W, human(P.arjun), readers('add', 'ai_admin'), REAUTH)).toBe(false)
     expect(can(W, human(P.arjun), readers('add', 'leadership'), REAUTH)).toBe(true)
     const afterLeadership = withReaders(['leadership'])
@@ -1346,14 +1346,14 @@ describe('ADM-02 CLAUDE.md Database: nobody changes their own roles or teams', (
 
 describe('PRD-85 ADM-02: DPO and Compliance Officer need a second approver', () => {
   test('PRD-85: an Owner’s grant is a proposal; the role is held only once a third person approves it', () => {
-    // The Owner persona proposed Nadia as Compliance Officer. Until approval she holds nothing.
+    // The Owner persona proposed Nadia as Compliance Officer. Until approval Nadia holds nothing.
     expect(can(W, human(ONE.owner), grant(P.nadia, 'compliance_officer'), REAUTH)).toBe(true)
     expect(W.holds(P.nadia, 'compliance_officer')).toBe(false)
     expect(can(W, human(P.nadia), { action: 'privileged_console.open', console: 'compliance' }, REAUTH)).toBe(false)
     expect(can(W, human(ONE.owner), approve(PR.nadiaCo), REAUTH)).toBe(false)
     expect(can(W, human(P.nadia), approve(PR.nadiaCo), REAUTH)).toBe(false)
     expect(can(W, human(ONE.admin), approve(PR.nadiaCo), REAUTH)).toBe(true)
-    // Once the Admin approves (C0.16 stamps the proposal and adds the role row), she holds it, and
+    // Once the Admin approves (C0.16 stamps the proposal and adds the role row), Nadia holds it, and
     // the proposal can't be approved again nor the role granted twice.
     const approved = matrixWorld(f => ({
       ...f,
@@ -1508,8 +1508,8 @@ describe('ACC-04 ACC-06: device sign-out and the lone Owner', () => {
     expect(can(W, human(ONE.dpo), { action: 'person.sign_out_devices', person: P.nadia }, REAUTH)).toBe(false)
   })
 
-  test('ACC-06 T13: in the seed org nobody changes the lone Owner’s phone or PIN, but any Admin signs out his devices', () => {
-    // Ashton is the only Owner: never himself, and an Admin can't act on an Owner-only role holder.
+  test('ACC-06 T13: in the seed org nobody changes the lone Owner’s phone or PIN, but any Admin signs out the Owner’s devices', () => {
+    // Ashton is the only Owner: never themselves, and an Admin can't act on an Owner-only role holder.
     // That leaves the reviewed bootstrap-style script a person runs (an open owner question in
     // T13 item 5), never a can() path. Signing out only removes sessions, so a lost phone is covered.
     const seed = new World(fixtureFacts())
@@ -1660,11 +1660,11 @@ function runAll(me: Id, check: (w: World, request: Request) => void = () => {}):
 }
 
 describe('Rule 9 ACC-10 ADM-03 ACC-07: no run of admin actions opens content to the person taking them', () => {
-  test('Rule 9 ADM-03 ACC-07 CHAT-01: no run of the actions Arjun is allowed lets him read #leadership', () => {
-    // Arjun (Admin and AI Admin) sets every org default he may, transfers every channel he may,
-    // adds everyone he may to every team, sets every team default he may, grants Team Admin
-    // wherever he may, and joins and adds people to every space he may. He isn't in #leadership,
-    // can't take it, can't add himself to a team or make himself Team Admin, and so never reads it.
+  test('Rule 9 ADM-03 ACC-07 CHAT-01: no run of the actions Arjun is allowed lets them read #leadership', () => {
+    // Arjun (Admin and AI Admin) sets every org default they may, transfers every channel they may,
+    // adds everyone they may to every team, sets every team default they may, grants Team Admin
+    // wherever they may, and joins and adds people to every space they may. Arjun isn't in #leadership,
+    // can't take it, can't add themselves to a team or make themselves Team Admin, and so never reads it.
     expect(canRead(new World(fixtureFacts()), human(P.arjun), ref.message(M.leadership))).toBe(false)
     const run = runAll(P.arjun, (w, request) => {
       const step = JSON.stringify(request)
@@ -1686,17 +1686,17 @@ describe('Rule 9 ACC-10 ADM-03 ACC-07: no run of admin actions opens content to 
       expect(run.allowed.get(action) ?? 0, action).toBeGreaterThan(0)
     }
     expect([...run.applied.values()].reduce((a, b) => a + b, 0)).toBeGreaterThan(100)
-    // He took #leadership from nobody and handed it only to its members.
+    // Arjun took #leadership from nobody and handed it only to its members.
     const leadership = run.last.get({ kind: 'channel', id: C.leadership })
     expect(leadership?.owners.every(o => run.last.isCurrentMember(o, C.leadership))).toBe(true)
   })
 
-  test('Rule 9 ACC-10: after the whole run Arjun reads exactly what he read before', () => {
+  test('Rule 9 ACC-10: after the whole run Arjun reads exactly what they read before', () => {
     const before = readable(new World(fixtureFacts()), P.arjun)
     expect(readable(runAll(P.arjun).last, P.arjun)).toEqual(before)
   })
 
-  test('Rule 9 ACC-07 T13: no run of a Team Admin’s actions (Marcus, of Operations) opens anything new to him', () => {
+  test('Rule 9 ACC-07 T13: no run of a Team Admin’s actions (Marcus, of Operations) opens anything new to them', () => {
     const before = readable(new World(fixtureFacts()), P.marcus)
     const run = runAll(P.marcus, (w, request) => {
       expect(canRead(w, human(P.marcus), ref.message(M.leadership)), JSON.stringify(request)).toBe(false)

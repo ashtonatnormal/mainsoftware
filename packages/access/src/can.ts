@@ -1,13 +1,5 @@
 import { adminCan, isAdmin } from './admin.ts'
-import {
-  atLeast,
-  granteeInOrg,
-  isItemOwner,
-  maySetSharing,
-  roleOn,
-  sameGrantee,
-  trashState,
-} from './drive.ts'
+import { atLeast, granteeInOrg, isItemOwner, maySetSharing, roleOn, sameGrantee, trashState } from './drive.ts'
 import { indexClassOf } from './index-class.ts'
 import { keysOf } from './keys.ts'
 import type { Id, Ref, Subject, Token } from './model.ts'
@@ -282,7 +274,8 @@ function driveAction(
       // Admins (ta:), which no grant names, so a grant to the owning team's members is an
       // ordinary grant (T13, Drive items).
       if (!maySetSharing(world, ref, me, keys) || !granteeInOrg(world, request.grantee)) return false
-      if (item.owner.kind === 'person' && sameGrantee(request.grantee, { kind: 'person', id: item.owner.id })) return false
+      if (item.owner.kind === 'person' && sameGrantee(request.grantee, { kind: 'person', id: item.owner.id }))
+        return false
       return request.role !== null || item.grants.some(g => sameGrantee(g.grantee, request.grantee))
     }
     case 'present':

@@ -235,9 +235,9 @@ export const RULE_9: readonly RuleCase[] = [
     'R9-03',
     'Rule 9 D16 PA-03 ACC-10: only people hold roles; the Owner’s assistant, agents and system jobs are refused every admin request',
     () => {
-      // Ashton, Owner and DPO, may make most of these himself, so his assistant's refusals matter.
-      const his = ADMIN_REQUESTS.filter(r => can(world, human(P.ashton), r, reauthenticated))
-      expect(his.length).toBeGreaterThan(15)
+      // Ashton, Owner and DPO, may make most of these themselves, so their assistant's refusals matter.
+      const ashtons = ADMIN_REQUESTS.filter(r => can(world, human(P.ashton), r, reauthenticated))
+      expect(ashtons.length).toBeGreaterThan(15)
       const nonHumans: Subject[] = [...Object.values(AS).map(assistant), ...Object.values(AG).map(agent), system]
       for (const s of nonHumans) {
         for (const r of ADMIN_REQUESTS) expect(can(world, s, r, reauthenticated), `${s.id} ${r.action}`).toBe(false)
@@ -346,7 +346,7 @@ export const RULE_9: readonly RuleCase[] = [
         role,
         teamId,
       })
-      // The Owner grants every Owner-only role to others, never to himself, and can't drop his own.
+      // The Owner grants every Owner-only role to others, never to themselves, and can't drop their own.
       for (const role of ['owner', 'admin', 'ai_admin', 'leadership', 'dpo', 'compliance_officer'] as const) {
         expect(allows(world, P.ashton, grant(P.nadia, role), reauthenticated), role).toBe(true)
         expect(allows(world, P.ashton, grant(P.ashton, role), reauthenticated), role).toBe(false)
@@ -359,7 +359,7 @@ export const RULE_9: readonly RuleCase[] = [
       expect(allows(world, P.weiling, revoke(P.weiling, 'compliance_officer'), reauthenticated)).toBe(false)
       expect(allows(world, P.marcus, revoke(P.marcus, 'team_admin', T.operations), reauthenticated)).toBe(false)
       expect(allows(world, P.arjun, revoke(P.marcus, 'team_admin', T.operations), reauthenticated)).toBe(true)
-      // The Admin makes others Team Admin, not himself.
+      // The Admin makes others Team Admin, not themselves.
       expect(allows(world, P.arjun, grant(P.kelvin, 'team_admin', T.it), reauthenticated)).toBe(true)
       expect(allows(world, P.arjun, grant(P.arjun, 'team_admin', T.it), reauthenticated)).toBe(false)
       // An Admin named in a proposal can't approve it; another Admin can.
@@ -376,8 +376,8 @@ export const RULE_9: readonly RuleCase[] = [
       )
       expect(allows(arjunProposed, P.arjun, approve('pr-arjun-compliance'), reauthenticated)).toBe(false)
       expect(allows(arjunProposed, P.nadia, approve('pr-arjun-compliance'), reauthenticated)).toBe(true)
-      // Nor does an Admin reach further through an admin power: no joining a team himself, no
-      // taking over a private channel he isn't in, no audit-log access for a role he holds (D45).
+      // Nor does an Admin reach further through an admin power: no joining a team themselves, no
+      // taking over a private channel they aren't in, no audit-log access for a role they hold (D45).
       const change = { action: 'team.members.change', team: T.finance, op: 'add' } as const
       expect(allows(world, P.arjun, { ...change, person: P.arjun }, reauthenticated)).toBe(false)
       expect(allows(world, P.arjun, { ...change, person: P.nadia }, reauthenticated)).toBe(true)
@@ -442,20 +442,29 @@ export const RULE_9: readonly RuleCase[] = [
           expect(allows(world, P.arjun, { action, person: target }, reauthenticated), `${action} ${target}`).toBe(true)
         }
       }
-      // While Kelvin waits as a proposed DPO, the Admin who could approve him can't take over his
+      // While Kelvin waits as a proposed DPO, the Admin who could approve them can't take over Kelvin's
       // account first (PRD-85's second approver would then be the account's holder).
       const proposed = changed(f => ({
         ...f,
         roleProposals: [
           ...f.roleProposals,
-          { id: 'pr-kelvin-dpo', personId: P.kelvin, role: 'dpo', proposedBy: P.ashton, approvedAt: null, withdrawnAt: null },
+          {
+            id: 'pr-kelvin-dpo',
+            personId: P.kelvin,
+            role: 'dpo',
+            proposedBy: P.ashton,
+            approvedAt: null,
+            withdrawnAt: null,
+          },
         ],
       }))
       for (const action of takeovers) {
         expect(allows(proposed, P.arjun, { action, person: P.kelvin }, reauthenticated), action).toBe(false)
         expect(allows(proposed, P.ashton, { action, person: P.kelvin }, reauthenticated), action).toBe(true)
       }
-      expect(allows(proposed, P.arjun, { action: 'role.approve', proposalId: 'pr-kelvin-dpo' }, reauthenticated)).toBe(true)
+      expect(allows(proposed, P.arjun, { action: 'role.approve', proposalId: 'pr-kelvin-dpo' }, reauthenticated)).toBe(
+        true,
+      )
       // Members, Team Admins and the Compliance Officer do none of it, signing out included.
       for (const actor of [P.marcus, P.huimin, P.rachel, P.weiling]) {
         for (const action of [...takeovers, 'person.sign_out_devices'] as const) {
@@ -510,7 +519,7 @@ export const RULE_9: readonly RuleCase[] = [
           expect(can(world, assistant(a), { action: 'view_viewed_by', resource: session })).toBe(false)
         }
       }
-      // Wei Ling was invited to the Q4 review but didn't take part: she reads it, not who viewed it.
+      // Wei Ling was invited to the Q4 review but didn't take part: they read it, not who viewed it.
       expect(reads(world, P.weiling, ref.session(S.q4Review))).toBe(true)
       expect(can(world, human(P.weiling), { action: 'view_viewed_by', resource: ref.session(S.q4Review) })).toBe(false)
       expect(can(world, human(P.ashton), { action: 'view_viewed_by', resource: ref.session(S.peopleFloor) })).toBe(

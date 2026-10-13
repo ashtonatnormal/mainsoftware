@@ -68,7 +68,8 @@ export function maySetSharing(world: World, ref: DriveRef, personId: Id, keys: R
   const role = roleOn(world, ref, personId, keys)
   if (role === 'owner') return true
   if (role !== 'editor') return false
-  const item = ref.kind === 'folder' ? world.get({ kind: 'folder', id: ref.id }) : world.get({ kind: 'file', id: ref.id })
+  const item =
+    ref.kind === 'folder' ? world.get({ kind: 'folder', id: ref.id }) : world.get({ kind: 'file', id: ref.id })
   return item?.editorsCanShare === true
 }
 
@@ -90,4 +91,3 @@ export function granteeInOrg(world: World, grantee: Grantee): boolean {
 export function sameGrantee(a: Grantee, b: Grantee): boolean {
   return a.kind === b.kind && a.id === b.id
 }
-

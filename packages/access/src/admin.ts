@@ -95,7 +95,8 @@ export function adminCan(world: World, actor: Id, request: AdminRequest, context
       // team, but an Admin can still remove its members, so its grants can be narrowed (an
       // archived team's Team Admins have no powers left).
       if (request.person === actor) return false
-      if (request.op === 'add' && !(world.isLiveTeam(request.team) && world.isActivePerson(request.person))) return false
+      if (request.op === 'add' && !(world.isLiveTeam(request.team) && world.isActivePerson(request.person)))
+        return false
       if (request.op === 'remove' && !world.isTeamMember(request.person, request.team)) return false
       return isAdmin(world, actor) || world.isTeamAdminOf(actor, request.team)
     }

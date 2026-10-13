@@ -220,7 +220,7 @@ export const RULE_5: readonly RuleCase[] = [
     'R5-04',
     'Rule 5 Rule 3 RMS-55: anything made from a restricted session is restricted, and readable only by people who can read the session',
     () => {
-      // What the fixture made from Hui Min's 1:1: a note, her private task, her suggested task and a slide copy.
+      // What the fixture made from Hui Min's 1:1: a note, their private task, their suggested task and a slide copy.
       const madeFrom = [
         ref.derived(DV.restrictedNote),
         ref.task(TK.private),
@@ -284,13 +284,13 @@ export const RULE_5: readonly RuleCase[] = [
     'R5-05',
     'Rule 5 REC-14 TASK-06 T13: a suggested task from a restricted session is its owner’s only; accepted, it is private until the owner shares it, and never indexed, even then',
     () => {
-      // Hui Min's suggested task from her 1:1: Ashton took part in the session but can't see it.
+      // Hui Min's suggested task from their 1:1: Ashton took part in the session but can't see it.
       const suggestion = ref.suggestedTask(ST.people)
       expectReaders(world, suggestion, [P.huimin], [P.ashton, P.marcus])
       expect(can(world, human(P.huimin), { action: 'accept', resource: suggestion })).toBe(true)
       expect(can(world, human(P.ashton), { action: 'accept', resource: suggestion })).toBe(false)
       expect(can(world, human(P.ashton), { action: 'dismiss', resource: suggestion })).toBe(false)
-      // Her accepted task names Marcus as an assignee, but stays hers alone until she shares it.
+      // Hui Min's accepted task names Marcus as an assignee, but stays Hui Min's alone until shared.
       const task = ref.task(TK.private)
       expectReaders(world, task, [P.huimin], [P.marcus, P.ashton])
       for (const action of ['edit', 'share', 'delete'] as const) {
@@ -298,7 +298,7 @@ export const RULE_5: readonly RuleCase[] = [
         expect(can(world, human(P.marcus), { action, resource: task }), action).toBe(false)
       }
       expect(indexClassOf(world, task)).toBe('restricted')
-      // Once she shares it, its assignees read it.
+      // Once Hui Min shares it, its assignees read it.
       const shared = changed(f => ({
         ...f,
         tasks: f.tasks.map(t => (t.id === TK.private ? { ...t, privateToId: null } : t)),
@@ -487,7 +487,7 @@ export const RULE_5: readonly RuleCase[] = [
     'R5-13',
     'Rule 5 decision 13 C2.4: only the DPO or a Compliance Officer may reclassify a past session, after re-authenticating',
     () => {
-      // Hui Min took part in her 1:1 and owns the room; Arjun is an Admin: neither may.
+      // Hui Min took part in their 1:1 and owns the room; Arjun is an Admin: neither may.
       for (const id of [S.peopleAshton, S.peopleBefore, S.opsRestricted]) {
         for (const person of everyone) {
           expect(

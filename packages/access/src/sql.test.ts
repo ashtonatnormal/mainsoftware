@@ -108,11 +108,11 @@ describe('sqlReadableBy (B.4, T3)', () => {
   test('names custom columns as quoted identifiers, a table-qualified one too, never as raw SQL', () => {
     const qualified = predicate(ashton, { tokens: 'r.readers', more: 'r.extra' })
     expect(qualified).toContain('"r"."readers" && $1::text[]')
-    expect(qualified).toContain('jsonb_array_elements("r"."extra")')
+    expect(qualified).toContain(`jsonb_array_elements(coalesce("r"."extra", '[[]]'::jsonb))`)
     // A name that tries to break out of the identifier stays one identifier.
     const hostile = predicate(ashton, { tokens: 'acl_tokens) or (true', more: 'we"ird' })
     expect(hostile).toContain('"acl_tokens) or (true" && $1::text[]')
-    expect(hostile).toContain('jsonb_array_elements("we""ird")')
+    expect(hostile).toContain(`jsonb_array_elements(coalesce("we""ird", '[[]]'::jsonb))`)
     expect(hostile).not.toMatch(/\bor \(true\b(?!")/)
   })
 

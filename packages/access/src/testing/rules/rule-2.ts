@@ -245,7 +245,11 @@ export const RULE_2: readonly RuleCase[] = [
     'C3.3',
     'Rule 2 REC-13 CAL-03: a scheduled meeting, one held in a team room included, posts to its event thread, never to the room’s channel',
   ),
-  ai('R2-19d', 'A3.1', 'Rule 2 REC-13: meeting notes post only into the session card or event thread the resolver chose'),
+  ai(
+    'R2-19d',
+    'A3.1',
+    'Rule 2 REC-13: meeting notes post only into the session card or event thread the resolver chose',
+  ),
   c0('R2-20', 'Rule 2 CAL-03: a meeting may use a team room only if every invitee can join it', () => {
     const everyInviteeJoins = (room: string, invitees: readonly string[]) =>
       invitees.every(p => can(world, human(p), { action: 'join', resource: ref.room(room) }))
@@ -272,7 +276,9 @@ export const RULE_2: readonly RuleCase[] = [
     const arjunSees = changed(f => ({
       ...f,
       files: f.files.map(x =>
-        x.id === FI.q3Numbers ? { ...x, grants: [...x.grants, { grantee: { kind: 'person', id: P.arjun }, role: 'viewer' }] } : x,
+        x.id === FI.q3Numbers
+          ? { ...x, grants: [...x.grants, { grantee: { kind: 'person', id: P.arjun }, role: 'viewer' }] }
+          : x,
       ),
     }))
     expect(sourceAllowed(arjunSees, run(arjunSees, P.cfo), ref.file(FI.q3Numbers))).toBe(true)
@@ -303,26 +309,30 @@ export const RULE_2: readonly RuleCase[] = [
   core('R2-28', 'C5.6', 'Rule 2 ROOM-11: agents never receive a deck presented live'),
   ai('R2-29', 'A5', 'Rule 2 CHT-66 AGT-09: suggest cards are checked at post time'),
   ai('R2-30', 'A2', 'Rule 2 PRD-111: response caches are keyed by the sources’ ACLs and the audience'),
-  c0('R2-31', 'Rule 2 PRD-35: an unknown audience covers nothing; a private channel with nobody in it still bounds by its later members', () => {
-    expect(audienceOf(world, ref.channel('ch-unknown'))).toBeNull()
-    expect(covers(world, null, ref.message(M.general))).toBe(false)
-    expect(
-      sourceAllowed(world, { run: 'agent_scheduled', agentId: AG.digest, audience: null }, ref.message(M.leadership)),
-    ).toBe(false)
-    // #leadership with every person gone and only the agent left still bounds by its later members.
-    const empty = changed(f => ({
-      ...f,
-      memberships: f.memberships.map(m =>
-        m.spaceId === C.leadership && m.principalId !== AG.digest ? { ...m, throughSeq: 2 } : m,
-      ),
-    }))
-    const a = audienceOf(empty, ref.channel(C.leadership))
-    expect(audiencePeople(empty, a)).toEqual([])
-    expect(covers(empty, a, ref.session(S.pricing))).toBe(false)
-    expect(
-      sourceAllowed(empty, { run: 'agent_scheduled', agentId: AG.digest, audience: a }, ref.session(S.pricing)),
-    ).toBe(false)
-  }),
+  c0(
+    'R2-31',
+    'Rule 2 PRD-35: an unknown audience covers nothing; a private channel with nobody in it still bounds by its later members',
+    () => {
+      expect(audienceOf(world, ref.channel('ch-unknown'))).toBeNull()
+      expect(covers(world, null, ref.message(M.general))).toBe(false)
+      expect(
+        sourceAllowed(world, { run: 'agent_scheduled', agentId: AG.digest, audience: null }, ref.message(M.leadership)),
+      ).toBe(false)
+      // #leadership with every person gone and only the agent left still bounds by its later members.
+      const empty = changed(f => ({
+        ...f,
+        memberships: f.memberships.map(m =>
+          m.spaceId === C.leadership && m.principalId !== AG.digest ? { ...m, throughSeq: 2 } : m,
+        ),
+      }))
+      const a = audienceOf(empty, ref.channel(C.leadership))
+      expect(audiencePeople(empty, a)).toEqual([])
+      expect(covers(empty, a, ref.session(S.pricing))).toBe(false)
+      expect(
+        sourceAllowed(empty, { run: 'agent_scheduled', agentId: AG.digest, audience: a }, ref.session(S.pricing)),
+      ).toBe(false)
+    },
+  ),
   c0(
     'R2-31b',
     'Rule 2 T13: an audience naming someone the snapshot lacks, people who have all left, or a conversation nobody is in covers nothing',
@@ -341,7 +351,9 @@ export const RULE_2: readonly RuleCase[] = [
       // A group DM everyone has left.
       const emptied = changed(f => ({
         ...f,
-        memberships: f.memberships.map(m => (m.spaceId === CV.floor && m.throughSeq === null ? { ...m, throughSeq: 99 } : m)),
+        memberships: f.memberships.map(m =>
+          m.spaceId === CV.floor && m.throughSeq === null ? { ...m, throughSeq: 99 } : m,
+        ),
       }))
       expect(covers(emptied, audienceOf(emptied, ref.groupDm(CV.floor)), restricted)).toBe(false)
       // The CFO's agent DM once the CFO has left.
@@ -352,7 +364,11 @@ export const RULE_2: readonly RuleCase[] = [
       const cfoDm = audienceOf(cfoGone, ref.agentDm(CV.cfoFinance))
       expect(covers(cfoGone, cfoDm, ref.file(FI.q3Numbers))).toBe(false)
       expect(
-        sourceAllowed(cfoGone, { run: 'agent_scheduled', agentId: AG.finance, audience: cfoDm }, ref.file(FI.q3Numbers)),
+        sourceAllowed(
+          cfoGone,
+          { run: 'agent_scheduled', agentId: AG.finance, audience: cfoDm },
+          ref.file(FI.q3Numbers),
+        ),
       ).toBe(false)
       // The Q4 review's event thread in a snapshot missing two attendees' people: the full world
       // refuses the pricing review there (Priya and Daniel can't read it), so the slice must too.

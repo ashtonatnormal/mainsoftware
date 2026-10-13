@@ -261,7 +261,7 @@ describe('readersOf: every resource kind (B.4)', () => {
 
   test('REC-13 C3.3: a meeting thread is its attendees and whoever took part in one of its sessions', () => {
     expect(readersOf(world, ref.thread(TH.q4Event))).toEqual([people(P.priya, P.ashton, P.daniel, P.ahmad, P.weiling)])
-    // Nadia, not invited, took part in the review: she joins the thread. Rachel took part in the
+    // Nadia, not invited, took part in the review: Nadia joins the thread. Rachel took part in the
     // pricing review, another event's session, and doesn't.
     const w = fixtureWorld(f => ({
       ...f,
@@ -445,7 +445,7 @@ describe('readersOf: every resource kind (B.4)', () => {
         ),
       }))
     expect(readersOf(trashedBy(P.priya), ref.file(FI.movers))).toEqual([people(P.ashton, P.priya)])
-    // Priya loses her grants on the sheet and its folder: only the owner is left.
+    // Priya loses their grants on the sheet and its folder: only the owner is left.
     expect(readersOf(trashedBy(P.priya, P.priya), ref.file(FI.movers))).toEqual([[p(P.ashton)]])
     // Nobody recorded as the trasher: the owner only.
     const noTrasher = fixtureWorld(f => ({
@@ -456,7 +456,7 @@ describe('readersOf: every resource kind (B.4)', () => {
   })
 
   test('DRV-01: a trashed item whose trasher reads it only through another grant needs two clauses', () => {
-    // Daniel trashed the proposal and then lost his own grant on it; he still reads it through the
+    // Daniel trashed the proposal and then lost their own grant on it; they still read it through the
     // Q4 team's grant on the folder, Ashton (an Editor, not the trasher) doesn't.
     const w = fixtureWorld(f => ({
       ...f,
