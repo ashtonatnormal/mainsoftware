@@ -1,8 +1,11 @@
 # The local stack for development and CI (C0.2; TECH-SPEC T9). Production uses RDS, ElastiCache
 # and S3 instead, so nothing here is deployed. Every port is published on 127.0.0.1 only, and the
-# credentials are dummy local values, the same ones .env.example gives the server.
+# credentials are dummy local values: Valkey's and the S3 store's are the ones .env.example gives
+# the server, and the server's Postgres login (hearth_app) comes from `npm run db:reset`, which
+# builds the `hearth` database as production's is built.
 #
 #   docker compose up -d --wait    start everything and wait until it is healthy
+#   npm run db:reset               then build the database the server uses
 #   docker compose down -v         stop it and delete its data
 name: hearth
 

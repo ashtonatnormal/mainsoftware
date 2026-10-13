@@ -14,6 +14,9 @@
   ],
   "scripts": {
     "dev": "npm run dev -w @hearth/server",
+    "db:reset": "scripts/db-local.sh reset",
+    "db:migrate": "scripts/db-local.sh migrate",
+    "db:types": "npm run db:types -w @hearth/server",
     "check": "npm run typecheck && npm run lint && npm test",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces",
     "lint": "biome check",

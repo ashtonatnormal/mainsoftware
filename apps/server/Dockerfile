@@ -34,6 +34,8 @@ EXPOSE 3000
 
 WORKDIR /app
 COPY --from=deps /app ./
+# Where apps/server/src/db/migrations.ts looks for them: db/migrations/ beside apps/.
+COPY db/migrations db/migrations
 
 # Not root, and nothing written at run time, so the task can run with a read-only root filesystem.
 USER node

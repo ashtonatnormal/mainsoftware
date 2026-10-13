@@ -11,7 +11,8 @@
 #                                         runs the production image instead (Docker)
 #
 # Both read their settings from .env.example (ENV_FILE to change it), so the dependencies it
-# names must be up: `docker compose up -d --wait` starts them. EXPECT_READY=0 skips the /ready
+# names must be up and the database built: `docker compose up -d --wait`, then
+# `npm run db:reset`. EXPECT_READY=0 skips the /ready
 # check, for running without them. The image mode uses host networking, so it needs Docker on
 # Linux, as in CI (Docker Desktop only with host networking turned on in its settings).
 set -euo pipefail

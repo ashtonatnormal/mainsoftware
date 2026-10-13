@@ -36,7 +36,8 @@ jobs:
       - run: npm audit signatures
   # Every npm workspace from the root (apps/*, packages/*, infra and demo/): what `npm run check`
   # runs locally (typecheck, lint, test), as separate steps so a failure names its step, then the
-  # build, then the server's start-up check (scripts/check-server.sh). The tests include the
+  # build, the local database (npm run db:reset), the server's start-up check
+  # (scripts/check-server.sh) from source and from the image, and the image's migrate step. The tests include the
   # guards in scripts/guards/ (no AI packages, no secret-shaped VITE_ variables, files the server
   # loads that Node can run). Keep CLAUDE.md (Testing and CI) in step with this job. It waits for
   # secrets and audit, so it gates merging on them too.
@@ -67,13 +68,23 @@ jobs:
       - run: npm run build
       # Node runs the server's .ts source with no build step (T2), so prove that every role
       # starts, answers /health and /ready against the local Compose stack, and stops cleanly on
-      # SIGTERM: first from the source, then from the production image.
+      # SIGTERM: first from the source, then from the production image. The server connects as
+      # hearth_app, which `npm run db:reset` sets up (migrations, seed, a local login).
       - run: docker compose up -d --wait
+      - run: npm run db:reset
       - run: scripts/check-server.sh
       - run: docker build -f apps/server/Dockerfile -t hearth-server .
       - run: IMAGE=hearth-server scripts/check-server.sh
+      # The image also runs the pre-deploy migrate step (T3): it must hold every migration the
+      # database has applied, or Kysely's migrator refuses to run.
+      - run: >-
+          docker run --rm --read-only --network host
+          -e MIGRATION_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/hearth
+          hearth-server node src/db/migrate.ts
   migrations:
     runs-on: ubuntu-latest
+    # A migration or test that hangs would otherwise hold the runner for six hours.
+    timeout-minutes: 20
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -94,13 +105,43 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      # Builds a scratch database from every file in db/migrations/, in one transaction, from a
-      # session that can only act as hearth_owner, then checks it against CLAUDE.md's Database
-      # rules (RLS, views, grants, functions, ownership, hearth_app's attributes).
+          # The whole history, so the order check below can compare with the base branch.
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      # The migrator (Kysely, T3) and the types generator are Node; nothing here runs install
+      # scripts.
+      - run: npm ci --ignore-scripts
+      # Every migration a PR adds numbers above the highest on its base branch, and none of the
+      # base's migrations changed: production has applied those, and a scratch build can't tell.
+      - if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: scripts/check-migration-order.sh "$BASE"
+      # Builds a scratch database from every file in db/migrations/ with the migrator production
+      # uses, in one transaction, from a session that can only act as hearth_owner, then checks it
+      # against CLAUDE.md's Database rules (org_id, RLS, views, grants, functions, ownership,
+      # hearth_app's attributes).
       - run: scripts/check-migrations.sh
+      # The migrator itself, against throwaway databases: it refuses a migration that commits or
+      # leaves another role in place, rolls a failed batch back, fails fast on a role it can't
+      # take, and refuses a migration numbered below one already applied.
+      - run: node apps/server/scripts/check-migrator.ts
+      # The Tembusu seed (local and CI data only) loads into it.
+      - run: >-
+          psql --no-psqlrc -w -v ON_ERROR_STOP=1 -q -d hearth_check --single-transaction
+          -c 'set local role hearth_owner' -f db/seed/tembusu.sql
       # DB tests in db/tests/: who can read and write what, for every role, including the ones
       # that must see nothing.
       - run: scripts/test-db.sh
+      # Refusals that must hold when two transactions race (someone leaving while given a role,
+      # a device signed out while a session starts), in two connections to a throwaway database.
+      - run: node apps/server/scripts/check-concurrency.ts
+      # The Kysely types (apps/server/src/db/schema.ts) match the schema the migrations build.
+      - run: npm run db:types
+      - run: git diff --exit-code -- apps/server/src/db/schema.ts
       # Risky migrations also get an upgrade step here, after the DB tests:
       #   UP_TO=NNNN scripts/check-migrations.sh && scripts/check-<name>-upgrade.sh
       # builds the database up to the migration before NNNN, loads production-shaped data, applies

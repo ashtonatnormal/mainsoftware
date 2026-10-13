@@ -3,18 +3,23 @@
 #   - a migration file isn't named <NNNN>_<name>.sql (lower case), two share a number, a folder or
 #     a hidden file sits in db/migrations/ (nothing in it would be applied), a file is over 120 KB,
 #     or a line starts with a psql meta-command
-#   - the migrations fail. They run in name order, in one transaction on an empty database, the
-#     way Kysely's migrator applies a batch on Postgres, and each file goes to the server unparsed,
-#     so a psql meta-command anywhere is a syntax error, as it would be in production. The session
-#     logs in as a throwaway non-superuser role whose only power is to act as hearth_owner (NOSUPERUSER;
-#     CLAUDE.md, Database), so a migration can't fall back on superuser rights. A migration that
-#     ends the transaction itself (COMMIT, ROLLBACK) or leaves a different role in place fails.
-#   - the result breaks a Database rule in CLAUDE.md: a table with row level security off, a view
-#     without security_invoker, a materialized view or foreign table granted to anyone, a function
-#     PUBLIC can execute, a SECURITY DEFINER function without search_path = '', TRUNCATE, TRIGGER
-#     or REFERENCES held by anyone but the owner, an object not owned by hearth_owner, or a
-#     hearth_app role that could bypass RLS. Objects that belong to an extension, and the
-#     constructor functions Postgres makes for a range type, are skipped.
+#   - the migrations fail. They're applied by the same Kysely migrator production uses
+#     (apps/server/src/db/migrate.ts; T3): in name order, in one transaction on an empty
+#     database, each file sent to the server unparsed, so a psql meta-command anywhere is a
+#     syntax error. The session logs in as a throwaway non-superuser role whose only power is to
+#     act as hearth_owner (NOSUPERUSER; CLAUDE.md, Database), so a migration can't fall back on
+#     superuser rights. A migration that ends the transaction itself (COMMIT, ROLLBACK) or leaves
+#     a different role in place fails, naming the file.
+#   - the result breaks a Database rule in CLAUDE.md: a table without org_id (orgs aside: its id
+#     is the org id), a table with row level security off, a view without security_invoker, a
+#     materialized view or foreign table granted to anyone, anything granted to PUBLIC, a
+#     function PUBLIC can execute, a SECURITY DEFINER function without search_path = '',
+#     TRUNCATE, TRIGGER or REFERENCES (on a table or a column) held by anyone but the owner, an
+#     object not owned by hearth_owner, a database hearth_owner doesn't own, or a hearth_app role
+#     that could bypass RLS. Objects that belong to an extension and the constructor functions
+#     Postgres makes for a range type are skipped. The migrator's own ledger (kysely_migration,
+#     kysely_migration_lock) has no org_id or row level security, so those two checks skip it by
+#     name; it must still be the owner's and granted to nobody.
 #
 # The scratch database ($CHECK_DB, default hearth_check) is dropped and rebuilt on every run, so
 # the database you develop against is never touched; scripts/test-db.sh then runs against it.
@@ -26,29 +31,30 @@
 # UP_TO=NNNN builds the database only up to the migration before NNNN, for an upgrade test:
 # scripts/check-<name>-upgrade.sh then loads production-shaped data and applies NNNN.
 #
-# The migration tool is Kysely (docs/TECH-SPEC.md, T3). When C0.3 adds its migrator (a provider
-# that reads these .sql files), apply the migrations here with it instead of psql, keep refusing
-# any file it would skip or not see, and leave its ledger tables (kysely_migration,
-# kysely_migration_lock) out of the checks by name. This scratch build starts empty, so it can't see
-# a migration numbered below one production already applied; C0.3's CI check against main does.
+# A scratch build starts empty, so it can't see a migration numbered below one production has
+# already applied; scripts/check-migration-order.sh, run against main in CI, does.
 #
 # Usage: scripts/check-migrations.sh && scripts/test-db.sh
-# Needs psql. Connects as a superuser with the standard PG* variables; any that are unset default
-# to the local stack (postgres:postgres@127.0.0.1:5432).
+# Needs psql and Node 24 with the repo's packages installed (npm ci). Connects as a superuser with
+# the standard PG* variables; any that are unset default to the local stack
+# (postgres:postgres@127.0.0.1:5432).
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 export PGHOST=${PGHOST:-127.0.0.1} PGPORT=${PGPORT:-5432} PGUSER=${PGUSER:-postgres} PGPASSWORD=${PGPASSWORD:-postgres}
 db=${CHECK_DB:-hearth_check}
 owner=hearth_owner
-migrator=hearth_migrate_check  # logs in for the migration run; may only act as $owner
+# Logs in for the migration run and may only act as $owner. One per scratch database, so two runs
+# against different databases on one server don't change each other's password.
+migrator=${db}_m
 # Untrusted extensions hearth_owner can't create (add vector with the migration that first uses
 # it). infra/ creates the same ones as the RDS master user.
 superuser_extensions=()
 # The database gets dropped, so only accept a plain name that says it's a scratch one, short
-# enough that Postgres won't truncate it (names stop at 63 bytes) into some other database's name.
-[[ $db =~ ^[a-z_][a-z0-9_]{0,56}_check$ ]] ||
-  { echo "CHECK_DB must be a lower-case name ending in _check, at most 63 characters, not '$db'" >&2; exit 2; }
+# enough that Postgres won't truncate it (names stop at 63 bytes) into some other database's name,
+# with room for the migrator role's _m.
+[[ $db =~ ^[a-z_][a-z0-9_]{0,54}_check$ ]] ||
+  { echo "CHECK_DB must be a lower-case name ending in _check, at most 61 characters, not '$db'" >&2; exit 2; }
 up_to=${UP_TO:-}
 [[ -z $up_to || $up_to =~ ^[0-9]{4}$ ]] || { echo "UP_TO must be a 4-digit migration number, not '$up_to'" >&2; exit 2; }
 sql() { psql --no-psqlrc -w -v ON_ERROR_STOP=1 -q "$@"; }  # -w: fail rather than prompt
@@ -71,7 +77,7 @@ for path in db/migrations/*; do
     status=1
   fi
   if [ "$(wc -c <"$path")" -gt 120000 ]; then
-    echo "$path is over 120 KB; split it (it goes to psql as one argument)" >&2
+    echo "$path is over 120 KB; split it" >&2
     status=1
   fi
   named+=("$path")
@@ -103,7 +109,7 @@ fi
   { echo "Connect as a superuser (PGUSER): this script creates roles and runs migrations as $owner." >&2; exit 2; }
 
 migrator_pw=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
-trap 'sql -d postgres -c "alter role $migrator password null" >/dev/null 2>&1 || true' EXIT
+trap 'sql -d postgres -c "drop role if exists $migrator" >/dev/null 2>&1 || true' EXIT
 sql -d postgres -c "set client_min_messages = warning" \
   -c "do \$\$ begin create role $owner nologin createrole; exception when duplicate_object then null; end \$\$" \
   -c "alter role $owner nosuperuser nobypassrls createrole" \
@@ -116,23 +122,15 @@ for ext in ${superuser_extensions[@]+"${superuser_extensions[@]}"}; do
   sql -d "$db" -c "create extension if not exists \"$ext\""
 done
 
-# Records when the transaction started; SQL can't move that, so a migration that ends the
-# transaction can't make this match again. The sentinel runs after the last migration.
-mark="select set_config('hearth.migration_txn', extract(epoch from transaction_timestamp())::text, true)"
-sentinel="do \$\$ begin
-  if current_setting('hearth.migration_txn', true) is distinct from extract(epoch from transaction_timestamp())::text then
-    raise exception 'a migration ended its own transaction (COMMIT or ROLLBACK); migrations run in one transaction';
-  end if;
-  if current_user <> '$owner' then
-    raise exception 'a migration changed role (now %); migrations run as $owner', current_user;
-  end if;
-end \$\$"
-args=()
-for path in ${files[@]+"${files[@]}"}; do args+=(-c "\\warn applying $path" -c "$(cat "$path")"); done
-PGUSER=$migrator PGPASSWORD=$migrator_pw \
-  sql -d "$db" --single-transaction -c "$mark" -c "set local role $owner" \
-  ${args[@]+"${args[@]}"} -c "$sentinel" >/dev/null ||
-  { echo "Migrations failed in the last file named above." >&2; exit 1; }
+# The migrator checks around every file that the session is still hearth_owner and still in the
+# batch's one transaction, and names the file that broke either rule. It connects with the PG*
+# variables, so nothing has to be put into a URL; an inherited MIGRATION_DATABASE_URL would win
+# over them, so it's dropped.
+before=()
+[ -z "$up_to" ] || before=(--before "$up_to")
+PGUSER=$migrator PGPASSWORD=$migrator_pw PGDATABASE=$db MIGRATION_ROLE=$owner \
+  env -u MIGRATION_DATABASE_URL node apps/server/src/db/migrate.ts ${before[@]+"${before[@]}"} >&2 ||
+  { echo "Migrations failed: see the migrate: lines above." >&2; exit 1; }
 
 checks="
 with rel as (
@@ -143,6 +141,10 @@ with rel as (
   where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema'
     and not exists (select 1 from pg_depend d
                     where d.classid = 'pg_class'::regclass and d.objid = c.oid and d.deptype = 'e')
+), ledger as (
+  -- The migrator's ledger, which it creates itself (as hearth_owner): it has no org_id or row
+  -- level security, so it is checked for those two only by name, and must be granted to nobody.
+  select oid from rel where name in ('public.kysely_migration', 'public.kysely_migration_lock')
 ), fn as (
   select p.oid, p.prosecdef, p.proconfig, p.proowner, p.proacl,
          format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) as name
@@ -153,8 +155,31 @@ with rel as (
                     where d.classid = 'pg_proc'::regclass and d.objid = p.oid
                       and (d.deptype = 'e' or (d.deptype = 'i' and d.refclassid = 'pg_type'::regclass)))
 ), problems(problem, object) as (
+  select 'Table without an org_id column (every record belongs to an org, ACC-11)', name
+  from rel where relkind in ('r', 'p') and name <> 'public.orgs' and oid not in (select oid from ledger)
+    and not exists (select 1 from pg_attribute a where a.attrelid = rel.oid and a.attname = 'org_id' and not a.attisdropped)
+  union all
   select 'Row level security is off (alter table <name> enable row level security)', name
-  from rel where relkind in ('r', 'p') and not relrowsecurity
+  from rel where relkind in ('r', 'p') and not relrowsecurity and oid not in (select oid from ledger)
+  union all
+  select 'The migrator''s ledger is granted to someone (only its owner may touch it)', format('%s: %s', name, a.privilege_type)
+  from rel cross join lateral aclexplode(relacl) a
+  where oid in (select oid from ledger) and a.grantee <> relowner
+  union all
+  select 'Granted to PUBLIC (grant to a named role instead)', format('%s: %s', name, a.privilege_type)
+  from rel cross join lateral aclexplode(relacl) a
+  where a.grantee = 0
+  union all
+  select 'Granted to PUBLIC (grant to a named role instead)', format('%s.%s: %s', name, att.attname, a.privilege_type)
+  from rel join pg_attribute att on att.attrelid = rel.oid and att.attnum > 0
+  cross join lateral aclexplode(att.attacl) a
+  where a.grantee = 0
+  union all
+  select 'TRUNCATE, TRIGGER or REFERENCES held by someone other than the owner (they ignore RLS)',
+         format('%s.%s: %s to %s', name, att.attname, a.privilege_type, a.grantee::regrole::text)
+  from rel join pg_attribute att on att.attrelid = rel.oid and att.attnum > 0
+  cross join lateral aclexplode(att.attacl) a
+  where a.grantee <> relowner and a.grantee <> 0 and a.privilege_type = 'REFERENCES'
   union all
   select 'View without security_invoker (create view <name> with (security_invoker = true))', name
   from rel where relkind = 'v' and not coalesce((select o.option_value::boolean
@@ -197,7 +222,11 @@ with rel as (
   select 'hearth_app could bypass RLS', 'hearth_app is a member of ' || r.rolname
   from pg_roles a cross join pg_roles r
   where a.rolname = 'hearth_app' and r.oid <> a.oid and pg_has_role(a.oid, r.oid, 'MEMBER')
-    and (r.rolsuper or r.rolbypassrls or exists (select 1 from rel where rel.relowner = r.oid))
+    and (r.rolsuper or r.rolbypassrls or exists (select 1 from rel where rel.relowner = r.oid)
+         or r.oid = (select datdba from pg_database where datname = current_database()))
+  union all
+  select 'The database is not owned by $owner', pg_get_userbyid(datdba)
+  from pg_database where datname = current_database() and datdba <> '$owner'::regrole
 )
 select problem, object from problems order by 1, 2"
 problems=$(sql -d "$db" -At -F $'\t' -c "$checks")
