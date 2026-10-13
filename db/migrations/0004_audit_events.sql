@@ -54,7 +54,7 @@ create policy org_isolation on public.audit_events for insert
 grant insert (org_id, actor_id, on_behalf_of_id, via, action, target_type, target_id, reason, case_id, request_id, device_id, ip, details)
   on public.audit_events to hearth_app;
 
--- Which roles may read the org's audit log (ADM-06, ACC-10). It's a setting, not code: none at
+-- Which roles may read the org's audit log (ADM-06, ACC-10, D45). It's a setting, not code: none at
 -- first, and the admin console (C0.16) adds and removes roles through a checked function that
 -- writes the audit event, so hearth_app may read the list but not change it. Team Admin can't be
 -- one: the log covers the whole org, and that role covers one team. A role taken off the list is

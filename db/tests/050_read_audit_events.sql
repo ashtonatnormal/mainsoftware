@@ -1,4 +1,4 @@
--- ADM-06, ACC-10, CLAUDE.md Database: read_audit_events() is the only way hearth_app reads the
+-- ADM-06, ACC-10, D45, CLAUDE.md Database: read_audit_events() is the only way hearth_app reads the
 -- audit log. It takes the reader from app.user_id and the org from app.org_id, both set from the
 -- session, and lets in only someone still at the org who holds a role on the org's
 -- audit_log_readers list, which starts empty; one case per ACC-10 role. It returns only the org's
