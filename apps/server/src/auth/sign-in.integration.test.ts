@@ -957,6 +957,50 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     ])
   })
 
+  it("ACC-05 T14: a member's refused admin requests naming the admin deactivating them lock nothing of the admin's, so the deactivation ends their sessions", async () => {
+    // Budgets: Admin A 1 code request, member M 1.
+    const a = await s.person({ roles: ['admin'], pin: s.newPin() })
+    const m = await s.person({ pin: s.newPin() })
+    const ac = await s.signIn(a)
+    const mc = await s.signIn(m)
+    // M holds no admin role, and last re-authenticated 10 minutes ago.
+    await s.age((await s.sessionOf(mc)).id, '10 minutes')
+
+    // Two loops of requests naming A, taking turns between a PIN reset and a device sign-out, each
+    // refused, until M is signed out or the deactivation has answered.
+    const answers: string[] = []
+    let stop = false
+    const loop = async (first: number): Promise<void> => {
+      for (let turn = first; !stop; turn++) {
+        const reply =
+          turn % 2 === 0
+            ? await mc.post('/api/admin/people/reset-pin', { person: a.id, identityCheck: 'in_person' })
+            : await mc.post('/api/admin/people/sign-out-devices', { person: a.id })
+        answers.push(`${reply.status} ${reply.error}`)
+        if (reply.status === 401) return
+      }
+    }
+    const loops = [loop(0), loop(1)]
+    try {
+      await eventually(
+        async () => answers.length,
+        n => n >= 2,
+      )
+      const deactivated = await ac.post('/api/admin/people/deactivate', { person: m.id })
+      expect([deactivated.status, deactivated.body]).toEqual([200, { status: 'deactivated', sessionsEnded: 1 }])
+    } finally {
+      stop = true
+      await Promise.all(loops)
+    }
+    const [live] = await s.query<{ n: number }>(
+      'select count(*)::int as n from sessions where user_id = $1 and revoked_at is null',
+      [m.id],
+    )
+    expect(live?.n).toBe(0)
+    // M was only ever refused, and then signed out.
+    expect(answers.filter(answer => answer !== '403 forbidden' && answer !== '401 signed_out')).toEqual([])
+  })
+
   it('C0.5 Done: deactivating a member signs them out everywhere and closes their socket within 2 s through the push (ACC-05, T5)', async () => {
     // Budgets: the Admin 1 code request, D 3, L 1.
     const admin = await s.person({ roles: ['admin'], pin: s.newPin() })
@@ -1211,8 +1255,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('PRD-53 T14: every limit is wired to the live Valkey', async () => {
-    // Budgets: P1 3 code requests, P2 1, P5 1, P6 1, P7 1, P8 1; the other requests are refused
-    // before any.
+    // Budgets: P1 3 code requests, P2 1, P5 1, P6 1, P7 1, P8 1, P9 1; the other requests are
+    // refused before any.
     // Each window is filled to the number PRD-53 or T14 sets (never policy.ts's own max, which a
     // change there would follow), and a request it covers is then refused.
     const filled = new Set<string>()
@@ -1260,20 +1304,40 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     await fill('otp-ip', tag(s.keys, `ip:${limitSubject('2001:db8:7:7::1')}`), 30)
     expect((await requestCode(s.client({ ip: '2001:db8:7:7::1234' }), s.number())).status).toBe(429)
 
-    // Every sign-in request per IP, 100 per 10 minutes: a code request, a code check and a PIN
-    // check from the address are each refused.
+    // Every sign-in request per IP, 100 per 10 minutes: from the address, each step is refused (a
+    // code request, a code check, setting a PIN, a PIN check, and a passkey's options and check).
     const authIp = '192.0.2.78'
     const p7 = await s.person({ pin: s.newPin() })
     const p8 = await s.person()
+    const p9 = await s.person()
     const atPin = s.client({ ip: authIp })
     expect((await requestCode(atPin, p7.e164)).status).toBe(200)
     expect((await verifyCode(atPin, await s.sms.nextCode(p7.e164))).status).toBe(200)
     const atCode = s.client({ ip: authIp })
     expect((await requestCode(atCode, p8.e164)).status).toBe(200)
+    const atSetPin = s.client({ ip: authIp })
+    expect((await requestCode(atSetPin, p9.e164)).status).toBe(200)
+    const toSetPin = await verifyCode(atSetPin, await s.sms.nextCode(p9.e164))
+    expect(toSetPin.body).toMatchObject({ next: 'set_pin' })
     await fill('auth-ip', tag(s.keys, `ip:${limitSubject(authIp)}`), 100)
+    // The limit is checked before the challenge is read, so a well-formed assertion is enough.
+    const assertion = {
+      id: Buffer.alloc(16, 1).toString('base64url'),
+      rawId: Buffer.alloc(16, 1).toString('base64url'),
+      type: 'public-key',
+      response: {
+        clientDataJSON: Buffer.from('{}').toString('base64url'),
+        authenticatorData: Buffer.alloc(37).toString('base64url'),
+        signature: Buffer.alloc(70, 3).toString('base64url'),
+      },
+      clientExtensionResults: {},
+    }
     const fromAuthIp = {
       codeCheck: await verifyCode(atCode, await s.sms.nextCode(p8.e164)),
+      setPin: await atSetPin.post('/api/auth/pin/set', { pin: s.newPin() }),
       pinCheck: await verifyPin(atPin, pinOf(p7)),
+      passkeyOptions: await atPin.post('/api/auth/passkey/options', {}),
+      passkeyCheck: await atPin.post('/api/auth/passkey/verify', { response: assertion }),
       codeRequest: await requestCode(s.client({ ip: authIp }), s.number()),
     }
     for (const [step, reply] of Object.entries(fromAuthIp)) {

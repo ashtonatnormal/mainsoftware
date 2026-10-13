@@ -2,9 +2,12 @@
 // deactivating them, resetting their PIN, signing their devices out, and listing their devices.
 // C0.16's console calls these. Each decides through can() (Principle 1) in its own transaction,
 // with a fresh re-authentication (§9.4), after re-reading the actor's own session FOR SHARE
-// (authorise). An action on someone else then takes that person's row, so the actor's rows come
-// first and the target's after, in the lock order (0006): two admins acting on each other at the
-// same moment deadlock, and exactly one gets 409 try_again rather than both succeeding.
+// (authorise). A PIN reset or device sign-out of someone else then takes that person's row, once
+// can() has allowed it, and decides again on what the lock let commit; a refused caller locks
+// nothing of theirs. That is an exception to the lock order (CLAUDE.md, Database): the target's
+// row comes after the actor's own person, device and session rows, so two admins acting on each
+// other at the same moment can deadlock, and exactly one gets 409 try_again rather than both
+// succeeding.
 import { type Request, World } from '@hearth/access'
 import { sql } from 'kysely'
 import { authorise, consider, decide, refusalFor } from '#src/access/world.ts'
@@ -100,9 +103,9 @@ export async function resetPin(
   const { orgId } = session
   const target = body.person
   const ended = await inSession(api, info, session, async trx => {
-    // The target's row is taken before can() decides: a sign-in in progress holds it FOR SHARE,
-    // so it finishes first and this then ends the session it made, and a deactivation in progress
-    // is seen, so someone who has just left is refused.
+    // Once can() allows the reset, the target's row is taken and can() decides again: a sign-in
+    // in progress holds it FOR SHARE, so it finishes first and this then ends the session it made,
+    // and a deactivation in progress is seen, so someone who has just left is refused.
     await authorise(trx, session, { action: 'person.reset_pin', person: target }, 'forbidden', { target })
     const user = await sql`select id from users where org_id = ${orgId} and id = ${target} for update`.execute(trx)
     // Someone who has never signed in has no PIN to reset.
@@ -140,7 +143,8 @@ export async function signOutDevices(
   const target = body.person
   const self = target === session.userId
   const { ended, revoked } = await inSession(api, info, session, async trx => {
-    // Their row is taken before can() decides, as for a PIN reset; your own, taken as the actor's.
+    // Their row is taken once can() allows it, and can() decides again, as for a PIN reset; your
+    // own, taken as the actor's.
     await authorise(trx, session, { action: 'person.sign_out_devices', person: target }, 'forbidden', {
       person: self ? 'no_key_update' : 'share',
       ...(self ? {} : { target }),

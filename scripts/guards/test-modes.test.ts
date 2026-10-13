@@ -1,4 +1,4 @@
-import { matchesGlob } from 'node:path'
+import { createFilter } from 'vite'
 import { describe, expect, it } from 'vitest'
 import config from '../../vitest.config'
 import { repoFiles } from './repo-files'
@@ -8,9 +8,15 @@ import { repoFiles } from './repo-files'
 // TECH-SPEC T10 say every `*.integration.test.ts` runs in the integration mode, and every other test
 // in apps/*, packages/*, infra/ and scripts/ in the default run, so a test file that matches
 // neither would never run, in CI or anywhere else.
+//
+// Vitest finds its test files with tinyglobby, which matches as picomatch does with dot files
+// included: a test in a folder such as .storybook/ runs (Vitest's globProjectFiles passes
+// { dot: true, ignore: exclude }). Vite's createFilter, with resolve: false, matches the paths the
+// same way, picomatch with dot: true, exclude before include. node:path's matchesGlob skips dot
+// files and folders, so it can't stand in.
 function runsIn(mode: 'test' | 'integration', path: string): boolean {
   const { include = [], exclude = [] } = config({ mode, command: 'serve' }).test ?? {}
-  return include.some(glob => matchesGlob(path, glob)) && !exclude.some(glob => matchesGlob(path, glob))
+  return include.length > 0 && createFilter(include, exclude, { resolve: false })(path)
 }
 
 const modesOf = (path: string) => (['test', 'integration'] as const).filter(mode => runsIn(mode, path))
@@ -28,6 +34,7 @@ describe('Vitest modes: every test file runs in exactly one mode (CLAUDE.md, Tes
       'infra/lib/x.integration.test.ts',
       'scripts/x.integration.test.ts',
       'scripts/guards/x.integration.test.ts',
+      'apps/server/.hidden/x.integration.test.ts',
     ]) {
       expect(modesOf(path), path).toEqual(['integration'])
     }
@@ -43,6 +50,10 @@ describe('Vitest modes: every test file runs in exactly one mode (CLAUDE.md, Tes
       'infra/x.test.ts',
       'scripts/x.test.ts',
       'scripts/guards/x.test.ts',
+      // Vitest runs a test in a dot folder, and a dot file.
+      'apps/web/.storybook/x.test.tsx',
+      'apps/server/src/.x.test.ts',
+      'infra/.hidden/x.test.ts',
     ]) {
       expect(modesOf(path), path).toEqual(['test'])
     }
@@ -54,6 +65,7 @@ describe('Vitest modes: every test file runs in exactly one mode (CLAUDE.md, Tes
       'apps/server/node_modules/x/a.integration.test.ts',
       'apps/web/dist/a.test.ts',
       'infra/cdk.out/a.integration.test.ts',
+      'packages/access/.git/a.test.ts',
     ]) {
       expect(modesOf(path), path).toEqual([])
     }

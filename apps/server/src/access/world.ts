@@ -16,9 +16,12 @@ export interface ActingOptions {
   person?: 'share' | 'no_key_update'
   // false: a plain read, for GETs, which change nothing.
   lock?: boolean
-  // The person an admin action changes. Their person row is taken FOR NO KEY UPDATE after the
-  // actor's rows (the lock order, 0006) and before can() decides, so a deactivation of them in
-  // progress makes the action wait and then decide on what it committed (CLAUDE.md, Database).
+  // The person an admin action changes. Once can() has allowed the action, their person row is
+  // taken FOR NO KEY UPDATE and can() decides again, so a deactivation of them in progress makes
+  // the action wait and then decide on what it committed, and a refused caller locks nothing of
+  // theirs. This is an exception to the lock order: the target's row comes after the actor's own
+  // person, device and session rows, so two admins acting on each other at the same moment can
+  // deadlock, and one of them gets 409 try_again (CLAUDE.md, Database).
   target?: string
 }
 
@@ -158,13 +161,18 @@ export async function consider(
 ): Promise<{ world: World; verdict: Verdict; fresh: boolean }> {
   const acting = await actingSession(trx, session, options)
   if (acting === undefined) throw signedOut()
-  if (options.target !== undefined) {
+  // Every C0.5 request about devices or passkeys is about the session's own person.
+  let world = await loadWorld(trx, session.orgId, { credentialsOf: session.userId })
+  let verdict = decide(world, session.userId, request, acting.fresh)
+  // The target's row only once can() has allowed the action, so a refused caller never waits on
+  // or holds anyone else's row; then can() decides again on what that lock let commit.
+  if (verdict === 'allowed' && options.target !== undefined) {
     await sql`select 1 from people where org_id = ${session.orgId} and id = ${options.target}
       for no key update`.execute(trx)
+    world = await loadWorld(trx, session.orgId, { credentialsOf: session.userId })
+    verdict = decide(world, session.userId, request, acting.fresh)
   }
-  // Every C0.5 request about devices or passkeys is about the session's own person.
-  const world = await loadWorld(trx, session.orgId, { credentialsOf: session.userId })
-  return { world, verdict: decide(world, session.userId, request, acting.fresh), fresh: acting.fresh }
+  return { world, verdict, fresh: acting.fresh }
 }
 
 export function refusalFor(verdict: Exclude<Verdict, 'allowed'>, refusal: 'forbidden' | 'not_found'): ApiError {

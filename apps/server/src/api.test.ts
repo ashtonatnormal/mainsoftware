@@ -4,8 +4,10 @@ import type { Pool } from 'pg'
 import { describe, expect, it } from 'vitest'
 import { type ApiDeps, registerApi } from '#src/api.ts'
 import { buildApp } from '#src/app.ts'
-import { deriveKeys } from '#src/auth/crypto.ts'
+import { ATTEMPT_COOKIE } from '#src/auth/cookies.ts'
+import { deriveKeys, keyName, otpMac, tag } from '#src/auth/crypto.ts'
 import { SLIDING_WINDOW } from '#src/auth/limiter.ts'
+import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { createDatabase, type Database } from '#src/db/database.ts'
 import { AfterResponse } from '#src/http.ts'
 import { createLogger } from '#src/logger.ts'
@@ -23,6 +25,8 @@ const PHONE_NUMBER = 'b0000000-0000-4000-8000-0000000000f1'
 // A well-formed token (43 base64url characters), made of one letter so no scanner takes it for a
 // secret.
 const TOKEN = 't'.repeat(43)
+const KEYS = deriveKeys('unit-test-unit-test-unit-test-unit-test')
+const NAMES = valkeyKeys('it:unit:')
 
 // A database the test must never reach: its pool refuses every connection and counts them.
 function unreachableDb(): { db: Database; touched: () => number } {
@@ -39,15 +43,25 @@ function unreachableDb(): { db: Database; touched: () => number } {
 }
 
 // The few Valkey commands sign-in uses. The sliding-window script answers `limit` ([1, 0] allows),
-// every other script 1; down makes every command fail as a closed connection does.
-function fakeValkey(options: { limit?: [number, number]; down?: boolean } = {}) {
-  const store = new Map<string, string>()
+// every other script 1; down makes every command fail as a closed connection does. `store`, if
+// given, holds the keys, and `scripts` gets each script's keys and arguments, so a test can read
+// what was written.
+function fakeValkey(
+  options: {
+    limit?: [number, number]
+    down?: boolean
+    store?: Map<string, string>
+    scripts?: (string | number)[][]
+  } = {},
+) {
+  const store = options.store ?? new Map<string, string>()
   const fail = () => {
     if (options.down) throw new Error('Connection is closed.')
   }
   const valkey = {
-    evalsha: async (sha: string) => {
+    evalsha: async (sha: string, _count: number, ...keysAndArgs: (string | number)[]) => {
       fail()
+      options.scripts?.push(keysAndArgs)
       return sha === SLIDING_WINDOW.sha ? (options.limit ?? [1, 0]) : 1
     },
     eval: async () => {
@@ -98,7 +112,7 @@ function setup(deps: Partial<ApiDeps> = {}) {
     appOrigin: APP_ORIGIN,
     db: unreachableDb().db,
     valkey: fakeValkey(),
-    keys: deriveKeys('unit-test-unit-test-unit-test-unit-test'),
+    keys: KEYS,
     sms: new MemorySms(),
     keyPrefix: 'it:unit:',
     offboarding: new OffboardingRegistry(logger),
@@ -264,7 +278,7 @@ describe('C0.5 ACC-03 PRD-53 a code request answers before anything touches Post
     for (const national of ['81234567', '7700900123']) expect(logged).not.toMatch(numberShape(national))
   })
 
-  it('T14: a code goes only to the attempt that asked last, so a browser that asks again gets one text', async () => {
+  it("T14: a browser that asks again before its first code is sent gets one text, with its newer attempt's code, and only that attempt names the person", async () => {
     let release: () => void = () => {}
     const held = new Promise<void>(resolve => {
       release = resolve
@@ -283,15 +297,41 @@ describe('C0.5 ACC-03 PRD-53 a code request answers before anything touches Post
       },
     )
     const sms = new MemorySms()
-    const { post, afterResponse } = setup({ db: pool.db, sms })
+    const store = new Map<string, string>()
+    const scripts: (string | number)[][] = []
+    const { post, afterResponse } = setup({ db: pool.db, sms, valkey: fakeValkey({ store, scripts }) })
+    // The attempt a reply's cookie names: the cookie, the attempt's key, and where Valkey keeps it.
+    const attemptOf = (reply: { headers: Record<string, unknown> }) => {
+      const pair = String(reply.headers['set-cookie']).split(';')[0] ?? ''
+      expect(pair.startsWith(`${ATTEMPT_COOKIE}=`)).toBe(true)
+      const attemptKey = keyName(pair.slice(ATTEMPT_COOKIE.length + 1))
+      return { pair, attemptKey, stored: NAMES.attempt(attemptKey) }
+    }
     const first = await post('/api/auth/otp/request', { phone: '+65 8123 4567' })
-    const attempt = String(first.headers['set-cookie']).split(';')[0] ?? ''
+    const firstAttempt = attemptOf(first)
     // The same browser asks again while the first lookup is held: its first attempt goes.
-    const second = await post('/api/auth/otp/request', { phone: '+65 8123 4567' }, { cookie: attempt })
+    const second = await post('/api/auth/otp/request', { phone: '+65 8123 4567' }, { cookie: firstAttempt.pair })
     expect(second.statusCode).toBe(200)
+    const secondAttempt = attemptOf(second)
     release()
     await afterResponse.idle()
     expect(sms.sent.map(sent => sent.to)).toEqual(['+6581234567'])
+    // The code texted is the newer attempt's: its MAC is the one stored for that attempt (storeOtp:
+    // the number's otp key, then the attempt key and the MAC). The newer attempt names the person,
+    // and the replaced one is gone.
+    const numberTag = tag(KEYS, '+6581234567')
+    const storedMac = scripts.find(
+      ([key, attemptKey]) => key === NAMES.otp(numberTag) && attemptKey === secondAttempt.attemptKey,
+    )?.[2]
+    expect(storedMac).toBeDefined()
+    expect(otpMac(KEYS, secondAttempt.attemptKey, numberTag, sms.sent[0]?.code ?? '')).toBe(storedMac)
+    expect(store.has(firstAttempt.stored)).toBe(false)
+    expect(JSON.parse(store.get(secondAttempt.stored) ?? 'null')).toMatchObject({
+      step: 'code_sent',
+      orgId: ORG,
+      personId: PERSON,
+      phoneNumberId: PHONE_NUMBER,
+    })
     const audits = pool.statements.filter(statement => statement.text.startsWith('insert into "audit_events"'))
     // One auth.code_requested row, its details last: the replaced attempt sent nothing and wrote nothing.
     expect(audits.map(statement => [statement.values[2], statement.values.at(-1)])).toEqual([

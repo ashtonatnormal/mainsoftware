@@ -11,8 +11,10 @@ export function createPool(databaseUrl: string, logger: Logger): Pool {
   // A connection that breaks (Postgres restarts, a failover, pg_terminate_backend) emits 'error'
   // on its client, and without a listener that would crash the process (main.ts). pg-pool listens
   // only while a client is idle, so every client gets a listener of its own, which also covers the
-  // time it's checked out (in a withOrg() transaction, say): the query in flight still rejects, so
-  // its caller answers 503, and the pool drops the broken client when it comes back.
+  // time it's checked out (in a withOrg() transaction, say). The query in flight still rejects: a
+  // request in a withOrg() transaction then answers 500 internal (api.ts), the session lookup
+  // before it answers 503 unavailable (auth/sessions.ts), and the pool drops the broken client
+  // when it comes back.
   pool.on('connect', client => {
     client.on('error', error => logger.warn({ err: error }, 'postgres connection failed'))
   })

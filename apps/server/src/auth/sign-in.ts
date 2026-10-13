@@ -5,10 +5,10 @@
 //
 // - Every number gets the same reply to a code request, and nothing touches Postgres before that
 //   reply. The roster lookup, the audit row and the text run after it, even when the client hangs
-//   up first. The attempt names the person only when their code is handed to the SMS provider,
-//   just before the send; a send that then fails leaves it naming them, and a guess at that code
-//   has the same odds as at one that arrived. An attempt that names nobody answers every code as
-//   wrong, even the right one.
+//   up first. The attempt names the person only on the way to sending their code, just before its
+//   audit row is written and the code is handed to the SMS provider; if the audit row, the commit
+//   or the send then fails, it still names them, and a guess at that code has the same odds as at
+//   one that arrived. An attempt that names nobody answers every code as wrong, even the right one.
 // - Every transaction before a session exists acts as the org's system principal: whoever holds
 //   the phone hasn't proved anything yet. Each starts by reading the person's row FOR SHARE, the
 //   first row in the lock order (0006), so someone who has left is refused there, before any
@@ -275,8 +275,9 @@ export async function requestCode(
 }
 
 // After the reply: find the number on the roster, and send the code only to a current number of
-// someone still at the org, within the global SMS cap. The attempt names them just before the code
-// is handed to the provider. Its errors are logged with at most a person id, never the number.
+// someone still at the org, within the global SMS cap. The attempt names them just before the audit
+// row is written and the code is handed to the provider. Its errors are logged with at most a
+// person id, never the number.
 async function deliverCode(
   api: Api,
   info: ReqInfo,
