@@ -122,8 +122,10 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   // Each open socket's session, and each session's open sockets.
   const sessionOf = new Map<WebSocket, SessionIds>()
   const socketsOf = new Map<string, Set<WebSocket>>()
-  // When each open session was last confirmed live (epoch ms): when its upgrade's lookup started,
-  // or a re-check that found it live started, whichever is later.
+  // When each open session was last confirmed live: when its upgrade's lookup started, or a
+  // re-check that found it live started, whichever is later. The times come from performance.now(),
+  // a monotonic clock like the re-check's own timers, so a step in the host's clock can't move a
+  // deadline.
   const confirmedAt = new Map<string, number>()
 
   const refused = zeroRefusals()
@@ -182,7 +184,7 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     if (token === undefined) return refuse(socket, 'session')
 
     let session: SessionIds | undefined | 'timed out'
-    const askedAt = Date.now()
+    const askedAt = performance.now()
     try {
       session = await lookupWithin(sha256(token))
     } catch (error) {
@@ -305,8 +307,10 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   // ended since it was last confirmed, with the api's message about it lost, and only a re-check
   // would find out. The next re-check settles within recheckMs + recheckTimeoutMs from now.
   function closeUnconfirmed(): void {
-    const confirmedBy = Date.now() + options.recheckMs + recheckTimeoutMs - revokeWithinMs
-    const unconfirmed = [...socketsOf.keys()].filter(id => (confirmedAt.get(id) ?? 0) < confirmedBy)
+    const confirmedBy = performance.now() + options.recheckMs + recheckTimeoutMs - revokeWithinMs
+    const unconfirmed = [...socketsOf.keys()].filter(
+      id => (confirmedAt.get(id) ?? Number.NEGATIVE_INFINITY) < confirmedBy,
+    )
     closeSessions(unconfirmed, 'unchecked')
   }
 
@@ -327,7 +331,7 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
       const timedOut = new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new Error('the re-check timed out')), recheckTimeoutMs)
       })
-      const startedAt = Date.now()
+      const startedAt = performance.now()
       let live: Set<string>
       try {
         // A check that settles after the deadline is still handled here, so its rejection is

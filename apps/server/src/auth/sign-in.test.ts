@@ -2,7 +2,7 @@ import type { Redis } from 'ioredis'
 import { describe, expect, it, vi } from 'vitest'
 import type { Api } from '#src/api.ts'
 import type { Attempt } from '#src/auth/attempts.ts'
-import { deriveKeys, keyName } from '#src/auth/crypto.ts'
+import { deriveKeys, hashPin, keyName } from '#src/auth/crypto.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { SLIDING_WINDOW } from '#src/auth/limiter.ts'
 import { relyingParty } from '#src/auth/passkeys.ts'
@@ -305,6 +305,39 @@ describe('ACC-03 T14 a sign-in step after the number was removed or moved', () =
 
   it('refuses a new PIN before hashing it', async () => {
     await refusedAt('set_pin', c => setPin(c.api, { pin: '381904' }, ATTEMPT_ID, c.info))
+  })
+
+  it('rolls back a wrong PIN whose number was removed after the unlocked read, counting nothing', async () => {
+    const held = valkeyWith({ v: 1, numberTag: 't', step: 'step_up', ...named })
+    const keys = deriveKeys('unit-test-unit-test-unit-test-unit-test')
+    const stored = await hashPin('381904', keys)
+    // The number is still there when read with no lock, and gone once read FOR SHARE after the
+    // PIN check: the removal committed in between.
+    const pool = scriptedPool(statement => {
+      const { text } = statement
+      if (text.startsWith('select deactivated_at from people')) return [{ deactivated_at: null }]
+      if (text.startsWith('select 1 from phone_numbers')) return text.endsWith('for share') ? [] : [{ '?column?': 1 }]
+      if (text.startsWith('select pin_hash, pin_key_id')) {
+        return [
+          { pin_hash: stored, pin_key_id: keys.pinKeyId, pin_failures: 0, pin_last_failed_at: null, now: new Date() },
+        ]
+      }
+      if (text.startsWith('update users set pin_failures = pin_failures + 1')) {
+        return [{ pin_failures: 1, pin_last_failed_at: new Date(), now: new Date() }]
+      }
+      return systemPrincipal(SYSTEM)(statement)
+    })
+    const c = context(held.valkey, pool)
+    expect(await refusal(verifyPinStep(c.api, { pin: '290517' }, ATTEMPT_ID, c.info))).toMatchObject({
+      status: 401,
+      code: 'attempt_expired',
+    })
+    // The count was written, then rolled back with the rest of the transaction.
+    const texts = pool.texts()
+    expect(texts.some(text => text.startsWith('update users set pin_failures = pin_failures + 1'))).toBe(true)
+    expect(texts.at(-1)).toBe('rollback')
+    expect(texts).not.toContain('commit')
+    expect(held.store.has(names.attempt(keyName(ATTEMPT_ID)))).toBe(false)
   })
 })
 

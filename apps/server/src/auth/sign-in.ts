@@ -238,14 +238,16 @@ const sessionInput = (attempt: Named, info: ReqInfo, method: 'sms_new_pin' | 'sm
   requestId: info.requestId,
 })
 
-// Runs a transaction that issues a session; a sign-in the roster no longer matches (the person
-// left, or the number moved) is 401 attempt_expired.
-async function issuing<T>(work: Promise<T>): Promise<T> {
+// Runs a sign-in step's transaction; one that finds the roster no longer matches (the person left,
+// or the number moved) throws AttemptStale, which rolls back what it wrote, drops the attempt and
+// answers 401 attempt_expired.
+async function issuing<T>(api: Api, info: ReqInfo, key: string, work: Promise<T>): Promise<T> {
   try {
     return await work
   } catch (error) {
-    if (error instanceof AttemptStale) throw attemptExpired()
-    throw error
+    if (!(error instanceof AttemptStale)) throw error
+    await dropQuietly(api, info, key)
+    throw attemptExpired()
   }
 }
 
@@ -486,6 +488,9 @@ export async function setPin(
   if (ready === 'pin_set') throw new ApiError(409, 'pin_already_set')
   const hash = await withPinSlot(() => hashPin(body.pin, api.keys))
   const session = await issuing(
+    api,
+    info,
+    key,
     withOrg(api.db, { orgId, system: true }, async trx => {
       if (!(await stillHere(trx, orgId, personId))) throw new AttemptStale()
       // The first sign-in makes the account; two at once both get here, and one then finds the
@@ -528,6 +533,9 @@ export async function verifyPinStep(
   await enforce(api, info, [windowOf(api, LIMITS.authPerIp, ipTag(api, info))])
   const { orgId, personId } = attempt
   const outcome = await issuing(
+    api,
+    info,
+    key,
     withPinSlot(() =>
       withOrg(api.db, { orgId, system: true }, async trx => {
         // Someone who has left, or whose number has gone, gets the same answer for a right and a
@@ -548,6 +556,12 @@ export async function verifyPinStep(
           },
           info.log,
         )
+        // The number was read with no lock above. Before a refusal commits its count, read it again
+        // FOR SHARE (users is locked now, and phone_numbers comes after it), so a number removed
+        // meanwhile rolls the count back.
+        if (!check.ok && !(await numberStillTheirs(trx, orgId, personId, attempt.phoneNumberId))) {
+          throw new AttemptStale()
+        }
         // Returned, so the failure count and its audit rows commit.
         if (!check.ok) return { kind: 'refused', check } as const
         if (!(await fromValkey(info, consumeAttempt(api.valkey, api.names, key)))) throw attemptExpired()
@@ -610,9 +624,14 @@ export async function passkeyVerify(
   const credentialId = Buffer.from(body.response.id, 'base64url')
   const { orgId, personId } = attempt
   const outcome = await issuing(
+    api,
+    info,
+    key,
     withOrg(api.db, { orgId, system: true }, async trx => {
       if (!(await stillSigningIn(trx, attempt))) return { kind: 'left' } as const
       const failed = async (passkey?: string) => {
+        // As for a refused PIN: a number removed since the unlocked read writes no failure.
+        if (!(await numberStillTheirs(trx, orgId, personId, attempt.phoneNumberId))) throw new AttemptStale()
         await writeAudit(trx, {
           orgId,
           actorId: null,

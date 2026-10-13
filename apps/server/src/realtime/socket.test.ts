@@ -299,7 +299,7 @@ describe('C0.5 T5 ACC-05 closing a session’s sockets', () => {
     // A revocation whose message was lost, with Postgres down: only the deadline closes the socket.
     // The ticks and the clock are fake, so each re-check lands at an exact time; the sockets, and
     // each re-check's own deadline timer, stay real.
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date', 'performance'] })
     try {
       const stillLive = vi.fn<SocketServerOptions['stillLive']>(async () => {
         throw new Error('connection refused')
@@ -314,6 +314,8 @@ describe('C0.5 T5 ACC-05 closing a session’s sockets', () => {
         stillLive,
       })
       const { ws, closed } = await opened(url)
+      // The host's clock jumping an hour moves no deadline: they run on the monotonic clock.
+      vi.setSystemTime(Date.now() + 3_600_000)
       await vi.advanceTimersByTimeAsync(7000)
       expect(stillLive).toHaveBeenCalledTimes(7)
       expect(ws.readyState).toBe(WebSocket.OPEN)
