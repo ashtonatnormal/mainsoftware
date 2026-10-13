@@ -141,18 +141,19 @@ export function covers(world: World, audience: Audience | null, item: Ref): bool
 // where the readers exactly match the session's audience).
 export function sameAudience(world: World, a: Audience | null, b: Audience | null): boolean {
   if (!resolvable(world, a) || !resolvable(world, b)) return false
+  // Beside the whole org every other token adds nobody, now or later.
+  const org = orgToken(world.orgId)
+  const reduced = (x: Audience) => (x.tokens.includes(org) ? [org] : x.tokens)
   const tokens = (x: Audience, open: boolean) =>
-    x.tokens
+    reduced(x)
       .filter(t => isOpenToken(world, t) === open)
       .sort()
       .join('\n')
   const open = tokens(a, true)
   if (open !== tokens(b, true)) return false
   // Beside an open token, a closed one keeps someone in after they leave the open one, so the
-  // closed tokens must match too; beside the whole org they add nobody. With no open token,
-  // nobody joins later, so today's people decide.
-  const org = orgToken(world.orgId)
-  if (open !== '' && !open.split('\n').includes(org) && tokens(a, false) !== tokens(b, false)) return false
+  // closed tokens must match too. With no open token, nobody joins later, so today's people decide.
+  if (open !== '' && tokens(a, false) !== tokens(b, false)) return false
   return audiencePeople(world, a).join('\n') === audiencePeople(world, b).join('\n')
 }
 
@@ -165,6 +166,8 @@ export function sameAudience(world: World, a: Audience | null, b: Audience | nul
 export function stampFor(world: World, place: { roomId?: Id; conversationId?: Id; eventId?: Id }): SessionStamp | null {
   const room = place.roomId === undefined ? undefined : world.get({ kind: 'room', id: place.roomId })
   if (place.roomId !== undefined && !room) return null
+  // A meeting room belongs to one event: another event's invitees never stamp its sessions.
+  if (room?.kind === 'meeting' && place.eventId !== undefined && place.eventId !== room.eventId) return null
   const restricted = room?.restricted ?? false
   const eventId = place.eventId ?? (room?.kind === 'meeting' ? room.eventId : undefined)
   if (eventId !== undefined) {

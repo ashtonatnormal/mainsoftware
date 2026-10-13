@@ -346,5 +346,6 @@ export function normalise(world: World, clauses: readonly (readonly Token[])[]):
     c => !narrow.some(other => other !== c && other.length < c.length && other.every(t => c.includes(t))),
   )
   const kept = minimal.length > 0 ? minimal : unique.length > 0 ? [[org]] : []
-  return kept.sort((a, b) => a.length - b.length || keyOf(a).localeCompare(keyOf(b)))
+  // Code-unit order, so a stored row is the same whatever the process's locale.
+  return kept.sort((a, b) => a.length - b.length || (keyOf(a) < keyOf(b) ? -1 : keyOf(a) > keyOf(b) ? 1 : 0))
 }

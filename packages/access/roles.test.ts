@@ -461,11 +461,19 @@ const SECTIONS: readonly Section[] = [
     title: 'person.add (a roster add or one CSV row; its roles are decided as grants)',
     rows: [
       { name: 'an Admin or Owner adds someone with no role', request: addPerson(), allowed: ADMINS },
-      ...OWNER_ONLY.map(role => ({
-        name: `a row with ${role} needs an Owner, as the grant would`,
-        request: addPerson({ role, teamId: null }),
-        allowed: OWNERS,
-      })),
+      ...OWNER_ONLY.map(role =>
+        role === 'dpo' || role === 'compliance_officer'
+          ? {
+              name: `PRD-85: no row carries ${role}; it is granted once the person exists, as a proposal a second person approves`,
+              request: addPerson({ role, teamId: null }),
+              allowed: NOBODY,
+            }
+          : {
+              name: `a row with ${role} needs an Owner, as the grant would`,
+              request: addPerson({ role, teamId: null }),
+              allowed: OWNERS,
+            },
+      ),
       {
         name: 'an Admin’s row with Team Admin of a live team is allowed',
         request: addPerson({ role: 'team_admin', teamId: T.operations }),
@@ -488,8 +496,13 @@ const SECTIONS: readonly Section[] = [
       },
       {
         name: 'one Owner-only role in a row makes the whole row need an Owner',
-        request: addPerson({ role: 'team_admin', teamId: T.operations }, { role: 'dpo', teamId: null }),
+        request: addPerson({ role: 'team_admin', teamId: T.operations }, { role: 'leadership', teamId: null }),
         allowed: OWNERS,
+      },
+      {
+        name: 'PRD-85: a DPO in a row refuses the whole row, whoever imports it',
+        request: addPerson({ role: 'team_admin', teamId: T.operations }, { role: 'dpo', teamId: null }),
+        allowed: NOBODY,
       },
       {
         name: 'ACC-03: a row may name an active manager other than whoever adds it',

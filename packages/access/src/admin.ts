@@ -55,10 +55,12 @@ export function adminCan(world: World, actor: Id, request: AdminRequest, context
     case 'person.add':
       // A new person, so "never self" holds; each role in the row needs the same authority as a
       // grant (an Admin's row can't make an Owner, Admin or DPO), and its manager the same check
-      // as a manager change.
+      // as a manager change. A row never carries DPO or Compliance Officer: those are granted once
+      // the person exists, as a proposal a second person approves (PRD-85), so a roster import
+      // can't skip the second approver.
       return (
         isAdmin(world, actor) &&
-        request.roles.every(r => roleAuthority(world, actor, r.role, r.teamId)) &&
+        request.roles.every(r => !TWO_PERSON_ROLES.includes(r.role) && roleAuthority(world, actor, r.role, r.teamId)) &&
         mayBeManager(world, actor, null, request.manager)
       )
     case 'person.set_manager':

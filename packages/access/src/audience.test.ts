@@ -385,8 +385,12 @@ describe('sameAudience (REC-13: notes go only where the readers exactly match)',
     const lead = m(C.leadership)
     expect(sameAudience(world, audience(lead, p(P.priya)), audience(lead))).toBe(false)
     expect(sameAudience(world, audience(lead, p(P.priya)), audience(p(P.priya), lead))).toBe(true)
-    // Beside the whole org a person adds nobody.
+    // Beside the whole org a person or a team adds nobody, now or later.
     expect(sameAudience(world, audience(o, p(P.priya)), audience(o))).toBe(true)
+    expect(sameAudience(world, audience(o, t(T.operations)), audience(o))).toBe(true)
+    expect(sameAudience(world, audience(o, t(T.operations)), audienceOf(world, ref.channel(C.general)))).toBe(true)
+    // Without it, a team is not the org.
+    expect(sameAudience(world, audience(t(T.operations)), audience(o))).toBe(false)
   })
 
   test('T13: an audience naming someone the snapshot lacks, or people who have all left, is never the same', () => {
@@ -433,10 +437,12 @@ describe('stampFor: what a session stamps at its start (REC-20, C2.4)', () => {
     )
   })
 
-  test('no stamp for an unknown room, conversation or event, an assistant chat, a channel given as a conversation, or nowhere', () => {
+  test('no stamp for an unknown room, conversation or event, a meeting room given another event, an assistant chat, a channel given as a conversation, or nowhere', () => {
     const nowhere: Parameters<typeof stampFor>[1][] = [
       { roomId: 'rm-missing' },
       { roomId: 'rm-missing', eventId: E.q4 },
+      // A meeting room with another event: that event's invitees never stamp its sessions.
+      { roomId: R.q4, eventId: E.allHands },
       { conversationId: 'dm-missing' },
       { conversationId: CV.ashtonAssistant },
       { conversationId: C.general },
