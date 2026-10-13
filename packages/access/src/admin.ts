@@ -54,16 +54,31 @@ export function adminCan(world: World, actor: Id, request: AdminRequest, context
     }
     case 'person.add':
       // A new person, so "never self" holds; each role in the row needs the same authority as a
-      // grant (an Admin's row can't make an Owner, Admin or DPO).
-      return isAdmin(world, actor) && request.roles.every(r => roleAuthority(world, actor, r.role, r.teamId))
+      // grant (an Admin's row can't make an Owner, Admin or DPO), and its manager the same check
+      // as a manager change.
+      return (
+        isAdmin(world, actor) &&
+        request.roles.every(r => roleAuthority(world, actor, r.role, r.teamId)) &&
+        mayBeManager(world, actor, null, request.manager)
+      )
+    case 'person.set_manager':
+      // Never your own record; the person must still be here.
+      if (request.person === actor || !world.isActivePerson(request.person)) return false
+      return isAdmin(world, actor) && mayBeManager(world, actor, request.person, request.manager)
     case 'person.deactivate':
     case 'person.reset_pin':
     case 'person.change_phone': {
       // These take over or end an account, which in effect removes its roles, so a holder of an
-      // Owner-only role is handled by an Owner only (T13). Never yourself.
+      // Owner-only role is handled by an Owner only (T13). So is the grantee of an open DPO or
+      // Compliance Officer proposal, or an Admin could take over the account and then approve
+      // the grant to it, holding Rule 9 access alone. Never yourself.
       if (request.person === actor || !world.isActivePerson(request.person)) return false
       if (!isAdmin(world, actor)) return false
-      const ownerOnlyTarget = world.rolesOf(request.person).some(r => OWNER_ONLY_ROLES.includes(r.role))
+      const ownerOnlyTarget =
+        world.rolesOf(request.person).some(r => OWNER_ONLY_ROLES.includes(r.role)) ||
+        world.facts.roleProposals.some(
+          p => p.personId === request.person && p.approvedAt === null && p.withdrawnAt === null,
+        )
       return !ownerOnlyTarget || isOwner(world, actor)
     }
     case 'person.sign_out_devices':
@@ -76,9 +91,11 @@ export function adminCan(world: World, actor: Id, request: AdminRequest, context
       return world.isLiveTeam(request.team) && isAdmin(world, actor)
     case 'team.members.change': {
       // Team membership opens everything shared with the team, so nobody changes their own
-      // through an admin power; another Admin or Team Admin does (T13).
-      if (request.person === actor || !world.isLiveTeam(request.team)) return false
-      if (request.op === 'add' && !world.isActivePerson(request.person)) return false
+      // through an admin power; another Admin or Team Admin does (T13). Nobody joins an archived
+      // team, but an Admin can still remove its members, so its grants can be narrowed (an
+      // archived team's Team Admins have no powers left).
+      if (request.person === actor) return false
+      if (request.op === 'add' && !(world.isLiveTeam(request.team) && world.isActivePerson(request.person))) return false
       if (request.op === 'remove' && !world.isTeamMember(request.person, request.team)) return false
       return isAdmin(world, actor) || world.isTeamAdminOf(actor, request.team)
     }
@@ -154,6 +171,14 @@ function isOpenPublicChannel(world: World, ref: Ref): boolean {
 // A team's default channels and rooms (ACC-07): public ones, or private ones the team owns and the
 // person setting them already manages, never a restricted room. So a team default can't pull the
 // team into a space none of them could open.
+// A person's manager receives their items when they leave (ACC-05), so nobody names themselves
+// anyone's manager through an admin power; another Admin or an Owner does (T13). The manager is
+// an active person other than the person themselves, or nobody.
+function mayBeManager(world: World, actor: Id, person: Id | null, manager: Id | null): boolean {
+  if (manager === null) return true
+  return manager !== actor && manager !== person && world.isActivePerson(manager)
+}
+
 function mayBeTeamDefault(world: World, actor: Id, teamId: Id, ref: Ref): boolean {
   if (ref.kind === 'channel') {
     const channel = world.get({ kind: 'channel', id: ref.id })

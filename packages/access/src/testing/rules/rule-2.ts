@@ -5,14 +5,15 @@ import {
   audienceOfPeople,
   audiencePeople,
   can,
+  canRead,
   covers,
   sameAudience,
   sourceAllowed,
   stampFor,
 } from '../../index.ts'
-import { AG, C, CV, DV, E, FI, human, M, P, R, ref, S, TH } from '../index.ts'
+import { AG, agent, C, CV, DV, E, FI, human, M, P, R, ref, S, TH } from '../index.ts'
 import { ai, c0, core, type RuleCase } from './case.ts'
-import { changed, world } from './helpers.ts'
+import { changed, reads, world } from './helpers.ts'
 
 const general = () => audienceOf(world, ref.channel(C.general))
 const leadership = () => audienceOf(world, ref.channel(C.leadership))
@@ -199,6 +200,11 @@ export const RULE_2: readonly RuleCase[] = [
       const run = { run: 'agent_scheduled' as const, agentId: AG.digest, audience: leadership() }
       expect(sourceAllowed(world, run, ref.session(S.pricing))).toBe(false)
       expect(sourceAllowed(world, run, ref.message(M.leadership))).toBe(true)
+      // #ops-north-site is outside the digest's scope though all of #leadership reads it: only
+      // AgentScope refuses it.
+      expect(canRead(world, agent(AG.digest), ref.message(M.ops1))).toBe(false)
+      expect(covers(world, leadership(), ref.message(M.ops1))).toBe(true)
+      expect(sourceAllowed(world, run, ref.message(M.ops1))).toBe(false)
     },
   ),
   c0('R2-16', 'Rule 2 CHT-50: the Weekly Digest in #leadership can’t use the Q3 pricing review', () => {
@@ -229,6 +235,17 @@ export const RULE_2: readonly RuleCase[] = [
     expect(same(ref.session(S.q4Call), ref.thread(TH.q4Call))).toBe(true)
     expect(same(ref.session(S.q4Review), ref.thread(TH.q4Event))).toBe(true)
   }),
+  core(
+    'R2-19b',
+    'C2.8',
+    'Rule 2 REC-13: the target resolver posts the session card only where the readers exactly match: a channel’s room → its session thread in the channel, a standalone room → a session thread in its panel, a restricted room → the session page only',
+  ),
+  core(
+    'R2-19c',
+    'C3.3',
+    'Rule 2 REC-13 CAL-03: a scheduled meeting, one held in a team room included, posts to its event thread, never to the room’s channel',
+  ),
+  ai('R2-19d', 'A3.1', 'Rule 2 REC-13: meeting notes post only into the session card or event thread the resolver chose'),
   c0('R2-20', 'Rule 2 CAL-03: a meeting may use a team room only if every invitee can join it', () => {
     const everyInviteeJoins = (room: string, invitees: readonly string[]) =>
       invitees.every(p => can(world, human(p), { action: 'join', resource: ref.room(room) }))
@@ -236,16 +253,34 @@ export const RULE_2: readonly RuleCase[] = [
     // #leadership's room is restricted and its channel private: Rachel can't join it.
     expect(everyInviteeJoins(R.leadershipOneOnOnes, [P.ashton, P.rachel])).toBe(false)
   }),
+  core(
+    'R2-20b',
+    'C3.3',
+    'Rule 2 CAL-03: scheduling refuses a team room unless the organiser and every invitee can join it, decided in packages/access',
+  ),
   c0('R2-21', 'Rule 2 STU-02: view-as uses AgentScope ∩ the person ∩ the AI Admin', () => {
-    const run = (asker: string) => ({
+    const run = (w: typeof world, asker: string) => ({
       run: 'agent_asked' as const,
       agentId: AG.finance,
       asker: human(asker),
-      audience: audienceOfPeople(world, [P.arjun]),
+      audience: audienceOfPeople(w, [P.arjun]),
     })
-    // Arjun, the AI Admin, can't open the CFO's sheet, so view-as as the CFO withholds it.
-    expect(sourceAllowed(world, run(P.cfo), ref.file(FI.q3Numbers))).toBe(false)
-    expect(sourceAllowed(world, run(P.cfo), ref.message(M.general))).toBe(true)
+    // The AI Admin leg: Arjun can't open the CFO's sheet, so view-as as the CFO withholds it.
+    expect(sourceAllowed(world, run(world, P.cfo), ref.file(FI.q3Numbers))).toBe(false)
+    expect(sourceAllowed(world, run(world, P.cfo), ref.message(M.general))).toBe(true)
+    // The person leg: with Arjun granted the sheet, view-as as the CFO uses it, as Rachel doesn't.
+    const arjunSees = changed(f => ({
+      ...f,
+      files: f.files.map(x =>
+        x.id === FI.q3Numbers ? { ...x, grants: [...x.grants, { grantee: { kind: 'person', id: P.arjun }, role: 'viewer' }] } : x,
+      ),
+    }))
+    expect(sourceAllowed(arjunSees, run(arjunSees, P.cfo), ref.file(FI.q3Numbers))).toBe(true)
+    expect(sourceAllowed(arjunSees, run(arjunSees, P.rachel), ref.file(FI.q3Numbers))).toBe(false)
+    // The scope leg: #ops-north-site is outside the Finance agent's scope, though the CFO and
+    // Arjun both read it.
+    expect(reads(world, P.cfo, ref.message(M.ops1)) && reads(world, P.arjun, ref.message(M.ops1))).toBe(true)
+    expect(sourceAllowed(world, run(world, P.cfo), ref.message(M.ops1))).toBe(false)
   }),
   ai('R2-22', 'A5.5', 'Rule 2 STU-02 STU-03: view-as and evaluation sets run on the fixture org by default'),
   ai('R2-23', 'A4', 'Rule 2 PA-11: delegation answers with AgentScope ∩ Access(user) in the user’s DM'),
@@ -268,7 +303,7 @@ export const RULE_2: readonly RuleCase[] = [
   core('R2-28', 'C5.6', 'Rule 2 ROOM-11: agents never receive a deck presented live'),
   ai('R2-29', 'A5', 'Rule 2 CHT-66 AGT-09: suggest cards are checked at post time'),
   ai('R2-30', 'A2', 'Rule 2 PRD-111: response caches are keyed by the sources’ ACLs and the audience'),
-  c0('R2-31', 'Rule 2 PRD-35: an unknown audience, or a private space with nobody in it, covers nothing', () => {
+  c0('R2-31', 'Rule 2 PRD-35: an unknown audience covers nothing; a private channel with nobody in it still bounds by its later members', () => {
     expect(audienceOf(world, ref.channel('ch-unknown'))).toBeNull()
     expect(covers(world, null, ref.message(M.general))).toBe(false)
     expect(
@@ -288,6 +323,52 @@ export const RULE_2: readonly RuleCase[] = [
       sourceAllowed(empty, { run: 'agent_scheduled', agentId: AG.digest, audience: a }, ref.session(S.pricing)),
     ).toBe(false)
   }),
+  c0(
+    'R2-31b',
+    'Rule 2 T13: an audience naming someone the snapshot lacks, people who have all left, or a conversation nobody is in covers nothing',
+    () => {
+      const restricted = ref.session(S.peopleAshton)
+      const scheduled = (w: typeof world, audience: ReturnType<typeof audienceOf>) =>
+        sourceAllowed(w, { run: 'agent_scheduled', agentId: AG.digest, audience }, ref.message(M.leadership))
+      // A person the snapshot doesn't hold, and one who has left.
+      for (const id of ['b9999999-0000-4000-8000-000000000099', P.formerDpo]) {
+        const a = audienceOfPeople(world, [id])
+        expect(covers(world, a, restricted), id).toBe(false)
+        expect(covers(world, a, ref.file(FI.q3Numbers)), id).toBe(false)
+        expect(audienceGap(world, a, restricted).includesFuture, id).toBe(true)
+        expect(sameAudience(world, a, a), id).toBe(false)
+      }
+      // A group DM everyone has left.
+      const emptied = changed(f => ({
+        ...f,
+        memberships: f.memberships.map(m => (m.spaceId === CV.floor && m.throughSeq === null ? { ...m, throughSeq: 99 } : m)),
+      }))
+      expect(covers(emptied, audienceOf(emptied, ref.groupDm(CV.floor)), restricted)).toBe(false)
+      // The CFO's agent DM once the CFO has left.
+      const cfoGone = changed(f => ({
+        ...f,
+        people: f.people.map(x => (x.id === P.cfo ? { ...x, deactivatedAt: 1 } : x)),
+      }))
+      const cfoDm = audienceOf(cfoGone, ref.agentDm(CV.cfoFinance))
+      expect(covers(cfoGone, cfoDm, ref.file(FI.q3Numbers))).toBe(false)
+      expect(
+        sourceAllowed(cfoGone, { run: 'agent_scheduled', agentId: AG.finance, audience: cfoDm }, ref.file(FI.q3Numbers)),
+      ).toBe(false)
+      // The Q4 review's event thread in a snapshot missing two attendees' people: the full world
+      // refuses the pricing review there (Priya and Daniel can't read it), so the slice must too.
+      const thread = ref.thread(TH.q4Event)
+      expect(covers(world, audienceOf(world, thread), ref.session(S.pricing))).toBe(false)
+      const slice = changed(f => ({ ...f, people: f.people.filter(x => x.id !== P.priya && x.id !== P.daniel) }))
+      const sliced = audienceOf(slice, thread)
+      expect(covers(slice, sliced, ref.session(S.pricing))).toBe(false)
+      expect(
+        sourceAllowed(slice, { run: 'agent_scheduled', agentId: AG.digest, audience: sliced }, ref.session(S.pricing)),
+      ).toBe(false)
+      expect(sameAudience(slice, sliced, audienceOf(slice, ref.session(S.q4Review)))).toBe(false)
+      // The unchanged fixture still lets the digest use #leadership's own post there.
+      expect(scheduled(world, leadership())).toBe(true)
+    },
+  ),
   c0(
     'R2-32',
     'Rule 2 Rule 4: everyone in a group DM’s audience is a current member, so a later member can’t widen an earlier post',

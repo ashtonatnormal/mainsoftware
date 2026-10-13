@@ -2,7 +2,8 @@
 // They compile queries with Kysely's Postgres compiler and no database: the predicate must sit in
 // the WHERE of the same query that pages and counts (never after a LIMIT or a count), carry the
 // keys only as parameters, and name its columns as quoted identifiers. That the predicate admits
-// exactly what filterReadable does is proved on a real Postgres by testing/check-sql.ts.
+// exactly what filterReadable does is proved on a real Postgres by scripts/check-access-sql.ts (CI's
+// migrations job).
 import {
   type CompiledQuery,
   DummyDriver,
@@ -47,11 +48,12 @@ const page = (keys: readonly string[]): CompiledQuery =>
   db.selectFrom('search_rows').selectAll().where(sqlReadableBy(keys)).orderBy('id').limit(20).compile()
 
 describe('sqlReadableBy (B.4, T3)', () => {
-  test('is exactly the clause rule over acl_tokens and acl_more, which check-sql.ts proves on Postgres', () => {
-    // Changing this text means running node packages/access/src/testing/check-sql.ts again.
+  test('is exactly the clause rule over acl_tokens and acl_more, which scripts/check-access-sql.ts proves on Postgres', () => {
+    // Changing this text means running node scripts/check-access-sql.ts again (the local stack up).
+    // A NULL acl_more is one clause nobody meets, never "no further clauses".
     expect(predicate(ashton)).toBe(
       flat(`("acl_tokens" && $1::text[] and not exists (
-        select 1 from jsonb_array_elements("acl_more") as clause (tokens)
+        select 1 from jsonb_array_elements(coalesce("acl_more", '[[]]'::jsonb)) as clause (tokens)
         where not (array(select jsonb_array_elements_text(clause.tokens)) && $2::text[])
       ))`),
     )

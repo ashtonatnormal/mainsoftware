@@ -15,8 +15,9 @@ export interface Audience {
 }
 
 // The audience of a place, or null when the snapshot can't say (an unknown place, one nobody can
-// read, or one whose readers need several clauses). Every function here treats null as "covers
-// nothing", so a missing fact never widens what may be shown.
+// read, or one whose readers need several clauses). Every function here treats null, and an
+// audience naming something the snapshot doesn't hold or nobody at all, as "covers nothing", so a
+// missing fact never widens what may be shown.
 export function audienceOf(world: World, place: Ref): Audience | null {
   const acl = readersOf(world, place)
   if (acl.length !== 1) return null
@@ -59,7 +60,7 @@ export function holdersOf(world: World, token: Token): Id[] {
     case 'm':
       return active(world.currentMembers(id).filter(p => world.principalKind(p) === 'human'))
     case 'e': {
-      const era = world.facts.memberships.find(m => m.id === id)
+      const era = world.membership(id)
       return era && world.isCurrentMember(era.principalId, era.spaceId) ? active([era.principalId]) : []
     }
     default:
@@ -83,13 +84,39 @@ export interface AudienceGap {
   includesFuture: boolean
 }
 
+// Whether the snapshot can say who an audience is (T13: a fact it doesn't hold denies). Every
+// org, person, team, space and era it names must be in the snapshot, and it must hold someone now
+// or be able to gain someone later: an audience of people who have all left, or of a conversation
+// nobody is in any more, is unknown, never empty. A partly loaded membership list can't be seen
+// here; the loader's obligation in world.ts covers it.
+function resolvable(world: World, audience: Audience | null): audience is Audience {
+  if (!audience || audience.orgId !== world.orgId || audience.tokens.length === 0) return false
+  for (const token of audience.tokens) {
+    const [prefix, ...rest] = token.split(':')
+    const id = rest.join(':')
+    const known =
+      prefix === 'o'
+        ? id === world.orgId
+        : prefix === 'p'
+          ? world.person(id) !== undefined
+          : prefix === 't' || prefix === 'ta'
+            ? world.team(id) !== undefined
+            : prefix === 'm'
+              ? world.space(id) !== undefined
+              : prefix === 'e'
+                ? world.membership(id) !== undefined
+                : false
+    if (!known) return false
+  }
+  return audience.tokens.some(t => isOpenToken(world, t)) || audiencePeople(world, audience).length > 0
+}
+
 // Who in an audience can't read an item: for each open token, the item must be readable by that
 // same token or by the whole org, since later members count; for each closed token, everyone who
-// holds it now must be able to read it. An unknown audience is all gap.
+// holds it now must be able to read it. An audience the snapshot can't resolve names nobody and
+// sets includesFuture, so covers() is false; don't show its count.
 export function audienceGap(world: World, audience: Audience | null, item: Ref): AudienceGap {
-  if (!audience || audience.orgId !== world.orgId || audience.tokens.length === 0) {
-    return { count: 0, people: [], includesFuture: true }
-  }
+  if (!resolvable(world, audience)) return { count: 0, people: [], includesFuture: true }
   const readers = readersOf(world, item)
   const org = orgToken(world.orgId)
   let includesFuture = false
@@ -103,9 +130,9 @@ export function audienceGap(world: World, audience: Audience | null, item: Ref):
 }
 
 // Whether everyone who will see a place can read an item (Rule 2's bound; CHAT-14's forward
-// warning; Rule 3's insert warning). Strict: false for an unknown or empty audience.
+// warning; Rule 3's insert warning). Strict: false for an audience the snapshot can't resolve.
 export function covers(world: World, audience: Audience | null, item: Ref): boolean {
-  if (!audience || audience.orgId !== world.orgId || audience.tokens.length === 0) return false
+  if (!resolvable(world, audience)) return false
   const gap = audienceGap(world, audience, item)
   return gap.count === 0 && !gap.includesFuture
 }
@@ -113,14 +140,16 @@ export function covers(world: World, audience: Audience | null, item: Ref): bool
 // Whether two places are seen by exactly the same people, now and later (REC-13: notes go only
 // where the readers exactly match the session's audience).
 export function sameAudience(world: World, a: Audience | null, b: Audience | null): boolean {
-  if (!a || !b || a.tokens.length === 0 || b.tokens.length === 0) return false
-  if (a.orgId !== world.orgId || b.orgId !== world.orgId) return false
-  const open = (x: Audience) =>
+  if (!resolvable(world, a) || !resolvable(world, b)) return false
+  const tokens = (x: Audience, open: boolean) =>
     x.tokens
-      .filter(t => isOpenToken(world, t))
+      .filter(t => isOpenToken(world, t) === open)
       .sort()
       .join('\n')
-  if (open(a) !== open(b)) return false
+  if (tokens(a, true) !== tokens(b, true)) return false
+  // Beside an open token, a closed one keeps someone in after they leave the open one, so the
+  // closed tokens must match too. With no open token, nobody joins later, so today's people decide.
+  if (tokens(a, true) !== '' && tokens(a, false) !== tokens(b, false)) return false
   return audiencePeople(world, a).join('\n') === audiencePeople(world, b).join('\n')
 }
 

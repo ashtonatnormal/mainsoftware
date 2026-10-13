@@ -40,7 +40,7 @@ import {
   T,
 } from '../index.ts'
 import { ai, c0, core, type RuleCase } from './case.ts'
-import { changed, expectReaders, reads, refsOf, world } from './helpers.ts'
+import { changed, expectReaders, reads, refsOf, rowReadable, world } from './helpers.ts'
 
 type Change = (facts: Facts) => Facts
 
@@ -85,12 +85,9 @@ const attachment = (id: Id, messageId: Id, owner: Id, sharedWith: Id[] = []): Fi
   trashedById: null,
 })
 
-// The in-memory form of sqlReadableBy (sql.ts) over the row aclOf stores: the keys meet its tokens
-// and every clause in its more column.
-function rowReadable(w: World, item: Ref, person: Id): boolean {
-  const row = aclOf(w, item)
-  const keys = new Set(keysOf(w, human(person)))
-  return row.tokens.some(t => keys.has(t)) && row.more.every(clause => clause.some(t => keys.has(t)))
+// Whether a person's keys read the row aclOf stores for an item, under the SQL row rule.
+function storedRowReads(w: World, item: Ref, person: Id): boolean {
+  return rowReadable(aclOf(w, item), keysOf(w, human(person)))
 }
 
 // Everything a Drive item could be asked for besides being read, restored or purged.
@@ -153,7 +150,7 @@ export const RULE_7: readonly RuleCase[] = [
   ),
   c0(
     'R7-01b',
-    'Rule 7 CHAT-05 Rule 4 review 11: a message deleted in a DM with an agent is closed to the agent and the person alike, and to any AI run',
+    'Rule 7 CHAT-05 Rule 4: a message deleted in a DM with an agent is closed to the agent and the person alike, and to any AI run',
     () => {
       const first = ref.message(M.itHelp1)
       const w = changed(deleteMessage(M.itHelp1))
@@ -329,7 +326,7 @@ export const RULE_7: readonly RuleCase[] = [
   ),
   c0(
     'R7-05b',
-    'Rule 7 FILE-02 DRV-01 review 6 31 36: trashing a folder sends everything in it to the Trash, each item readable only by its own owner and whoever trashed the folder',
+    'Rule 7 FILE-02 DRV-01: trashing a folder sends everything in it to the Trash, each item readable only by its own owner and whoever trashed the folder',
     () => {
       // Priya trashes the Q4 launch folder, shared with the Q4 team as Commenters. Daniel and
       // Ashton are named Editors of the proposal and the deck inside it.
@@ -344,8 +341,8 @@ export const RULE_7: readonly RuleCase[] = [
         // The stored row no longer carries the Q4 team or any grant from the folder above.
         const row = aclOf(w, item)
         expect([...row.tokens, ...row.more.flat()], item.id).not.toContain(`t:${T.q4}`)
-        for (const p of lost) expect(rowReadable(w, item, p), `${p} row ${item.id}`).toBe(false)
-        for (const p of readers) expect(rowReadable(w, item, p), `${p} row ${item.id}`).toBe(true)
+        for (const p of lost) expect(storedRowReads(w, item, p), `${p} row ${item.id}`).toBe(false)
+        for (const p of readers) expect(storedRowReads(w, item, p), `${p} row ${item.id}`).toBe(true)
       }
       expect(aclOf(world, ref.file(FI.q4Proposal)).tokens).toContain(`t:${T.q4}`)
       // Ahmad still reads the MSA as its owner; Daniel loses the proposal and the deck from every list.
@@ -364,7 +361,7 @@ export const RULE_7: readonly RuleCase[] = [
   ),
   c0(
     'R7-05c',
-    'Rule 7 DRV-01 review 11 31: a whole-org share on a folder stops reaching what is inside once the folder is in the Trash, in can() and in the stored rows',
+    'Rule 7 DRV-01: a whole-org share on a folder stops reaching what is inside once the folder is in the Trash, in can() and in the stored rows',
     () => {
       // Ashton shares his vendor-quotes folder with the whole org; Priya's quotes sit in it. Then
       // he trashes the folder.
@@ -376,21 +373,21 @@ export const RULE_7: readonly RuleCase[] = [
       const w = changed(steps(shared, trashFolder(F.vendor, P.ashton)))
       const kranji = ref.file(FI.kranji)
       expect(reads(before, P.nadia, kranji)).toBe(true)
-      expect(rowReadable(before, kranji, P.nadia)).toBe(true)
+      expect(storedRowReads(before, kranji, P.nadia)).toBe(true)
       expectReaders(w, kranji, [P.priya, P.ashton], [P.nadia, P.kelvin, P.arjun, P.weiling])
-      expect(rowReadable(w, kranji, P.nadia)).toBe(false)
+      expect(storedRowReads(w, kranji, P.nadia)).toBe(false)
       expect(filterReadable(w, human(P.nadia), refsOf('file')).map(key)).not.toContain(key(kranji))
       // Ashton's own movers sheet goes with the folder: Priya, its Editor, can't open it there.
       expectReaders(w, ref.file(FI.movers), [P.ashton], [P.priya, P.nadia])
       // Restored, the org reads the quote again.
       const restored = changed(steps(shared, trashFolder(F.vendor, P.ashton), restoreFolder(F.vendor)))
       expect(reads(restored, P.nadia, kranji)).toBe(true)
-      expect(rowReadable(restored, kranji, P.nadia)).toBe(true)
+      expect(storedRowReads(restored, kranji, P.nadia)).toBe(true)
     },
   ),
   c0(
     'R7-05d',
-    'Rule 7 DRV-01 review 11: an agent reads nothing in the Trash, even inside its scope, so no AI run uses it',
+    'Rule 7 DRV-01: an agent reads nothing in the Trash, even inside its scope, so no AI run uses it',
     () => {
       // The HR agent's scope is the HR wiki; the Finance agent's holds the CFO's Q3 numbers.
       const wiki = ref.folder(F.hr)
@@ -420,7 +417,7 @@ export const RULE_7: readonly RuleCase[] = [
   ),
   c0(
     'R7-05e',
-    'Rule 7 FILE-02 DRV-17 review 31: nothing in the Trash is edited, commented on, shared, presented, handed over or added to, by its owner or anyone',
+    'Rule 7 FILE-02 DRV-17: nothing in the Trash is edited, commented on, shared, presented, handed over or added to, by its owner or anyone',
     () => {
       const w = changed(trashFolder(F.q4, P.priya))
       // Before, each owner could change their own item, and Daniel, a named Editor, could edit and
@@ -471,7 +468,7 @@ export const RULE_7: readonly RuleCase[] = [
   ),
   c0(
     'R7-05f',
-    'Rule 7 FILE-02 DRV-01 DRV-18 review 15 31: only the owner, or whoever trashed it while still an Editor, restores an item, and only from where it was trashed',
+    'Rule 7 FILE-02 DRV-01 DRV-18: only the owner, or whoever trashed it while still an Editor, restores an item, and only from where it was trashed',
     () => {
       // Farah, an Editor, trashes Marcus's runbook. Priya, also an Editor, didn't.
       const runbook = ref.file(FI.runbook)
@@ -496,7 +493,7 @@ export const RULE_7: readonly RuleCase[] = [
   ),
   c0(
     'R7-05g',
-    'Rule 7 FILE-02 DRV-01 DRV-67 review 16: only an item’s own owner purges it; owning the folder it is in, trashing it or holding an org role isn’t enough',
+    'Rule 7 FILE-02 DRV-01 DRV-67: only an item’s own owner purges it; owning the folder it is in, trashing it or holding an org role isn’t enough',
     () => {
       const kranji = ref.file(FI.kranji)
       // Ashton owns the vendor folder, so he may edit and trash Priya's Kranji quote inside it.
@@ -543,7 +540,7 @@ export const RULE_7: readonly RuleCase[] = [
   core(
     'R7-05i',
     'C4.1',
-    'Rule 7 DRV-01 DRV-67 review 16: purging a folder deletes only what its owner owns; everyone else’s items inside go back to their owners’ My Drive',
+    'Rule 7 DRV-01 DRV-67: purging a folder deletes only what its owner owns; everyone else’s items inside go back to their owners’ My Drive',
   ),
   core(
     'R7-05j',

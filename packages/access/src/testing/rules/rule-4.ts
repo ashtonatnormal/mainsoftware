@@ -454,7 +454,7 @@ export const RULE_4: readonly RuleCase[] = [
         })
       expect(add(crowd(15), P.ashton, q4, { kind: 'human', id: P.rachel })).toBe(true)
       expect(add(crowd(16), P.ashton, q4, { kind: 'human', id: P.rachel })).toBe(false)
-      // Facts that put an agent in a group DM anyway close it to everyone (finding 19: fail closed).
+      // Facts that put an agent in a group DM anyway close it to everyone (T13: what doesn't fit fails closed).
       const withAgent = changed(addMember(CV.q4, AG.digest, 6))
       expect(readersAmong(withAgent, q4)).toEqual([])
       expect(readersAmong(withAgent, ref.message(M.q4Fifth))).toEqual([])
@@ -561,7 +561,7 @@ export const RULE_4: readonly RuleCase[] = [
         expect(indexClassOf(world, item), item.id).toBe('restricted')
       }
       expect(SEARCHABLE_CLASSES).not.toContain('restricted')
-      // A DM message, and the task made from it, when the DM itself wasn't loaded (finding 3).
+      // A DM message, and the task made from it, when the DM itself wasn't loaded.
       const unloaded = changed(f => ({
         ...f,
         conversations: f.conversations.filter(c => c.id !== CV.ashtonPriya),

@@ -39,6 +39,13 @@ export type Space =
 // an absent fact denies: an unknown resource, person, team or space is never readable, and a
 // resource whose chain (message → space, file → folders, session → room) doesn't resolve is
 // readable by nobody. Missing and unreadable give the same answer, so nothing reveals what exists.
+//
+// A snapshot may hold only the facts one request needs, with one obligation on whoever loads it:
+// for every space, event and session it holds, it holds all of that place's memberships, its
+// attendees' and members' people, and the session's stamp. The audience functions (audience.ts)
+// refuse an audience naming a person, space or membership the snapshot lacks, but they can't see
+// that a conversation's memberships were only partly loaded, and a missing membership would shrink
+// an audience rather than deny.
 export class World {
   readonly orgId: Id
   readonly facts: Facts
@@ -51,6 +58,7 @@ export class World {
   private readonly agents = new Map<Id, AgentFact>()
   private readonly assistants = new Map<Id, AssistantFact>()
   private readonly spaces = new Map<Id, Space>()
+  private readonly memberships = new Map<Id, MembershipFact>()
   private readonly membershipsBySpace = new Map<Id, MembershipFact[]>()
   private readonly membershipsByPrincipal = new Map<Id, MembershipFact[]>()
   private readonly byKind = new Map<ResourceKind, Map<Id, unknown>>()
@@ -69,7 +77,9 @@ export class World {
     }
     for (const a of facts.agents) once(this.agents, 'agent', a.id, a)
     for (const a of facts.assistants) once(this.assistants, 'assistant', a.id, a)
+    // A group-DM era is a token named by its membership id alone (keys.ts), so the id is unique.
     for (const m of facts.memberships) {
+      once(this.memberships, 'membership', m.id, m)
       push(this.membershipsBySpace, m.spaceId, m)
       push(this.membershipsByPrincipal, m.principalId, m)
     }
@@ -172,7 +182,7 @@ export class World {
   assistant(id: Id): AssistantFact | undefined {
     return this.assistants.get(id)
   }
-  // A principal who can take part: an active person or an agent that isn't archived.
+  // The kind of a principal the snapshot holds, whether or not it is still active.
   principalKind(id: Id): 'human' | 'agent' | 'assistant' | undefined {
     if (this.people.has(id)) return 'human'
     if (this.agents.has(id)) return 'agent'
@@ -184,6 +194,9 @@ export class World {
 
   space(id: Id): Space | undefined {
     return this.spaces.get(id)
+  }
+  membership(id: Id): MembershipFact | undefined {
+    return this.memberships.get(id)
   }
   membershipsOf(spaceId: Id): MembershipFact[] {
     return this.membershipsBySpace.get(spaceId) ?? []

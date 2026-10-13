@@ -5,16 +5,17 @@
 // It lives in scripts/ (Node types, pg) so that packages/access keeps a typecheck with no Node
 // globals. It builds a throwaway database (access_sql_check) holding one row per item, as aclOf stores it
 // (C0.6, C1.7), and checks:
-// - edge rows (empty tokens, an empty clause, ragged clauses) against allows() for several key sets;
+// - edge rows (empty tokens, an empty clause, ragged clauses) against allows() for several key sets,
+//   and a NULL acl_more, which no key set may read;
 // - the fixture org, plus items whose readers need several clauses (the fixture's own all
 //   normalise to one, so acl_more would otherwise go untested): for every person (those who have
 //   left included), both assistants and the system principal, the rows, the count and every page
 //   SQL returns equal filterReadable;
 // - after membership, team-membership and role changes only: the rows stored before the changes,
 //   queried with each subject's new keys, equal filterReadable on the changed world, so a
-//   membership change needs no re-ACL (lists.ts; review finding 12).
-// Agents read by scope, not by keys (can.ts), so A2's retrieval layer owns their SQL; they aren't
-// checked here.
+//   membership change needs no re-ACL (lists.ts);
+// - agents: they read by scope, not by keys (AGT-04, can.ts), so the filter selects nothing for
+//   them; A2's retrieval layer brings their SQL and its check.
 //
 //   node scripts/check-access-sql.ts
 //
@@ -33,7 +34,23 @@ import {
   World,
 } from '@hearth/access'
 import { sqlReadableBy } from '@hearth/access/sql'
-import { ALL_REFS, AS, assistant, C, CV, FI, fixtureFacts, human, M, P, R, system, T } from '@hearth/access/testing'
+import {
+  AG,
+  ALL_REFS,
+  AS,
+  agent,
+  assistant,
+  C,
+  CV,
+  FI,
+  fixtureFacts,
+  human,
+  M,
+  P,
+  R,
+  system,
+  T,
+} from '@hearth/access/testing'
 import { type ColumnType, Kysely, PostgresDialect, sql } from 'kysely'
 import { Client, Pool } from 'pg'
 
@@ -52,7 +69,7 @@ interface AclTable {
   kind: string
   id: string
   acl_tokens: string[]
-  acl_more: ColumnType<unknown, string | undefined, string>
+  acl_more: ColumnType<unknown, string | null | undefined, string | null>
 }
 interface Database {
   rows: AclTable
@@ -214,6 +231,8 @@ async function compare(
 }
 
 async function checkEdgeRows(db: Kysely<Database>): Promise<string> {
+  // A NULL acl_more (a table that forgot NOT NULL) must make a row nobody's, never drop its clauses.
+  const nullMore = 'null-more'
   const rows: { id: string; acl: Token[][] }[] = [
     { id: 'no-clauses', acl: [] },
     { id: 'empty-first', acl: [[]] },
@@ -223,6 +242,7 @@ async function checkEdgeRows(db: Kysely<Database>): Promise<string> {
     { id: 'empty-second', acl: [['a'], []] },
     { id: 'ragged', acl: [['a', 'b', 'c'], ['d'], ['b', 'e']] },
     { id: 'quoted', acl: [["p:it's"], ['m:"x"', 'e:a,b']] },
+    { id: nullMore, acl: [['a']] },
   ]
   await db
     .insertInto('edge_rows')
@@ -231,7 +251,7 @@ async function checkEdgeRows(db: Kysely<Database>): Promise<string> {
         kind: 'edge',
         id,
         acl_tokens: first,
-        acl_more: JSON.stringify(more),
+        acl_more: id === nullMore ? null : JSON.stringify(more),
       })),
     )
     .execute()
@@ -239,7 +259,7 @@ async function checkEdgeRows(db: Kysely<Database>): Promise<string> {
   const failures: string[] = []
   for (const keys of keySets) {
     const got = (await db.selectFrom('edge_rows').select('id').where(sqlReadableBy(keys)).execute()).map(r => r.id)
-    const expected = rows.filter(row => allows(row.acl, new Set(keys))).map(row => row.id)
+    const expected = rows.filter(row => row.id !== nullMore && allows(row.acl, new Set(keys))).map(row => row.id)
     if ([...got].sort().join() !== [...expected].sort().join()) {
       failures.push(`keys [${keys.join(', ')}]: ${difference(expected, got)}`)
     }
@@ -281,7 +301,7 @@ async function main(): Promise<number> {
         .addColumn('kind', 'text', c => c.notNull())
         .addColumn('id', 'text', c => c.notNull())
         .addColumn('acl_tokens', sql`text[]`, c => c.notNull())
-        .addColumn('acl_more', 'jsonb', c => c.notNull().defaultTo(sql`'[]'::jsonb`))
+        .addColumn('acl_more', 'jsonb', c => (table === 'rows' ? c.notNull().defaultTo(sql`'[]'::jsonb`) : c))
         .addPrimaryKeyConstraint(`${table}_pkey`, ['kind', 'id'])
         .execute()
     }
@@ -332,6 +352,16 @@ async function main(): Promise<number> {
       const failures = await compare(db, after, subjects, refs)
       if (failures.length > 0) throw new Error(failures.join('; '))
       return `rows stored before the changes, queried with keys after them, equal filterReadable for ${subjects.length} subjects (${moved.length} of whom gained or lost access)`
+    })
+
+    await run('agents select nothing', async () => {
+      const agents = Object.values(AG).map(agent)
+      for (const a of agents) {
+        const keys = keysOf(before, a)
+        const got = await readable(db, keys)
+        if (keys.length > 0 || got.length > 0) throw new Error(`${a.id}: ${keys.length} keys, ${got.length} rows`)
+      }
+      return `${agents.length} agents hold no keys and match no row; they read by scope (A2)`
     })
   } finally {
     await db.destroy()

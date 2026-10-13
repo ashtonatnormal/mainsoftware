@@ -61,14 +61,15 @@ export function trashState(
 }
 
 // Whether someone may change who an item is shared with: its Owner, or an Editor while the Owner
-// lets Editors share (FILE-03, decision 17). Restricted editing leaves an unnamed Editor out.
+// lets Editors share it (FILE-03, decision 17), a folder as much as a file. Restricted editing
+// leaves an unnamed Editor out. A folder's grants reach everything in it, whatever an item's own
+// switch says: an item is never less shared than its folder.
 export function maySetSharing(world: World, ref: DriveRef, personId: Id, keys: ReadonlySet<Token>): boolean {
   const role = roleOn(world, ref, personId, keys)
   if (role === 'owner') return true
   if (role !== 'editor') return false
-  if (ref.kind === 'folder') return true
-  const file = world.get({ kind: 'file', id: ref.id })
-  return file?.editorsCanShare === true
+  const item = ref.kind === 'folder' ? world.get({ kind: 'folder', id: ref.id }) : world.get({ kind: 'file', id: ref.id })
+  return item?.editorsCanShare === true
 }
 
 // Whether a grantee names someone in this org: an active person, a team in the snapshot, or the
@@ -90,6 +91,3 @@ export function sameGrantee(a: Grantee, b: Grantee): boolean {
   return a.kind === b.kind && a.id === b.id
 }
 
-export function ownerAsGrantee(item: FolderFact | FileFact): Grantee {
-  return item.owner.kind === 'person' ? { kind: 'person', id: item.owner.id } : { kind: 'team', id: item.owner.id }
-}

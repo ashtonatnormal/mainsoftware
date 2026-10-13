@@ -1,11 +1,15 @@
 import { expect } from 'vitest'
 import {
   aclOf,
+  audienceOfPeople,
   can,
   canRead,
+  covers,
   type Facts,
   filterReadable,
+  type Grant,
   type Id,
+  indexClassOf,
   keysOf,
   listAccessible,
   type OrgRole,
@@ -41,7 +45,7 @@ import {
   TK,
 } from '../index.ts'
 import { ai, c0, core, type RuleCase } from './case.ts'
-import { changed, expectReaders, reads, refsOf, world } from './helpers.ts'
+import { allows, changed, expectReaders, reads, refsOf, rowReadable, world } from './helpers.ts'
 
 const KINDS: readonly ResourceKind[] = [
   'channel',
@@ -65,12 +69,6 @@ const KINDS: readonly ResourceKind[] = [
 const everyone = [...SEED_PEOPLE, P.cfo, P.formerDpo, P.formerAdmin]
 const subjects: Subject[] = [...everyone.map(human), assistant(AS.ashton), assistant(AS.daniel)]
 const key = (r: Ref) => `${r.kind}:${r.id}`
-
-// The in-memory form of sqlReadableBy (sql.ts): the keys meet a row's tokens and every clause in
-// its more column.
-function rowReadable(row: ReturnType<typeof aclOf>, keys: ReadonlySet<string>): boolean {
-  return row.tokens.some(t => keys.has(t)) && row.more.every(clause => clause.some(t => keys.has(t)))
-}
 
 function withoutRoles(facts: Facts, person: Id): Facts {
   return { ...facts, roles: facts.roles.filter(r => r.personId !== person) }
@@ -136,21 +134,38 @@ export const RULE_1: readonly RuleCase[] = [
   c0('R1-01', 'Rule 1 SRCH-04 BRAIN-02: filterReadable and listAccessible keep exactly what can(read) allows', () => {
     const refs = refsOf()
     for (const s of subjects) {
-      expect(filterReadable(world, s, refs)).toEqual(refs.filter(r => canRead(world, s, r)))
+      const allowed = refs.filter(r => can(world, s, { action: 'read', resource: r }))
+      expect(filterReadable(world, s, refs)).toEqual(allowed)
       for (const kind of KINDS) {
-        expect(listAccessible(world, s, kind)).toEqual(refs.filter(r => r.kind === kind && canRead(world, s, r)))
+        expect(listAccessible(world, s, kind)).toEqual(allowed.filter(r => r.kind === kind))
       }
     }
   }),
   c0(
     'R1-02',
-    'Rule 1 SRCH-04 T3: the stored ACL rows sqlReadableBy reads select exactly what filterReadable keeps',
+    'Rule 1 SRCH-04 T3: under sqlReadableBy’s row rule, the stored ACL rows select exactly what filterReadable keeps (scripts/check-access-sql.ts runs the SQL itself)',
     () => {
-      const refs = refsOf()
+      // Rows with several clauses too: derived items whose sources different people read (Rule 3),
+      // and a doc in the Trash whose trasher reads it only through a team grant (DRV-01).
+      const w = changed(f => ({
+        ...f,
+        derived: [
+          ...f.derived,
+          { id: 'dv-r102-q3', sources: [ref.message(M.leadership), ref.file(FI.q3Numbers)] },
+          { id: 'dv-r102-q4', sources: [ref.message(M.q4Third), ref.message(M.leadership)] },
+        ],
+        files: f.files.map(x =>
+          x.id === FI.q4Proposal
+            ? { ...x, trashedAt: 1, trashedById: P.daniel, grants: x.grants.filter(g => g.grantee.id !== P.daniel) }
+            : x,
+        ),
+      }))
+      const refs = [...refsOf(), ref.derived('dv-r102-q3'), ref.derived('dv-r102-q4')]
+      expect(refs.filter(r => aclOf(w, r).more.length > 0).length).toBeGreaterThanOrEqual(3)
       for (const s of subjects) {
-        const keys = new Set(keysOf(world, s))
-        const bySql = refs.filter(r => rowReadable(aclOf(world, r), keys))
-        expect(bySql.map(key)).toEqual(filterReadable(world, s, refs).map(key))
+        const keys = keysOf(w, s)
+        const byRow = refs.filter(r => rowReadable(aclOf(w, r), keys))
+        expect(byRow.map(key), s.id).toEqual(filterReadable(w, s, refs).map(key))
       }
     },
   ),
@@ -178,7 +193,7 @@ export const RULE_1: readonly RuleCase[] = [
   ai('R1-04c', 'A2', 'Rule 1 PRD-107: vector search pre-filters by ACL partition and never exposes similarity scores'),
   c0(
     'R1-05',
-    'Rule 1 PRD-108 CHT-57: an item you can’t read answers every request exactly as a missing one does',
+    'Rule 1 PRD-108 CHT-57: an item you can’t read answers every content request exactly as a missing one does',
     () => {
       const actions = ['read', 'post', 'join', 'edit', 'delete', 'comment', 'share', 'view_history', 'trash'] as const
       for (const me of SEED_PEOPLE) {
@@ -214,20 +229,25 @@ export const RULE_1: readonly RuleCase[] = [
   }),
   c0(
     'R1-06b',
-    'Rule 1 ACC-10: each role holder has a private channel, DM, restricted session and unshared item they can’t read',
+    'Rule 1 ACC-10: each role holder has a private channel, DM, group DM, restricted session, unshared item and assistant chat they can’t read',
     () => {
-      // So R1-06 can't pass with nothing to check.
-      const unreadable = [
-        ref.channel(C.studio),
-        ref.dm(CV.farahKelvin),
-        ref.groupDm(CV.floor),
-        ref.session(S.peopleFloor),
-        ref.file(FI.rachelNotes),
-        ref.assistantChat(CV.danielAssistant),
+      // So R1-06 can't pass with nothing to check: for every role holder, and for Kelvin, whom
+      // R1-06 gives every role, at least one item of each kind is out of reach.
+      const kinds: [string, Ref[]][] = [
+        ['private channel', [ref.channel(C.studio), ref.channel(C.leadership)]],
+        ['DM', [ref.dm(CV.farahKelvin), ref.dm(CV.ashtonPriya)]],
+        ['group DM', [ref.groupDm(CV.floor), ref.groupDm(CV.q4)]],
+        ['restricted session', [ref.session(S.peopleFloor), ref.session(S.peopleAshton)]],
+        ['unshared item', [ref.file(FI.rachelNotes), ref.file(FI.q3Numbers)]],
+        ['assistant chat', [ref.assistantChat(CV.danielAssistant), ref.assistantChat(CV.ashtonAssistant)]],
       ]
       for (const person of [...ROLE_HOLDERS, P.kelvin]) {
-        const outside = unreadable.filter(item => !reads(world, person, item))
-        expect(outside.length, person).toBeGreaterThanOrEqual(person === P.kelvin ? 3 : 5)
+        for (const [kind, items] of kinds) {
+          expect(
+            items.some(item => !reads(world, person, item)),
+            `${person} ${kind}`,
+          ).toBe(true)
+        }
       }
     },
   ),
@@ -362,13 +382,35 @@ export const RULE_1: readonly RuleCase[] = [
       expect(reads(world, P.ahmad, ref.message(M.q4Fourth))).toBe(false)
     },
   ),
-  c0('R1-15', 'Rule 1 CHAT-06 FILE-08: a chat attachment is readable exactly when its message is', () => {
-    for (const me of everyone) {
-      expect(reads(world, me, ref.file(FI.q4Attachment)), me).toBe(reads(world, me, ref.message(M.q4First)))
-      expect(reads(world, me, ref.file(FI.otPdf)), me).toBe(reads(world, me, ref.message(M.opsFile)))
-    }
-    expect(reads(world, P.daniel, ref.file(FI.q4Attachment))).toBe(false)
-  }),
+  c0(
+    'R1-15',
+    'Rule 1 CHAT-06 FILE-03 FILE-08 T13: a chat attachment’s readers are its message’s, plus only those its owner shares it with',
+    () => {
+      const attachment = ref.file(FI.q4Attachment)
+      for (const me of everyone) {
+        expect(reads(world, me, attachment), me).toBe(reads(world, me, ref.message(M.q4First)))
+        expect(reads(world, me, ref.file(FI.otPdf)), me).toBe(reads(world, me, ref.message(M.opsFile)))
+      }
+      expect(reads(world, P.daniel, attachment)).toBe(false)
+      // A reader of the message is a Viewer of the attachment, so only its owner shares it further.
+      const rachel = { kind: 'person' as const, id: P.rachel }
+      expect(allows(world, P.priya, { action: 'share.set', resource: attachment, grantee: rachel, role: 'viewer' })).toBe(
+        false,
+      )
+      expect(allows(world, P.ashton, { action: 'share.set', resource: attachment, grantee: rachel, role: 'viewer' })).toBe(
+        true,
+      )
+      const shared = changed(f => ({
+        ...f,
+        files: f.files.map(x => (x.id === FI.q4Attachment ? { ...x, grants: [{ grantee: rachel, role: 'viewer' }] } : x)),
+      }))
+      // The share reaches only Rachel: she reads the attachment, not the message, and it stays a DM item.
+      expect(reads(shared, P.rachel, attachment)).toBe(true)
+      expect(reads(shared, P.rachel, ref.message(M.q4First))).toBe(false)
+      expect(reads(shared, P.marcus, attachment)).toBe(false)
+      expect(indexClassOf(shared, attachment)).toBe('dm')
+    },
+  ),
   c0('R1-16', 'Rule 1 SHEET-29: knowing an item’s id or link opens nothing', () => {
     // Rachel asks for the CFO's sheet by id; nothing about holding the id lets her in.
     expect(reads(world, P.rachel, ref.file(FI.q3Numbers))).toBe(false)
@@ -434,13 +476,19 @@ export const RULE_1: readonly RuleCase[] = [
     },
   ),
   c0('R1-21', 'Rule 1 §7.1: built-in AI for a viewer uses only what that viewer can read', () => {
-    const audience = { orgId: world.orgId, tokens: [`p:${P.rachel}`] }
-    expect(sourceAllowed(world, { run: 'built_in', viewer: human(P.rachel), audience }, ref.file(FI.rachelNotes))).toBe(
+    const own = audienceOfPeople(world, [P.rachel])
+    expect(sourceAllowed(world, { run: 'built_in', viewer: human(P.rachel), audience: own }, ref.file(FI.rachelNotes))).toBe(
       true,
     )
-    expect(sourceAllowed(world, { run: 'built_in', viewer: human(P.rachel), audience }, ref.file(FI.q3Numbers))).toBe(
-      false,
-    )
+    // Wei Ling, the audience, can open the CFO's sheet; Rachel, the viewer, can't, so it's out.
+    const weiling = audienceOfPeople(world, [P.weiling])
+    expect(covers(world, weiling, ref.file(FI.q3Numbers))).toBe(true)
+    expect(
+      sourceAllowed(world, { run: 'built_in', viewer: human(P.rachel), audience: weiling }, ref.file(FI.q3Numbers)),
+    ).toBe(false)
+    expect(
+      sourceAllowed(world, { run: 'built_in', viewer: human(P.weiling), audience: weiling }, ref.file(FI.q3Numbers)),
+    ).toBe(true)
   }),
   ai('R1-22', 'A2', 'Rule 1 SRCH-03 BRAIN-02: an AI answer uses only sources the asker can open at answer time'),
   core('R1-23', 'C5.3', 'Rule 1 SHEET-29: a sheet link shows "Sheet · no access" to anyone who can’t open it'),
@@ -500,6 +548,45 @@ export const RULE_1: readonly RuleCase[] = [
         expect(can(world, human(member), { action: 'limit_editing', resource: policy })).toBe(false)
       }
       expect(can(world, human(P.huimin), { action: 'limit_editing', resource: policy })).toBe(false)
+      // Marcus shares a team-owned item with the team itself, and narrows or removes that grant;
+      // the team's members are grantees like anyone else, never its Owner.
+      const operations = { kind: 'team' as const, id: T.operations }
+      const withDoc = (grants: Grant[]) =>
+        changed(f => ({
+          ...f,
+          files: [
+            ...f.files,
+            {
+              id: 'd-ops-fresh',
+              subtype: 'doc',
+              parent: { kind: 'root' },
+              owner: { kind: 'team', id: T.operations },
+              grants,
+              editingLimitedTo: null,
+              editorsCanShare: true,
+              trashedAt: null,
+              trashedById: null,
+            },
+          ],
+        }))
+      const doc = ref.file('d-ops-fresh')
+      const fresh = withDoc([])
+      expect(reads(fresh, P.farah, doc)).toBe(false)
+      expect(allows(fresh, P.marcus, { action: 'share.set', resource: doc, grantee: operations, role: 'viewer' })).toBe(
+        true,
+      )
+      expect(allows(fresh, P.huimin, { action: 'share.set', resource: doc, grantee: operations, role: 'viewer' })).toBe(
+        false,
+      )
+      const granted = withDoc([{ grantee: operations, role: 'viewer' }])
+      expect(reads(granted, P.farah, doc)).toBe(true)
+      // The Operations wiki folder grants the team Editor: Marcus narrows it or removes it.
+      const wiki = ref.folder(F.ops)
+      expect(allows(world, P.marcus, { action: 'share.set', resource: wiki, grantee: operations, role: 'viewer' })).toBe(
+        true,
+      )
+      expect(allows(world, P.marcus, { action: 'share.set', resource: wiki, grantee: operations, role: null })).toBe(true)
+      expect(allows(world, P.huimin, { action: 'share.set', resource: wiki, grantee: operations, role: null })).toBe(false)
     },
   ),
   c0(
@@ -572,6 +659,27 @@ export const RULE_1: readonly RuleCase[] = [
     },
   ),
   c0(
+    'R1-38b',
+    'Rule 1 FILE-03 decision 17 T13: a folder’s Owner turns its Editors’ sharing off as a file’s does',
+    () => {
+      // Ashton owns the vendor quotes folder; Priya is its Editor.
+      const folder = ref.folder(F.vendor)
+      const org = { kind: 'org' as const, id: world.orgId }
+      expect(allows(world, P.ashton, { action: 'set_editors_can_share', resource: folder })).toBe(true)
+      expect(allows(world, P.priya, { action: 'set_editors_can_share', resource: folder })).toBe(false)
+      expect(allows(world, P.priya, { action: 'share.set', resource: folder, grantee: org, role: 'viewer' })).toBe(true)
+      const off = changed(f => ({
+        ...f,
+        folders: f.folders.map(x => (x.id === F.vendor ? { ...x, editorsCanShare: false } : x)),
+      }))
+      expect(allows(off, P.priya, { action: 'share.set', resource: folder, grantee: org, role: 'viewer' })).toBe(false)
+      expect(allows(off, P.priya, { action: 'share', resource: folder })).toBe(false)
+      expect(allows(off, P.ashton, { action: 'share.set', resource: folder, grantee: org, role: 'viewer' })).toBe(true)
+      // Restricted editing stays a file setting.
+      expect(allows(world, P.ashton, { action: 'limit_editing', resource: folder })).toBe(false)
+    },
+  ),
+  c0(
     'R1-39',
     'Rule 1 FILE-01 ADM-03 T13: anyone creates in My Drive or where they can edit; public channels follow the org setting',
     () => {
@@ -587,6 +695,31 @@ export const RULE_1: readonly RuleCase[] = [
       const open = changed(f => ({ ...f, settings: { publicCreation: 'everyone' } }))
       expect(can(open, human(P.nadia), { action: 'create', kind: 'channel', visibility: 'public' })).toBe(true)
       expect(can(world, assistant(AS.ashton), { action: 'create', kind: 'task' })).toBe(false)
+    },
+  ),
+  c0(
+    'R1-40',
+    'Rule 1 CHAT-01 ROOM-01: only the owners of a private channel or room add, remove and manage its members',
+    () => {
+      const rachel = { kind: 'human' as const, id: P.rachel }
+      // Ashton owns private #leadership and the private Board room; Wei Ling is a member of both
+      // and owns neither.
+      for (const space of [ref.channel(C.leadership), ref.room(R.board)]) {
+        expect(allows(world, P.ashton, { action: 'member.add', resource: space, principal: rachel }), space.id).toBe(true)
+        expect(allows(world, P.weiling, { action: 'member.add', resource: space, principal: rachel }), space.id).toBe(
+          false,
+        )
+        expect(allows(world, P.ashton, { action: 'manage', resource: space }), space.id).toBe(true)
+        expect(allows(world, P.weiling, { action: 'manage', resource: space }), space.id).toBe(false)
+      }
+      const leadership = ref.channel(C.leadership)
+      const priya = { kind: 'human' as const, id: P.priya }
+      expect(allows(world, P.ashton, { action: 'member.remove', resource: leadership, principal: priya })).toBe(true)
+      expect(allows(world, P.weiling, { action: 'member.remove', resource: leadership, principal: priya })).toBe(false)
+      const board = ref.room(R.board)
+      const cfo = { kind: 'human' as const, id: P.cfo }
+      expect(allows(world, P.ashton, { action: 'member.remove', resource: board, principal: cfo })).toBe(true)
+      expect(allows(world, P.weiling, { action: 'member.remove', resource: board, principal: cfo })).toBe(false)
     },
   ),
 ]

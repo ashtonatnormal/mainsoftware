@@ -4,7 +4,6 @@ import {
   granteeInOrg,
   isItemOwner,
   maySetSharing,
-  ownerAsGrantee,
   roleOn,
   sameGrantee,
   trashState,
@@ -279,9 +278,11 @@ function driveAction(
       return maySetSharing(world, ref, me, keys)
     case 'share.set': {
       // Up to Editor, on this item's own grants, to someone in the org, never touching the owner
-      // (FILE-03). A grant from a folder above is changed on that folder.
+      // (FILE-03). A grant from a folder above is changed on that folder. A team owner is its Team
+      // Admins (ta:), which no grant names, so a grant to the owning team's members is an
+      // ordinary grant (T13, Drive items).
       if (!maySetSharing(world, ref, me, keys) || !granteeInOrg(world, request.grantee)) return false
-      if (sameGrantee(request.grantee, ownerAsGrantee(item))) return false
+      if (item.owner.kind === 'person' && sameGrantee(request.grantee, { kind: 'person', id: item.owner.id })) return false
       return request.role !== null || item.grants.some(g => sameGrantee(g.grantee, request.grantee))
     }
     case 'present':
@@ -290,6 +291,7 @@ function driveAction(
       // Only people who can share the deck show it to an audience that can't open it (SLIDE-18).
       return file?.subtype === 'deck' && maySetSharing(world, ref, me, keys)
     case 'set_editors_can_share':
+      return isItemOwner(item, keys)
     case 'limit_editing':
       return file !== undefined && isItemOwner(item, keys)
     case 'transfer_ownership': {

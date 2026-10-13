@@ -45,7 +45,7 @@ import {
   TK,
 } from '../index.ts'
 import { ai, c0, core, type RuleCase } from './case.ts'
-import { changed, expectReaders, reads, world } from './helpers.ts'
+import { changed, expectReaders, reads, rowReadable, world } from './helpers.ts'
 
 const everyone = [...SEED_PEOPLE, P.cfo, P.formerDpo, P.formerAdmin]
 const subjects: Subject[] = [...everyone.map(human), assistant(AS.ashton), assistant(AS.daniel)]
@@ -58,11 +58,6 @@ function withDerived(items: readonly DerivedRow[], also: (facts: Facts) => Facts
   return changed(f => also({ ...f, derived: [...f.derived, ...items] }))
 }
 
-// The in-memory form of sqlReadableBy (sql.ts): the keys meet a row's tokens and every clause in
-// its more column.
-function rowReadable(row: AclRow, keys: ReadonlySet<string>): boolean {
-  return row.tokens.some(t => keys.has(t)) && row.more.every(clause => clause.some(t => keys.has(t)))
-}
 
 // Membership changes: they change who holds which keys, never a stored row.
 const leaveSpace =
@@ -280,7 +275,7 @@ export const RULE_3: readonly RuleCase[] = [
   ),
   c0(
     'R3-03',
-    'Rule 3 DOC-09 DOC-10 SHEET-40 SLIDE-30: accepted AI output takes the target item’s permissions, as if typed',
+    'Rule 3 DOC-09 DOC-10 SHEET-40 SLIDE-30: an item’s access never depends on a derived item drawn from it; a preview has its sources’ readers',
     () => {
       // A suggestion for the Q4 proposal drawn from the Q3 pricing review is, until accepted, a
       // derived item: only people who read the review see the preview. Once accepted it is the
@@ -497,7 +492,7 @@ export const RULE_3: readonly RuleCase[] = [
   ),
   c0(
     'R3-11',
-    'Rule 3 SLIDE-18 SLIDE-25 SLIDE-34 Q20: every role presents; only people who can share a deck present it anyway, and those copies are playback only',
+    'Rule 3 SLIDE-18 SLIDE-25 SLIDE-34 Q20: every role presents; only people who can share a deck present it anyway, and a copy stored as playback-only is never indexed',
     () => {
       const deck = ref.file(FI.q4Deck)
       const asks = (w: World, p: Id, action: 'present' | 'present_anyway', resource = deck) =>
@@ -562,12 +557,17 @@ export const RULE_3: readonly RuleCase[] = [
       })
       // A deck the whole org can open needs no override there.
       expect(covers(world, audienceOf(world, ref.channel(C.leadership)), ref.file(FI.allHandsDeck))).toBe(true)
-      // Copies kept from a presentation like that are playback only: they go with the session's
-      // audience, and are never indexed.
+      // A copy stored as playback-only goes with the session's audience and is never indexed.
       expect(indexClassOf(world, ref.slideCopy(SC.standupPlayback))).toBe('playback_only')
       expect(SEARCHABLE_CLASSES).not.toContain('playback_only')
       expect(reads(world, P.nadia, ref.slideCopy(SC.standupPlayback))).toBe(true)
+      expect(indexClassOf(world, ref.slideCopy(SC.pricing))).toBe('playback_only')
     },
+  ),
+  core(
+    'R3-11b',
+    'C5.6',
+    'Rule 3 SLIDE-18 SLIDE-34: copies of a deck the session’s audience doesn’t cover when it is shown (someone can’t open it now, or later members won’t) are stored playback-only',
   ),
   c0(
     'R3-12',
@@ -634,6 +634,11 @@ export const RULE_3: readonly RuleCase[] = [
     'R3-15',
     'A3.6',
     'Rule 3 SHT-55 SHEET-39 PDPA-15: Ask-about-sheet history hides once the asker loses access to the sheet',
+  ),
+  ai(
+    'R3-16b',
+    'A3.5, A3.6, A3.7',
+    'Rule 3 DOC-09 DOC-10 SHEET-40 SLIDE-30: accepted AI output takes the target item’s permissions, as if typed',
   ),
   ai(
     'R3-16',

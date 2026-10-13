@@ -194,6 +194,8 @@ export interface FolderFact {
   parentId: Id | null
   owner: DriveOwner
   grants: readonly Grant[]
+  // Editors may share unless the Owner turns it off (FILE-03, decision 17).
+  editorsCanShare: boolean
   trashedAt: number | null
   trashedById: Id | null
 }

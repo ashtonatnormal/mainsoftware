@@ -381,6 +381,20 @@ describe('sameAudience (REC-13: notes go only where the readers exactly match)',
     expect(sameAudience(left, call(left), group(left))).toBe(true)
   })
 
+  test('a person named beside an open token isn’t the same as the open token alone: they stay after leaving it', () => {
+    const lead = m(C.leadership)
+    expect(sameAudience(world, audience(lead, p(P.priya)), audience(lead))).toBe(false)
+    expect(sameAudience(world, audience(lead, p(P.priya)), audience(p(P.priya), lead))).toBe(true)
+  })
+
+  test('T13: an audience naming someone the snapshot lacks, or people who have all left, is never the same', () => {
+    const unknown = audience(p('b9999999-0000-4000-8000-000000000099'))
+    expect(sameAudience(world, unknown, unknown)).toBe(false)
+    const gone = audienceOfPeople(world, [P.formerDpo])
+    expect(sameAudience(world, gone, gone)).toBe(false)
+    expect(sameAudience(world, audience(m('ch-unknown')), audience(m('ch-unknown')))).toBe(false)
+  })
+
   test('ACC-11: audiences from another org are never the same, whoever they name', () => {
     const owner = { orgId: ORG_2, tokens: [p(ORG_2_PEOPLE.owner)] }
     const someoneElse = { orgId: ORG_2, tokens: [p('b2000000-0000-4000-8000-000000000002')] }

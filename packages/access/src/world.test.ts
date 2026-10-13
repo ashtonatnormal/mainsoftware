@@ -22,6 +22,7 @@ const INDEXED: readonly [keyof Facts, string][] = [
   ['files', 'file'],
   ['comments', 'comment'],
   ['derived', 'derived'],
+  ['memberships', 'membership'],
 ]
 
 describe('World construction (B.4)', () => {
@@ -47,6 +48,19 @@ describe('World construction (B.4)', () => {
     expect(() => new World({ ...facts, conversations: [...facts.conversations, { ...dm }] })).toThrow(
       `Two dm facts share the id ${dm.id}`,
     )
+  })
+
+  test('decision 10: refuses a membership id used twice, so one era can’t open another group DM', () => {
+    // Nadia's membership of a second group DM reuses the id of Priya's era in the Q4 group DM.
+    const facts = fixtureFacts()
+    const priyaEra = facts.memberships.find(m => m.spaceId === CV.q4 && m.principalId === P.priya)
+    if (!priyaEra) throw new Error('the fixture has no Q4 era for Priya')
+    const reused: Facts = {
+      ...facts,
+      conversations: [...facts.conversations, { id: 'gdm-other', kind: 'group_dm', ownerId: null }],
+      memberships: [...facts.memberships, { ...priyaEra, spaceId: 'gdm-other', principalId: P.nadia }],
+    }
+    expect(() => new World(reused)).toThrow(`Two membership facts share the id ${priyaEra.id}`)
   })
 
   test('refuses two spaces with the same id across kinds, since a message names its space by id alone', () => {

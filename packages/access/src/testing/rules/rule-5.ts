@@ -44,7 +44,7 @@ import {
   TK,
 } from '../index.ts'
 import { ai, c0, core, type RuleCase } from './case.ts'
-import { allows, changed, expectReaders, reads, world } from './helpers.ts'
+import { allows, changed, expectReaders, reads, rowReadable, world } from './helpers.ts'
 
 const everyone = [...SEED_PEOPLE, P.cfo, P.formerDpo, P.formerAdmin]
 const ORG_ROLES: OrgRole[] = ['owner', 'admin', 'ai_admin', 'leadership', 'dpo', 'compliance_officer']
@@ -66,11 +66,6 @@ const withStamp =
     ...f,
     sessions: f.sessions.map(s => (s.id === id ? { ...s, stamp: change(s.stamp) } : s)),
   })
-// The in-memory form of sqlReadableBy (sql.ts) over a stored row.
-function rowReadable(row: ReturnType<typeof aclOf>, keys: readonly string[]): boolean {
-  const held = new Set(keys)
-  return row.tokens.some(t => held.has(t)) && row.more.every(clause => clause.some(t => held.has(t)))
-}
 // The participants of a fixture session.
 function participantsOf(id: Id): readonly Id[] {
   return world.get({ kind: 'session', id })?.participants ?? []
@@ -287,7 +282,7 @@ export const RULE_5: readonly RuleCase[] = [
   ),
   c0(
     'R5-05',
-    'Rule 5 REC-14 TASK-06: a suggested task from a restricted session is its owner’s only; accepted, it stays private and unindexed until the owner shares it',
+    'Rule 5 REC-14 TASK-06 T13: a suggested task from a restricted session is its owner’s only; accepted, it is private until the owner shares it, and never indexed, even then',
     () => {
       // Hui Min's suggested task from her 1:1: Ashton took part in the session but can't see it.
       const suggestion = ref.suggestedTask(ST.people)
@@ -309,6 +304,9 @@ export const RULE_5: readonly RuleCase[] = [
         tasks: f.tasks.map(t => (t.id === TK.private ? { ...t, privateToId: null } : t)),
       }))
       expectReaders(shared, task, [P.huimin, P.marcus], [P.ashton, P.farah])
+      // Sharing widens its readers only: made from a restricted session, it stays restricted.
+      expect(indexClassOf(shared, task)).toBe('restricted')
+      expect(aclOf(shared, task).indexClass).toBe('restricted')
     },
   ),
   core(

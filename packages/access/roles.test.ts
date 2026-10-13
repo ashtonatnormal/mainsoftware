@@ -258,7 +258,13 @@ const revoke = (person: Id, role: OrgRole, teamId: Id | null = null): AdminReque
   teamId,
 })
 const approve = (proposalId: Id): AdminRequest => ({ action: 'role.approve', proposalId })
-const addPerson = (...roles: { role: OrgRole; teamId: Id | null }[]): AdminRequest => ({ action: 'person.add', roles })
+const addPerson = (...roles: { role: OrgRole; teamId: Id | null }[]): AdminRequest => ({
+  action: 'person.add',
+  roles,
+  manager: null,
+})
+const addManaged = (manager: Id): AdminRequest => ({ action: 'person.add', roles: [], manager })
+const setManager = (person: Id, manager: Id | null): AdminRequest => ({ action: 'person.set_manager', person, manager })
 const teamChange = (team: Id, person: Id, op: 'add' | 'remove'): AdminRequest => ({
   action: 'team.members.change',
   team,
@@ -286,14 +292,20 @@ interface Section {
 }
 
 // Deactivating, resetting the PIN and changing the phone take over or end an account, so a holder
-// of an Owner-only role is handled by an Owner only (T13, critic 1.17); never yourself.
+// of an Owner-only role, or the grantee of an open DPO or Compliance Officer proposal, is handled by
+// an Owner only (T13 item 5); never yourself.
 const ACCOUNT_TARGETS: readonly { who: string; person: Id; allowed: readonly ActorKey[] }[] = [
-  { who: 'someone with no role: an Admin or Owner', person: P.nadia, allowed: ADMINS },
+  { who: 'someone with no role: an Admin or Owner', person: P.kelvin, allowed: ADMINS },
+  {
+    who: 'the grantee of an open Compliance Officer proposal who holds no role: an Owner only',
+    person: P.nadia,
+    allowed: OWNERS,
+  },
   { who: 'a Team Admin (not an Owner-only role): an Admin or Owner', person: P.marcus, allowed: ADMINS },
   { who: 'a Leadership holder: an Owner only', person: P.priya, allowed: OWNERS },
-  { who: 'the Admin: an Owner only, never Arjun himself', person: P.arjun, allowed: OWNERS },
+  { who: 'the Admin: an Owner only, never Arjun', person: P.arjun, allowed: OWNERS },
   { who: 'a Compliance Officer: an Owner only', person: P.weiling, allowed: OWNERS },
-  { who: 'the Owner and DPO: another Owner only, never Ashton himself', person: P.ashton, allowed: ['owner'] },
+  { who: 'the Owner and DPO: another Owner only, never Ashton', person: P.ashton, allowed: ['owner'] },
   { who: 'another Owner: Ashton only', person: ONE.owner, allowed: ['ashton'] },
   { who: 'someone whose Admin role was revoked: an Admin or Owner', person: P.formerAdmin, allowed: ADMINS },
   { who: 'the Team Admin of an archived team: an Admin or Owner', person: P.farah, allowed: ADMINS },
@@ -479,6 +491,52 @@ const SECTIONS: readonly Section[] = [
         request: addPerson({ role: 'team_admin', teamId: T.operations }, { role: 'dpo', teamId: null }),
         allowed: OWNERS,
       },
+      {
+        name: 'ACC-03: a row may name an active manager other than whoever adds it',
+        request: addManaged(P.marcus),
+        allowed: but(ADMINS, 'marcus'),
+      },
+      {
+        name: 'T13: nobody names themselves the new person’s manager (ACC-05 would hand them their items)',
+        request: addManaged(ONE.admin),
+        allowed: but(ADMINS, 'admin'),
+      },
+      {
+        name: 'a row naming someone who has left as manager is refused',
+        request: addManaged(P.formerDpo),
+        allowed: NOBODY,
+      },
+    ],
+  },
+  {
+    ids: 'ACC-03 ACC-05 ADM-02 T13',
+    title: 'person.set_manager (a leaver’s items go to their manager, so never yourself)',
+    rows: [
+      { name: 'an Admin or Owner sets someone’s manager', request: setManager(P.kelvin, P.marcus), allowed: ADMINS },
+      { name: 'an Admin or Owner clears it', request: setManager(P.kelvin, null), allowed: ADMINS },
+      {
+        name: 'T13: nobody names themselves someone’s manager; another Admin or an Owner does',
+        request: setManager(P.kelvin, ONE.admin),
+        allowed: but(ADMINS, 'admin'),
+      },
+      {
+        name: 'T13: nor an Owner themselves',
+        request: setManager(P.kelvin, P.ashton),
+        allowed: but(ADMINS, 'ashton'),
+      },
+      { name: 'nobody is their own manager', request: setManager(P.kelvin, P.kelvin), allowed: NOBODY },
+      {
+        name: 'nobody changes their own manager through an admin power',
+        request: setManager(ONE.admin, P.marcus),
+        allowed: but(ADMINS, 'admin'),
+      },
+      { name: 'nobody manages someone who has left', request: setManager(P.formerDpo, P.marcus), allowed: NOBODY },
+      { name: 'nobody who has left is anyone’s manager', request: setManager(P.kelvin, P.formerDpo), allowed: NOBODY },
+      {
+        name: 'nobody sets the manager of someone not on the roster',
+        request: setManager(X.unknownPerson, P.marcus),
+        allowed: NOBODY,
+      },
     ],
   },
   ...(['person.deactivate', 'person.reset_pin', 'person.change_phone'] as const).map(action => ({
@@ -598,9 +656,19 @@ const SECTIONS: readonly Section[] = [
         allowed: NOBODY,
       },
       {
-        name: 'T13: nobody changes an archived team, its Team Admin included',
+        name: 'T13: nobody adds anyone to an archived team, its former Team Admin included',
         request: teamChange(T.nightShift, P.nadia, 'add'),
         allowed: NOBODY,
+      },
+      {
+        name: 'T13: an Admin or Owner removes someone from an archived team, so its grants stop reaching them',
+        request: teamChange(T.nightShift, P.kelvin, 'remove'),
+        allowed: ADMINS,
+      },
+      {
+        name: 'T13: an archived team’s former Team Admin is removed by an Admin, never by themselves',
+        request: teamChange(T.nightShift, P.farah, 'remove'),
+        allowed: ADMINS,
       },
       {
         name: 'nobody changes a team not in the org',
@@ -1015,6 +1083,7 @@ const ADMIN_ACTION_IDS: Record<AdminRequest['action'], string> = {
   'role.approve': 'ADM-02 PRD-85',
   'role.revoke': 'ADM-02 ACC-10',
   'person.add': 'ADM-02 ACC-03',
+  'person.set_manager': 'ACC-03 ACC-05',
   'person.deactivate': 'ADM-02 ACC-05',
   'person.reset_pin': 'ADM-02 ACC-06',
   'person.change_phone': 'ADM-02 ACC-06',
@@ -1232,7 +1301,7 @@ describe('ADM-02 CLAUDE.md Database: nobody changes their own roles or teams', (
       auditLogReaders: ['leadership', 'dpo'],
     }))
     expect(can(listed, human(ONE.admin), readers('remove', 'leadership'), REAUTH)).toBe(false)
-    // Ashton holds DPO and is an Owner (finding 9: Owners as D45 has them).
+    // Ashton holds DPO and is an Owner (Owners as D45 has them).
     expect(can(W, human(P.ashton), readers('add', 'dpo'), REAUTH)).toBe(true)
     expect(can(listed, human(P.ashton), readers('remove', 'dpo'), REAUTH)).toBe(true)
   })
@@ -1441,8 +1510,8 @@ describe('ACC-04 ACC-06: device sign-out and the lone Owner', () => {
 
   test('ACC-06 T13: in the seed org nobody changes the lone Owner’s phone or PIN, but any Admin signs out his devices', () => {
     // Ashton is the only Owner: never himself, and an Admin can't act on an Owner-only role holder.
-    // That leaves the reviewed bootstrap-style script a person runs (an open owner question, finding
-    // 37), never a can() path. Signing out only removes sessions, so a lost phone is covered.
+    // That leaves the reviewed bootstrap-style script a person runs (an open owner question in
+    // T13 item 5), never a can() path. Signing out only removes sessions, so a lost phone is covered.
     const seed = new World(fixtureFacts())
     for (const action of ['person.change_phone', 'person.reset_pin', 'person.deactivate'] as const) {
       for (const id of [P.ashton, P.arjun, P.weiling, P.marcus]) {
@@ -1456,7 +1525,7 @@ describe('ACC-04 ACC-06: device sign-out and the lone Owner', () => {
 })
 
 // A run of every action someone may take that changes memberships or ownership, applied one after
-// another to the facts (finding 8; ADM-03, ACC-07, CHAT-01). Removing someone only ever narrows
+// another to the facts (ADM-03, ACC-07, CHAT-01). Removing someone only ever narrows
 // reads, so the run applies the additions, transfers and grants.
 const KINDS: readonly ResourceKind[] = [
   'channel',

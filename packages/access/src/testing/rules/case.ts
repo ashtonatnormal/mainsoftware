@@ -16,7 +16,7 @@ export interface Rule {
 
 // A case that runs now.
 export const c0 = (id: string, name: string, run: () => void): RuleCase => ({ id, name, status: 'c0', run })
-// A non-AI case for a later step, e.g. todo('R1-03', 'C1.7', '…').
+// A non-AI case for a later step, e.g. core('R1-03', 'C1.7', '…').
 export const core = (id: string, stage: string, name: string): RuleCase => ({ id, name, status: 'core', stage })
 // An AI case, for the A-stage that builds it.
 export const ai = (id: string, stage: string, name: string): RuleCase => ({ id, name, status: 'ai', stage })

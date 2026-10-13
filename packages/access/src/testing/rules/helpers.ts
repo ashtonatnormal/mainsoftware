@@ -1,5 +1,6 @@
 import { expect } from 'vitest'
 import {
+  type AclRow,
   can,
   canRead,
   type Facts,
@@ -11,6 +12,7 @@ import {
   type RequestContext,
   type ResourceKind,
   type Subject,
+  type Token,
   type World,
 } from '../../index.ts'
 import { ALL_REFS, fixtureWorld, human } from '../index.ts'
@@ -42,4 +44,12 @@ export function refsOf(kind?: ResourceKind): Ref[] {
 // The fixture with some facts changed.
 export function changed(change: (facts: Facts) => Facts): World {
   return fixtureWorld(change)
+}
+
+// The row rule sqlReadableBy (sql.ts) runs in Postgres, in memory: the keys meet a stored row's
+// tokens and every clause in its more column. scripts/check-access-sql.ts checks the SQL itself
+// against this rule on a real database.
+export function rowReadable(row: AclRow, keys: Iterable<Token>): boolean {
+  const held = new Set(keys)
+  return row.tokens.some(t => held.has(t)) && row.more.every(clause => clause.some(t => held.has(t)))
 }

@@ -77,7 +77,8 @@ const ADMIN_REQUESTS: readonly AdminRequest[] = [
   { action: 'role.grant', person: P.nadia, role: 'team_admin', teamId: T.customerSuccess },
   { action: 'role.approve', proposalId: PROPOSAL.priyaDpo },
   { action: 'role.revoke', person: P.weiling, role: 'compliance_officer', teamId: null },
-  { action: 'person.add', roles: [] },
+  { action: 'person.add', roles: [], manager: null },
+  { action: 'person.set_manager', person: P.nadia, manager: P.marcus },
   { action: 'person.deactivate', person: P.nadia },
   { action: 'person.reset_pin', person: P.nadia },
   { action: 'person.change_phone', person: P.nadia },
@@ -140,7 +141,7 @@ function reach(w: World, s: Subject): string[] {
 export const RULE_9: readonly RuleCase[] = [
   c0(
     'R9-01',
-    'Rule 9 ADM-12 PDPA-13 review 46: holding DPO or Compliance Officer widens no read or content action through can()',
+    'Rule 9 ADM-12 PDPA-13: holding DPO or Compliance Officer widens no read or content action through can()',
     () => {
       // Ashton is Owner and DPO; Wei Ling is Leadership and Compliance Officer; Kelvin, a Member in
       // no private space, is given both roles. Each is compared with the same world without them.
@@ -278,7 +279,7 @@ export const RULE_9: readonly RuleCase[] = [
   ),
   c0(
     'R9-05',
-    'Rule 9 PRD-85 ACC-10 review 10: a DPO or Compliance Officer grant needs an Owner to propose it and an Owner or Admin who is neither proposer nor grantee to approve it',
+    'Rule 9 PRD-85 ACC-10: a DPO or Compliance Officer grant needs an Owner to propose it and an Owner or Admin who is neither proposer nor grantee to approve it',
     () => {
       // Ashton (Owner) has proposed Priya as DPO.
       const priyaDpo = approve(PROPOSAL.priyaDpo)
@@ -417,7 +418,7 @@ export const RULE_9: readonly RuleCase[] = [
   ),
   c0(
     'R9-07',
-    'Rule 9 ACC-04 ACC-06 ADM-02 T13 review 37: an Admin can’t deactivate, reset the PIN of or change the phone of the Owner, the DPO or a Compliance Officer, but signs out anyone’s devices',
+    'Rule 9 ACC-04 ACC-06 ADM-02 PRD-85 T13: an Admin can’t deactivate, reset the PIN of or change the phone of the Owner, the DPO, a Compliance Officer or someone proposed as one, but signs out anyone’s devices',
     () => {
       const takeovers = ['person.deactivate', 'person.reset_pin', 'person.change_phone'] as const
       // Ashton is Owner and DPO and Wei Ling Compliance Officer; Kelvin is made DPO only and Nadia
@@ -426,7 +427,7 @@ export const RULE_9: readonly RuleCase[] = [
       for (const target of [P.ashton, P.weiling, P.kelvin, P.nadia]) {
         for (const action of takeovers) {
           expect(allows(w, P.arjun, { action, person: target }, reauthenticated), `${action} ${target}`).toBe(false)
-          // The Owner may, for anyone but himself.
+          // The Owner may, for anyone but themselves.
           expect(allows(w, P.ashton, { action, person: target }, reauthenticated), `${action} ${target}`).toBe(
             target !== P.ashton,
           )
@@ -441,6 +442,20 @@ export const RULE_9: readonly RuleCase[] = [
           expect(allows(world, P.arjun, { action, person: target }, reauthenticated), `${action} ${target}`).toBe(true)
         }
       }
+      // While Kelvin waits as a proposed DPO, the Admin who could approve him can't take over his
+      // account first (PRD-85's second approver would then be the account's holder).
+      const proposed = changed(f => ({
+        ...f,
+        roleProposals: [
+          ...f.roleProposals,
+          { id: 'pr-kelvin-dpo', personId: P.kelvin, role: 'dpo', proposedBy: P.ashton, approvedAt: null, withdrawnAt: null },
+        ],
+      }))
+      for (const action of takeovers) {
+        expect(allows(proposed, P.arjun, { action, person: P.kelvin }, reauthenticated), action).toBe(false)
+        expect(allows(proposed, P.ashton, { action, person: P.kelvin }, reauthenticated), action).toBe(true)
+      }
+      expect(allows(proposed, P.arjun, { action: 'role.approve', proposalId: 'pr-kelvin-dpo' }, reauthenticated)).toBe(true)
       // Members, Team Admins and the Compliance Officer do none of it, signing out included.
       for (const actor of [P.marcus, P.huimin, P.rachel, P.weiling]) {
         for (const action of [...takeovers, 'person.sign_out_devices'] as const) {

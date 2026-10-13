@@ -51,8 +51,11 @@ export type AdminRequest =
   | { action: 'role.grant'; person: Id; role: OrgRole; teamId: Id | null }
   | { action: 'role.approve'; proposalId: Id }
   | { action: 'role.revoke'; person: Id; role: OrgRole; teamId: Id | null }
-  // A roster add or one CSV row (ACC-03): the roles in it are decided as role grants.
-  | { action: 'person.add'; roles: readonly { role: OrgRole; teamId: Id | null }[] }
+  // A roster add or one CSV row (ACC-03): the roles in it are decided as role grants, and its
+  // manager as a manager change.
+  | { action: 'person.add'; roles: readonly { role: OrgRole; teamId: Id | null }[]; manager: Id | null }
+  // A console edit or CSV re-import of an existing person's manager (ACC-03).
+  | { action: 'person.set_manager'; person: Id; manager: Id | null }
   | { action: 'person.deactivate' | 'person.reset_pin' | 'person.change_phone' | 'person.sign_out_devices'; person: Id }
   | { action: 'team.create' }
   | { action: 'team.archive'; team: Id }
@@ -83,6 +86,7 @@ export const ADMIN_ACTIONS = new Set<string>([
   'role.approve',
   'role.revoke',
   'person.add',
+  'person.set_manager',
   'person.deactivate',
   'person.reset_pin',
   'person.change_phone',

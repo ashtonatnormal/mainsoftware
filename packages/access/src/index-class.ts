@@ -43,13 +43,18 @@ export function indexClassOf(world: World, ref: Ref, seen: ReadonlySet<string> =
     }
     case 'room': {
       const room = world.get({ kind: 'room', id: ref.id })
-      if (!room) return 'restricted'
-      return room.restricted ? 'restricted' : 'normal'
+      if (!room || room.restricted) return 'restricted'
+      // The room's own place must resolve too: its channel, or its meeting's event.
+      if (room.kind === 'channel_room') return of({ kind: 'channel', id: room.channelId })
+      if (room.kind === 'meeting') return of({ kind: 'event', id: room.eventId })
+      return 'normal'
     }
     case 'thread': {
       const thread = world.get({ kind: 'thread', id: ref.id })
       if (!thread) return 'restricted'
-      return thread.audience.kind === 'call' ? of({ kind: 'session', id: thread.audience.sessionId }) : 'normal'
+      return thread.audience.kind === 'call'
+        ? of({ kind: 'session', id: thread.audience.sessionId })
+        : of({ kind: 'event', id: thread.audience.eventId })
     }
     case 'message': {
       const message = world.get({ kind: 'message', id: ref.id })
@@ -69,7 +74,12 @@ export function indexClassOf(world: World, ref: Ref, seen: ReadonlySet<string> =
         if (conversation?.kind !== 'conversation') return 'restricted'
         return of({ kind: conversation.fact.kind, id: conversation.fact.id })
       }
-      return world.get({ kind: 'room', id: session.place.roomId }) ? 'normal' : 'restricted'
+      const room = world.get({ kind: 'room', id: session.place.roomId })
+      if (!room) return 'restricted'
+      // The room's chain must resolve, but its restricted flag now is not the session's.
+      if (room.kind === 'channel_room') return of({ kind: 'channel', id: room.channelId })
+      if (room.kind === 'meeting') return of({ kind: 'event', id: room.eventId })
+      return 'normal'
     }
     case 'slide_copy': {
       const copy = world.get({ kind: 'slide_copy', id: ref.id })

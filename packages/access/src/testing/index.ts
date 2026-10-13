@@ -305,7 +305,7 @@ function messages(spaceId: Id, rows: readonly [Id, Id][]): MessageFact[] {
   return rows.map(([id, authorId], i) => ({ id, spaceId, seq: i + 1, authorId, deletedAt: null }))
 }
 function folder(id: Id, owner: FolderFact['owner'], grants: Grant[], parentId: Id | null = null): FolderFact {
-  return { id, parentId, owner, grants, trashedAt: null, trashedById: null }
+  return { id, parentId, owner, grants, editorsCanShare: true, trashedAt: null, trashedById: null }
 }
 function file(
   id: Id,
@@ -590,7 +590,8 @@ export function fixtureFacts(): Facts {
       }),
     ],
     slideCopies: [
-      { id: SC.pricing, sessionId: S.pricing, playbackOnly: false },
+      // The Q4 deck was shown in the pricing review, where Rachel can't open it (SLIDE-34).
+      { id: SC.pricing, sessionId: S.pricing, playbackOnly: true },
       { id: SC.people, sessionId: S.peopleAshton, playbackOnly: false },
       { id: SC.standupPlayback, sessionId: S.standupFri, playbackOnly: true },
     ],

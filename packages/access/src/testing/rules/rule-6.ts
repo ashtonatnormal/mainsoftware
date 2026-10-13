@@ -40,7 +40,7 @@ import {
   TK,
 } from '../index.ts'
 import { ai, c0, core, type RuleCase } from './case.ts'
-import { allows, changed, expectReaders, reads, refsOf, world } from './helpers.ts'
+import { allows, changed, expectReaders, reads, refsOf, rowReadable, world } from './helpers.ts'
 
 type Change = (facts: Facts) => Facts
 
@@ -123,11 +123,6 @@ const editFolder =
   f => ({ ...f, folders: f.folders.map(x => (x.id === id ? change(x) : x)) })
 const person = (id: Id) => ({ kind: 'person' as const, id })
 
-// The in-memory form of sqlReadableBy (sql.ts) over a stored row.
-function rowReadable(row: ReturnType<typeof aclOf>, keys: readonly string[]): boolean {
-  const held = new Set(keys)
-  return row.tokens.some(t => held.has(t)) && row.more.every(clause => clause.some(t => held.has(t)))
-}
 const keyOf = (r: Ref) => `${r.kind}:${r.id}`
 
 // R6-09's inputs. A membership, team, role or deactivation change changes people's keys and no
