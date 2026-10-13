@@ -40,12 +40,18 @@ export type Space =
 // resource whose chain (message → space, file → folders, session → room) doesn't resolve is
 // readable by nobody. Missing and unreadable give the same answer, so nothing reveals what exists.
 //
-// A snapshot may hold only the facts one request needs, with one obligation on whoever loads it:
-// for every space, event and session it holds, it holds all of that place's memberships, its
-// attendees' and members' people, and the session's stamp. The audience functions (audience.ts)
-// refuse an audience naming a person, space or membership the snapshot lacks, but they can't see
-// that a conversation's memberships were only partly loaded, and a missing membership would shrink
-// an audience rather than deny.
+// A snapshot may hold only the facts one request needs, with two obligations on whoever loads it,
+// for the facts whose presence (not absence) narrows an answer:
+// - for every space, event and session it holds: all of that place's memberships, its attendees'
+//   and members' people and the session's stamp; and for every event it holds, and the event of
+//   every meeting thread it holds, every session of that event with its participants' people,
+//   since a meeting thread's readers include everyone who took part in one (readers.ts). The
+//   audience functions (audience.ts) refuse an audience naming a person, space or era the
+//   snapshot lacks, but a partly loaded membership or session list would shrink an audience
+//   rather than deny.
+// - for every person an admin request names, as actor or target: all of their role rows and every
+//   open role proposal naming them, since an Owner-only target and an Admin's own roles are
+//   refused by those rows being there (admin.ts, T13 items 5 and 8).
 export class World {
   readonly orgId: Id
   readonly facts: Facts
@@ -163,7 +169,7 @@ export class World {
     return team !== undefined && team.archivedAt === null
   }
   // Teams the person currently belongs to. Membership of an archived team still counts for
-  // content grants to it until C1.10 transfers the team's resources (T13).
+  // content grants to it until an Admin removes the member (T13 item 14).
   teamsOf(personId: Id): Id[] {
     return (this.teamsByPerson.get(personId) ?? []).filter(id => this.teams.has(id))
   }

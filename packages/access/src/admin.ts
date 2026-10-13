@@ -169,9 +169,6 @@ function isOpenPublicChannel(world: World, ref: Ref): boolean {
   return channel !== undefined && channel.archivedAt === null && channel.visibility === 'public'
 }
 
-// A team's default channels and rooms (ACC-07): public ones, or private ones the team owns and the
-// person setting them already manages, never a restricted room. So a team default can't pull the
-// team into a space none of them could open.
 // A person's manager receives their items when they leave (ACC-05), so nobody names themselves
 // anyone's manager through an admin power; another Admin or an Owner does (T13). The manager is
 // an active person other than the person themselves, or nobody.
@@ -180,6 +177,9 @@ function mayBeManager(world: World, actor: Id, person: Id | null, manager: Id | 
   return manager !== actor && manager !== person && world.isActivePerson(manager)
 }
 
+// A team's default channels and rooms (ACC-07): public ones, or private ones the team owns and the
+// person setting them already manages, never a restricted room. So a team default can't pull the
+// team into a space none of them could open.
 function mayBeTeamDefault(world: World, actor: Id, teamId: Id, ref: Ref): boolean {
   if (ref.kind === 'channel') {
     const channel = world.get({ kind: 'channel', id: ref.id })

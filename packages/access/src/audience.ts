@@ -87,8 +87,8 @@ export interface AudienceGap {
 // Whether the snapshot can say who an audience is (T13: a fact it doesn't hold denies). Every
 // org, person, team, space and era it names must be in the snapshot, and it must hold someone now
 // or be able to gain someone later: an audience of people who have all left, or of a conversation
-// nobody is in any more, is unknown, never empty. A partly loaded membership list can't be seen
-// here; the loader's obligation in world.ts covers it.
+// nobody is in any more, is unknown, never empty. A partly loaded membership or meeting-session
+// list can't be seen here; the loader's obligation in world.ts covers it.
 function resolvable(world: World, audience: Audience | null): audience is Audience {
   if (!audience || audience.orgId !== world.orgId || audience.tokens.length === 0) return false
   for (const token of audience.tokens) {
@@ -146,10 +146,13 @@ export function sameAudience(world: World, a: Audience | null, b: Audience | nul
       .filter(t => isOpenToken(world, t) === open)
       .sort()
       .join('\n')
-  if (tokens(a, true) !== tokens(b, true)) return false
+  const open = tokens(a, true)
+  if (open !== tokens(b, true)) return false
   // Beside an open token, a closed one keeps someone in after they leave the open one, so the
-  // closed tokens must match too. With no open token, nobody joins later, so today's people decide.
-  if (tokens(a, true) !== '' && tokens(a, false) !== tokens(b, false)) return false
+  // closed tokens must match too; beside the whole org they add nobody. With no open token,
+  // nobody joins later, so today's people decide.
+  const org = orgToken(world.orgId)
+  if (open !== '' && !open.split('\n').includes(org) && tokens(a, false) !== tokens(b, false)) return false
   return audiencePeople(world, a).join('\n') === audiencePeople(world, b).join('\n')
 }
 

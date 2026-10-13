@@ -328,6 +328,7 @@ export const RULE_2: readonly RuleCase[] = [
       const a = audienceOf(empty, ref.channel(C.leadership))
       expect(audiencePeople(empty, a)).toEqual([])
       expect(covers(empty, a, ref.session(S.pricing))).toBe(false)
+      expect(covers(empty, a, ref.message(M.leadership))).toBe(true)
       expect(
         sourceAllowed(empty, { run: 'agent_scheduled', agentId: AG.digest, audience: a }, ref.session(S.pricing)),
       ).toBe(false)
@@ -335,7 +336,7 @@ export const RULE_2: readonly RuleCase[] = [
   ),
   c0(
     'R2-31b',
-    'Rule 2 T13: an audience naming someone the snapshot lacks, people who have all left, or a conversation nobody is in covers nothing',
+    'Rule 2 T13: an audience naming someone, a space or an era the snapshot lacks, people who have all left, or a conversation nobody is in covers nothing',
     () => {
       const restricted = ref.session(S.peopleAshton)
       const scheduled = (w: typeof world, audience: ReturnType<typeof audienceOf>) =>
@@ -381,6 +382,26 @@ export const RULE_2: readonly RuleCase[] = [
         sourceAllowed(slice, { run: 'agent_scheduled', agentId: AG.digest, audience: sliced }, ref.session(S.pricing)),
       ).toBe(false)
       expect(sameAudience(slice, sliced, audienceOf(slice, ref.session(S.q4Review)))).toBe(false)
+      // A space or era the snapshot lacks: the audience is unknown, never smaller.
+      const noChannel = changed(f => ({ ...f, channels: f.channels.filter(c => c.id !== C.leadership) }))
+      expect(covers(noChannel, leadership(), ref.event(E.allHands))).toBe(false)
+      const eraAudience = audienceOf(world, ref.message(M.q4Fifth))
+      const danielEra = world.facts.memberships.find(m => m.spaceId === CV.q4 && m.principalId === P.daniel)
+      const noEra = changed(f => ({ ...f, memberships: f.memberships.filter(m => m.id !== danielEra?.id) }))
+      expect(covers(noEra, eraAudience, ref.message(M.q4First))).toBe(false)
+      // A meeting thread's readers include everyone who took part in any session of its event, so
+      // the loader holds them all (world.ts): here Daniel, not invited, joined a second pricing
+      // session, and the first session's notes don't belong in the thread.
+      const pricing = world.get({ kind: 'session', id: S.pricing })
+      if (!pricing) throw new Error('the fixture has no pricing session')
+      const secondSession = changed(f => ({
+        ...f,
+        sessions: [...f.sessions, { ...pricing, id: 'ss-pricing-2', participants: [P.ashton, P.daniel] }],
+        threads: [...f.threads, { id: 'th-pricing', audience: { kind: 'event', eventId: E.pricing } }],
+      }))
+      const pricingThread = audienceOf(secondSession, ref.thread('th-pricing'))
+      expect(sameAudience(secondSession, audienceOf(secondSession, ref.session(S.pricing)), pricingThread)).toBe(false)
+      expect(covers(secondSession, pricingThread, ref.session(S.pricing))).toBe(false)
       // The unchanged fixture still lets the digest use #leadership's own post there.
       expect(scheduled(world, leadership())).toBe(true)
     },

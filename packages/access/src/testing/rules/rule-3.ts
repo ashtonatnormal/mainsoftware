@@ -273,7 +273,7 @@ export const RULE_3: readonly RuleCase[] = [
   ),
   c0(
     'R3-03',
-    'Rule 3 DOC-09 DOC-10 SHEET-40 SLIDE-30: an item’s access never depends on a derived item drawn from it; a preview has its sources’ readers',
+    'Rule 3 DOC-09 DOC-10 SHEET-40 SLIDE-30: a file’s access never depends on derived items; a preview has its sources’ readers',
     () => {
       // A suggestion for the Q4 proposal drawn from the Q3 pricing review is, until accepted, a
       // derived item: only people who read the review see the preview. Once accepted it is the
@@ -557,6 +557,8 @@ export const RULE_3: readonly RuleCase[] = [
       expect(covers(world, audienceOf(world, ref.channel(C.leadership)), ref.file(FI.allHandsDeck))).toBe(true)
       // A copy stored as playback-only goes with the session's audience and is never indexed.
       expect(indexClassOf(world, ref.slideCopy(SC.standupPlayback))).toBe('playback_only')
+      // Slides everyone could open are indexed as part of their session (SLIDE-34).
+      expect(indexClassOf(world, ref.slideCopy(SC.standup))).toBe('normal')
       expect(SEARCHABLE_CLASSES).not.toContain('playback_only')
       expect(reads(world, P.nadia, ref.slideCopy(SC.standupPlayback))).toBe(true)
       expect(indexClassOf(world, ref.slideCopy(SC.pricing))).toBe('playback_only')

@@ -139,7 +139,12 @@ export const S = {
   dmCall: 'ss-dm-call', // a DM call both took part in
   q4Review: 'ss-q4-launch-review',
 } as const
-export const SC = { pricing: 'sc-pricing-1', people: 'sc-people-1', standupPlayback: 'sc-standup-1' } as const
+export const SC = {
+  pricing: 'sc-pricing-1',
+  people: 'sc-people-1',
+  standupPlayback: 'sc-standup-1',
+  standup: 'sc-standup-2', // the whole org could open the deck: indexed with the session
+} as const
 export const F = {
   q4: 'f-q4-launch',
   q4Contract: 'f-q4-contract',
@@ -594,6 +599,7 @@ export function fixtureFacts(): Facts {
       { id: SC.pricing, sessionId: S.pricing, playbackOnly: true },
       { id: SC.people, sessionId: S.peopleAshton, playbackOnly: false },
       { id: SC.standupPlayback, sessionId: S.standupFri, playbackOnly: true },
+      { id: SC.standup, sessionId: S.standupFri, playbackOnly: false },
     ],
     events: [
       { id: E.pricing, organiserId: P.ashton, invitees: [P.weiling, P.ahmad, P.rachel] },

@@ -74,11 +74,11 @@ export function indexClassOf(world: World, ref: Ref, seen: ReadonlySet<string> =
         if (conversation?.kind !== 'conversation') return 'restricted'
         return of({ kind: conversation.fact.kind, id: conversation.fact.id })
       }
-      const room = world.get({ kind: 'room', id: session.place.roomId })
-      if (!room) return 'restricted'
-      // The room's chain must resolve, but its restricted flag now is not the session's.
-      if (room.kind === 'channel_room') return of({ kind: 'channel', id: room.channelId })
-      if (room.kind === 'meeting') return of({ kind: 'event', id: room.eventId })
+      // Classed by its stamp, which its readers follow (REC-20): a space stamp needs its space; a
+      // meeting's or a call's carries its own people. The room's restricted flag now is not the
+      // session's.
+      if (!world.get({ kind: 'room', id: session.place.roomId })) return 'restricted'
+      if (session.stamp.audience === 'space') return world.space(session.stamp.spaceId) ? 'normal' : 'restricted'
       return 'normal'
     }
     case 'slide_copy': {

@@ -385,6 +385,8 @@ describe('sameAudience (REC-13: notes go only where the readers exactly match)',
     const lead = m(C.leadership)
     expect(sameAudience(world, audience(lead, p(P.priya)), audience(lead))).toBe(false)
     expect(sameAudience(world, audience(lead, p(P.priya)), audience(p(P.priya), lead))).toBe(true)
+    // Beside the whole org a person adds nobody.
+    expect(sameAudience(world, audience(o, p(P.priya)), audience(o))).toBe(true)
   })
 
   test('T13: an audience naming someone the snapshot lacks, or people who have all left, is never the same', () => {
@@ -392,7 +394,13 @@ describe('sameAudience (REC-13: notes go only where the readers exactly match)',
     expect(sameAudience(world, unknown, unknown)).toBe(false)
     const gone = audienceOfPeople(world, [P.formerDpo])
     expect(sameAudience(world, gone, gone)).toBe(false)
-    expect(sameAudience(world, audience(m('ch-unknown')), audience(m('ch-unknown')))).toBe(false)
+    const unknownSpace = audience(m('ch-unknown'), p(P.priya))
+    expect(sameAudience(world, unknownSpace, unknownSpace)).toBe(false)
+    const unknownTeam = audience(t('d0000000-0000-4000-8000-0000000000ff'))
+    expect(covers(world, unknownTeam, ref.message(M.ops1))).toBe(false)
+    const otherOrg = audience(orgToken('a0000000-0000-4000-8000-0000000000ff'))
+    expect(covers(world, otherOrg, ref.message(M.ops1))).toBe(false)
+    expect(sameAudience(world, otherOrg, otherOrg)).toBe(false)
   })
 
   test('ACC-11: audiences from another org are never the same, whoever they name', () => {

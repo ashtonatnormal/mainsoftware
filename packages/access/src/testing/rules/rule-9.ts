@@ -462,6 +462,24 @@ export const RULE_9: readonly RuleCase[] = [
         expect(allows(proposed, P.arjun, { action, person: P.kelvin }, reauthenticated), action).toBe(false)
         expect(allows(proposed, P.ashton, { action, person: P.kelvin }, reauthenticated), action).toBe(true)
       }
+      // Once the proposal is withdrawn, Kelvin is the Admin's to handle again.
+      const withdrawn = changed(f => ({
+        ...f,
+        roleProposals: [
+          ...f.roleProposals,
+          {
+            id: 'pr-kelvin-dpo',
+            personId: P.kelvin,
+            role: 'dpo',
+            proposedBy: P.ashton,
+            approvedAt: null,
+            withdrawnAt: 1,
+          },
+        ],
+      }))
+      for (const action of takeovers) {
+        expect(allows(withdrawn, P.arjun, { action, person: P.kelvin }, reauthenticated), action).toBe(true)
+      }
       expect(allows(proposed, P.arjun, { action: 'role.approve', proposalId: 'pr-kelvin-dpo' }, reauthenticated)).toBe(
         true,
       )

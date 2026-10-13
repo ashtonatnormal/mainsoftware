@@ -618,7 +618,7 @@ export const RULE_6: readonly RuleCase[] = [
       expect(beforeAfter(world, co, P.weiling, request), request.action).toEqual([true, false])
     }
     // Marcus's Team Admin role for Operations is revoked: they no longer act as Owner of the team's
-    // items or changes its members.
+    // items or change its members.
     const ta = changed(revoke(P.marcus, 'team_admin'))
     expect(keysOf(ta, human(P.marcus))).not.toContain(`ta:${T.operations}`)
     expect(beforeAfter(world, ta, P.marcus, { action: 'limit_editing', resource: ref.file(FI.opsPolicy) }, {})).toEqual(

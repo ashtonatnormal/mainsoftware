@@ -146,7 +146,9 @@ export const RULE_1: readonly RuleCase[] = [
     'Rule 1 SRCH-04 T3: under sqlReadableBy’s row rule, the stored ACL rows select exactly what filterReadable keeps (scripts/check-access-sql.ts runs the SQL itself)',
     () => {
       // Rows with several clauses too: derived items whose sources different people read (Rule 3),
-      // and a doc in the Trash whose trasher reads it only through a team grant (DRV-01).
+      // and a doc in the Trash whose trasher reads it only through a team grant (DRV-01). The Trash
+      // row's second clause decides only after a key change, which R6-09 and
+      // scripts/check-access-sql.ts cover.
       const w = changed(f => ({
         ...f,
         derived: [
@@ -747,6 +749,11 @@ export const RULE_1: readonly RuleCase[] = [
         true,
       )
       expect(allows(open, P.nadia, { action: 'member.add', resource: ref.room(R.lounge), principal: rachel })).toBe(
+        false,
+      )
+      // Wei Ling isn't in public #ops-north-site, and can't add anyone to it.
+      const ahmad = { kind: 'human' as const, id: P.ahmad }
+      expect(allows(world, P.weiling, { action: 'member.add', resource: ref.channel(C.ops), principal: ahmad })).toBe(
         false,
       )
     },
