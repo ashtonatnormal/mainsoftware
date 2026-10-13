@@ -10,5 +10,12 @@ export default defineConfig({
   test: {
     include: ['{apps,packages}/*/**/*.test.{ts,tsx}', 'infra/**/*.test.ts', 'scripts/**/*.test.ts'],
     exclude: [...defaultExclude, '**/dist/**', '**/cdk.out/**'],
+    // Tags on the Rule 1-9 suite (packages/access/rules.test.ts): one per rule, and on a todo the
+    // kind of stage that builds it. `--tags-filter=ai` lists the AI cases.
+    tags: [
+      ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => ({ name: `rule-${n}`, description: `PRD §7.2 Rule ${n}` })),
+      { name: 'core', description: 'a non-AI case for a later core step' },
+      { name: 'ai', description: 'a case for the AI layer (A0-A6)' },
+    ],
   },
 })

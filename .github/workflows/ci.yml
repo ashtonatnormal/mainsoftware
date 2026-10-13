@@ -35,10 +35,10 @@ jobs:
       - run: npm audit --audit-level=high
       - run: npm audit signatures
   # Every npm workspace from the root (apps/*, packages/*, infra and demo/): what `npm run check`
-  # runs locally (typecheck, lint, test), as separate steps so a failure names its step, then the
-  # build, the local database (npm run db:reset), the server's start-up check
-  # (scripts/check-server.sh) from source and from the image, and the image's migrate step. The tests include the
-  # guards in scripts/guards/ (no AI packages, no secret-shaped VITE_ variables, files the server
+  # runs locally (typecheck, lint, test), as separate steps so a failure names its step, then a
+  # listing of the Rule 1-9 access suite (rules.test.ts, verbose), the build, the local database
+  # (npm run db:reset), the server's start-up check (scripts/check-server.sh) from source and from
+  # the image, and the image's migrate step. The tests include the guards in scripts/guards/ (no AI packages, no secret-shaped VITE_ variables, files the server
   # loads that Node can run). Keep CLAUDE.md (Testing and CI) in step with this job. It waits for
   # secrets and audit, so it gates merging on them too.
   check:
@@ -65,6 +65,9 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      # The Rule 1-9 access suite, case by case, todos included, so CI lists every rule
+      # (BUILD-PLAN C0.4, T10). `npm test` above already ran it; this prints the names.
+      - run: npx vitest run packages/access/rules.test.ts --reporter=verbose
       - run: npm run build
       # Node runs the server's .ts source with no build step (T2), so prove that every role
       # starts, answers /health and /ready against the local Compose stack, and stops cleanly on
@@ -139,6 +142,11 @@ jobs:
       # Refusals that must hold when two transactions race (someone leaving while given a role,
       # a device signed out while a session starts), in two connections to a throwaway database.
       - run: node apps/server/scripts/check-concurrency.ts
+      # The SQL access filter (sqlReadableBy, @hearth/access/sql) selects exactly what the
+      # in-memory rule allows, for every person, both assistants and the system principal in the
+      # fixture org, on Postgres 17, and still does after membership changes with no row rewritten;
+      # a NULL acl_more is nobody's, and agents (who read by scope; A2) match no row (C0.4, SRCH-04).
+      - run: node scripts/check-access-sql.ts
       # The Kysely types (apps/server/src/db/schema.ts) match the schema the migrations build.
       - run: npm run db:types
       - run: git diff --exit-code -- apps/server/src/db/schema.ts
