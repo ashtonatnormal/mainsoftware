@@ -5,9 +5,14 @@
   "type": "module",
   "description": "The permission model every access check goes through (PRD §7.2, B.4). Built in C0.4.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./sql": "./src/sql.ts",
+    "./testing": "./src/testing/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "kysely": "0.29.6"
   }
 }

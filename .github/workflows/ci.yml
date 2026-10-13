@@ -65,6 +65,9 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      # The Rule 1-9 access suite, case by case, todos included, so CI lists every rule
+      # (BUILD-PLAN C0.4, T10). `npm test` above already ran it; this prints the names.
+      - run: npx vitest run packages/access/rules.test.ts --reporter=verbose
       - run: npm run build
       # Node runs the server's .ts source with no build step (T2), so prove that every role
       # starts, answers /health and /ready against the local Compose stack, and stops cleanly on
@@ -139,6 +142,10 @@ jobs:
       # Refusals that must hold when two transactions race (someone leaving while given a role,
       # a device signed out while a session starts), in two connections to a throwaway database.
       - run: node apps/server/scripts/check-concurrency.ts
+      # The SQL access filter (sqlReadableBy, @hearth/access/sql) selects exactly what the
+      # in-memory rule allows, for every subject in the fixture org, on Postgres 17, and still does
+      # after membership changes with no row rewritten (C0.4, SRCH-04).
+      - run: node packages/access/src/testing/check-sql.ts
       # The Kysely types (apps/server/src/db/schema.ts) match the schema the migrations build.
       - run: npm run db:types
       - run: git diff --exit-code -- apps/server/src/db/schema.ts
