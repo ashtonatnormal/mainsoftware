@@ -354,7 +354,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     const api = await startApiOn(valkey, logger)
     const realtime = await startRealtimeApp(options.recheckMs ?? SOCKET_RECHECK_MS, true)
     // The realtime app subscribes in the background; a revocation published before it has would
-    // be caught only by the 30-second re-check.
+    // be caught only by the re-check.
     for (let tries = 0; ; tries++) {
       const reply = (await valkey.call('PUBSUB', 'NUMSUB', names.revoked)) as [string, number]
       if (Number(reply[1]) >= 1) break

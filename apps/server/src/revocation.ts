@@ -1,7 +1,8 @@
 // Telling the realtime role which sessions have ended (T5, ACC-05). After a commit that ended
 // sessions (a sign-out, a deactivation, a PIN reset), the api publishes their ids on one Valkey
 // channel, and every realtime process closes those sessions' sockets at once. It is best effort:
-// a lost message is caught by the realtime role's re-check of every open socket within 30 s, so a
+// a lost message is caught by the realtime role's re-check of every open socket (every 15 s, and
+// with Postgres down too: realtime/socket.ts closes what it can't confirm within T5's 60 s), so a
 // failure here is logged and swallowed, never turned into an error for the person who signed out.
 // The message holds session ids only, never a token.
 import type { Redis } from 'ioredis'

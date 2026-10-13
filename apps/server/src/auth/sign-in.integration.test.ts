@@ -1019,7 +1019,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const closed = await closeOf(open.closed)
     expect(closed).toMatchObject({ code: 4401, reason: 'signed_out' })
     expect(closed.at - startedAt).toBeLessThan(2000)
-    // The push closed it, not the 30-second re-check.
+    // The push closed it, not the re-check.
     expect(s.realtime.server.counts().closedRevoked).toBe(before + 1)
     const reconnect = await s.openSocket(d1)
     expect(reconnect.status).toBe(401)
@@ -1191,7 +1191,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     ])
   })
 
-  it("T5: the 30-second re-check alone closes a revoked session's socket", async () => {
+  it("T5: the re-check alone closes a revoked session's socket", async () => {
     // Budgets: Q 1 code request.
     const other = await s.startRealtime({ recheckMs: 500, subscribe: false })
     const q = await s.person({ pin: s.newPin() })
@@ -1228,8 +1228,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(s.logs.some(line => line.event === 'reauth_limit_unavailable')).toBe(true)
   })
 
-  it('ACC-03 T14: a number in two orgs, and a number removed before the finish', async () => {
-    // Budgets: T 1 code request (the second org's person holds the same number), Y 1.
+  it('ACC-03 T14: a number in two orgs, a number removed before its code is checked, and one removed before the finish', async () => {
+    // Budgets: T 1 code request (the second org's person holds the same number), Z 1, Y 1.
     const t = await s.person({ pin: s.newPin() })
     const twin = await s.person({ org: 'second', e164: t.e164 })
     const sentBefore = s.sms.sent.length
@@ -1241,6 +1241,25 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const twoOrgs = s.logs.filter(line => line.event === 'phone_in_two_orgs')
     expect(twoOrgs.length).toBeGreaterThan(0)
     for (const line of twoOrgs) expect(JSON.stringify(line)).not.toContain(t.local)
+
+    // The right code, checked after its number was removed, is answered as a wrong one and moves
+    // the sign-in no further.
+    const z = await s.person({ pin: s.newPin() })
+    const zc = s.client()
+    expect((await requestCode(zc, z.e164)).status).toBe(200)
+    const zCode = await s.sms.nextCode(z.e164)
+    await s.query('update phone_numbers set removed_at = now(), removed_by = $2 where id = $1', [
+      z.phoneNumberId,
+      s.org.system,
+    ])
+    const checked = await verifyCode(zc, zCode)
+    expect(checked.status).toBe(401)
+    expect(checked.body).toMatchObject({ error: 'code_wrong', triesLeft: 4 })
+    await s.settled()
+    expect((await auditOf(z)).map(row => [row.action, row.details])).toEqual([
+      ['auth.code_requested', { send: 'attempted' }],
+      ['auth.code_failed', { result: 'wrong', numberRemoved: true }],
+    ])
 
     const y = await s.person()
     const { client: yc, reply: step } = await atStepUp(y)

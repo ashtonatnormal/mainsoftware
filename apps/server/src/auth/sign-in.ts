@@ -46,7 +46,7 @@ import { checkPin, type PinCheck, pinStateJSON } from '#src/auth/pin.ts'
 import { pinState } from '#src/auth/pin-lock.ts'
 import { pinProblem } from '#src/auth/pin-policy.ts'
 import { LIMITS, OTP, PASSKEY_CHALLENGE_TTL_MS } from '#src/auth/policy.ts'
-import { AttemptStale, type IssuedSession, issueSession } from '#src/auth/sessions.ts'
+import { AttemptStale, type IssuedSession, issueSession, numberStillTheirs } from '#src/auth/sessions.ts'
 import { type InOrg, withOrg } from '#src/db/database.ts'
 import { personByPhone } from '#src/db/pre-org.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
@@ -297,7 +297,7 @@ async function deliverCode(
   }
   const { orgId, personId, phoneNumberId } = match
   const send = await withOrg(api.db, { orgId, system: true }, async trx => {
-    const audit = (send: 'attempted' | 'skipped_left' | 'skipped_cap') =>
+    const audit = (send: 'attempted' | 'skipped_left' | 'skipped_number_removed' | 'skipped_cap') =>
       writeAudit(trx, {
         orgId,
         actorId: null,
@@ -311,6 +311,12 @@ async function deliverCode(
       })
     if (!(await stillHere(trx, orgId, personId))) {
       await audit('skipped_left')
+      return false
+    }
+    // The lookup's own lock ended with its transaction, so the number is read again: one removed or
+    // moved since gets no code.
+    if (!(await numberStillTheirs(trx, orgId, personId, phoneNumberId))) {
+      await audit('skipped_number_removed')
       return false
     }
     let capped: 'sms_global_cap' | 'sms_cap_unavailable' | undefined
@@ -369,11 +375,14 @@ export async function verifyCode(
     checkOtp(api.valkey, api.names, attempt.numberTag, key, otpMac(api.keys, key, attempt.numberTag, body.code)),
   )
   const person = named(attempt)
-  let left = false
+  let stale: 'left' | 'number_removed' | undefined
   if (check.result === 'ok' && person !== undefined) {
-    const { orgId, personId } = person
+    const { orgId, personId, phoneNumberId } = person
     const account = await withOrg(api.db, { orgId, system: true }, async trx => {
-      if (!(await stillHere(trx, orgId, personId))) return undefined
+      if (!(await stillHere(trx, orgId, personId))) return 'left' as const
+      // A number removed or moved since the code went to it moves the sign-in no further, and
+      // shows nothing of the account.
+      if (!(await numberStillTheirs(trx, orgId, personId, phoneNumberId))) return 'number_removed' as const
       const user = await sql<{
         pin_hash: string | null
         pin_failures: number
@@ -385,7 +394,7 @@ export async function verifyCode(
         where org_id = ${orgId} and user_id = ${personId} and removed_at is null`.execute(trx)
       return { user: user.rows[0], passkeys: Number(passkeys.rows[0]?.n ?? 0) }
     })
-    if (account !== undefined) {
+    if (typeof account !== 'string') {
       const { user } = account
       const pinHash = user?.pin_hash ?? null
       const next = pinHash === null ? 'set_pin' : 'step_up'
@@ -399,10 +408,11 @@ export async function verifyCode(
         body: { status: 'code_verified', next: 'step_up', pin: pinStateJSON(state), passkey: account.passkeys > 0 },
       }
     }
-    left = true
+    stale = account
   }
   // Every failure is answered as a wrong guess at that count would be: a right code on an attempt
-  // that names nobody (a one-in-a-million guess) or a leaver too, so nothing tells them apart.
+  // that names nobody (a one-in-a-million guess), a leaver, or a number no longer theirs too, so
+  // nothing tells them apart.
   const tries = check.result === 'ok' ? check.tries + 1 : check.tries
   const result = check.result === 'ok' ? (tries >= OTP.maxTries ? 'dead' : 'wrong') : check.result
   if (person !== undefined) {
@@ -417,7 +427,12 @@ export async function verifyCode(
           deviceId: null,
           ip: info.ip,
           requestId: info.requestId,
-          details: left ? { result, left: true } : { result },
+          details:
+            stale === 'left'
+              ? { result, left: true }
+              : stale === 'number_removed'
+                ? { result, numberRemoved: true }
+                : { result },
         }),
       ),
     )

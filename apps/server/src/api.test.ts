@@ -290,6 +290,7 @@ describe('C0.5 ACC-03 PRD-53 a code request answers before anything touches Post
         }
         if (statement.text.includes("from principals where org_id = $1 and kind = 'system'")) return [{ id: SYSTEM }]
         if (statement.text.startsWith('select deactivated_at from people')) return [{ deactivated_at: null }]
+        if (statement.text.startsWith('select 1 from phone_numbers')) return [{ '?column?': 1 }]
         return []
       },
       async statement => {

@@ -2,7 +2,8 @@
 // socket is opened only for a live session, from the app's own origin (CLAUDE.md, Security and
 // privacy), and closed as soon as that session ends (T5, ACC-05): at once when the api says so on
 // the revocation channel (realtime/index.ts), and otherwise at the next re-check of every open
-// socket's session, within SOCKET_RECHECK_MS.
+// socket's session, within SOCKET_RECHECK_MS. While re-checks fail (Postgres down), a socket
+// whose session can't be confirmed live in time to keep SOCKET_REVOKE_MS is closed as unchecked.
 //
 // Once a listener for 'upgrade' exists, Node hands every upgrade request to it and never to
 // Fastify, and leaves one it doesn't answer hanging. So the handler here answers every upgrade,
@@ -21,7 +22,7 @@ import type { Logger } from 'pino'
 import { WebSocket, WebSocketServer } from 'ws'
 import { readCookie, SESSION_COOKIE } from '#src/auth/cookies.ts'
 import { sha256 } from '#src/auth/crypto.ts'
-import { SIGNED_OUT_CLOSE, SOCKETS_PER_SESSION } from '#src/auth/policy.ts'
+import { SIGNED_OUT_CLOSE, SOCKET_REVOKE_MS, SOCKETS_PER_SESSION } from '#src/auth/policy.ts'
 import type { SessionIds } from '#src/db/pre-org.ts'
 import { pathOf } from '#src/logger.ts'
 import { isAppOrigin } from '#src/origin.ts'
@@ -45,6 +46,11 @@ export const CLOSE_GRACE_MS = 1000
 // The close every socket gets when the server stops: the client reconnects (to another task).
 export const STOPPING_CLOSE = { code: 1001, reason: 'server stopping' } as const
 
+// The close a socket gets when its session couldn't be confirmed live in time, because the
+// re-checks kept failing: the session may still be live, so the client reconnects, and the
+// upgrade's own lookup decides.
+export const UNCHECKED_CLOSE = { code: 1013, reason: 'try again later' } as const
+
 // Refused upgrades are logged at debug, since anyone can repeat them without limit, and summed up
 // at info at most this often.
 const REFUSAL_LOG_MS = 60_000
@@ -66,9 +72,12 @@ export interface SocketServerOptions {
   // The live session behind a token's SHA-256, or undefined (db/pre-org.ts sessionByToken in
   // production; a fake in unit tests). A throw refuses the upgrade 503.
   lookup: (tokenHash: Buffer) => Promise<SessionIds | undefined>
-  // Of these sessions, the ids still live. A throw keeps every socket open until the next try.
+  // Of these sessions, the ids still live. A throw closes only the sockets that would otherwise
+  // stay unconfirmed for longer than revokeWithinMs.
   stillLive: (sessions: readonly SessionIds[]) => Promise<Set<string>>
   recheckMs: number
+  // How soon a session that ends must lose its sockets: SOCKET_REVOKE_MS unless a test shortens it.
+  revokeWithinMs?: number
   lookupTimeoutMs?: number
   // RECHECK_TIMEOUT_MS, or the re-check interval if that is shorter, unless a test sets it.
   recheckTimeoutMs?: number
@@ -82,6 +91,8 @@ export interface SocketCounts {
   // Sockets closed because their session ended: told by the api, or found by the re-check.
   closedRevoked: number
   closedRecheck: number
+  // Sockets closed because the re-checks kept failing and their session couldn't be confirmed live.
+  closedUnchecked: number
 }
 
 export interface SocketServer {
@@ -99,17 +110,22 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   const { appOrigin, logger } = options
   const lookupTimeoutMs = options.lookupTimeoutMs ?? LOOKUP_TIMEOUT_MS
   const recheckTimeoutMs = options.recheckTimeoutMs ?? Math.min(options.recheckMs, RECHECK_TIMEOUT_MS)
+  const revokeWithinMs = options.revokeWithinMs ?? SOCKET_REVOKE_MS
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES, perMessageDeflate: false })
 
   // Each open socket's session, and each session's open sockets.
   const sessionOf = new Map<WebSocket, SessionIds>()
   const socketsOf = new Map<string, Set<WebSocket>>()
+  // When each open session was last confirmed live (epoch ms): when its upgrade's lookup started,
+  // or a re-check that found it live started, whichever is later.
+  const confirmedAt = new Map<string, number>()
 
   const refused = zeroRefusals()
   let refusalsLogged = zeroRefusals()
   let refusalsLoggedAt = Date.now()
   let closedRevoked = 0
   let closedRecheck = 0
+  let closedUnchecked = 0
   let stopping = false
 
   function refuse(socket: Duplex, reason: Refusal): void {
@@ -160,6 +176,7 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     if (token === undefined) return refuse(socket, 'session')
 
     let session: SessionIds | undefined | 'timed out'
+    const askedAt = Date.now()
     try {
       session = await lookupWithin(sha256(token))
     } catch (error) {
@@ -180,10 +197,10 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     // verifyClient), so no other upgrade can pass the cap above before this one is counted.
     socket.removeListener('error', onSocketError)
     const ids = session
-    wss.handleUpgrade(request, socket, head, ws => accept(ws, ids))
+    wss.handleUpgrade(request, socket, head, ws => accept(ws, ids, askedAt))
   }
 
-  function accept(ws: WebSocket, session: SessionIds): void {
+  function accept(ws: WebSocket, session: SessionIds, askedAt: number): void {
     // A frame over MAX_FRAME_BYTES, or any other protocol error, ends this socket and nothing
     // else. Without a listener the error would be thrown, and end the process.
     ws.on('error', error => {
@@ -202,11 +219,15 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
       socketsOf.set(session.sessionId, sockets)
     }
     sockets.add(ws)
+    confirmedAt.set(session.sessionId, Math.max(confirmedAt.get(session.sessionId) ?? 0, askedAt))
     ws.on('close', () => {
       sessionOf.delete(ws)
       const open = socketsOf.get(session.sessionId)
       open?.delete(ws)
-      if (open?.size === 0) socketsOf.delete(session.sessionId)
+      if (open?.size === 0) {
+        socketsOf.delete(session.sessionId)
+        confirmedAt.delete(session.sessionId)
+      }
     })
     logger.info({ event: 'ws_open', sessionId: session.sessionId })
   }
@@ -228,7 +249,12 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     })
   }
 
-  function closeSessions(sessionIds: readonly string[], cause: 'revoked' | 'recheck', at?: number): number {
+  function closeSessions(
+    sessionIds: readonly string[],
+    cause: 'revoked' | 'recheck' | 'unchecked',
+    at?: number,
+  ): number {
+    const close = cause === 'unchecked' ? UNCHECKED_CLOSE : SIGNED_OUT_CLOSE
     let sockets = 0
     let sessions = 0
     for (const sessionId of sessionIds) {
@@ -238,12 +264,13 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
       sessions++
       for (const ws of open) {
         sockets++
-        void closeSocket(ws, SIGNED_OUT_CLOSE.code, SIGNED_OUT_CLOSE.reason)
+        void closeSocket(ws, close.code, close.reason)
       }
     }
     if (sockets === 0) return 0
     if (cause === 'revoked') closedRevoked += sockets
-    else closedRecheck += sockets
+    else if (cause === 'recheck') closedRecheck += sockets
+    else closedUnchecked += sockets
     logger.info({
       event: 'ws_closed',
       cause,
@@ -267,10 +294,21 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     }
   }
 
+  // After a failed re-check: closes the sockets of each session that, were the next re-check to
+  // fail too, would have gone unconfirmed for longer than revokeWithinMs. Such a session may have
+  // ended since it was last confirmed, with the api's message about it lost, and only a re-check
+  // would find out. The next re-check settles within recheckMs + recheckTimeoutMs from now.
+  function closeUnconfirmed(): void {
+    const confirmedBy = Date.now() + options.recheckMs + recheckTimeoutMs - revokeWithinMs
+    const unconfirmed = [...socketsOf.keys()].filter(id => (confirmedAt.get(id) ?? 0) < confirmedBy)
+    closeSessions(unconfirmed, 'unchecked')
+  }
+
   // The re-check: every open socket's session, asked whether it's still live. One run at a time;
-  // a tick that finds the last one still going is skipped. A failed check closes nothing, since
-  // Postgres being down isn't a revocation; the next tick tries again. A check that takes longer
-  // than recheckTimeoutMs has failed, so one that never answers doesn't stop the ticks after it.
+  // a tick that finds the last one still going is skipped. A failed check closes no socket as
+  // signed out, since Postgres being down isn't a revocation; it closes only the sockets
+  // closeUnconfirmed() names, and the next tick tries again. A check that takes longer than
+  // recheckTimeoutMs has failed, so one that never answers doesn't stop the ticks after it.
   let checking = false
   async function recheck(): Promise<void> {
     if (checking) return
@@ -283,6 +321,7 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
       const timedOut = new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new Error('the re-check timed out')), recheckTimeoutMs)
       })
+      const startedAt = Date.now()
       let live: Set<string>
       try {
         // A check that settles after the deadline is still handled here, so its rejection is
@@ -290,10 +329,15 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
         live = await Promise.race([Promise.resolve().then(() => options.stillLive([...sessions.values()])), timedOut])
       } catch (error) {
         logger.error({ err: error, event: 'ws_recheck_failed' }, 'could not re-check the open sockets')
+        closeUnconfirmed()
         return
       }
       const ended = [...sessions.keys()].filter(id => !live.has(id))
       closeSessions(ended, 'recheck')
+      for (const id of sessions.keys()) {
+        // Only sessions with a socket still open: the map is emptied as their last one closes.
+        if (live.has(id) && socketsOf.has(id)) confirmedAt.set(id, Math.max(confirmedAt.get(id) ?? 0, startedAt))
+      }
     } finally {
       clearTimeout(timer)
       checking = false
@@ -328,6 +372,6 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
 
   return {
     closeSessions,
-    counts: () => ({ open: sessionOf.size, refused: { ...refused }, closedRevoked, closedRecheck }),
+    counts: () => ({ open: sessionOf.size, refused: { ...refused }, closedRevoked, closedRecheck, closedUnchecked }),
   }
 }

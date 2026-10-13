@@ -62,8 +62,8 @@ export function registerRealtime(
 // a device still signed in, of a person who hasn't left. The same rules as session_by_token
 // (0006), read in each org's own transaction acting as its system principal, with no row locks:
 // it's a periodic re-check, not a refusal. An org with no system principal can't be checked, so
-// its sessions count as ended (failing closed); any other error is thrown, and the re-check keeps
-// every socket until its next try.
+// its sessions count as ended (failing closed); any other error is thrown, and the failed re-check
+// closes only the sockets it can no longer confirm in time (socket.ts closeUnconfirmed).
 export async function liveSessions(
   db: Database,
   sessions: readonly SessionIds[],

@@ -6,11 +6,13 @@ import { deriveKeys, keyName } from '#src/auth/crypto.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { SLIDING_WINDOW } from '#src/auth/limiter.ts'
 import { relyingParty } from '#src/auth/passkeys.ts'
-import { pinRefusal, setPin, tooManyRequests, verifyCode, verifyPinStep } from '#src/auth/sign-in.ts'
+import { pinRefusal, requestCode, setPin, tooManyRequests, verifyCode, verifyPinStep } from '#src/auth/sign-in.ts'
+import type { SmsProvider } from '#src/auth/sms/provider.ts'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { AfterResponse, type ReqInfo } from '#src/http.ts'
 import { OffboardingRegistry } from '#src/offboarding.ts'
 import { type Statement, scriptedPool, systemPrincipal } from '#src/testing/pool.ts'
+import { MemorySms } from '#src/testing/sms.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const PERSON = 'b0000000-0000-4000-8000-000000000001'
@@ -38,13 +40,26 @@ function valkeyWith(attempt: Attempt | undefined, check: [string, number] = ['wr
   return { valkey: valkey as unknown as Redis, store }
 }
 
-// The org's rows a code check reads: the person (left or not), their account and passkeys.
-function orgPool(person: { left?: boolean; pinHash?: string | null; passkeys?: number } = {}) {
+// The org's rows a code check reads: the person (left or not), the number the code went to (still
+// theirs or not), their account and passkeys. `roster` also answers the roster lookup with them.
+function orgPool(
+  person: {
+    left?: boolean
+    numberRemoved?: boolean
+    pinHash?: string | null
+    passkeys?: number
+    roster?: boolean
+  } = {},
+) {
   return scriptedPool((statement: Statement) => {
     const { text } = statement
+    if (person.roster && text.includes('from public.person_by_phone(')) {
+      return [{ phone_number_id: NUMBER, org_id: ORG, person_id: PERSON }]
+    }
     if (text.startsWith('select deactivated_at from people')) {
       return [{ deactivated_at: person.left ? new Date('2026-10-01T00:00:00Z') : null }]
     }
+    if (text.startsWith('select 1 from phone_numbers')) return person.numberRemoved ? [] : [{ '?column?': 1 }]
     if (text.startsWith('select pin_hash, pin_failures')) {
       if (person.pinHash === undefined) return []
       return [{ pin_hash: person.pinHash, pin_failures: 0, pin_last_failed_at: null, now: new Date() }]
@@ -54,13 +69,13 @@ function orgPool(person: { left?: boolean; pinHash?: string | null; passkeys?: n
   })
 }
 
-function context(valkey: Redis, pool = scriptedPool()) {
+function context(valkey: Redis, pool = scriptedPool(), sms?: SmsProvider) {
   const tasks: (() => Promise<void>)[] = []
   const api: Api = {
     db: pool.db,
     valkey,
     keys: deriveKeys('unit-test-unit-test-unit-test-unit-test'),
-    sms: undefined,
+    sms,
     keyPrefix: PREFIX,
     offboarding: new OffboardingRegistry({ info: vi.fn(), error: vi.fn() }),
     afterResponse: new AfterResponse(),
@@ -146,6 +161,28 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
     expect(audit?.values).toContainEqual({ result: 'wrong', left: true })
   })
 
+  it('ACC-03 T14: answers the right code sent to a number removed or moved since as a wrong one, shows nothing of the account, and audits it', async () => {
+    const pin = `$argon2id$v=19$m=19456,t=2,p=1$${'A'.repeat(22)}$${'B'.repeat(43)}`
+    const pool = orgPool({ numberRemoved: true, pinHash: pin, passkeys: 1 })
+    const stale = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['ok', 0])
+    const removed = context(stale.valkey, pool)
+    expect(await refusal(verifyCode(removed.api, code, ATTEMPT_ID, removed.info))).toMatchObject({
+      code: 'code_wrong',
+      extra: { triesLeft: 4 },
+    })
+    // The attempt stays where it was, and neither the PIN nor the passkeys were read.
+    expect(JSON.parse(stale.store.get(names.attempt(keyName(ATTEMPT_ID))) ?? '{}')).toMatchObject({ step: 'code_sent' })
+    expect(pool.texts().filter(text => text.includes('pin_hash') || text.includes('from passkeys'))).toEqual([])
+    const number = pool.statements.find(s => s.text.startsWith('select 1 from phone_numbers'))
+    expect(number?.text).toMatch(/person_id = \$\d+ and removed_at is null for share$/)
+    expect(number?.values).toEqual(expect.arrayContaining([ORG, NUMBER, PERSON]))
+    expect(removed.tasks).toHaveLength(1)
+    await removed.tasks[0]?.()
+    const audit = pool.statements.find(s => s.text.startsWith('insert into "audit_events"'))
+    expect(audit?.values).toContain('auth.code_failed')
+    expect(audit?.values).toContainEqual({ result: 'wrong', numberRemoved: true })
+  })
+
   it('moves a first sign-in to set_pin, and someone with a PIN to the step-up with their PIN state', async () => {
     const first = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['ok', 0])
     const firstContext = context(first.valkey, orgPool())
@@ -166,6 +203,36 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
       },
     })
     expect(JSON.parse(again.store.get(names.attempt(keyName(ATTEMPT_ID))) ?? '{}')).toMatchObject({ step: 'step_up' })
+  })
+})
+
+describe('ACC-03 T14 sending a code after the reply', () => {
+  // A code request for a roster number, with its after-reply work run: what was texted, and the
+  // audit row's details.
+  async function delivered(person: { left?: boolean; numberRemoved?: boolean }) {
+    const pool = orgPool({ ...person, roster: true })
+    const sms = new MemorySms()
+    const { api, info, tasks } = context(valkeyWith(undefined).valkey, pool, sms)
+    const reply = await requestCode(api, { phone: '+6591234567' }, undefined, info)
+    expect(reply.body).toEqual({ status: 'code_sent', expiresInSeconds: 300, codeLength: 6 })
+    for (const task of tasks) await task()
+    const audit = pool.statements.find(s => s.text.startsWith('insert into "audit_events"'))
+    return {
+      sent: sms.sent.map(entry => entry.to),
+      audit: audit?.values.find(value => typeof value === 'object' && value !== null),
+    }
+  }
+
+  it('texts a current roster number of someone still here, and audits it attempted', async () => {
+    expect(await delivered({})).toEqual({ sent: ['+6591234567'], audit: { send: 'attempted' } })
+  })
+
+  it('texts nothing to a number removed or moved after the roster lookup, and audits it skipped_number_removed', async () => {
+    expect(await delivered({ numberRemoved: true })).toEqual({ sent: [], audit: { send: 'skipped_number_removed' } })
+  })
+
+  it('texts nothing to someone who left after the roster lookup, and audits it skipped_left', async () => {
+    expect(await delivered({ left: true })).toEqual({ sent: [], audit: { send: 'skipped_left' } })
   })
 })
 

@@ -269,7 +269,7 @@ describe('C0.5 T5 ACC-05 closing a session’s sockets', () => {
     expect(server.counts()).toMatchObject({ closedRevoked: 0, closedRecheck: 1 })
   })
 
-  it('a re-check that fails keeps every socket open: Postgres being down is no revocation', async () => {
+  it('a re-check that fails closes no socket while it can still be confirmed in time: Postgres being down is no revocation', async () => {
     const stillLive = vi.fn<SocketServerOptions['stillLive']>(async () => {
       throw new Error('connection refused')
     })
@@ -277,8 +277,45 @@ describe('C0.5 T5 ACC-05 closing a session’s sockets', () => {
     const { ws } = await opened(url)
     await until(() => stillLive.mock.calls.length >= 3)
     expect(ws.readyState).toBe(WebSocket.OPEN)
-    expect(server.counts()).toMatchObject({ open: 1, closedRecheck: 0 })
+    expect(server.counts()).toMatchObject({ open: 1, closedRecheck: 0, closedUnchecked: 0 })
     expect(logs).toContainEqual(expect.objectContaining({ event: 'ws_recheck_failed' }))
+  })
+
+  it('T5 ACC-05: while re-checks keep failing, a socket closes with 1013 before its session has gone unconfirmed for revokeWithinMs', async () => {
+    // A revocation whose message was lost, with Postgres down: only the deadline closes the socket.
+    const stillLive = vi.fn<SocketServerOptions['stillLive']>(async () => {
+      throw new Error('connection refused')
+    })
+    // Re-checks every 100 ms, each with a 100 ms deadline: the socket must close within 1000 ms of
+    // its upgrade, so it closes at the first failure more than 800 ms after it, while the next
+    // could still settle in time.
+    const { url, server, logs } = await start({ recheckMs: 100, revokeWithinMs: 1000, stillLive })
+    const openedAt = Date.now()
+    const { ws, closed } = await opened(url)
+    expect(await closed).toEqual({ code: 1013, reason: 'try again later' })
+    const elapsed = Date.now() - openedAt
+    expect(elapsed).toBeGreaterThanOrEqual(800)
+    expect(elapsed).toBeLessThan(1000)
+    expect(ws.readyState).toBe(WebSocket.CLOSED)
+    await until(() => server.counts().open === 0)
+    expect(server.counts()).toMatchObject({ closedUnchecked: 1, closedRecheck: 0, closedRevoked: 0 })
+    expect(logs).toContainEqual(expect.objectContaining({ event: 'ws_closed', cause: 'unchecked', sockets: 1 }))
+  })
+
+  it('T5 ACC-05: a re-check that succeeds between failures confirms the session again, so its socket stays', async () => {
+    let calls = 0
+    // Every third re-check answers; the two in between fail.
+    const stillLive = vi.fn<SocketServerOptions['stillLive']>(async sessions => {
+      calls++
+      if (calls % 3 !== 0) throw new Error('connection refused')
+      return new Set(sessions.map(session => session.sessionId))
+    })
+    const { url, server } = await start({ recheckMs: 50, revokeWithinMs: 600, stillLive })
+    const { ws } = await opened(url)
+    // Well past 600 ms since the upgrade: only the successful re-checks keep it open.
+    await until(() => stillLive.mock.calls.length >= 24, 5000)
+    expect(ws.readyState).toBe(WebSocket.OPEN)
+    expect(server.counts()).toMatchObject({ open: 1, closedUnchecked: 0 })
   })
 
   it('T5 ACC-05: a re-check that never answers counts as failed, and the next one still runs and closes an ended session', async () => {

@@ -59,9 +59,13 @@ export const LIMITS = {
   smsGlobal: { name: 'sms-global', windowMs: 3_600_000, max: 100 },
 } as const
 
+// A session that ends loses its sockets within this long (ACC-05, T5).
+export const SOCKET_REVOKE_MS = 60_000
+
 // The realtime role re-checks every open socket's session this often, and a session holds at most
-// this many sockets.
-export const SOCKET_RECHECK_MS = 30_000
+// this many sockets. With realtime/socket.ts's 10 s deadline for one re-check, 15 s lets one failed
+// re-check close nothing and still closes within SOCKET_REVOKE_MS: 2 × (15 + 10) s < 60 s.
+export const SOCKET_RECHECK_MS = 15_000
 export const SOCKETS_PER_SESSION = 8
 
 // The close a socket gets when its session ends: the client doesn't reconnect.

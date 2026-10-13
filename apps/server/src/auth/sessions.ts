@@ -101,6 +101,21 @@ export class AttemptStale extends Error {
   }
 }
 
+// Whether a sign-in's number is still this person's current roster number: not removed, and not
+// moved to someone else. Read FOR SHARE, after the person's row (the lock order), so a change in
+// progress is waited for and then seen (ACC-03, T14).
+export async function numberStillTheirs(
+  trx: InOrg,
+  orgId: string,
+  personId: string,
+  phoneNumberId: string,
+): Promise<boolean> {
+  const { rows } = await sql`select 1 from phone_numbers
+    where org_id = ${orgId} and id = ${phoneNumberId} and person_id = ${personId} and removed_at is null
+    for share`.execute(trx)
+  return rows.length === 1
+}
+
 export interface IssuedSession {
   token: string
   sessionId: string
@@ -127,10 +142,7 @@ export async function issueSession(
   },
 ): Promise<IssuedSession> {
   const { orgId, personId } = input
-  const number = await sql`select 1 from phone_numbers
-    where org_id = ${orgId} and id = ${input.phoneNumberId} and person_id = ${personId} and removed_at is null
-    for share`.execute(trx)
-  if (number.rows.length === 0) throw new AttemptStale()
+  if (!(await numberStillTheirs(trx, orgId, personId, input.phoneNumberId))) throw new AttemptStale()
   const token = newSecret()
   let deviceId: string
   let sessionId: string
