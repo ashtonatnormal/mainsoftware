@@ -58,7 +58,9 @@ export function adminCan(world: World, actor: Id, request: AdminRequest, context
       // as a manager change.
       return (
         isAdmin(world, actor) &&
-        request.roles.every(r => roleAuthority(world, actor, r.role, r.teamId)) &&
+        request.roles.every(
+          r => !TWO_PERSON_ROLES.includes(r.role) && roleAuthority(world, actor, r.role, r.teamId),
+        ) &&
         mayBeManager(world, actor, null, request.manager)
       )
     case 'person.set_manager':

@@ -461,11 +461,21 @@ const SECTIONS: readonly Section[] = [
     title: 'person.add (a roster add or one CSV row; its roles are decided as grants)',
     rows: [
       { name: 'an Admin or Owner adds someone with no role', request: addPerson(), allowed: ADMINS },
-      ...OWNER_ONLY.map(role => ({
+      ...OWNER_ONLY.filter(role => role !== 'dpo' && role !== 'compliance_officer').map(role => ({
         name: `a row with ${role} needs an Owner, as the grant would`,
         request: addPerson({ role, teamId: null }),
         allowed: OWNERS,
       })),
+      {
+        name: 'a roster row with DPO must use the two-person grant flow',
+        request: addPerson({ role: 'dpo', teamId: null }),
+        allowed: NOBODY,
+      },
+      {
+        name: 'a CSV row with Compliance Officer must use the two-person grant flow',
+        request: addPerson({ role: 'compliance_officer', teamId: null }),
+        allowed: NOBODY,
+      },
       {
         name: 'an Admin’s row with Team Admin of a live team is allowed',
         request: addPerson({ role: 'team_admin', teamId: T.operations }),
@@ -487,9 +497,9 @@ const SECTIONS: readonly Section[] = [
         allowed: NOBODY,
       },
       {
-        name: 'one Owner-only role in a row makes the whole row need an Owner',
+        name: 'a row with a two-person role is refused even when its other roles are authorized',
         request: addPerson({ role: 'team_admin', teamId: T.operations }, { role: 'dpo', teamId: null }),
-        allowed: OWNERS,
+        allowed: NOBODY,
       },
       {
         name: 'ACC-03: a row may name an active manager other than whoever adds it',
