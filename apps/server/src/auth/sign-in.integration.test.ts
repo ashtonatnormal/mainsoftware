@@ -1228,8 +1228,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(s.logs.some(line => line.event === 'reauth_limit_unavailable')).toBe(true)
   })
 
-  it('ACC-03 T14: a number in two orgs, a number removed before its code is checked, and one removed before the finish', async () => {
-    // Budgets: T 1 code request (the second org's person holds the same number), Z 1, Y 1.
+  it('ACC-03 T14: a number in two orgs, and a number removed before its code is checked, at the step-up, and before the finish', async () => {
+    // Budgets: T 1 code request (the second org's person holds the same number), Z 1, W 1, Y 1.
     const t = await s.person({ pin: s.newPin() })
     const twin = await s.person({ org: 'second', e164: t.e164 })
     const sentBefore = s.sms.sent.length
@@ -1260,6 +1260,22 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       ['auth.code_requested', { send: 'attempted' }],
       ['auth.code_failed', { result: 'wrong', numberRemoved: true }],
     ])
+
+    // At the step-up, a PIN for a number removed since is refused right or wrong, uncounted, and
+    // the attempt goes.
+    const w = await s.person({ pin: s.newPin() })
+    const { client: wc, reply: wStep } = await atStepUp(w)
+    expect(wStep.body).toMatchObject({ next: 'step_up' })
+    await s.query('update phone_numbers set removed_at = now(), removed_by = $2 where id = $1', [
+      w.phoneNumberId,
+      s.org.system,
+    ])
+    const guessed = await wc.post('/api/auth/pin/verify', { pin: s.newPin() })
+    expect([guessed.status, guessed.error]).toEqual([401, 'attempt_expired'])
+    expect((await wc.post('/api/auth/passkey/options', {})).error).toBe('attempt_expired')
+    expect((await userOf(w))?.pin_failures).toBe(0)
+    await s.settled()
+    expect((await auditOf(w)).map(row => row.action)).toEqual(['auth.code_requested'])
 
     const y = await s.person()
     const { client: yc, reply: step } = await atStepUp(y)

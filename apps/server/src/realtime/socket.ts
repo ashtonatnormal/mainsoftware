@@ -111,6 +111,12 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   const lookupTimeoutMs = options.lookupTimeoutMs ?? LOOKUP_TIMEOUT_MS
   const recheckTimeoutMs = options.recheckTimeoutMs ?? Math.min(options.recheckMs, RECHECK_TIMEOUT_MS)
   const revokeWithinMs = options.revokeWithinMs ?? SOCKET_REVOKE_MS
+  // Even with every re-check answering, a session that ends just after one is found only by the
+  // next, which settles within recheckMs + recheckTimeoutMs: timings that can't keep
+  // revokeWithinMs are refused at start.
+  if (options.recheckMs + recheckTimeoutMs >= revokeWithinMs) {
+    throw new Error('the socket re-check interval plus its deadline must be shorter than revokeWithinMs')
+  }
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES, perMessageDeflate: false })
 
   // Each open socket's session, and each session's open sockets.

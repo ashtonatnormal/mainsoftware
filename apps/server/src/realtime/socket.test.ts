@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { WebSocket } from 'ws'
 import { buildApp } from '#src/app.ts'
 import { sha256 } from '#src/auth/crypto.ts'
+import { SOCKET_RECHECK_MS } from '#src/auth/policy.ts'
 import type { SessionIds } from '#src/db/pre-org.ts'
 import { createLogger } from '#src/logger.ts'
 import { attachSocketServer, MAX_FRAME_BYTES, type SocketServerOptions } from '#src/realtime/socket.ts'
@@ -75,7 +76,7 @@ async function start(options: Partial<SocketServerOptions> = {}) {
     logger,
     lookup,
     stillLive,
-    recheckMs: 60_000,
+    recheckMs: SOCKET_RECHECK_MS,
     ...options,
   })
   await app.listen({ host: '127.0.0.1', port: 0 })
@@ -281,25 +282,51 @@ describe('C0.5 T5 ACC-05 closing a session’s sockets', () => {
     expect(logs).toContainEqual(expect.objectContaining({ event: 'ws_recheck_failed' }))
   })
 
-  it('T5 ACC-05: while re-checks keep failing, a socket closes with 1013 before its session has gone unconfirmed for revokeWithinMs', async () => {
+  it('T5 ACC-05: refuses re-check timings that could not close an ended session within revokeWithinMs', () => {
+    const logger = createLogger({ logLevel: 'silent', role: 'realtime' })
+    const app = buildApp({ appOrigin: APP_ORIGIN, logger, checks: {} })
+    const base = { appOrigin: APP_ORIGIN, logger, lookup: knownSessions, stillLive: async () => new Set<string>() }
+    // 50 s plus the 10 s deadline reaches the 60 s limit; 49 s plus 10 s doesn't.
+    expect(() => attachSocketServer(app, { ...base, recheckMs: 50_000 })).toThrow(/shorter than revokeWithinMs/)
+    expect(() => attachSocketServer(app, { ...base, recheckMs: 100, revokeWithinMs: 200 })).toThrow(
+      /shorter than revokeWithinMs/,
+    )
+    expect(() => attachSocketServer(app, { ...base, recheckMs: 49_000 })).not.toThrow()
+    void app.close()
+  })
+
+  it('T5 ACC-05: while re-checks keep failing, a socket closes with 1013 at the first failure the next could leave past revokeWithinMs', async () => {
     // A revocation whose message was lost, with Postgres down: only the deadline closes the socket.
-    const stillLive = vi.fn<SocketServerOptions['stillLive']>(async () => {
-      throw new Error('connection refused')
-    })
-    // Re-checks every 100 ms, each with a 100 ms deadline: the socket must close within 1000 ms of
-    // its upgrade, so it closes at the first failure more than 800 ms after it, while the next
-    // could still settle in time.
-    const { url, server, logs } = await start({ recheckMs: 100, revokeWithinMs: 1000, stillLive })
-    const openedAt = Date.now()
-    const { ws, closed } = await opened(url)
-    expect(await closed).toEqual({ code: 1013, reason: 'try again later' })
-    const elapsed = Date.now() - openedAt
-    expect(elapsed).toBeGreaterThanOrEqual(800)
-    expect(elapsed).toBeLessThan(1000)
-    expect(ws.readyState).toBe(WebSocket.CLOSED)
-    await until(() => server.counts().open === 0)
-    expect(server.counts()).toMatchObject({ closedUnchecked: 1, closedRecheck: 0, closedRevoked: 0 })
-    expect(logs).toContainEqual(expect.objectContaining({ event: 'ws_closed', cause: 'unchecked', sockets: 1 }))
+    // The ticks and the clock are fake, so each re-check lands at an exact time; the sockets, and
+    // each re-check's own deadline timer, stay real.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    try {
+      const stillLive = vi.fn<SocketServerOptions['stillLive']>(async () => {
+        throw new Error('connection refused')
+      })
+      // A re-check every 1 s with a 2 s deadline, against a 10 s limit: a failure at t only keeps
+      // the limit if the next re-check settles by t + 3 s, so the socket (confirmed at 0) closes at
+      // the first failure after 7 s.
+      const { url, server, logs } = await start({
+        recheckMs: 1000,
+        recheckTimeoutMs: 2000,
+        revokeWithinMs: 10_000,
+        stillLive,
+      })
+      const { ws, closed } = await opened(url)
+      await vi.advanceTimersByTimeAsync(7000)
+      expect(stillLive).toHaveBeenCalledTimes(7)
+      expect(ws.readyState).toBe(WebSocket.OPEN)
+      expect(server.counts()).toMatchObject({ closedUnchecked: 0 })
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(stillLive).toHaveBeenCalledTimes(8)
+      expect(await closed).toEqual({ code: 1013, reason: 'try again later' })
+      await until(() => server.counts().open === 0)
+      expect(server.counts()).toMatchObject({ closedUnchecked: 1, closedRecheck: 0, closedRevoked: 0 })
+      expect(logs).toContainEqual(expect.objectContaining({ event: 'ws_closed', cause: 'unchecked', sockets: 1 }))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('T5 ACC-05: a re-check that succeeds between failures confirms the session again, so its socket stays', async () => {

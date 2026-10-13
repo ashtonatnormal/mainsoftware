@@ -6,7 +6,15 @@ import { deriveKeys, keyName } from '#src/auth/crypto.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { SLIDING_WINDOW } from '#src/auth/limiter.ts'
 import { relyingParty } from '#src/auth/passkeys.ts'
-import { pinRefusal, requestCode, setPin, tooManyRequests, verifyCode, verifyPinStep } from '#src/auth/sign-in.ts'
+import {
+  passkeyOptions,
+  pinRefusal,
+  requestCode,
+  setPin,
+  tooManyRequests,
+  verifyCode,
+  verifyPinStep,
+} from '#src/auth/sign-in.ts'
 import type { SmsProvider } from '#src/auth/sms/provider.ts'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { AfterResponse, type ReqInfo } from '#src/http.ts'
@@ -266,6 +274,37 @@ describe('SHL-49 PRD-53 the PIN steps refuse before any work', () => {
       code: 'invalid_pin',
     })
     expect(c.pool.statements).toEqual([])
+  })
+})
+
+describe('ACC-03 T14 a sign-in step after the number was removed or moved', () => {
+  const pin = `$argon2id$v=19$m=19456,t=2,p=1$${'A'.repeat(22)}$${'B'.repeat(43)}`
+
+  // The step-up for someone with a PIN and a passkey whose number has gone: each step drops the
+  // attempt and answers attempt_expired, before the PIN or any passkey is read.
+  async function refusedAt(step: 'set_pin' | 'step_up', run: (c: ReturnType<typeof context>) => Promise<unknown>) {
+    const pool = orgPool({ numberRemoved: true, pinHash: step === 'set_pin' ? null : pin, passkeys: 1 })
+    const held = valkeyWith({ v: 1, numberTag: 't', step, ...named })
+    const c = context(held.valkey, pool)
+    expect(await refusal(run(c))).toMatchObject({ status: 401, code: 'attempt_expired', clear: ['attempt'] })
+    expect(held.store.has(names.attempt(keyName(ATTEMPT_ID)))).toBe(false)
+    const number = pool.texts().find(text => text.startsWith('select 1 from phone_numbers'))
+    // Read with no lock, since users and passkeys come before phone_numbers in the lock order.
+    expect(number).toMatch(/removed_at is null$/)
+    // Nothing of the account was read or written: no PIN, no failure count, no passkey.
+    expect(pool.texts().filter(text => /pin_hash|pin_failures|passkeys|insert into/.test(text))).toEqual([])
+  }
+
+  it('refuses the PIN at the step-up, right or wrong, without counting it', async () => {
+    await refusedAt('step_up', c => verifyPinStep(c.api, { pin: '381904' }, ATTEMPT_ID, c.info))
+  })
+
+  it('refuses passkey options, showing none of the passkeys', async () => {
+    await refusedAt('step_up', c => passkeyOptions(c.api, ATTEMPT_ID, c.info))
+  })
+
+  it('refuses a new PIN before hashing it', async () => {
+    await refusedAt('set_pin', c => setPin(c.api, { pin: '381904' }, ATTEMPT_ID, c.info))
   })
 })
 
