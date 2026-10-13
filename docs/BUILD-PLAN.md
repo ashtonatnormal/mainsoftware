@@ -71,9 +71,9 @@ flowchart TB
 | Stage | What it builds | Needs | Who uses it | Size |
 |---|---|---|---|---|
 | **C0** Foundations | Repo, CI and the AI-free guard; AWS; tenant model with RLS; principals; access core and rule suite; sign-in; outbox, queue, flags; realtime gateway; compliance core; PWA, push, first run; admin shell; backups and DR | — | Builder plus 2–3 testers | XL, 7–9 weeks |
-| **C1** Chat | Channels, DMs, threads, attachments, audio-only voice notes, ticks, presence, push, offline send, keyword search, rule-based Today | C0 | One team leaves WhatsApp (10–20 people) | XL, 7–9 weeks |
+| **C1** Chat | Channels, DMs, replies and quotes, attachments, audio-only voice notes, ticks, presence, push, offline send, keyword search, rule-based Today | C0 | One team leaves WhatsApp (10–20 people) | XL, 7–9 weeks |
 | **C2** Tasks, rooms, recording | Tasks core; LiveKit rooms and calls; per-track recording with no transcription; session pages; restricted rooms; viewed-by; retention and holds; Rule 9 for sessions | C1 | Plus a call-heavy team | XL, 8–10 weeks |
-| **C3** Calendar | Meetings with their own rooms, event pages and threads, RSVP, find-a-time, recurrence; the Sheets spike | C2 | 3–5 teams (~100 people) | M, 5–7 weeks |
+| **C3** Calendar | Meetings with their own rooms, event pages and meeting chats, one-time guests (P1), RSVP, find-a-time, recurrence; the Sheets spike | C2 | 3–5 teams (~100 people) | M, 5–7 weeks |
 | **C4** Drive and Docs | Drive, sharing, previews, sandboxed text extraction; Yjs sync server; docs with comments and history; wiki spaces; templates; export | C1–C3 | Plus HR and IT | XL, 7–9 weeks |
 | **C5** Sheets and Slides | Calc worker, accessible grid, co-editing, slides, present mode, presenting to a room, import and export | C2–C4 | Plus finance and ops | XXL, 10–14 weeks |
 | **C6** Core launch | DPO consoles, scale and chaos tests, pen test, DR drill, accessibility audit, rollout waves, WhatsApp sunset, then people insights | C1–C5 | The whole org | L, 5–7 weeks plus rollout |
@@ -165,7 +165,7 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 
 ### C1 — Chat and messaging core
 
-**Goal:** One pilot team leaves its WhatsApp work groups: channels, DMs, threads, attachments, audio-only voice notes, ticks, presence, push, offline send and permission-filtered keyword search, with a rule-based Today. Search is the first outbox consumer, so the Org Brain later reuses a proven contract.
+**Goal:** One pilot team leaves its WhatsApp work groups: channels, DMs, replies and quotes, attachments, audio-only voice notes, ticks, presence, push, offline send and permission-filtered keyword search, with a rule-based Today. Search is the first outbox consumer, so the Org Brain later reuses a proven contract.
 
 **Needs first:** C0. **Size:** XL: about 7-9 weeks, plus a 2-week pilot soak overlapping C1.14, C1.15 and early C2. Same assumption as C0..
 
@@ -174,14 +174,14 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 | Step | What | Needs first | PRD rows |
 |---|---|---|---|
 | **C1.1** Conversation model and realtime topics | Team- or org-owned channels; DMs and group DMs up to 20 with membership eras (PRD-79); memberships for any principal kind; default channels (ACC-07): org-wide ones set by Admins and each team's chosen by its Team Admins, with the admin console's picker; server-sequenced idempotent messages; block-type registry (text, file, voice, call, interactive card; AI kinds reserved) with a fallback card; index classes stamped; hidden ai_participation; synced read cursors; gateway topics; outbox events incl. acl.changed. | C0.4, C0.6, C0.7, C0.10 | CHAT-01, CHAT-02, ACC-07 |
-| **C1.2** Messaging features | Threads with also-send; reactions with a hidden suggestion-chip slot; mentions by principal id with @channel and @here rules; edit and delete with tombstones and isHeld()-aware versions; sanitised formatting; a trust-levelled renderer with a reserved 'ai' level; pins and topic; the unified list with filters by principal kind (Agents hidden); channel browser; server-side drafts with provenance. | C1.1, C0.10 | CHAT-03, CHAT-04, CHAT-05, CHAT-08, CHAT-11, CHAT-15 |
+| **C1.2** Messaging features | Flat conversations, no threads (D52); reactions with a hidden suggestion-chip slot; mentions by principal id with @channel and @here rules; edit and delete with tombstones and isHeld()-aware versions; sanitised formatting; a trust-levelled renderer with a reserved 'ai' level; pins and topic; the unified list with filters by principal kind (Agents hidden); channel browser; server-side drafts with provenance. | C1.1, C0.10 | CHAT-03, CHAT-04, CHAT-05, CHAT-08, CHAT-11, CHAT-15 |
 | **C1.3** Presence, typing and read ticks | Presence, typing and custom status in Valkey keyed by principal (PRD-58 numbers); read ticks in DMs and groups and seen-by up to 50, behind the ADM-13 toggle (Q9: default on). | C1.1, C0.7 | CHAT-10, CHAT-09, ADM-13 |
-| **C1.4** Chat notifications | Pushes for DMs, mentions and thread replies (ids only); channels badge-only; per-conversation all / mentions / off, DND, quiet hours; server badge counts; in-app inbox fallback; delivery dashboard per platform. An internal alpha starts after this step. The internal alpha after this step is limited to the builder and C0 testers on non-prod with synthetic content until C1.11 and C1.13 (notice v1, Q3 and Q13, runbooks) are done. | C1.2, C0.14 | NOTIF-02, NOTIF-03 |
+| **C1.4** Chat notifications | Pushes for DMs, mentions and replies to your messages (ids only); channels badge-only; per-conversation all / mentions / off, DND, quiet hours; server badge counts; in-app inbox fallback; delivery dashboard per platform. An internal alpha starts after this step. The internal alpha after this step is limited to the builder and C0 testers on non-prod with synthetic content until C1.11 and C1.13 (notice v1, Q3 and Q13, runbooks) are done. | C1.2, C0.14 | NOTIF-02, NOTIF-03 |
 | **C1.5** File pipeline | The single upload pipeline, reused by C4 and C5: resumable presigned upload to quarantine, PRD-54 limits, type sniffing, malware scan before promotion (EICAR in CI), an ffmpeg media-worker with no internet, files served only from the user-content origin via signed URLs; Drive-ready file objects inheriting the conversation ACL; per-conversation Shared files; thumbnails as derived artifacts. | C0.12, C0.15, C1.1, INF-FILES, INF-SCAN, INF-MEDIAPROC | CHAT-06, FILE-08 |
 | **C1.6** Voice messages, audio only | Record by tap or hold (Opus; AAC on iOS), transcode to Opus/OGG, waveform from amplitude (no ML), 1x / 1.5x / 2x, 10-minute cap; nullable transcript with status not_enabled and a voice_message.created event; no transcript placeholder; 360-day audio class; no silence trimming (it needs VAD). | C1.5, C1.2 | CHAT-07 |
 | **C1.7** Keyword search (outbox consumer #1) | Outbox indexer with a searchable-type registry; rows with container ACLs, acl_epoch, index_class, restricted flags, anchors, tsvector and pg_trgm; sqlReadableBy pre-filter plus filterReadable re-check (SRCH-04); re-ACL job; enumerators; searchable in 30 s, deletes out in 5 minutes; filters and jump-to; restricted kept out; sole reader of search tables; bar says 'Search', Ask slot hidden. | C0.4, C0.6, C1.2, C1.5, INF-SEARCH, INF-ENUM | SRCH-01, SRCH-02, SRCH-04, SRCH-06, BRAIN-09 |
 | **C1.8** Offline queue and device safety | Encrypted IndexedDB keyed by a server-held session key, wiped on sign-out or revocation (PRD-74); an offline send queue that survives the app being killed, with idempotent retries; offline and retry states; the NFR-04 profile (send p95 <2 s); composer above the keyboard. | C1.2, C0.14, INF-LOCALSTORE | NFR-04 |
-| **C1.9** Rule-based Today | Actionable model with a provider registry, rule ranker, stored dismissals and render-time access checks; providers for unanswered mentions, thread replies, replies owed by rule (>2 working hours) and the install-and-push reminder; a 'Since you were last here' block; AI kinds reserved. | C1.2, C1.3, C1.4 | PA-04, PA-05 |
+| **C1.9** Rule-based Today | Actionable model with a provider registry, rule ranker, stored dismissals and render-time access checks; providers for unanswered mentions, replies to your messages, replies owed by rule (>2 working hours) and the install-and-push reminder; a 'Since you were last here' block; AI kinds reserved. | C1.2, C1.3, C1.4 | PA-04, PA-05 |
 | **C1.10** Directory and moderation | People directory (ACC-09); report a message, admin removal with audit, a harassment route to HR, admin-only channels (PRD-78); channel ownership transfer, archive and the public-channel rule (ADM-03). | C1.2, C0.16 | ACC-09, ADM-03 |
 | **C1.11** Sealed Rule 9 core and DPO runbooks | Pulled forward from C2: a sealed Rule 9 service with a case, mandatory reason, audited search and read of chat including DMs from base tables, per-item export, privileged.read events, no outbox or index writes and arch-lint isolation (ADM-12 core). Written breach runbook (30-day and 3-day PDPC clocks) and DPO access and withdrawal procedures (PRD-49). Done: timed dry runs. | C0.3, C0.9, C1.7, INF-PRIV | ADM-12 |
 | **C1.12** Load harness and synthetic data | k6 HTTP and WebSocket scenarios and a synthetic org at 1,000 users (design check at 5,000) with 1- and 3-year message volume in non-prod; send p95 <300 ms, search p95 <1 s; re-run at every stage exit. | C1.2, C1.7, INF-LOAD |  |
@@ -229,7 +229,7 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 |---|---|---|---|
 | **C2.1** Tasks core (moved from C3) | Tasks with assignees, due date, status, priority and comments; My Tasks and team lists; list view; a task from any message, keeping the source's index class; an origin field; assigned, due-soon, overdue and comment notifications (PRD-61); task.overdue events; 'Due today' on Today; tasks searchable. | C1.2, C1.4, C1.7, C1.9, C0.6 | TASK-01, TASK-02, TASK-03, TASK-04, TASK-05 |
 | **C2.2** LiveKit integration | LiveKit Cloud (Singapore edge; agent observability and recording off) with its DPA cleared in PDPA-10 first (PRD-47); join tokens only after can(join); signed webhooks into the outbox; revocation removes participants within 60 s; provider.send rows per participant per session; self-host-compatible features only; browser noise suppression only. | C1.1, C1.15, C0.7, C0.9, INF-MEDIA | ROOM-01 |
-| **C2.3** Rooms | Channel and standalone rooms, team default rooms (ACC-07, joined with the team), who's in a room shown everywhere (restricted rooms hidden), controls, speaking indicators and grid, 50 participants, room text panel, push-to-talk as P0, phones join muted, disconnect shown within 10 s with a rejoin push and the iOS mitigations. Builder-only until C2.5 and C2.6 ship. Rooms stay builder-only until C2.11 ships. The room model carries a restricted boolean from the start (default false, writable only by the DPO or a Compliance Officer through an audited API), and the join flow has a "shared room device" toggle (§7.5). | C2.2, C1.2, C1.3, C0.14 | CHAT-16, ROOM-01, ROOM-02, ROOM-03, ROOM-04, ROOM-05, ROOM-06, ROOM-08, ROOM-09 |
+| **C2.3** Rooms | Channel and standalone rooms, team default rooms (ACC-07, joined with the team), who's in a room shown everywhere (restricted rooms hidden), controls, speaking indicators and grid with a large-room layout, 250 participants (D54), room text panel, push-to-talk as P0, phones join muted, disconnect shown within 10 s with a rejoin push and the iOS mitigations. Builder-only until C2.5 and C2.6 ship. Rooms stay builder-only until C2.11 ships. The room model carries a restricted boolean from the start (default false, writable only by the DPO or a Compliance Officer through an audited API), and the join flow has a "shared room device" toggle (§7.5). | C2.2, C1.2, C1.3, C0.14 | CHAT-16, ROOM-01, ROOM-02, ROOM-03, ROOM-04, ROOM-05, ROOM-06, ROOM-08, ROOM-09 |
 | **C2.4** Session lifecycle and snapshots | REC-01 state machine counting only human principals, 2-minute grace, paused spans, one server clock; at start, stamp index_class, the REC-20 audience (audienceOf), the REC-13 target and transcript and notes status; session.* events; a past session is reclassified only by an audited DPO or Compliance action. Stamp index_class and the REC-20 audience from the room's restricted flag (built in C2.3). Capture LiveKit speaking spans from the first recorded session (talk time for people insights). | C2.2, C0.4, C0.6, C2.3 | REC-01, REC-20 |
 | **C2.5** Recording policy, notice v2, restricted rooms | Recording policy (all, or meetings and calls only); no opt-out beyond the DPO carve-out; always-visible indicator; join notice and tone from active purposes ('This session is recorded'); restricted rooms with the flag on all derived data; recording purposes, bystander statement, drop-in LIA, Q8 and Q10; notice v2 re-acknowledged before the first recording. | C2.4, C0.9 | REC-03, REC-04, REC-05, REC-06, REC-07, ADM-04 |
 | **C2.6** Recorder bot | Hidden system:recorder writing per-track segmented Opus to S3 (restricted sessions under their own key) with a session-clock manifest (speaker, track kind, gaps, checksums) and track_segment.written; pluggable sinks (S3 now, VAD and STT in A1); isProcessingAllowed per track; scoped write-only role; crash recovery; 200 concurrent sessions; Go if the spike says so. The manifest stores per track: shared_device, the processing-allowed (PDPA-04a) state, and the speaker's acknowledged notice version. | C2.4, C2.5, C0.10, C0.12, INF-RECORDER | REC-02 |
@@ -262,14 +262,14 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 - [ ] No stored mix; every playback logged; viewed-by works; LiveKit provider.send rows exist.
 - [ ] A time-shifted retention test deletes at 120 days, keeps held audio, cascades and logs.
 - [ ] A removed member is dropped from the room within 60 s; calls ring on Android and the iOS fallback works; disconnects show within 10 s.
-- [ ] PRD-59 met at 50 participants; 200 concurrent recorded sessions or a documented proxy.
+- [ ] PRD-59 met at 250 participants; 200 concurrent recorded sessions or a documented proxy.
 - [ ] The recorder role can't read other sessions; redaction silences spans with a content-free record; no model runs in the room pipeline.
 
 **Not in this stage:** No transcription, VAD, AI notes or Ask this meeting; no deck presenting (C5); no scheduled-meeting rooms (C3); no ML noise cancellation; no full DPO consoles (C6).
 
 ### C3 — Calendar, meetings and task extras
 
-**Goal:** Scheduled meetings with their own rooms and event pages, RSVP, find-a-time, recurring meetings with a page and thread per occurrence, and Today as a real home page. Event threads become the scheduled-meeting notes target; the suggested-tasks inbox is built but hidden; the Sheets spike settles the engine before C4.
+**Goal:** Scheduled meetings with their own rooms and event pages, RSVP, find-a-time, recurring meetings with a page and meeting chat per occurrence, and Today as a real home page. Meeting chats become the scheduled-meeting notes target; the suggested-tasks inbox is built but hidden; the Sheets spike settles the engine before C4.
 
 **Needs first:** C2. **Size:** M: about 5-7 weeks including the 1-2-week Sheets spike; calendar core needs only C1 and can be interleaved with C2. Same assumption as C0..
 
@@ -279,7 +279,7 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 |---|---|---|---|
 | **C3.1** Time zones, recurrence, reminders | UTC plus an IANA zone on every event; per-user zone and working hours; RRULE recurrence anchored to the organiser's zone with a page id per occurrence; reminders on the scheduler that respect quiet hours. Event time zones, RRULE anchoring and reminders only; per-user zones and working hours are already in C0.3. | C0.6, C0.3 | CAL-06 |
 | **C3.2** Calendar events, RSVP and views | Day, week and agenda views (agenda default on phones); events with attendees, agenda, recurrence and reminders; RSVP with a note; team calendars (P1); events searchable and in jump-to. | C3.1, C1.4, C1.7 | CAL-01, CAL-02, CAL-05, CAL-07 |
-| **C3.3** Meeting rooms and event pages | A private meeting room per occurrence (a team room only if every invitee can join), opening at T-5 minutes; the event page and thread (invitees ∪ participants) as the REC-13 target, with meeting-window sessions bound to the event; a meeting page of typed link slots shown only when the artifact exists and is openable; a non-AI 'Last time' section that A4's prep brief later fills. | C3.2, C2.3, C2.4, C2.8, C1.2 | CAL-03, CAL-08, REC-13 |
+| **C3.3** Meeting rooms and event pages | A private meeting room per occurrence (a team room only if every invitee can join), opening at T-5 minutes; the event page and meeting chat (invitees ∪ participants) as the REC-13 target, with meeting-window sessions bound to the event; a meeting page of typed link slots shown only when the artifact exists and is openable; a non-AI 'Last time' section that A4's prep brief later fills. | C3.2, C2.3, C2.4, C2.8, C1.2 | CAL-03, CAL-08, REC-13 |
 | **C3.4** Availability and find a time | Free/busy over events and working hours as an API any principal can call; deterministic find-a-time with at least 3 slots in 1 s for 20 attendees. | C3.2 | CAL-04 |
 | **C3.5** Hidden suggested-tasks inbox; task extras | A hidden suggested-tasks entity and producer API (origin, provenance, restricted flag for owner-only, dedupe key); accepting or editing creates a real task with origin accepted_suggestion; contract tests with a fake producer. P1: board view, subtasks, recurring tasks. | C2.1, C0.6, C0.10 | TASK-06, TASK-03, TASK-07, TASK-08 |
 | **C3.6** Today v1 and meeting notifications | An upcoming-meetings provider with Join; meeting-starting push; a daily start-of-day reminder of unanswered mentions labelled 'Reminders'; out-of-office presence and DM auto-reply (P1). | C1.9, C3.2, C3.3, C2.1 | NOTIF-02, CAL-09 |
@@ -289,13 +289,13 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 
 **Seams built here (space left for AI):**
 - Hidden suggested-tasks entity and producer API
-- Event threads, meeting-page slots, 'Last time'
+- Meeting chats, meeting-page slots, 'Last time'
 - Free/busy API for any principal
 
 **Done when:**
 - [ ] ≥80% of the pilot teams' internal meetings scheduled in Hearth over 2 weeks.
-- [ ] Zone and recurrence tests pass; per-occurrence pages and threads; rooms open at T-5 minutes.
-- [ ] Scheduled-meeting cards land in the event thread; team-room sessions bind to the event.
+- [ ] Zone and recurrence tests pass; per-occurrence pages and meeting chats; rooms open at T-5 minutes.
+- [ ] Scheduled-meeting cards land in the meeting chat; team-room sessions bind to the event.
 - [ ] Find-a-time in 1 s or less for 20 attendees; task reminders on time and inside quiet hours; ≥60% open Today weekly.
 - [ ] Suggested-tasks contract tests pass with the UI hidden.
 - [ ] Spike numbers met; Q21 (formula engine) recorded; the Yjs contract handed to C4.3.
@@ -475,20 +475,20 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 | Step | What | Needs first | PRD rows |
 |---|---|---|---|
 | **A2.1** Embeddings store | Embeddings provider cleared (PRD-75); pgvector enabled; vector rows mirror the search ACL columns, partitioned by ACL container, on their own KMS key and in the retention cascade. | A0.2, C6.9, INF-BRAIN |  |
-| **A2.2** Org Brain indexer (consumer #2) | Bootstrap from enumerators and extractor anchors, then tail the outbox; restricted and privileged items never indexed; DM content only for participants' assistants; edits and deletes within 5 minutes; files, sheet rows, comments and slides; processing restrictions and the leaver decision honoured; throttled back-fill. | A2.1, C1.7, C4.2, C5.8 | BRAIN-01, BRAIN-03, BRAIN-04, BRAIN-09, CHAT-05, FILE-06, SHEET-44, SHEET-45, SLIDE-34, REC-07, PDPA-09 |
+| **A2.2** Org Brain indexer (consumer #2) | Bootstrap from enumerators and extractor anchors, then tail the outbox; restricted sessions indexed for participants only (D49) and privileged items never indexed; DM content only for participants' assistants; edits and deletes within 5 minutes; files, sheet rows, comments and slides; processing restrictions and the leaver decision honoured; throttled back-fill. | A2.1, C1.7, C4.2, C5.8 | BRAIN-01, BRAIN-03, BRAIN-04, BRAIN-09, CHAT-05, FILE-06, SHEET-44, SHEET-45, SLIDE-34, REC-07, PDPA-09 |
 | **A2.3** Retrieval layer | retrieve(asker, audience, agent?, query) from the access-core functions with live re-check (Rules 1-8); provenance through the C0 registry; ai.retrieval per item; the search entry point becomes retrieval (B.4); AI-cache revocation handlers; sheet rules (SHEET-37). | A2.2, C0.4, C0.3, INF-RETRIEVAL | BRAIN-02, BRAIN-08, SRCH-04, SHEET-37, ACC-05, PDPA-06 |
 | **A2.4** Leak and Rule 6/7 gates | Every access-rules todo implemented; Rule 6 (60 s) and Rule 7 (5 minutes) proven on the C6 harness; this is the zero-leak gate for A3-A5. | A2.3, C6.3 |  |
 
 **Done when:**
 - [ ] The indexer bootstraps and tails; vectors share the search ACL columns and pre-filter.
-- [ ] Restricted and privileged items never indexed; DM content only for participants' assistants.
+- [ ] Restricted sessions indexed for participants only and kept out of shared answers, agents, summaries and insights; privileged items never indexed; DM content only for participants' assistants.
 - [ ] Every access-rule todo green; revocation 60 s, deletion 5 minutes, freshness 2 minutes; ai.retrieval logged per item.
 
 **Not in this stage:** No AI answers, assistant or agents.
 
 ### A3 — Built-in AI
 
-**Goal:** AI inside existing surfaces: notes in session cards and event threads, action items in the suggested-tasks inbox, Ask in the search bar, catch-up and summaries, and AI help in Docs, Sheets and Slides, all through the retrieval layer.
+**Goal:** AI inside existing surfaces: notes in session cards and meeting chats, delivered to each participant (REC-24), action items in the suggested-tasks inbox, Ask in the search bar, catch-up and summaries, and AI help in Docs, Sheets and Slides, all through the retrieval layer.
 
 **Needs first:** A1, A2. **Size:** XL: about 7-9 weeks. Same assumption as C0..
 
@@ -496,7 +496,7 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 
 | Step | What | Needs first | PRD rows |
 |---|---|---|---|
-| **A3.1** Meeting notes | Notes for substantive sessions (D27) from transcripts and slides, by system:hearth with the AI marker, in the existing session card or event thread; regenerated as versions that keep human edits; an incomplete-transcript marker; notes retention class. | A1.1, A2.4, C2.8, C3.3 | REC-11, REC-12, REC-13, AMB-02, ADM-07 |
+| **A3.1** Meeting notes | Notes for substantive sessions (D27) from transcripts and slides, by system:hearth with the AI marker, in the existing session card or meeting chat, and delivered to each participant (REC-24); regenerated as versions that keep human edits; an incomplete-transcript marker; notes retention class. | A1.1, A2.4, C2.8, C3.3 | REC-11, REC-12, REC-13, AMB-02, ADM-07 |
 | **A3.2** Action items to inbox | REC-14 action items through the C3.5 producer with Rule 5 visibility; the inbox unhidden; the action-items-closed metric with a notice update. | A3.1, C3.5 | REC-14, TASK-06, ADM-14 |
 | **A3.3** Ask | Ask in the SRCH-01 bar with citations; Ask this meeting (P1); who knows about X (P1); AI conversation retention and collector (PDPA-15); phone acceptance for Ask. | A2.4, A0.4, C1.7 | SRCH-01, SRCH-03, SRCH-05, REC-17, PDPA-15, NFR-02 |
 | **A3.4** Catch-up and summaries | Catch me up from read cursors (AMB-01); per-scope summaries, entities and the decision log (P1). | A2.4, A0.4 | AMB-01, BRAIN-05, BRAIN-06, BRAIN-07 |
@@ -506,7 +506,7 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 | **A3.8** AI quick replies | AI quick replies in the composer chip slot behind ai.quick_replies. | A0.4, C1.2 | CHAT-08 |
 
 **Done when:**
-- [ ] Notes in existing threads within 5 minutes; PRD-60 quality on 50+ sessions; restricted notes stay on the session page.
+- [ ] Notes in session cards and meeting chats, and delivered to participants, within 5 minutes; PRD-60 quality on 50+ sessions; restricted notes stay on the session page.
 - [ ] Action items in the inbox with provenance; restricted origins owner-only.
 - [ ] Every AI output shows marker and sources; Ask passes the leak and phone suites; sheet figures come from the engine.
 
@@ -685,7 +685,7 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 | Search rows with container ACLs, anchors, enumerators, type registry | C1.7 | A1 transcripts; A2 vectors and retrieval entry |
 | Search bar with hidden Ask slot | C1.7 | A3 Ask; A4 conversational Ask |
 | Today actionable registry and 'Since you were last here' | C1.9 | A4 AI actionables and digest |
-| Sealed Rule 9 service | C1.11 | A2 privileged access never feeds AI |
+| Sealed Rule 9 service | C1.11 | A2 privileged access never indexed; A4 Rule 10 case assist (ADM-15) |
 | Deterministic sensitive-data detector | C1.14 | A1 transcript spans; A4 memory warning |
 | Task origin field and task.overdue | C2.1 | A3 action-item metric; A5 triggers |
 | LiveKit provider.send rows | C2.2 | A1 OpenAI sends; A2 PDPA-06 rows |
@@ -698,7 +698,7 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 | Retention cascade and back-fill eligibility view | C2.9 | A1 back-fill; A2 vector deletion |
 | Redaction spans with redaction.applied | C2.11 | A1, A2, A3 withdrawal |
 | Hidden suggested-tasks entity and producer API | C3.5 | A3 action items; A4, A5 suggestions |
-| Event threads, meeting-page slots, 'Last time' | C3.3 | A1 links; A3 notes; A4 prep brief |
+| Meeting chats, meeting-page slots, 'Last time' | C3.3 | A1 links; A3 notes; A4 prep brief |
 | Free/busy API for any principal | C3.4 | A5 availability tool |
 | Drive ACL materialisation and re-ACL job | C4.1 | A2 vector ACLs |
 | Extractor with stable anchors per version | C4.2 | A2 embeddings and citations |
@@ -1023,31 +1023,31 @@ Internal work suite (chat, voice rooms, meetings, calendar, tasks, Drive with do
 
 ## Part 2 — Every PRD requirement, by stage
 
-All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage that can build it. **Layer** says whether a row is pure core (no model calls), pure AI, or core with a seam: its non-AI part ships in the core stage, and the AI part named in the last column lands later. Rows the plan moved after the dependency and AI-boundary checks are marked ↻.
+All 305 requirement rows in `docs/PRD.md`, each placed in the earliest stage that can build it. **Layer** says whether a row is pure core (no model calls), pure AI, or core with a seam: its non-AI part ships in the core stage, and the AI part named in the last column lands later. Rows the plan moved after the dependency and AI-boundary checks are marked ↻.
 
 | Stage | Rows | P0 | Core | Core + seam | AI |
 |---|---|---|---|---|---|
 | C0 Foundations and infrastructure (builder only) | 26 | 25 | 17 | 9 | 0 |
-| C1 Chat and messaging core | 32 | 24 | 18 | 14 | 0 |
+| C1 Chat and messaging core | 31 | 23 | 17 | 14 | 0 |
 | C2 Tasks, rooms, calls and recording (no transcription) | 35 | 32 | 25 | 10 | 0 |
-| C3 Calendar, meetings and task extras | 12 | 8 | 10 | 2 | 0 |
+| C3 Calendar, meetings and task extras | 13 | 8 | 11 | 2 | 0 |
 | C4 Drive, Docs and wiki | 16 | 11 | 15 | 1 | 0 |
 | C5 Sheets and Slides, non-AI (part of the core launch, D43) | 72 | 55 | 63 | 9 | 0 |
-| C6 Core hardening and core launch (WhatsApp sunset) | 11 | 4 | 6 | 5 | 0 |
+| C6 Core hardening and core launch (WhatsApp sunset) | 12 | 4 | 7 | 5 | 0 |
 | A0 AI platform | 5 | 4 | 0 | 0 | 5 |
 | A1 Speech-to-text | 5 | 4 | 0 | 0 | 5 |
-| A2 Org Brain and the retrieval layer | 6 | 6 | 0 | 0 | 6 |
-| A3 Built-in AI | 24 | 8 | 0 | 0 | 24 |
-| A4 Personal assistant | 9 | 8 | 0 | 0 | 9 |
+| A2 Org Brain and the retrieval layer | 7 | 6 | 0 | 0 | 7 |
+| A3 Built-in AI | 25 | 9 | 0 | 0 | 25 |
+| A4 Personal assistant | 10 | 8 | 0 | 0 | 10 |
 | A5 Specialist agents and Agent Studio | 25 | 17 | 1 | 0 | 24 |
-| POST Post-v1 | 18 | 0 | 10 | 0 | 8 |
-| N/A Retired rows | 5 | 0 | 0 | 0 | 0 |
+| POST Post-v1 | 17 | 0 | 9 | 0 | 8 |
+| N/A Retired rows | 6 | 0 | 0 | 0 | 0 |
 
 ### C0 rows — Foundations and infrastructure (builder only)
 
 | ID | Pri | Layer | What | Needs first | AI part deferred (to) |
 |---|---|---|---|---|---|
-| ACC-01 | P0 | core | Phone number plus SMS one-time code sign-in | ACC-03, ACC-11, INF-AUTH, INF-DB, INF-AUDIT |  |
+| ACC-01 | P0 | core | Phone + SMS code or email + email code sign-in (email link on desktop) | ACC-03, ACC-11, INF-AUTH, INF-DB, INF-AUDIT |  |
 | ACC-02 | P0 | core | Account PIN, optional passkey, new-device step-up | ACC-01, INF-AUTH, INF-KMS, INF-AUDIT |  |
 | ACC-03 | P0 | core | Roster-only joining; admin add and CSV import | ACC-07, ACC-10, ACC-11, INF-DB, INF-AUDIT |  |
 | ACC-04 | P0 | core | Device list and remote sign-out, self and admin | ACC-01, ACC-02, INF-AUTH, INF-AUDIT |  |
@@ -1055,7 +1055,7 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | ACC-06 | P0 | core | Admin-assisted PIN reset, phone change, OTP/PIN rate limits | ACC-02, ACC-04, ACC-10, INF-AUTH, INF-AUDIT |  |
 | ACC-07 | P0 | core | Departments, teams, team and org default channels/rooms | ACC-10, ACC-11, INF-DB, INF-ACCESS |  |
 | ACC-08 | P0 | core | Profiles: photo, title, teams, manager, hours, zone, status | ACC-07, ACC-11, INF-DB, INF-OBJSTORE |  |
-| ACC-10 | P0 | core+seam | Role set incl. AI Admin, Leadership, DPO, Compliance | ACC-11, INF-DB, INF-ACCESS, INF-AUDIT | What the AI Admin role can actually do: AI settings, spend caps and kill switch (ADM-05, ADM-10) in A0; agent publishing and Agent Studio (AGT-01, STU) in A5. (A0) |
+| ACC-10 | P0 | core+seam | Role set incl. AI Admin, Leadership, DPO, Compliance; renamable (ACC-15) | ACC-11, INF-DB, INF-ACCESS, INF-AUDIT | What the AI Admin role can actually do: AI settings, spend caps and kill switch (ADM-05, ADM-10) in A0; agent publishing and Agent Studio (AGT-01, STU) in A5. (A0) |
 | ACC-11 | P0 | core | Every record belongs to an org (org_id + RLS) | INF-DB |  |
 | ACC-12 | P0 | core | First sign-in acknowledges versioned privacy and recording notice | ACC-01, PDPA-01, PDPA-02, INF-COMPLIANCE, INF-AUDIT |  |
 | ACC-14 | P0 | core+seam | Guided first run: install, SMS, PIN, notice, push, profile | ACC-01, ACC-02, ACC-07, ACC-08, ACC-12, NOTIF-01, INF-SHELL, INF-NOTIFY | The final step prompting the user to message the Onboarding Buddy agent. (A5) |
@@ -1085,8 +1085,7 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | BRAIN-09 | P0 | core+seam | Freshness: searchable in 30 s; available to AI in 2 min | SRCH-02, INF-SEARCH, INF-OUTBOX, INF-QUEUE, INF-OBS | 'Available to AI within 2 minutes' (A2 embedding indexer). (A2) |
 | CHAT-01 | P0 | core+seam | Public and private channels with owners and settings | ACC-07, ACC-10, ACC-11, ADM-03, INF-WS, INF-ACCESS, INF-AUDIT, INF-OUTBOX | The channel owners' AI participation level setting (AGT-08, via CHAT-18). (A5) |
 | CHAT-02 | P0 | core | DMs and group DMs up to 20 people | ACC-03, ACC-08, INF-WS, INF-ACCESS, INF-OUTBOX |  |
-| CHAT-03 | P0 | core | Threads on any message, with also-send-to-channel | CHAT-01, CHAT-02, CHAT-05 |  |
-| CHAT-04 | P0 | core+seam | Unified chat list: unread, pin, mute, filters | CHAT-01, CHAT-02, CHAT-03, NOTIF-03, INF-WS | The Agents filter and agent conversations in the list. (A5) |
+| CHAT-04 | P0 | core+seam | Unified chat list: unread, pin, mute, filters | CHAT-01, CHAT-02, NOTIF-03, INF-WS | The Agents filter and agent conversations in the list. (A5) |
 | CHAT-05 | P0 | core+seam | Messages: formatting, mentions, previews, replies, edit, delete | CHAT-01, CHAT-02, INF-WS, INF-ACCESS, INF-OUTBOX, INF-NOTIFY | @mentioning agents (A5) and Rule 7 propagation of edits and deletes into the Org Brain and AI-derived content (A2). (A2) |
 | CHAT-06 | P0 | core | Attachments with inline previews, inheriting conversation access | CHAT-05, INF-FILES, INF-OBJSTORE, INF-ACCESS |  |
 | CHAT-07 | P0 | core+seam | Voice messages: record, waveform, speed; transcript deferred | CHAT-05, CHAT-06, INF-FILES, INF-OBJSTORE, INF-OUTBOX, INF-FLAGS | The automatic transcript under the message: speech detection/silence trimming (Silero VAD) and gpt-transcribe with org vocabulary (REC-19), including the 'No speech detected' state. (A1) |
@@ -1100,7 +1099,7 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | CHAT-15 | P0 | core | Channel browser to discover public channels | CHAT-01, ACC-07, INF-ACCESS |  |
 | FILE-08 | P0 | core | Per-conversation 'Shared files' view of chat attachments | CHAT-06, INF-FILES, INF-ACCESS |  |
 | NFR-04 | P0 · P1 (open offline) | core | Weak-connection tolerance: offline message queue, adaptive voice bitrate | CHAT-05, INF-WS, INF-SHELL |  |
-| NOTIF-02 | P0 | core+seam | Default notification rules per event; channels badge-only | NOTIF-01, CHAT-02, CHAT-03, CHAT-05, INF-NOTIFY | Assistant nudges (PA-09, A4); 'meeting notes ready' (A3) and agent approval requests to owners (AGT-06, A5). (A4) |
+| NOTIF-02 | P0 | core+seam | Default notification rules per event; channels badge-only | NOTIF-01, CHAT-02, CHAT-05, INF-NOTIFY | Assistant nudges (PA-09, A4); 'meeting notes ready' (A3) and agent approval requests to owners (AGT-06, A5). (A4) |
 | NOTIF-03 | P0 | core | Per-conversation levels, do not disturb, quiet hours from working hours | NOTIF-01, NOTIF-02, ACC-08, INF-NOTIFY |  |
 | NOTIF-04 | P1 | core+seam | Smart batching of low-priority notifications into a digest | NOTIF-02, NOTIF-03, PA-05 | Grouping into the AI-written assistant digest, and any model-judged priority (A4, with PA-05's AI digest and PA-04's AI ranker). (A4) |
 | PA-04 | P0 | core+seam | Today actionables: Open, Draft, Dismiss; ranked | CHAT-04, CHAT-05, INF-SHELL, INF-ACCESS | AI-detected actionables (replies owed that need judgement, meeting action items, meetings needing prep), importance ranking by model, and the ready-made Draft action. (A4) |
@@ -1128,8 +1127,8 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | REC-04 | P0 | core | No participant opt-out; DPO-only legal carve-out | REC-03, PDPA-01 |  |
 | REC-05 | P0 | core | Always-visible recording indicator in rooms and calls | ROOM-01, REC-02, INF-SHELL |  |
 | REC-06 | P0 | core+seam | Join notice and distinct join tone | ROOM-01, REC-03, PDPA-02 | The 'and transcribed' wording, shown only once session transcription is switched on. (A1) |
-| REC-07 | P0 | core+seam | Restricted rooms: participants-only, badge, never indexed | ROOM-01, REC-20, ACC-10, ADM-01, INF-ACCESS, INF-AUDIT | Exclusion from the Org Brain (BRAIN-03) in A2; transcription of restricted sessions (A1); Rule 5 handling of derived notes and suggested tasks (A3); blocking agent invitations (A5). (A2) |
-| REC-13 | P0 | core+seam | Post session record only where readers match audience | REC-20, CHAT-03, ROOM-06, ROOM-07, INF-ACCESS | The AI meeting notes content posted into that place (REC-11, REC-12). (A3) |
+| REC-07 | P0 | core+seam | Restricted rooms: participants-only, badge, indexed for participants only | ROOM-01, REC-20, ACC-10, ADM-01, INF-ACCESS, INF-AUDIT | Participants-only indexing in the Org Brain (BRAIN-03) in A2; transcription of restricted sessions (A1); Rule 5 handling of derived notes and suggested tasks (A3); blocking agent invitations (A5). (A2) |
+| REC-13 | P0 | core+seam | Post session record only where readers match audience | REC-20, CHAT-01, ROOM-06, ROOM-07, INF-ACCESS | The AI meeting notes content posted into that place (REC-11, REC-12). (A3) |
 | REC-16 | P0 | core+seam | Session playback page with on-demand track mixing | REC-02, REC-20, INF-RECORDER, INF-OBJSTORE | Transcript synced with the player, click-a-line-to-jump, and search within the transcript. (A1) |
 | REC-18 | P1 | core+seam | Compliance/DPO redaction of spoken spans in sessions | REC-02, REC-16, ACC-10, ADM-12, INF-AUDIT, INF-OUTBOX | Removing the passage from every transcript version including the machine output (A1), and propagation to notes (A3) and the Org Brain (A2). (A1) |
 | REC-20 | P0 | core | Default audience of session record and its derivatives | REC-01, ROOM-01, ROOM-07, CHAT-01, INF-ACCESS |  |
@@ -1140,8 +1139,8 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | ROOM-02 | P0 | core | Who is in a room shown everywhere | ROOM-01, CHAT-10, INF-WS |  |
 | ROOM-03 | P0 | core | In-room controls: mute, camera, share, hand, reactions | ROOM-01, INF-MEDIA |  |
 | ROOM-04 | P0 | core | Speaking indicators and adaptive participant grid | ROOM-01, INF-MEDIA, INF-SHELL |  |
-| ROOM-05 | P0 | core | Rooms hold 50 participants (100 at P1) | ROOM-01, INF-MEDIA |  |
-| ROOM-06 | P0 | core | Room text panel showing channel or room thread | ROOM-01, CHAT-01, CHAT-03 |  |
+| ROOM-05 | P0 | core | Rooms hold 250 participants (400 at P1), large-room layout | ROOM-01, INF-MEDIA |  |
+| ROOM-06 | P0 | core | Room text panel showing the channel or the standalone room's chat | ROOM-01, CHAT-01, CHAT-05 |  |
 | ROOM-07 | P0 | core | One-tap DM and group-DM calls, as sessions | CHAT-02, ROOM-01, REC-01, INF-MEDIA, INF-NOTIFY |  |
 | ROOM-08 | P1 | core | Push-to-talk and noise suppression | ROOM-03, INF-MEDIA |  |
 | ROOM-09 | P0 | core | Phone-browser joining, background audio, rejoin push | ROOM-01, NOTIF-01, INF-MEDIA, INF-NOTIFY |  |
@@ -1157,7 +1156,7 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 |---|---|---|---|---|---|
 | CAL-01 | P0 | core | Personal calendar: day, week, agenda views; agenda default on mobile | CAL-02, CAL-06, ACC-08, INF-SHELL, INF-ACCESS |  |
 | CAL-02 | P0 | core | Create events: attendees, agenda, recurrence, reminders | CAL-06, ACC-08, INF-DB, INF-ACCESS, INF-QUEUE, INF-NOTIFY, INF-OUTBOX |  |
-| CAL-03 | P0 | core | Meeting room per event or team room; page and thread per occurrence | CAL-02, ROOM-01, REC-01, REC-13, REC-20, CHAT-03, INF-MEDIA, INF-ACCESS |  |
+| CAL-03 | P0 | core | Meeting room per event or team room; page and meeting chat per occurrence | CAL-02, ROOM-01, REC-01, REC-13, REC-20, CHAT-05, INF-MEDIA, INF-ACCESS |  |
 | CAL-04 | P0 | core | Free/busy, working hours and deterministic 'find a time' | CAL-02, CAL-06, ACC-08 |  |
 | CAL-05 | P0 | core | RSVP yes/no/maybe with optional note | CAL-02, INF-NOTIFY |  |
 | CAL-06 | P0 | core | Per-user time zones | ACC-08, INF-DB |  |
@@ -1167,6 +1166,7 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | TASK-06 | P0 | core+seam | Suggested-tasks inbox: accept, edit or dismiss suggestions | TASK-01, TASK-02, INF-ACCESS, INF-FLAGS, INF-OUTBOX | Every producer of suggestions: meeting action items (REC-14, A3) and assistant suggestions (PA-04, A4); agent-proposed tasks follow in A5 (AGT-05/06). (A3) |
 | TASK-07 | P1 | core | Subtasks and checklists | TASK-01 |  |
 | TASK-08 | P1 | core | Recurring tasks | TASK-01, CAL-02, CAL-06, INF-QUEUE |  |
+| REC-08 | P1 | core | One-time meeting guests: single-use link, guest notice and consent, room only | CAL-02, CAL-03, ROOM-01, REC-06, REC-20, INF-ACCESS, INF-AUDIT |  |
 
 ### C4 rows — Drive, Docs and wiki
 
@@ -1281,6 +1281,7 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | PDPA-11 | P1 | core | Breach incident record with 30-day and 3-day clocks, templates, register | PDPA-13, ACC-10, INF-COMPLIANCE, INF-NOTIFY, INF-AUDIT |  |
 | PDPA-11a | P0 | core | Breach scoping: exposed items and count of unique affected people | PDPA-11, PDPA-05, ADM-06, INF-AUDIT, INF-ACCESS, INF-SEARCH |  |
 | PDPA-18 | P1 (with ADM-14) | core | People-insights safeguards: counts only, logged views, caveats, exclusions | PDPA-01, PDPA-02, PDPA-03, ADM-06, REC-07, ACC-10, INF-AUDIT |  |
+| ACC-15 | P1 | core | Custom roles: rename roles, add roles from a fixed permission list | ACC-10, ADM-02, ADM-06, INF-ACCESS, INF-AUDIT |  |
 
 ### A0 rows — AI platform
 
@@ -1308,20 +1309,21 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 |---|---|---|---|---|---|
 | BRAIN-01 | P0 | ai | Org Brain index of all content types | INF-BRAIN, INF-OUTBOX, INF-QUEUE, INF-MODEL, CHAT-05, CHAT-07, REC-10, DOC-01 |  |
 | BRAIN-02 | P0 | ai | Per-item ACLs; retrieval filters and re-checks live permissions | BRAIN-01, INF-ACCESS, INF-RETRIEVAL, INF-OUTBOX |  |
-| BRAIN-03 | P0 | ai | Restricted-room sessions excluded from the Org Brain | BRAIN-01, REC-07 |  |
-| BRAIN-04 | P0 | ai | Deletes/edits propagate in 5 min; derived content withdrawn | BRAIN-01, BRAIN-08, INF-OUTBOX |  |
+| BRAIN-03 | P0 | ai | Restricted-room sessions indexed for participants only, kept out of shared answers | BRAIN-01, REC-07 |  |
+| BRAIN-04 | P0 | ai | Deletes remove item and outdated versions in 5 min; edits update; derived content withdrawn | BRAIN-01, BRAIN-08, INF-OUTBOX |  |
 | BRAIN-08 | P0 | ai | Provenance recorded for every derived artifact | INF-BRAIN, INF-DB, INF-ACCESS |  |
 | SHEET-37 | P0 | ai | Access rules for AI on sheets | SHEET-24, SHEET-26, SHEET-27, SHEET-29, SHEET-44, INF-BRAIN, INF-RETRIEVAL |  |
+| BRAIN-10 | P1 | ai | Outdated versions kept with dates; answers say what changed | BRAIN-02, BRAIN-04, BRAIN-08 |  |
 
 ### A3 rows — Built-in AI
 
 | ID | Pri | Layer | What | Needs first | AI part deferred (to) |
 |---|---|---|---|---|---|
-| AMB-01 | P0 | ai | Catch me up on a channel, thread or doc | CHAT-03, CHAT-04, DOC-01, AMB-06, INF-MODEL, INF-RETRIEVAL, ADM-05, ADM-10 |  |
+| AMB-01 | P0 | ai | Catch me up on a channel, conversation or doc | CHAT-04, DOC-01, AMB-06, INF-MODEL, INF-RETRIEVAL, ADM-05, ADM-10 |  |
 | AMB-02 | P0 | ai | Meeting notes and action items (REC-11 - REC-14) | REC-10, REC-11, REC-12, REC-13, REC-14, TASK-06, INF-MODEL |  |
 | AMB-07 | See §8.7–8.8 | ai | AI in Sheets and Slides (pointer to SHEET/SLIDE AI rows) | SHEET-37, SHEET-38, SLIDE-30, AMB-06, INF-CALC, INF-MODEL, INF-RETRIEVAL |  |
 | BRAIN-05 | P1 | ai | Entities (people, teams, projects, decisions) linked to sources | BRAIN-01, BRAIN-02, BRAIN-08, INF-MODEL, INF-RETRIEVAL |  |
-| BRAIN-06 | P1 | ai | Decision log from meetings and threads, per team/project | BRAIN-05, BRAIN-08, REC-12, INF-RETRIEVAL |  |
+| BRAIN-06 | P1 | ai | Decision log from meetings and conversations, per team/project | BRAIN-05, BRAIN-08, REC-12, INF-RETRIEVAL |  |
 | BRAIN-07 | P1 | ai | Per-scope summaries: channel daily/weekly, team weekly | BRAIN-01, BRAIN-08, AMB-06, INF-MODEL, INF-QUEUE |  |
 | DOC-09 | P1 | ai | Inline AI writing: draft, rewrite, summarise a selection | DOC-01, DOC-04, AMB-06, BRAIN-08, INF-MODEL, INF-RETRIEVAL, ADM-05, ADM-10 |  |
 | DOC-10 | P1 | ai | Save meeting notes or assistant answers to a doc | REC-12, DOC-01, FILE-01, BRAIN-08, AMB-06 |  |
@@ -1341,6 +1343,7 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | SLIDE-33 | P1 | ai | AI rewrites a slide: shorten, clarify, split, relayout | SLIDE-30, SLIDE-03, INF-MODEL |  |
 | SRCH-03 | P0 | ai | Ask: AI answer with citations above search results | SRCH-01, SRCH-02, BRAIN-01, BRAIN-02, BRAIN-08, AMB-06, INF-MODEL, INF-RETRIEVAL |  |
 | SRCH-05 | P1 | ai | 'Who knows about X': people suggestions from visible content | SRCH-01, BRAIN-05, INF-RETRIEVAL |  |
+| REC-24 | P0 | ai | Notes delivered to each participant in Hearth | REC-11, REC-13, NOTIF-02, INF-NOTIFY |  |
 
 ### A4 rows — Personal assistant
 
@@ -1355,6 +1358,7 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | PA-09 | P0 | ai | Proactive private nudges with frequency and quiet-hour controls | PA-04, PA-06, NOTIF-01, NOTIF-03, INF-NOTIFY |  |
 | PA-10 | P0 | ai | Personal memory: view, edit, delete, turn off | PA-01, PDPA-15, INF-KMS, INF-AUDIT |  |
 | PA-12 | P1 | ai | Share an assistant answer into a channel, regenerated for audience | PA-07, BRAIN-08, INF-RETRIEVAL, CHAT-05 |  |
+| ADM-15 | P1 | ai | Case assist in the Compliance and DPO consoles (Rule 10) | ADM-12, PDPA-05, ADM-06, INF-MODEL |  |
 
 ### A5 rows — Specialist agents and Agent Studio
 
@@ -1364,9 +1368,9 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | AGT-02 | P0 | ai | Agent identity: name, avatar, role, team, owner, badge, presence, live status | AGT-01, ACC-07, ACC-08, CHAT-10, INF-AUTH |  |
 | AGT-03 | P0 | ai | Playbook: plain-language instructions for job, tone, boundaries | AGT-02, INF-MODEL |  |
 | AGT-04 | P0 | ai | Knowledge scope over channels, wiki, Drive items; bounded by Rules 1-2 | AGT-02, BRAIN-02, BRAIN-03, INF-BRAIN, INF-RETRIEVAL, INF-ACCESS |  |
-| AGT-05 | P0 | ai | Suite-native tools: Brain search, post/reply, propose task, draft doc, availability | AGT-03, AGT-04, CHAT-03, CHAT-05, TASK-06, DOC-01, CAL-04, INF-RETRIEVAL |  |
+| AGT-05 | P0 | ai | Suite-native tools: Brain search, post/reply, propose task, draft doc, availability | AGT-03, AGT-04, CHAT-05, TASK-06, DOC-01, CAL-04, INF-RETRIEVAL |  |
 | AGT-06 | P0 | ai | Approve/Decline card for any action other than posting | AGT-05, TASK-01, DOC-01, CHAT-05, INF-NOTIFY, INF-AUDIT |  |
-| AGT-07 | P0 | ai | Invoke agents by @mention in channels/threads or by DM | AGT-02, AGT-03, AGT-04, CHAT-02, CHAT-03, CHAT-05, INF-MODEL |  |
+| AGT-07 | P0 | ai | Invoke agents by @mention in channels or group DMs, or by DM | AGT-02, AGT-03, AGT-04, CHAT-02, CHAT-05, INF-MODEL |  |
 | AGT-08 | P0 (Off/Mention/Suggest) · P1 (Active) | ai | Per-channel participation levels: Off, Mention only, Suggest, Active | AGT-07, CHAT-01, ADM-05, AMB-06 |  |
 | AGT-09 | P0 | ai | Unprompted guardrails: confidence, citation, hourly cap, feedback threshold | AGT-04, AGT-08, AMB-06, REC-07, CHAT-02 |  |
 | AGT-10 | P0 | ai | Scheduled recurring agent jobs; interrupted runs wait for review | AGT-05, AGT-06, INF-QUEUE, INF-AUDIT |  |
@@ -1390,7 +1394,7 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 
 | ID | Pri | Layer | What | Needs first | AI part deferred (to) |
 |---|---|---|---|---|---|
-| ACC-13 | P2 | core | Email sign-in and external SSO | ACC-01, INF-AUTH |  |
+| ACC-13 | P2 | core | External SSO (email sign-in moved to ACC-01) | ACC-01, INF-AUTH |  |
 | AGT-15 | P2 | ai | Agent computers: sandboxed browser, terminal, files per agent | AGT-05, AGT-14 |  |
 | AGT-16 | P2 | ai | External tool connectors (e.g. MCP) for agents | AGT-05, AGT-06 |  |
 | AMB-05 | P2 | ai | Translate a message or doc for the reader | INF-MODEL, AMB-06 |  |
@@ -1398,7 +1402,6 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | NFR-05 | P2 (first post-v1 item) | core | Native iOS and Android apps | NFR-01, NFR-03 |  |
 | PA-13 | P2 | ai | Rename the assistant and choose its avatar | PA-01 |  |
 | PA-14 | P2 | ai | Voice conversation with the assistant | PA-07, INF-STT, INF-MEDIA |  |
-| REC-08 | P2 | core | External participants and their consent | ROOM-01, REC-06 |  |
 | ROOM-12 | P2 | ai | Agents and assistant speaking in real time | ROOM-11, INF-MODEL, INF-MEDIA |  |
 | SHEET-12 | P2 | core | Post-v1 formula features; no external-data or AI functions | SHEET-07, SHEET-08 |  |
 | SHEET-43 | P2 | ai | AI fill, tidy-up and column split suggestions | SHEET-26, SHEET-37, SHEET-38, INF-MODEL |  |
@@ -1418,6 +1421,7 @@ All 301 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | DOC-12 | — | retired | Spreadsheets (retired; moved to Sheets §8.7) |  |  |
 | DOC-13 | — | retired | Slides (retired; moved to Slides §8.8) |  |  |
 | ROOM-10 | — | retired | Live captions (removed by D31) |  |  |
+| CHAT-03 | — | retired | Threads on any message (removed by D52) |  |  |
 
 ### Rows moved by the checks
 
