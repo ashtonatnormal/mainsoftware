@@ -16,7 +16,7 @@ function capture() {
 }
 
 describe('C0.5 the revocation channel connection', () => {
-  it('is a second connection of its own, which queues commands while it connects', () => {
+  it('is a second connection of its own, which queues commands while it connects and leaves subscribing again to keepSubscribed', () => {
     const { logger } = capture()
     // lazyConnect, so nothing here reaches a Valkey; the duplicate inherits it.
     const client = new Redis({ lazyConnect: true, enableOfflineQueue: false })
@@ -26,6 +26,8 @@ describe('C0.5 the revocation channel connection', () => {
       expect(sub.options.connectionName).toBe('hearth-revocations')
       expect(sub.options.enableOfflineQueue).toBe(true)
       expect(client.options.enableOfflineQueue).toBe(false)
+      // ioredis's own re-subscribe after a reconnect is off: its failure would be unhandled.
+      expect(sub.options.autoResubscribe).toBe(false)
     } finally {
       sub.disconnect()
       client.disconnect()

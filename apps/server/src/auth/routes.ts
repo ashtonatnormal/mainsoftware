@@ -1,4 +1,4 @@
-// /api/auth (§4.1, §4.2): signing in, which needs no session, and the signed-in self-service
+// /api/auth (T14 item 16): signing in, which needs no session, and the signed-in self-service
 // (re-authentication, passkeys, sign-out). Every route is a POST, so the root Origin check refuses
 // any request that isn't from the app's own origin (origin.ts). Bodies are strict zod objects: an
 // unknown key is 400 invalid_request, and nothing a client sends is echoed back.

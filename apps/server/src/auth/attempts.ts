@@ -18,8 +18,9 @@ export const Attempt = z
     numberTag: z.string(),
     // Which step comes next: the code, then setting a PIN or the step-up (the PIN or a passkey).
     step: z.enum(['code_sent', 'set_pin', 'step_up']),
-    // Set only once a code has actually been sent to a current roster number of someone still at
-    // the org. An attempt without them answers every code as wrong.
+    // Set only when a code is handed to the SMS provider for a current roster number of someone
+    // still at the org, just before the send (and kept if the send fails). An attempt without them
+    // answers every code as wrong.
     orgId: z.uuid().optional(),
     personId: z.uuid().optional(),
     phoneNumberId: z.uuid().optional(),

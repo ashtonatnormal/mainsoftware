@@ -85,8 +85,8 @@ export async function hit(valkey: Redis, windows: readonly Window[]): Promise<Li
 }
 
 // Whose address a per-IP window counts: an IPv4 address as it is (an IPv4-mapped IPv6 address as
-// its IPv4 form), and an IPv6 address by its /64, which one client normally holds whole (security
-// critic S4). Anything else is returned unchanged.
+// its IPv4 form), and an IPv6 address by its /64, which one client normally holds whole (T14
+// item 5). Anything else is returned unchanged.
 export function limitSubject(ip: string): string {
   if (isIPv4(ip)) return ip
   if (!isIPv6(ip)) return ip

@@ -199,7 +199,7 @@ const errorName = (error: unknown): string => (error instanceof Error ? error.na
 
 // What a browser sends (WebAuthn's RegistrationResponseJSON and AuthenticationResponseJSON),
 // bounded. These are ordinary objects, so a browser's newer fields are dropped rather than
-// refused; the request body around them is strict (§4).
+// refused; the request body around them is strict (http.ts).
 const base64url = (max: number) =>
   z
     .string()

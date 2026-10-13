@@ -1,5 +1,5 @@
 // Sign-in, devices and socket revocation against the Compose stack (BUILD-PLAN C0.5's "Done
-// when"; design §7.2): the real api and realtime apps, Postgres and Valkey, through the routes a
+// when"): the real api and realtime apps, Postgres and Valkey, through the routes a
 // browser uses. `npm run test:integration` runs it (Vitest's integration mode), with the stack up
 // (`docker compose up -d --wait`). The harness (testing/stack.ts) builds a throwaway database and
 // Valkey key prefix for the run.
@@ -13,6 +13,7 @@
 // or attempt id; every /api reply was no-store and held no token or attempt id; no Node warning
 // fired. When every test ran and passed, it also checks that every error code (but try_again and
 // internal) was answered and every audit action written at least once.
+import { type AddressInfo, connect } from 'node:net'
 import type {
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
@@ -23,6 +24,7 @@ import { ATTEMPT_COOKIE, SESSION_COOKIE } from '#src/auth/cookies.ts'
 import { keyName, tag } from '#src/auth/crypto.ts'
 import { MESSAGES } from '#src/auth/errors.ts'
 import { limitSubject } from '#src/auth/limiter.ts'
+import { LIMITS } from '#src/auth/policy.ts'
 import { createAuthenticator } from '#src/testing/authenticator.ts'
 import { APP_ORIGIN, type Client, type Closed, type Person, type Stack, startStack } from '#src/testing/stack.ts'
 
@@ -106,6 +108,26 @@ async function lockPassed(person: Person): Promise<void> {
   ])
 }
 
+// Moves a session's start, re-authentication and expiry back 2161 hours, leaving its last-seen
+// time: a session past its 90 days that was used today. The stamping trigger is off for the one
+// statement, as in the harness's age().
+async function pastExpiry(sessionId: string): Promise<void> {
+  await s.query('begin')
+  try {
+    await s.query('set local session_replication_role = replica')
+    await s.query(
+      `update sessions set created_at = created_at - interval '2161 hours',
+         reauthenticated_at = reauthenticated_at - interval '2161 hours', expires_at = expires_at - interval '2161 hours'
+       where id = $1`,
+      [sessionId],
+    )
+    await s.query('commit')
+  } catch (error) {
+    await s.query('rollback')
+    throw error
+  }
+}
+
 // A client that has asked for a code for the person and checked it: at the step after the code.
 async function atStepUp(person: Person): Promise<{ client: Client; reply: Awaited<ReturnType<Client['post']>> }> {
   const client = s.client()
@@ -138,6 +160,69 @@ async function closeOf(closed: Promise<Closed>): Promise<Closed> {
 async function valkeyNow(): Promise<number> {
   const [seconds, micros] = await s.valkey.time()
   return Number(seconds) * 1000 + Math.floor(Number(micros) / 1000)
+}
+
+// Waits up to 5 s for check to pass, then fails with what it last saw.
+async function eventually<T>(read: () => Promise<T>, check: (value: T) => boolean): Promise<T> {
+  const deadline = Date.now() + 5000
+  for (;;) {
+    const value = await read()
+    if (check(value)) return value
+    if (Date.now() > deadline) throw new Error(`still not as expected after 5 s: ${JSON.stringify(value)}`)
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+}
+
+// Waits until at least this many backends on the run's database are waiting on a lock. The
+// statistics snapshot is cleared first, since one is kept for the rest of a transaction.
+async function lockWaiters(count: number): Promise<void> {
+  await eventually(
+    async () => {
+      await s.query('select pg_stat_clear_snapshot()')
+      const [row] = await s.query<{ n: number }>(
+        "select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'",
+      )
+      return row?.n ?? 0
+    },
+    n => n >= count,
+  )
+}
+
+// The api app's port, listening on first use (requests otherwise go through inject).
+let apiPort: number | undefined
+async function listeningApi(): Promise<number> {
+  if (apiPort === undefined) {
+    await s.api.listen({ host: '127.0.0.1', port: 0 })
+    apiPort = (s.api.server.address() as AddressInfo).port
+  }
+  return apiPort
+}
+
+// Sends a POST as this client over a socket of its own, and closes the connection as soon as the
+// request is written: a client that hangs up before the reply. Resolves once the server has
+// closed its side too.
+async function hangUp(client: Client, path: string, body: unknown): Promise<void> {
+  const port = await listeningApi()
+  const payload = JSON.stringify(body)
+  const cookie = client.cookieHeader()
+  const socket = connect(port, '127.0.0.1')
+  const closed = new Promise<void>(resolve => socket.once('close', () => resolve()))
+  socket.on('error', () => {})
+  socket.end(
+    [
+      `POST ${path} HTTP/1.1`,
+      'Host: 127.0.0.1',
+      `Origin: ${APP_ORIGIN}`,
+      `User-Agent: ${client.userAgent}`,
+      `X-Forwarded-For: ${client.ip}`,
+      ...(cookie === '' ? [] : [`Cookie: ${cookie}`]),
+      'Content-Type: application/json',
+      `Content-Length: ${Buffer.byteLength(payload)}`,
+      '',
+      payload,
+    ].join('\r\n'),
+  )
+  await closed
 }
 
 // Fills a sliding window with `count` hits at `at` (Valkey ms).
@@ -346,7 +431,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('C0.5 Done: a number not on the roster gets the identical reply and no SMS (ACC-03, PRD-53)', async () => {
-    // Budgets: R 3 code requests, N (not on the roster) 3.
+    // Budgets: R 3 code requests, N (not on the roster) 3; a refused request doesn't count.
     const r = await s.person()
     const n = s.number()
     const rc = s.client()
@@ -413,13 +498,26 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(fourthN.text).toBe(fourthR.text)
     expect(fourthN.headers['retry-after']).toBe('600')
 
+    // A refused request costs nothing (limiter.ts): another is still refused, and R's windows and
+    // those of R's browser's address hold only what was allowed: 3 code requests, and 5 code
+    // checks besides in the address's window for every sign-in request.
+    expect((await requestCode(rc, r.e164)).status).toBe(429)
+    const rcAddress = tag(s.keys, `ip:${limitSubject(rc.ip)}`)
+    const held = (name: string, subject: string) => s.valkey.zcard(s.names.limit(name, subject))
+    expect({
+      'otp-n10m': await held('otp-n10m', tag(s.keys, r.e164)),
+      'otp-n24h': await held('otp-n24h', tag(s.keys, r.e164)),
+      'otp-ip': await held('otp-ip', rcAddress),
+      'auth-ip': await held('auth-ip', rcAddress),
+    }).toEqual({ 'otp-n10m': 3, 'otp-n24h': 3, 'otp-ip': 3, 'auth-ip': 8 })
+
     const nonRoster = s.logs.filter(line => line.event === 'otp_non_roster')
     expect(nonRoster.length).toBeGreaterThan(0)
     for (const line of nonRoster) expect(JSON.stringify(line)).not.toContain(n.slice(3))
   })
 
   it('PRD-53: codes expire, die after 5 tries, and are replaced', async () => {
-    // Budgets: A 2 code requests, B 2, C 1.
+    // Budgets: A 2 code requests, B 2, C 1, D 2.
     const a = await s.person({ pin: s.newPin() })
     const b = await s.person({ pin: s.newPin() })
     const c = await s.person({ pin: s.newPin() })
@@ -454,6 +552,22 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect([replaced.status, replaced.error]).toEqual([401, 'code_wrong'])
     expect((await verifyCode(bc, second)).status).toBe(200)
 
+    // T14: the code is bound to the browser that asked for it. A newer request from another
+    // browser replaces it, and the older browser's tries neither count against the new code nor
+    // kill it.
+    const d = await s.person({ pin: s.newPin() })
+    const older = s.client()
+    const newer = s.client()
+    expect((await requestCode(older, d.e164)).status).toBe(200)
+    await s.sms.nextCode(d.e164)
+    expect((await requestCode(newer, d.e164)).status).toBe(200)
+    const newest = await s.sms.nextCode(d.e164)
+    for (let tries = 1; tries <= 5; tries++) {
+      const reply = await verifyCode(older, tries < 5 ? another(newest) : newest)
+      expect([reply.status, reply.error]).toEqual([401, 'code_expired'])
+    }
+    expect((await verifyCode(newer, newest)).status).toBe(200)
+
     // A code past its 5 minutes (its record gone from Valkey, as expiry leaves it).
     const cc = s.client()
     expect((await requestCode(cc, c.e164)).status).toBe(200)
@@ -461,6 +575,36 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     await s.valkey.del(s.names.otp(tag(s.keys, c.e164)))
     const expired = await verifyCode(cc, late)
     expect([expired.status, expired.error]).toEqual([401, 'code_expired'])
+  })
+
+  it('BUILD-PLAN C0.5 ADM-06: a wrong code whose sender hangs up before the reply is counted once and still audited', async () => {
+    // Budgets: G 1 code request.
+    const g = await s.person({ pin: s.newPin() })
+    const gc = s.client()
+    expect((await requestCode(gc, g.e164)).status).toBe(200)
+    const code = await s.sms.nextCode(g.e164)
+    await hangUp(gc, '/api/auth/otp/verify', { code: another(code) })
+    const failed = await eventually(
+      async () => (await auditOf(g)).filter(row => row.action === 'auth.code_failed'),
+      rows => rows.length > 0,
+    )
+    await s.settled()
+    expect(failed.map(row => row.details)).toEqual([{ result: 'wrong' }])
+    expect(failed[0]).toMatchObject({ actor_id: null, ip: gc.ip })
+    expect(await s.valkey.hget(s.names.otp(tag(s.keys, g.e164)), 'tries')).toBe('1')
+  })
+
+  it('BUILD-PLAN C0.5 ADM-06: a code request whose sender hangs up before the reply still sends the code and writes its audit row', async () => {
+    // Budgets: H 1 code request (hung up).
+    const h = await s.person()
+    await hangUp(s.client(), '/api/auth/otp/request', { phone: h.e164 })
+    await s.sms.nextCode(h.e164)
+    const rows = await eventually(
+      () => auditOf(h),
+      found => found.length > 0,
+    )
+    await s.settled()
+    expect(rows.map(row => [row.action, row.details])).toEqual([['auth.code_requested', { send: 'attempted' }]])
   })
 
   it('C0.5 Done: the PIN locks after 5 wrong tries for 15 minutes and after 10 until an admin resets it (PRD-53, ACC-02, ACC-06)', async () => {
@@ -552,6 +696,14 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const { client: again, reply: newPin } = await atStepUp(m)
     expect(newPin.body).toEqual({ status: 'code_verified', next: 'set_pin' })
     expect((await again.post('/api/auth/pin/set', { pin: s.newPin() })).status).toBe(200)
+
+    // ACC-04 T14: the reset ended the first device's session but didn't sign the device out, and
+    // a device lists only while it holds a live session: M and the admin each see the new one.
+    const newDevice = (await s.sessionOf(again)).deviceId
+    const listedIds = (reply: Awaited<ReturnType<Client['get']>>) =>
+      reply.json<{ devices: { id: string }[] }>().devices.map(device => device.id)
+    expect(listedIds(await again.get('/api/devices'))).toEqual([newDevice])
+    expect(listedIds(await adminC.get(`/api/admin/people/${m.id}/devices`))).toEqual([newDevice])
 
     const resetRow = (await auditOf(m)).find(row => row.action === 'person.reset_pin')
     expect(resetRow).toMatchObject({
@@ -677,6 +829,21 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect([tampered.status, tampered.error]).toEqual([401, 'passkey_failed'])
     expect((await auditOf(p)).filter(row => row.action === 'auth.passkey_failed')).toHaveLength(1)
 
+    // T14: an assertion without user verification fails, and so does one whose signature counter
+    // is the stored one (a replayed assertion, or a cloned authenticator).
+    const thirdOptions = async () => (await third.post('/api/auth/passkey/options', {})).json<RequestOptions>().options
+    const noUv = await third.post('/api/auth/passkey/verify', {
+      response: authenticator.assert(await thirdOptions(), { uv: false }),
+    })
+    expect([noUv.status, noUv.error]).toEqual([401, 'passkey_failed'])
+    const [now] = await s.query<{ counter: string }>('select counter::text from passkeys where id = $1', [passkeyId])
+    expect(Number(now?.counter)).toBeGreaterThan(0)
+    const cloned = await third.post('/api/auth/passkey/verify', {
+      response: authenticator.assert(await thirdOptions(), { counter: Number(now?.counter) }),
+    })
+    expect([cloned.status, cloned.error]).toEqual([401, 'passkey_failed'])
+    expect((await auditOf(p)).filter(row => row.action === 'auth.passkey_failed')).toHaveLength(3)
+
     // §9.4: adding or removing a passkey needs a re-authentication from the last 5 minutes.
     const { id: sessionId } = await s.sessionOf(second)
     await s.age(sessionId, '4 minutes')
@@ -755,6 +922,41 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(byOwner.status).toBe(200)
   })
 
+  it('ACC-05 ACC-06: a PIN reset that waits on a deactivation in progress decides on what it committed, and is refused', async () => {
+    // Budgets: Admin A 1 code request, Admin B 1, target T 1.
+    const a = await s.person({ roles: ['admin'], pin: s.newPin() })
+    const b = await s.person({ roles: ['admin'], pin: s.newPin() })
+    const t = await s.person({ pin: s.newPin() })
+    const ac = await s.signIn(a)
+    const bc = await s.signIn(b)
+    await s.signIn(t)
+    const before = await userOf(t)
+
+    // T's device held FOR SHARE keeps A's deactivation waiting in people_end_sessions, holding
+    // T's person row, while B's reset is sent.
+    let deactivating: Promise<Awaited<ReturnType<Client['post']>>> | undefined
+    let resetting: Promise<Awaited<ReturnType<Client['post']>>> | undefined
+    await s.query('begin')
+    try {
+      await s.query('select id from devices where user_id = $1 for share', [t.id])
+      deactivating = ac.post('/api/admin/people/deactivate', { person: t.id })
+      await lockWaiters(1)
+      resetting = bc.post('/api/admin/people/reset-pin', { person: t.id, identityCheck: 'in_person' })
+      await lockWaiters(2)
+    } finally {
+      await s.query('commit')
+    }
+    const [deactivated, reset] = await Promise.all([deactivating, resetting])
+    expect(deactivated?.body).toEqual({ status: 'deactivated', sessionsEnded: 1 })
+    expect([reset?.status, reset?.error]).toEqual([403, 'forbidden'])
+    const after = await userOf(t)
+    expect(after?.pin_hash).toBe(before?.pin_hash)
+    expect(after?.pin_reset_at).toBeNull()
+    expect((await auditOf(t)).filter(row => row.action.startsWith('person.')).map(row => row.action)).toEqual([
+      'person.deactivate',
+    ])
+  })
+
   it('C0.5 Done: deactivating a member signs them out everywhere and closes their socket within 2 s through the push (ACC-05, T5)', async () => {
     // Budgets: the Admin 1 code request, D 3, L 1.
     const admin = await s.person({ roles: ['admin'], pin: s.newPin() })
@@ -826,7 +1028,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('ACC-04: devices are listed and signed out: one, all others, this one, and by an admin', async () => {
-    // Budgets: M 3 code requests, N 2, the Admin 1.
+    // Budgets: M 3 code requests, N 3, the Admin 1.
     const m = await s.person({ pin: s.newPin() })
     const n = await s.person({ pin: s.newPin() })
     const admin = await s.person({ roles: ['admin'], pin: s.newPin() })
@@ -838,6 +1040,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const c = await s.signIn(m)
     const nx = await s.signIn(n)
     const ny = await s.signIn(n)
+    const nz = await s.signIn(n)
     const aDevice = (await s.sessionOf(a)).deviceId
     const bDevice = (await s.sessionOf(b)).deviceId
     const cDevice = (await s.sessionOf(c)).deviceId
@@ -903,12 +1106,16 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       [cDevice],
     ])
 
-    // A session unused for 31 days has ended; the other device still lists.
+    // A session unused for 31 days has ended, and so has one past its 90 days though used today
+    // (T14: a device lists only while it holds a live session); the other device still lists.
     const xSocket = await socket(nx)
     await s.age((await s.sessionOf(ny)).id, '31 days')
     const idle = await ny.get('/api/devices')
     expect([idle.status, idle.error]).toEqual([401, 'signed_out'])
     expect(ny.cookie(SESSION_COOKIE)).toBeUndefined()
+    await pastExpiry((await s.sessionOf(nz)).id)
+    const expired = await nz.get('/api/devices')
+    expect([expired.status, expired.error]).toEqual([401, 'signed_out'])
     expect((await nx.get('/api/devices')).json<{ devices: { id: string }[] }>().devices.map(d => d.id)).toEqual([
       nxDevice,
     ])
@@ -930,7 +1137,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const pushedBefore = s.realtime.server.counts().closedRevoked
     const adminStartedAt = Date.now()
     const all = await adminC.post('/api/admin/people/sign-out-devices', { person: n.id })
-    expect(all.body).toEqual({ signedOut: 2 })
+    expect(all.body).toEqual({ signedOut: 3 })
     const xClosed = await closeOf(xSocket.closed)
     expect(xClosed.code).toBe(4401)
     expect(xClosed.at - adminStartedAt).toBeLessThan(2000)
@@ -977,7 +1184,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(s.logs.some(line => line.event === 'reauth_limit_unavailable')).toBe(true)
   })
 
-  it('ACC-03 decision 12: a number in two orgs, and a number removed before the finish', async () => {
+  it('ACC-03 T14: a number in two orgs, and a number removed before the finish', async () => {
     // Budgets: T 1 code request (the second org's person holds the same number), Y 1.
     const t = await s.person({ pin: s.newPin() })
     const twin = await s.person({ org: 'second', e164: t.e164 })
@@ -1004,12 +1211,24 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('PRD-53 T14: every limit is wired to the live Valkey', async () => {
-    // Budgets: P1 3 code requests, P2 1, P5 1, P6 1; the other requests are refused before any.
-    const now = await valkeyNow()
+    // Budgets: P1 3 code requests, P2 1, P5 1, P6 1, P7 1, P8 1; the other requests are refused
+    // before any.
+    // Each window is filled to the number PRD-53 or T14 sets (never policy.ts's own max, which a
+    // change there would follow), and a request it covers is then refused.
+    const filled = new Set<string>()
+    async function fill(name: string, subject: string, count: number, at?: number): Promise<void> {
+      filled.add(name)
+      await seedWindow(s.names.limit(name, subject), count, at ?? (await valkeyNow()))
+    }
+
+    // 3 per number per 10 minutes.
+    const fresh = s.number()
+    await fill('otp-n10m', tag(s.keys, fresh), 3)
+    expect((await requestCode(s.client(), fresh)).status).toBe(429)
 
     // 10 per number per rolling 24 hours: 7 an hour ago leave room for 3.
     const p1 = await s.person()
-    await seedWindow(s.names.limit('otp-n24h', tag(s.keys, p1.e164)), 7, now - 3_600_000)
+    await fill('otp-n24h', tag(s.keys, p1.e164), 7, (await valkeyNow()) - 3_600_000)
     const c1 = s.client()
     for (let i = 0; i < 3; i++) expect((await requestCode(c1, p1.e164)).status).toBe(200)
     const day = await requestCode(c1, p1.e164)
@@ -1020,7 +1239,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const capKey = s.names.limit('sms-global', 'all')
     try {
       const p2 = await s.person()
-      await seedWindow(capKey, 100, await valkeyNow())
+      await fill('sms-global', 'all', 100)
       const sentBefore = s.sms.sent.length
       const c2 = s.client()
       const capped = await requestCode(c2, p2.e164)
@@ -1034,21 +1253,37 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       await s.valkey.del(capKey)
     }
 
-    // Per IP, and an IPv6 client by its /64.
+    // Code requests per IP, and an IPv6 client by its /64.
     const ip = '192.0.2.77'
-    await seedWindow(s.names.limit('otp-ip', tag(s.keys, `ip:${limitSubject(ip)}`)), 30, await valkeyNow())
+    await fill('otp-ip', tag(s.keys, `ip:${limitSubject(ip)}`), 30)
     expect((await requestCode(s.client({ ip }), s.number())).status).toBe(429)
-    await seedWindow(
-      s.names.limit('otp-ip', tag(s.keys, `ip:${limitSubject('2001:db8:7:7::1')}`)),
-      30,
-      await valkeyNow(),
-    )
+    await fill('otp-ip', tag(s.keys, `ip:${limitSubject('2001:db8:7:7::1')}`), 30)
     expect((await requestCode(s.client({ ip: '2001:db8:7:7::1234' }), s.number())).status).toBe(429)
+
+    // Every sign-in request per IP, 100 per 10 minutes: a code request, a code check and a PIN
+    // check from the address are each refused.
+    const authIp = '192.0.2.78'
+    const p7 = await s.person({ pin: s.newPin() })
+    const p8 = await s.person()
+    const atPin = s.client({ ip: authIp })
+    expect((await requestCode(atPin, p7.e164)).status).toBe(200)
+    expect((await verifyCode(atPin, await s.sms.nextCode(p7.e164))).status).toBe(200)
+    const atCode = s.client({ ip: authIp })
+    expect((await requestCode(atCode, p8.e164)).status).toBe(200)
+    await fill('auth-ip', tag(s.keys, `ip:${limitSubject(authIp)}`), 100)
+    const fromAuthIp = {
+      codeCheck: await verifyCode(atCode, await s.sms.nextCode(p8.e164)),
+      pinCheck: await verifyPin(atPin, pinOf(p7)),
+      codeRequest: await requestCode(s.client({ ip: authIp }), s.number()),
+    }
+    for (const [step, reply] of Object.entries(fromAuthIp)) {
+      expect([reply.status, reply.error], step).toEqual([429, 'too_many_requests'])
+    }
 
     // Every number together.
     const allKey = s.names.limit('otp-all', 'all')
     try {
-      await seedWindow(allKey, 600, await valkeyNow())
+      await fill('otp-all', 'all', 600)
       expect((await requestCode(s.client(), s.number())).status).toBe(429)
     } finally {
       await s.valkey.del(allKey)
@@ -1058,14 +1293,22 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const p5 = await s.person()
     const c5 = s.client()
     expect((await requestCode(c5, p5.e164)).status).toBe(200)
-    await seedWindow(s.names.limit('otp-v24h', tag(s.keys, p5.e164)), 10, await valkeyNow())
+    await fill('otp-v24h', tag(s.keys, p5.e164), 10)
     expect((await verifyCode(c5, await s.sms.nextCode(p5.e164))).status).toBe(429)
 
     // Re-authentications per session.
     const p6 = await s.person({ pin: s.newPin() })
     const c6 = await s.signIn(p6)
-    await seedWindow(s.names.limit('reauth', (await s.sessionOf(c6)).id), 10, await valkeyNow())
+    await fill('reauth', (await s.sessionOf(c6)).id, 10)
     const reauth = await c6.post('/api/auth/reauth/pin', { pin: pinOf(p6) })
     expect([reauth.status, reauth.error]).toEqual([429, 'too_many_requests'])
+
+    // Every limit policy.ts names was filled and refused above.
+    expect([...filled].sort()).toEqual(
+      Object.values(LIMITS)
+        .flat()
+        .map(limit => limit.name)
+        .sort(),
+    )
   })
 })

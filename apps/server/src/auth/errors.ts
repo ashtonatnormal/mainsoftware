@@ -9,7 +9,8 @@
 
 export const MESSAGES = {
   invalid_request: "That request wasn't understood.",
-  invalid_phone: "Enter a mobile number, with the country code if it isn't Singaporean.",
+  invalid_phone:
+    'Enter your mobile number starting with + and the country code, or just the 8 digits of a Singapore number.',
   invalid_code: 'Enter the 6-digit code.',
   invalid_pin: 'Your PIN is 6 digits.',
   pin_too_easy: 'Choose a harder PIN. Avoid repeated digits and runs like 123456.',
@@ -31,7 +32,7 @@ export const MESSAGES = {
   signed_out: "You've been signed out. Sign in again to keep using Hearth.",
   reauth_required: "Confirm it's you with your PIN or a passkey first.",
   forbidden: "You can't do that.",
-  not_found: "That isn't there any more.",
+  not_found: "We couldn't find that.",
   no_account: "They haven't signed in yet, so there's no PIN to reset.",
   try_again: 'Something else changed this at the same moment. Try again.',
   internal: 'Something went wrong on our side. Try again.',

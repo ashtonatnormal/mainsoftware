@@ -65,16 +65,19 @@ interface Credential {
 
 export interface Authenticator {
   // Answers registration options with a new credential, or with the last one again
-  // (reuseCredential), as an authenticator that ignored excludeCredentials would.
+  // (reuseCredential), as an authenticator that ignored excludeCredentials would. `uv: false`
+  // leaves the user-verified flag out: only presence was checked, no device PIN or biometric.
   register(
     options: PublicKeyCredentialCreationOptionsJSON,
-    opts?: { reuseCredential?: boolean },
+    opts?: { reuseCredential?: boolean; uv?: boolean },
   ): RegistrationResponseJSON
   // Answers authentication options with a credential the options allow. `origin` writes another
-  // origin into clientDataJSON (a tampered assertion); `userHandle` replaces the handle sent.
+  // origin into clientDataJSON (a tampered assertion); `userHandle` replaces the handle sent;
+  // `uv: false` leaves the user-verified flag out; `counter` sends that signature counter instead
+  // of the next one (a cloned authenticator, or a replayed assertion).
   assert(
     options: PublicKeyCredentialRequestOptionsJSON,
-    opts?: { origin?: string; userHandle?: string },
+    opts?: { origin?: string; userHandle?: string; uv?: boolean; counter?: number },
   ): AuthenticationResponseJSON
 }
 
@@ -111,7 +114,7 @@ export function createAuthenticator(origin: string): Authenticator {
       idLength.writeUInt16BE(credential.id.length)
       const authData = Buffer.concat([
         sha256(rpId),
-        Buffer.from([UP | UV | BE | BS | AT]),
+        Buffer.from([UP | (opts.uv === false ? 0 : UV) | BE | BS | AT]),
         Buffer.alloc(4),
         // The AAGUID: zeros, as attestation "none" allows.
         Buffer.alloc(16),
@@ -151,8 +154,12 @@ export function createAuthenticator(origin: string): Authenticator {
       if (credential === undefined) throw new Error('this authenticator holds none of the allowed credentials')
       credential.counter += 1
       const counter = Buffer.alloc(4)
-      counter.writeUInt32BE(credential.counter)
-      const authData = Buffer.concat([sha256(rpId), Buffer.from([UP | UV | BE | BS]), counter])
+      counter.writeUInt32BE(opts.counter ?? credential.counter)
+      const authData = Buffer.concat([
+        sha256(rpId),
+        Buffer.from([UP | (opts.uv === false ? 0 : UV) | BE | BS]),
+        counter,
+      ])
       const clientData = Buffer.from(
         JSON.stringify({
           type: 'webauthn.get',

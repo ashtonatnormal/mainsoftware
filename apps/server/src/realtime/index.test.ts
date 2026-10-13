@@ -126,6 +126,31 @@ describe('C0.5 T5 listening for ended sessions', () => {
     expect(log.info).toHaveBeenCalledWith({ event: 'revocations_subscribed' }, expect.any(String))
   })
 
+  it('subscribes again on each new connection after a reconnect, and keeps trying if that fails', async () => {
+    vi.useFakeTimers()
+    const { asRedis, events, subscribe } = fakeSubscriber()
+    const log = logger()
+    keepSubscribed(asRedis, 'it:unit:', () => {}, log)
+    // The first connection's 'ready' finds the first subscribe still pending: no second one.
+    events.emit('ready')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(subscribe).toHaveBeenCalledTimes(1)
+
+    // A reconnect: Valkey has forgotten the subscription, and the new subscribe fails once.
+    subscribe.mockRejectedValueOnce(new Error('Command timed out'))
+    events.emit('ready')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(subscribe).toHaveBeenCalledTimes(2)
+    // A 'ready' while the retry waits sends nothing more.
+    events.emit('ready')
+    await vi.advanceTimersByTimeAsync(SUBSCRIBE_RETRY_MS)
+    expect(subscribe).toHaveBeenCalledTimes(3)
+    expect(subscribe.mock.calls.every(([channel]) => channel === 'it:unit:revoked')).toBe(true)
+    expect(log.info).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(SUBSCRIBE_RETRY_MS * 3)
+    expect(subscribe).toHaveBeenCalledTimes(3)
+  })
+
   it('stops trying once stopped', async () => {
     vi.useFakeTimers()
     const { asRedis, subscribe } = fakeSubscriber({ failures: 100 })

@@ -1,4 +1,4 @@
-// Signed-in self-service (ACC-02, §9.4; design §3.24): re-authenticating with the PIN or a
+// Signed-in self-service (ACC-02, §9.4, T14): re-authenticating with the PIN or a
 // passkey, adding and removing a passkey, and signing out. Every transaction runs as the
 // session's person (inSession) and starts by re-reading the acting session FOR SHARE (person,
 // device, session), so a session that ended a moment ago is refused with 401 signed_out.

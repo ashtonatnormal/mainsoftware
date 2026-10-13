@@ -4,11 +4,11 @@ import { defaultExclude, defineConfig } from 'vitest/config'
 // in its workspace (src/, test/ or the root, such as packages/access/rules.test.ts). demo/ keeps its
 // own node:test suite, which `npm test` runs after this one.
 //
-// The integration tests (`*.integration.test.ts`) run only in the `integration` mode
-// (`npm run test:integration`), because they need the Compose stack (`docker compose up -d --wait`):
-// each run builds its own throwaway database and Valkey key prefix (apps/server/src/testing/stack.ts),
-// so they can run one after another, one file at a time. `npm test` and `npm run check` leave them
-// out, so those pass without Docker.
+// The integration tests (`*.integration.test.ts`, wherever they sit in apps/*, packages/*, infra/ or
+// scripts/) run only in the `integration` mode (`npm run test:integration`), because they need the
+// Compose stack (`docker compose up -d --wait`): each run builds its own throwaway database and
+// Valkey key prefix (apps/server/src/testing/stack.ts), so they can run one after another, one file
+// at a time. `npm test` and `npm run check` leave them out, so those pass without Docker.
 export default defineConfig(({ mode }) => {
   const integration = mode === 'integration'
   return {
@@ -17,7 +17,13 @@ export default defineConfig(({ mode }) => {
     resolve: { tsconfigPaths: true },
     test: integration
       ? {
-          include: ['apps/*/src/**/*.integration.test.ts'],
+          // Every file the default run leaves out as an integration test, so each test file runs in
+          // one mode or the other (scripts/guards/test-modes.test.ts).
+          include: [
+            '{apps,packages}/*/**/*.integration.test.ts',
+            'infra/**/*.integration.test.ts',
+            'scripts/**/*.integration.test.ts',
+          ],
           exclude: [...defaultExclude, '**/dist/**', '**/cdk.out/**'],
           fileParallelism: false,
           testTimeout: 120_000,

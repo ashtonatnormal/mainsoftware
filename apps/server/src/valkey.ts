@@ -32,10 +32,16 @@ export function createValkey(url: string, logger: Logger): Redis {
 }
 
 // A second connection for the revocation channel: a subscribed connection can run nothing else.
-// Commands queue while it connects (enableOfflineQueue), and ioredis re-subscribes after a reconnect;
-// the realtime re-check covers any message missed in between (T14).
+// Commands queue while it connects (enableOfflineQueue). ioredis's own re-subscribe after a
+// reconnect is off: nothing could handle it failing (it would end the process), so
+// realtime/index.ts keepSubscribed subscribes again itself. The realtime re-check covers any
+// message missed in between (T14).
 export function createSubscriber(client: Redis, logger: Logger): Redis {
-  const sub = client.duplicate({ connectionName: 'hearth-revocations', enableOfflineQueue: true })
+  const sub = client.duplicate({
+    connectionName: 'hearth-revocations',
+    enableOfflineQueue: true,
+    autoResubscribe: false,
+  })
   watch(sub, logger, 'valkey subscriber')
   return sub
 }

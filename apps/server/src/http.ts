@@ -7,7 +7,7 @@ import { z } from 'zod'
 import { addCookie } from '#src/auth/cookies.ts'
 import { ApiError, type ErrorCode } from '#src/auth/errors.ts'
 
-// Bodies are JSON of at most 16 KiB (§4).
+// Bodies are JSON of at most 16 KiB.
 export const BODY_LIMIT = 16_384
 
 // A uuid as people's ids are stored: lower case, so comparing it with an id read from the
@@ -32,7 +32,8 @@ export interface ReqInfo {
   requestId: string
   userAgent: string | undefined
   log: FastifyBaseLogger
-  // Runs task after the response has been sent; its errors are logged (api.ts).
+  // Runs task once the response has ended, sent or abandoned by the client; its errors are logged
+  // (AfterResponse below).
   after(task: () => Promise<void>): void
 }
 
@@ -63,28 +64,40 @@ export function requestInfo(api: { afterResponse: AfterResponse }, request: Fast
   }
 }
 
-// Work a handler queues to run once its response has been sent: the roster lookup and text after
-// a code request, an audit row after a failed code, a session's last-use time. The api scope's
-// onResponse hook starts a request's tasks, one after another; each failure is logged. A request
-// whose response never finished (the client went away) never starts its tasks. idle() resolves
-// once every started task has settled: the integration harness awaits it after each request, so
-// what a test checks next doesn't race the work, and the api scope's onClose awaits it (for at
-// most 5 s), so a SIGTERM lets a pending text or audit row finish.
+// Work a handler queues to run once its response has ended: the roster lookup and text after a
+// code request, an audit row after a failed code, a session's last-use time. The api scope starts
+// a request's tasks when its response ends, sent or abandoned (api.ts), and runs them one after
+// another; each failure is logged. A client that goes away before the reply doesn't stop them, so
+// it can't keep a failed code out of the audit log (BUILD-PLAN C0.5: an audit event for every
+// failure); it gets no reply to time, so running the work then tells it nothing. A task queued
+// after the response has ended (the client left while the handler was still working) runs at
+// once. idle() resolves once every started task has settled: the integration harness awaits it
+// after each request, so what a test checks next doesn't race the work, and the api scope's
+// onClose awaits it (for at most 5 s), so a SIGTERM lets a pending text or audit row finish.
 export class AfterResponse {
   readonly #queued = new WeakMap<FastifyRequest, Array<() => Promise<void>>>()
+  // Requests whose response has ended, and the last run of tasks each started, so a task queued
+  // later still runs after the earlier ones.
+  readonly #ended = new WeakMap<FastifyRequest, Promise<void>>()
   readonly #running = new Set<Promise<void>>()
 
   add(request: FastifyRequest, task: () => Promise<void>): void {
     const tasks = this.#queued.get(request)
     if (tasks === undefined) this.#queued.set(request, [task])
     else tasks.push(task)
+    if (this.#ended.has(request)) this.start(request)
   }
 
+  // Called when the response ends; calling it again starts only what was queued since.
   start(request: FastifyRequest): void {
+    const previous = this.#ended.get(request) ?? Promise.resolve()
     const tasks = this.#queued.get(request)
-    if (tasks === undefined) return
     this.#queued.delete(request)
-    const run = (async () => {
+    if (tasks === undefined) {
+      this.#ended.set(request, previous)
+      return
+    }
+    const run = previous.then(async () => {
       for (const task of tasks) {
         try {
           await task()
@@ -92,13 +105,14 @@ export class AfterResponse {
           request.log.error({ err: error, event: 'after_response_failed' }, 'work after the response failed')
         }
       }
-    })()
+    })
+    this.#ended.set(request, run)
     this.#running.add(run)
     void run.finally(() => this.#running.delete(run))
   }
 
   async idle(): Promise<void> {
-    // Lets a response that has just finished reach the onResponse hook first.
+    // Lets a response that has just ended reach the api scope's hooks first.
     await new Promise<void>(resolve => setImmediate(resolve))
     while (this.#running.size > 0) await Promise.allSettled([...this.#running])
   }

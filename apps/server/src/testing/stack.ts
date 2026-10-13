@@ -1,6 +1,6 @@
 // The integration harness (test-only; the image leaves testing/ out): the real api and realtime
-// apps on the Compose stack's Postgres and Valkey, for apps/server/src/**/*.integration.test.ts
-// (`npm run test:integration`, Vitest's integration mode).
+// apps on the Compose stack's Postgres and Valkey, for the server's integration tests
+// (`*.integration.test.ts`, which `npm run test:integration` runs in Vitest's integration mode).
 //
 // Each run builds its own throwaway database (auth_it_<random>, migrated with production's
 // migrator, owned by hearth_owner, the server connecting as hearth_app) and its own Valkey key

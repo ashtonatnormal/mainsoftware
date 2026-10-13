@@ -42,8 +42,8 @@ export async function publishRevoked(
 }
 
 // Subscribes the realtime role's own Valkey connection (valkey.ts createSubscriber) to the channel.
-// Resolves once subscribed; ioredis subscribes again by itself after a reconnect. A message that
-// isn't one of ours is logged and dropped.
+// Resolves once subscribed; realtime/index.ts keepSubscribed subscribes again after a reconnect. A
+// message that isn't one of ours is logged and dropped.
 export async function subscribeRevoked(
   subscriber: Pick<Redis, 'subscribe' | 'on'>,
   keyPrefix: string,

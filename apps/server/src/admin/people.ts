@@ -1,4 +1,4 @@
-// The admin actions on a person that C0.5 needs (ACC-04, ACC-05, ACC-06; design §3.28):
+// The admin actions on a person that C0.5 needs (ACC-04, ACC-05, ACC-06; T14 items 12 and 13):
 // deactivating them, resetting their PIN, signing their devices out, and listing their devices.
 // C0.16's console calls these. Each decides through can() (Principle 1) in its own transaction,
 // with a fresh re-authentication (§9.4), after re-reading the actor's own session FOR SHARE
@@ -13,7 +13,6 @@ import { writeAudit } from '#src/auth/audit.ts'
 import { clearedCookie } from '#src/auth/cookies.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { inSession, type SessionIds } from '#src/auth/sessions.ts'
-import type { InOrg } from '#src/db/database.ts'
 import { endDevices, endedSessions, hasLiveSession } from '#src/devices/routes.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
 import { publishRevoked } from '#src/revocation.ts'
@@ -28,12 +27,6 @@ const audit = (session: SessionIds, info: ReqInfo, target: string) =>
     ip: info.ip,
     requestId: info.requestId,
   }) as const
-
-// The target's person row FOR NO KEY UPDATE, before their sessions are ended: a sign-in in
-// progress holds it FOR SHARE, so it finishes first, and this then ends the session it made.
-async function lockPerson(trx: InOrg, orgId: string, personId: string): Promise<void> {
-  await sql`select 1 from people where org_id = ${orgId} and id = ${personId} for no key update`.execute(trx)
-}
 
 // The same snapshot with one person still active, to ask whether an action refused only because
 // they've left would otherwise be allowed.
@@ -107,8 +100,10 @@ export async function resetPin(
   const { orgId } = session
   const target = body.person
   const ended = await inSession(api, info, session, async trx => {
-    await authorise(trx, session, { action: 'person.reset_pin', person: target }, 'forbidden')
-    await lockPerson(trx, orgId, target)
+    // The target's row is taken before can() decides: a sign-in in progress holds it FOR SHARE,
+    // so it finishes first and this then ends the session it made, and a deactivation in progress
+    // is seen, so someone who has just left is refused.
+    await authorise(trx, session, { action: 'person.reset_pin', person: target }, 'forbidden', { target })
     const user = await sql`select id from users where org_id = ${orgId} and id = ${target} for update`.execute(trx)
     // Someone who has never signed in has no PIN to reset.
     if (user.rows.length === 0) throw new ApiError(409, 'no_account')
@@ -145,10 +140,11 @@ export async function signOutDevices(
   const target = body.person
   const self = target === session.userId
   const { ended, revoked } = await inSession(api, info, session, async trx => {
+    // Their row is taken before can() decides, as for a PIN reset; your own, taken as the actor's.
     await authorise(trx, session, { action: 'person.sign_out_devices', person: target }, 'forbidden', {
       person: self ? 'no_key_update' : 'share',
+      ...(self ? {} : { target }),
     })
-    if (!self) await lockPerson(trx, session.orgId, target)
     const ended = await endDevices(trx, session, target)
     await writeAudit(trx, {
       ...audit(session, info, target),

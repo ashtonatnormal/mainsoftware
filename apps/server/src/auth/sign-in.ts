@@ -1,12 +1,14 @@
-// The sign-in service (ACC-01, ACC-02, ACC-03, PRD-53; design §3.23 and §5). A sign-in is an
+// The sign-in service (ACC-01, ACC-02, ACC-03, PRD-53, T14). A sign-in is an
 // attempt in Valkey (attempts.ts) that moves through three steps: a code is sent, then a new PIN
 // is set or the step-up is passed (the account PIN or a passkey), and then a device and session
 // are issued and the attempt is used up.
 //
 // - Every number gets the same reply to a code request, and nothing touches Postgres before that
-//   reply. The roster lookup, the audit row and the text run after it, and the attempt names the
-//   person only once a code has actually been sent to them. An attempt that names nobody answers
-//   every code as wrong, even the right one.
+//   reply. The roster lookup, the audit row and the text run after it, even when the client hangs
+//   up first. The attempt names the person only when their code is handed to the SMS provider,
+//   just before the send; a send that then fails leaves it naming them, and a guess at that code
+//   has the same odds as at one that arrived. An attempt that names nobody answers every code as
+//   wrong, even the right one.
 // - Every transaction before a session exists acts as the org's system principal: whoever holds
 //   the phone hasn't proved anything yet. Each starts by reading the person's row FOR SHARE, the
 //   first row in the lock order (0006), so someone who has left is refused there, before any
@@ -152,7 +154,7 @@ export async function recordPasskeyUse(trx: InOrg, orgId: string, passkeyId: str
     where org_id = ${orgId} and id = ${passkeyId}`.execute(trx)
 }
 
-// A PIN check that failed, as the reply (§4.1, §4.2). At sign-in an unset PIN means the attempt
+// A PIN check that failed, as the reply (T14 item 9). At sign-in an unset PIN means the attempt
 // should have gone to set_pin; at re-authentication only an admin reset helps.
 export function pinRefusal(check: Exclude<PinCheck, { ok: true }>, during: 'sign_in' | 'reauth'): ApiError {
   switch (check.reason) {
@@ -273,8 +275,8 @@ export async function requestCode(
 }
 
 // After the reply: find the number on the roster, and send the code only to a current number of
-// someone still at the org, within the global SMS cap. Only then does the attempt name them. Its
-// errors are logged with at most a person id, never the number.
+// someone still at the org, within the global SMS cap. The attempt names them just before the code
+// is handed to the provider. Its errors are logged with at most a person id, never the number.
 async function deliverCode(
   api: Api,
   info: ReqInfo,

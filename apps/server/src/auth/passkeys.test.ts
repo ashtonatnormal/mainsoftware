@@ -11,9 +11,12 @@ import {
   verifyAuthentication,
   verifyRegistration,
 } from '#src/auth/passkeys.ts'
+import { createAuthenticator } from '#src/testing/authenticator.ts'
 
-// A full ceremony with a software authenticator runs in the integration test; these cover the
-// options Hearth asks for and what it refuses before the library is called.
+// The integration test runs full ceremonies through the routes. These cover the options Hearth
+// asks for, what it refuses before the library is called, and, with the software authenticator,
+// what the library is told to refuse: no user verification, and a signature counter that didn't
+// go up.
 
 const HANDLE = 'a1b2c3d4-0000-4000-8000-000000000001'
 const rp = relyingParty('https://hearth.example.com')
@@ -156,5 +159,52 @@ describe('ACC-02 passkeys: verification failures', () => {
     )
     expect(result).toBeUndefined()
     expect(log.info).toHaveBeenCalledWith(expect.objectContaining({ event: 'passkey_authentication_failed' }))
+  })
+})
+
+describe('ACC-02 T14 passkeys: user verification required, and a counter that must go up', () => {
+  const log = { info: vi.fn() }
+
+  // A passkey registered through the real options and verification, then stored with `counter`.
+  async function registered(counter: number) {
+    const authenticator = createAuthenticator(rp.origin)
+    const options = await registrationOptions(rp, { handle: HANDLE, name: 'Wei Ling Tan' }, [])
+    const added = await verifyRegistration(
+      rp,
+      RegistrationResponse.parse(authenticator.register(options)),
+      options.challenge,
+      log,
+    )
+    if (added === undefined) throw new Error('the control registration did not verify')
+    return { authenticator, stored: { ...added, counter } }
+  }
+
+  // Asks for an assertion and verifies it against the stored passkey, as the step-up does.
+  async function asserted(counter: number, opts: { uv?: boolean; counter?: number } = {}) {
+    const { authenticator, stored } = await registered(counter)
+    const options = await authenticationOptions(rp, [stored])
+    const response = AuthenticationResponse.parse(authenticator.assert(options, opts))
+    return verifyAuthentication(rp, response, options.challenge, stored, HANDLE, log)
+  }
+
+  it('verifies a user-verified assertion whose counter went up, and answers the new counter', async () => {
+    expect(await asserted(0)).toEqual({ newCounter: 1 })
+    expect(await asserted(5, { counter: 6 })).toEqual({ newCounter: 6 })
+  })
+
+  it('refuses an assertion without user verification (presence alone)', async () => {
+    expect(await asserted(0, { uv: false })).toBeUndefined()
+  })
+
+  it('refuses a counter that did not go up: a replayed assertion or a cloned authenticator', async () => {
+    expect(await asserted(5, { counter: 5 })).toBeUndefined()
+    expect(await asserted(5, { counter: 3 })).toBeUndefined()
+  })
+
+  it('refuses a registration without user verification', async () => {
+    const authenticator = createAuthenticator(rp.origin)
+    const options = await registrationOptions(rp, { handle: HANDLE, name: 'Wei Ling Tan' }, [])
+    const response = RegistrationResponse.parse(authenticator.register(options, { uv: false }))
+    expect(await verifyRegistration(rp, response, options.challenge, log)).toBeUndefined()
   })
 })

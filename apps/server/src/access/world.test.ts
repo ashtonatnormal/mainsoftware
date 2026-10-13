@@ -51,7 +51,7 @@ function org(fresh: boolean | 'ended' = true) {
   })
 }
 
-describe('C0.5 §3.26 the acting session, re-read in the action’s own transaction', () => {
+describe('C0.5 T14 the acting session, re-read in the action’s own transaction', () => {
   it('locks person, device and session FOR SHARE by default, and says whether the re-authentication is fresh', async () => {
     const { db, statements } = org(true)
     const acting = await withOrg(db, { orgId: ORG, userId: ADMIN }, trx => actingSession(trx, session(ADMIN)))
@@ -83,7 +83,7 @@ describe('C0.5 §3.26 the acting session, re-read in the action’s own transact
   })
 })
 
-describe('C0.5 §3.26 T13 the World loader', () => {
+describe('C0.5 T13 the World loader', () => {
   it("loads people, roles, teams and the named person's devices and passkeys, each query naming the org", async () => {
     const { db, statements } = org()
     const world = await withOrg(db, { orgId: ORG, userId: ADMIN }, trx => loadWorld(trx, ORG, { credentialsOf: ADMIN }))

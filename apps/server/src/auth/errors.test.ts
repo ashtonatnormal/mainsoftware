@@ -38,9 +38,12 @@ describe('C0.5 api errors', () => {
     expect(messageFor(new ApiError(423, 'pin_locked', { pin: { state: 'admin_locked' } }))).toBe(
       PIN_ADMIN_LOCKED_MESSAGE,
     )
+    // It names the + that someone who typed their country code without one is missing.
     expect(messageFor(new ApiError(400, 'invalid_phone'))).toBe(
-      "Enter a mobile number, with the country code if it isn't Singaporean.",
+      'Enter your mobile number starting with + and the country code, or just the 8 digits of a Singapore number.',
     )
+    // It claims nothing about an id that never existed or is someone else's.
+    expect(messageFor(new ApiError(404, 'not_found'))).toBe("We couldn't find that.")
   })
 
   it('carries its extras and the cookies to clear', () => {

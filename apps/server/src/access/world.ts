@@ -16,6 +16,10 @@ export interface ActingOptions {
   person?: 'share' | 'no_key_update'
   // false: a plain read, for GETs, which change nothing.
   lock?: boolean
+  // The person an admin action changes. Their person row is taken FOR NO KEY UPDATE after the
+  // actor's rows (the lock order, 0006) and before can() decides, so a deactivation of them in
+  // progress makes the action wait and then decide on what it committed (CLAUDE.md, Database).
+  target?: string
 }
 
 // The acting session, re-read in the action's own transaction, because the pre-org lookup's
@@ -154,6 +158,10 @@ export async function consider(
 ): Promise<{ world: World; verdict: Verdict; fresh: boolean }> {
   const acting = await actingSession(trx, session, options)
   if (acting === undefined) throw signedOut()
+  if (options.target !== undefined) {
+    await sql`select 1 from people where org_id = ${session.orgId} and id = ${options.target}
+      for no key update`.execute(trx)
+  }
   // Every C0.5 request about devices or passkeys is about the session's own person.
   const world = await loadWorld(trx, session.orgId, { credentialsOf: session.userId })
   return { world, verdict: decide(world, session.userId, request, acting.fresh), fresh: acting.fresh }

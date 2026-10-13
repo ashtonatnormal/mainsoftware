@@ -8,9 +8,17 @@ import { CHECK_TIMEOUT_MS, type Check } from '#src/ready.ts'
 export function createPool(databaseUrl: string, logger: Logger): Pool {
   // A new connection that can't be made in 2 s fails rather than queueing behind /ready.
   const pool = new Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 2000, max: 10 })
-  // An idle connection that breaks (Postgres restarts, a failover) is reported here; without a
-  // listener the error would crash the process. The pool replaces it on next use.
-  pool.on('error', error => logger.warn({ err: error }, 'idle postgres connection failed'))
+  // A connection that breaks (Postgres restarts, a failover, pg_terminate_backend) emits 'error'
+  // on its client, and without a listener that would crash the process (main.ts). pg-pool listens
+  // only while a client is idle, so every client gets a listener of its own, which also covers the
+  // time it's checked out (in a withOrg() transaction, say): the query in flight still rejects, so
+  // its caller answers 503, and the pool drops the broken client when it comes back.
+  pool.on('connect', client => {
+    client.on('error', error => logger.warn({ err: error }, 'postgres connection failed'))
+  })
+  // pg-pool also reports an idle client's failure on the pool, and throws without a listener. The
+  // client's own listener has logged it already, and the pool replaces the client on next use.
+  pool.on('error', () => {})
   return pool
 }
 

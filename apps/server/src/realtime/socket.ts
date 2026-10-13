@@ -34,6 +34,11 @@ export const MAX_FRAME_BYTES = 4096
 // How long a session lookup may take before the upgrade is refused 503.
 export const LOOKUP_TIMEOUT_MS = 5000
 
+// How long one re-check may take, at most, before it counts as failed (never longer than the
+// re-check interval), so a query on a connection that has stopped answering can't hold up every
+// later re-check and keep ended sessions' sockets open past T5's 60 s.
+export const RECHECK_TIMEOUT_MS = 10_000
+
 // How long a client gets to finish the closing handshake before its socket is cut.
 export const CLOSE_GRACE_MS = 1000
 
@@ -65,6 +70,8 @@ export interface SocketServerOptions {
   stillLive: (sessions: readonly SessionIds[]) => Promise<Set<string>>
   recheckMs: number
   lookupTimeoutMs?: number
+  // RECHECK_TIMEOUT_MS, or the re-check interval if that is shorter, unless a test sets it.
+  recheckTimeoutMs?: number
 }
 
 export interface SocketCounts {
@@ -91,6 +98,7 @@ function zeroRefusals(): Record<Refusal, number> {
 export function attachSocketServer(app: FastifyInstance, options: SocketServerOptions): SocketServer {
   const { appOrigin, logger } = options
   const lookupTimeoutMs = options.lookupTimeoutMs ?? LOOKUP_TIMEOUT_MS
+  const recheckTimeoutMs = options.recheckTimeoutMs ?? Math.min(options.recheckMs, RECHECK_TIMEOUT_MS)
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES, perMessageDeflate: false })
 
   // Each open socket's session, and each session's open sockets.
@@ -261,18 +269,25 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
 
   // The re-check: every open socket's session, asked whether it's still live. One run at a time;
   // a tick that finds the last one still going is skipped. A failed check closes nothing, since
-  // Postgres being down isn't a revocation; the next tick tries again.
+  // Postgres being down isn't a revocation; the next tick tries again. A check that takes longer
+  // than recheckTimeoutMs has failed, so one that never answers doesn't stop the ticks after it.
   let checking = false
   async function recheck(): Promise<void> {
     if (checking) return
     checking = true
+    let timer: NodeJS.Timeout | undefined
     try {
       const sessions = new Map<string, SessionIds>()
       for (const session of sessionOf.values()) sessions.set(session.sessionId, session)
       if (sessions.size === 0) return
+      const timedOut = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('the re-check timed out')), recheckTimeoutMs)
+      })
       let live: Set<string>
       try {
-        live = await options.stillLive([...sessions.values()])
+        // A check that settles after the deadline is still handled here, so its rejection is
+        // never unhandled.
+        live = await Promise.race([Promise.resolve().then(() => options.stillLive([...sessions.values()])), timedOut])
       } catch (error) {
         logger.error({ err: error, event: 'ws_recheck_failed' }, 'could not re-check the open sockets')
         return
@@ -280,6 +295,7 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
       const ended = [...sessions.keys()].filter(id => !live.has(id))
       closeSessions(ended, 'recheck')
     } finally {
+      clearTimeout(timer)
       checking = false
     }
   }

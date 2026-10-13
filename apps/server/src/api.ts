@@ -2,8 +2,8 @@
 // actions on a person. Every response in the scope carries Cache-Control: no-store, errors
 // included. Every body is JSON of at most 16 KiB, parsed by a strict zod object (http.ts). Errors
 // become `{ error, message, ...extra }` (auth/errors.ts); anything unexpected is a 500 whose detail
-// goes only to the (redacted) log. Work a handler queues for after its response runs from the
-// scope's onResponse hook (http.ts AfterResponse).
+// goes only to the (redacted) log. Work a handler queues for after its response runs once that
+// response has ended, sent or abandoned (http.ts AfterResponse).
 import { setTimeout as delay } from 'node:timers/promises'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Redis } from 'ioredis'
@@ -63,6 +63,11 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps & { appOrigin: s
       scope.addHook('onSend', async (_request, reply, payload) => {
         reply.header('cache-control', 'no-store')
         return payload
+      })
+      // The raw response's 'close' comes after it has been sent, and also when the client goes away
+      // first, which never reaches onResponse. onResponse starts the tasks too, for inject().
+      scope.addHook('onRequest', async (request, reply) => {
+        reply.raw.once('close', () => api.afterResponse.start(request))
       })
       scope.addHook('onResponse', async request => {
         api.afterResponse.start(request)

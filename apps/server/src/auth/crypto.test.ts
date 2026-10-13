@@ -108,7 +108,7 @@ describe('T6 PIN hashing (argon2id; needs Node 24.7 or later)', () => {
     expect(await verifyPin('381904', '', keys)).toBe(false)
   })
 
-  it('refuses at once, without hashing, a hash at any cost the server never issues (S10)', async () => {
+  it('T14 item 8: refuses at once, without hashing, a hash at any cost the server never issues', async () => {
     const phc = await hashPin('381904', keys)
     const costly = phc.replace('m=19456', 'm=65536')
     expect(isIssuedPinHash(costly)).toBe(false)

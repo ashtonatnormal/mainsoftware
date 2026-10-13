@@ -1,4 +1,4 @@
-// /api/admin (§4.3): actions on a person, each needing a session, a re-authentication from the
+// /api/admin (T14 item 16): actions on a person, each needing a session, a re-authentication from the
 // last 5 minutes and can()'s yes (admin/people.ts). A person id in a path is fine: it isn't
 // personal data, and the path is what gets logged.
 import type { FastifyInstance } from 'fastify'

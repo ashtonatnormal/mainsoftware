@@ -112,7 +112,7 @@ export interface IssuedSession {
 // Makes the device and session a finished sign-in earns, in the caller's transaction, which has
 // already read the person FOR SHARE (sign-in.ts), and audits auth.sign_in. The number the code
 // went to is read again FOR SHARE, so a number removed since the code was sent can't finish a
-// sign-in (decision 12). The session starts re-authenticated: the sign-in just proved the PIN or a
+// sign-in (ACC-03, T14). The session starts re-authenticated: the sign-in just proved the PIN or a
 // passkey (0006's default stamps it at the start).
 export async function issueSession(
   trx: InOrg,

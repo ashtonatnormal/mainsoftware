@@ -281,6 +281,23 @@ describe('C0.5 T5 ACC-05 closing a session’s sockets', () => {
     expect(logs).toContainEqual(expect.objectContaining({ event: 'ws_recheck_failed' }))
   })
 
+  it('T5 ACC-05: a re-check that never answers counts as failed, and the next one still runs and closes an ended session', async () => {
+    let calls = 0
+    const stillLive = vi.fn<SocketServerOptions['stillLive']>(() => {
+      calls++
+      // The first query never answers, as on a connection that died without closing; by the
+      // next, the session has ended.
+      return calls === 1 ? new Promise<Set<string>>(() => {}) : Promise.resolve(new Set<string>())
+    })
+    const { url, server, logs } = await start({ recheckMs: 50, stillLive })
+    const { ws, closed } = await opened(url)
+    await until(() => ws.readyState === WebSocket.CLOSED)
+    expect(await closed).toEqual({ code: 4401, reason: 'signed_out' })
+    expect(stillLive.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(server.counts()).toMatchObject({ closedRecheck: 1 })
+    expect(logs).toContainEqual(expect.objectContaining({ event: 'ws_recheck_failed' }))
+  })
+
   it('stopping the server closes its sockets with 1001 and returns promptly', async () => {
     const { app, url } = await start()
     const first = await opened(url)
@@ -327,7 +344,7 @@ function upgradeRequest(token: string): string {
   ].join('\r\n')
 }
 
-describe('C0.5 security critique S1: no client can end the process', () => {
+describe('C0.5 T14 item 14: no client can end the realtime process', () => {
   it.each([
     ['refuses', undefined],
     ['accepts', SESSION],

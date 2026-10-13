@@ -3,7 +3,8 @@ import type { Redis } from 'ioredis'
 import { describe, expect, it } from 'vitest'
 import { hit, limitSubject, runScript, SLIDING_WINDOW, script } from '#src/auth/limiter.ts'
 
-// The Lua itself runs against Valkey in the integration test (npm run test:integration).
+// The Lua itself runs against Valkey in the integration test (npm run test:integration), which also
+// checks that a refused request records nothing in any window.
 
 describe('T14 INF-RATELIMIT whose address a per-IP window counts', () => {
   it('counts an IPv4 address as it is, and an IPv4-mapped IPv6 address as its IPv4 form', () => {

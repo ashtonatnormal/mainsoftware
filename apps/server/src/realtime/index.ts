@@ -99,10 +99,12 @@ export async function liveSessions(
   return live
 }
 
-// Subscribes to the revocation channel, and keeps trying every SUBSCRIBE_RETRY_MS until it works:
-// ioredis subscribes again by itself after a reconnect, but only to a channel a subscribe has
-// already succeeded for, and one sent while Valkey is down fails. Until then sockets still close
-// at the re-check. Returns a function that stops trying.
+// Subscribes to the revocation channel, and again on each new connection after a reconnect, since
+// Valkey forgets a subscription with the connection that made it. ioredis would do that itself,
+// but nothing could handle its subscribe failing, which would end the process (main.ts), so
+// valkey.ts turns that off and this does it instead. A subscribe that fails, or one sent while
+// Valkey is down, is tried again every SUBSCRIBE_RETRY_MS until it works; until then sockets still
+// close at the re-check. Returns a function that stops trying.
 export function keepSubscribed(
   subscriber: Pick<Redis, 'subscribe' | 'on'>,
   keyPrefix: string,
@@ -112,17 +114,32 @@ export function keepSubscribed(
   const channel = valkeyKeys(keyPrefix).revoked
   let stopped = false
   let timer: NodeJS.Timeout | undefined
-  const subscribed = () => logger.info({ event: 'revocations_subscribed' }, 'listening for ended sessions')
+  // True from a subscribe being sent until one succeeds, retries included.
+  let pending = true
+  const subscribed = () => {
+    pending = false
+    logger.info({ event: 'revocations_subscribed' }, 'listening for ended sessions')
+  }
   const retry = () => {
+    clearTimeout(timer)
     if (stopped) return
     timer = setTimeout(() => {
       timer = undefined
-      if (stopped) return
-      // The channel's listener is already on the connection; only the subscribe is repeated.
-      subscriber.subscribe(channel).then(subscribed, retry)
+      subscribeAgain()
     }, SUBSCRIBE_RETRY_MS)
     timer.unref()
   }
+  // The channel's listener is already on the connection; only the subscribe is repeated.
+  const subscribeAgain = () => {
+    if (stopped) return
+    pending = true
+    subscriber.subscribe(channel).then(subscribed, retry)
+  }
+  // A new connection. The first one finds the first subscribe still pending, as does one that
+  // comes back while a retry waits.
+  subscriber.on('ready', () => {
+    if (!pending) subscribeAgain()
+  })
   subscribeRevoked(subscriber, keyPrefix, onRevoked, logger).then(subscribed, (error: unknown) => {
     // Logged once; the connection's own errors are logged by valkey.ts.
     logger.warn({ err: error, event: 'revocations_subscribe_failed' }, 'could not listen for ended sessions yet')

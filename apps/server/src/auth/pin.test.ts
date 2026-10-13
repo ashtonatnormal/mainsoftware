@@ -158,7 +158,7 @@ describe('PRD-53 ACC-02 the PIN check', () => {
     }
   })
 
-  it('shows a PIN state as JSON with an ISO time (§4.1)', () => {
+  it('shows a PIN state as JSON with an ISO time', () => {
     const until = new Date('2026-10-13T10:15:00Z')
     expect(pinStateJSON({ state: 'ok', triesBeforeLock: 2, triesBeforeAdminLock: 7 })).toEqual({
       state: 'ok',

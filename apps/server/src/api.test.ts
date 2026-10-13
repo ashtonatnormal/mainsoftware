@@ -18,6 +18,8 @@ const ORG = 'a0000000-0000-4000-8000-000000000001'
 const PERSON = 'b0000000-0000-4000-8000-000000000001'
 const DEVICE = 'b0000000-0000-4000-8000-0000000000d1'
 const SESSION = 'b0000000-0000-4000-8000-0000000000e1'
+const SYSTEM = 'c0000000-0000-4000-8000-000000000001'
+const PHONE_NUMBER = 'b0000000-0000-4000-8000-0000000000f1'
 // A well-formed token (43 base64url characters), made of one letter so no scanner takes it for a
 // secret.
 const TOKEN = 't'.repeat(43)
@@ -52,8 +54,10 @@ function fakeValkey(options: { limit?: [number, number]; down?: boolean } = {}) 
       fail()
       return 1
     },
-    set: async (key: string, value: string) => {
+    // SET with XX writes only a key that exists, as updateAttempt relies on.
+    set: async (key: string, value: string, ...flags: unknown[]) => {
       fail()
+      if (flags.includes('XX') && !store.has(key)) return null
       store.set(key, value)
       return 'OK'
     },
@@ -111,6 +115,13 @@ function setup(deps: Partial<ApiDeps> = {}) {
   return { app, logs, afterResponse, post }
 }
 
+// A phone number as a log could hold it: the digits after the country code, in order, with or
+// without a space, dash, dot or bracket between any two. Only that shape counts, so digits that
+// happen to be in a response time, a timestamp or a request id can't match.
+function numberShape(national: string): RegExp {
+  return new RegExp(national.split('').join('[\\s().-]?'))
+}
+
 // The session lookup finds the session, and then each statement gets `then`'s answer.
 function signedInPool(then: (statement: Statement) => unknown[] | Error) {
   return scriptedPool(statement => {
@@ -121,7 +132,7 @@ function signedInPool(then: (statement: Statement) => unknown[] | Error) {
   })
 }
 
-describe('C0.5 the api scope (§3.27, §4): bodies, errors and no-store', () => {
+describe('C0.5 T14 the api scope: bodies, errors and no-store', () => {
   it('sends Cache-Control: no-store on every response, errors included', async () => {
     const { post, app } = setup()
     const responses = [
@@ -173,7 +184,7 @@ describe('C0.5 the api scope (§3.27, §4): bodies, errors and no-store', () => 
     expect(over.json().error).toBe('invalid_request')
   })
 
-  it('gives a malformed phone number, code or PIN its own error (§4.4)', async () => {
+  it('gives a malformed phone number, code or PIN its own error', async () => {
     const { post } = setup()
     const phone = await post('/api/auth/otp/request', { phone: 'abc' })
     expect(phone.statusCode).toBe(400)
@@ -249,7 +260,43 @@ describe('C0.5 ACC-03 PRD-53 a code request answers before anything touches Post
     expect(logs.filter(line => line.event === 'otp_non_roster')).toHaveLength(2)
     expect(pool.texts().filter(text => text.includes('person_by_phone'))).toHaveLength(2)
     expect(pool.texts().some(text => /^insert/.test(text))).toBe(false)
-    expect(JSON.stringify(logs)).not.toMatch(/8123|4567|7700|900123/)
+    const logged = JSON.stringify(logs)
+    for (const national of ['81234567', '7700900123']) expect(logged).not.toMatch(numberShape(national))
+  })
+
+  it('T14: a code goes only to the attempt that asked last, so a browser that asks again gets one text', async () => {
+    let release: () => void = () => {}
+    const held = new Promise<void>(resolve => {
+      release = resolve
+    })
+    const pool = scriptedPool(
+      statement => {
+        if (statement.text.includes('public.person_by_phone')) {
+          return [{ phone_number_id: PHONE_NUMBER, org_id: ORG, person_id: PERSON }]
+        }
+        if (statement.text.includes("from principals where org_id = $1 and kind = 'system'")) return [{ id: SYSTEM }]
+        if (statement.text.startsWith('select deactivated_at from people')) return [{ deactivated_at: null }]
+        return []
+      },
+      async statement => {
+        if (statement.text.includes('public.person_by_phone')) await held
+      },
+    )
+    const sms = new MemorySms()
+    const { post, afterResponse } = setup({ db: pool.db, sms })
+    const first = await post('/api/auth/otp/request', { phone: '+65 8123 4567' })
+    const attempt = String(first.headers['set-cookie']).split(';')[0] ?? ''
+    // The same browser asks again while the first lookup is held: its first attempt goes.
+    const second = await post('/api/auth/otp/request', { phone: '+65 8123 4567' }, { cookie: attempt })
+    expect(second.statusCode).toBe(200)
+    release()
+    await afterResponse.idle()
+    expect(sms.sent.map(sent => sent.to)).toEqual(['+6581234567'])
+    const audits = pool.statements.filter(statement => statement.text.startsWith('insert into "audit_events"'))
+    // One auth.code_requested row, its details last: the replaced attempt sent nothing and wrote nothing.
+    expect(audits.map(statement => [statement.values[2], statement.values.at(-1)])).toEqual([
+      ['auth.code_requested', { send: 'attempted' }],
+    ])
   })
 
   it('logs work after the response that fails, with the reply already sent', async () => {

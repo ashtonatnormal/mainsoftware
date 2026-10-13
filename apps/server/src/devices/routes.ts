@@ -1,4 +1,4 @@
-// Your own devices (ACC-04; design §3.25): the list of browsers and phones you're signed in on,
+// Your own devices (ACC-04, T14 item 7): the list of browsers and phones you're signed in on,
 // with your passkeys, and signing one out, or all but this one. Signing a device out ends its
 // sessions in the same transaction (0003's devices_end_sessions), and after the commit the
 // realtime role is told to close their sockets (revocation.ts). Your own list shows exact times;

@@ -89,7 +89,7 @@ async function refusal(promise: Promise<unknown>): Promise<ApiError> {
 
 const code = { code: '123456' }
 
-describe('PRD-53 ACC-03 checking a sign-in code (§5)', () => {
+describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
   it('answers a missing attempt 401 attempt_expired, clearing its cookie, and one at another step 409 wrong_step', async () => {
     const none = context(valkeyWith(undefined).valkey)
     expect(await refusal(verifyCode(none.api, code, ATTEMPT_ID, none.info))).toMatchObject({
@@ -202,7 +202,7 @@ describe('SHL-49 PRD-53 the PIN steps refuse before any work', () => {
   })
 })
 
-describe('PRD-53 §4.4 how refusals answer', () => {
+describe('PRD-53 T14 how refusals answer', () => {
   it('rounds a wait up to whole minutes, so it never dates another request to the second', () => {
     for (const [ms, seconds] of [
       [1, 60],

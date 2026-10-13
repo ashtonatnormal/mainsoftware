@@ -107,7 +107,7 @@ export async function checkPin(
   return { ok: false, reason: 'wrong', state: next }
 }
 
-// How a PIN's state is shown to the person whose PIN it is (§4.1): after a correct code at
+// How a PIN's state is shown to the person whose PIN it is (T14 item 9): after a correct code at
 // step-up, or with a refusal. Never for 'unset', which the flow answers by asking for a new PIN.
 export type PinStateJSON =
   | { state: 'ok'; triesBeforeLock: number; triesBeforeAdminLock: number }
