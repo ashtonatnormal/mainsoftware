@@ -30,7 +30,7 @@ export function allows(acl: Acl, keys: ReadonlySet<Token>): boolean {
 
 // The single read rule. Every other function in this package that answers "who can see this"
 // is built on it, and search rows store it (aclOf), so the in-memory and SQL paths agree.
-export function readersOf(world: World, ref: Ref): Acl {
+export function readersOf(world: World, ref: Ref, seen: ReadonlySet<string> = new Set()): Acl {
   switch (ref.kind) {
     case 'channel':
     case 'dm':
@@ -83,11 +83,14 @@ export function readersOf(world: World, ref: Ref): Acl {
       return readersOf(world, { kind: 'file', id: comment.fileId })
     }
     case 'derived': {
+      // Provenance that loops back on itself resolves to nobody, like any chain that doesn't end.
+      const key = `derived:${ref.id}`
       const derived = world.get({ kind: 'derived', id: ref.id })
-      if (!derived || derived.sources.length === 0) return NOBODY
+      if (!derived || derived.sources.length === 0 || seen.has(key)) return NOBODY
+      const next = new Set(seen).add(key)
       return intersect(
         world,
-        derived.sources.map(source => readersOf(world, source)),
+        derived.sources.map(source => readersOf(world, source, next)),
       )
     }
     default:
@@ -215,6 +218,12 @@ function messageReaders(world: World, message: MessageFact): Acl {
 // Sessions (REC-20).
 
 function sessionReaders(world: World, session: SessionFact): Acl {
+  // A session whose room or conversation isn't in the snapshot is readable by nobody.
+  const place =
+    session.place.kind === 'room'
+      ? world.get({ kind: 'room', id: session.place.roomId })
+      : world.space(session.place.conversationId)
+  if (!place) return NOBODY
   const participants = session.participants.map(personToken)
   const stamp = session.stamp
   // A restricted session is for the people who took part, whatever its base audience (Rule 5).

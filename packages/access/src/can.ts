@@ -374,7 +374,7 @@ function agentReads(world: World, agentId: Id, ref: Ref): boolean {
 
 // Whether an item is still there: not deleted, not in the Trash, its chain resolving, and for
 // something derived, every source live (Rule 7).
-export function isLive(world: World, ref: Ref): boolean {
+export function isLive(world: World, ref: Ref, seen: ReadonlySet<string> = new Set()): boolean {
   if (readersOf(world, ref).length === 0) return false
   switch (ref.kind) {
     case 'folder':
@@ -385,8 +385,11 @@ export function isLive(world: World, ref: Ref): boolean {
       return comment !== undefined && isLive(world, { kind: 'file', id: comment.fileId })
     }
     case 'derived': {
+      const key = `derived:${ref.id}`
       const derived = world.get({ kind: 'derived', id: ref.id })
-      return derived?.sources.every(source => isLive(world, source)) === true
+      if (seen.has(key)) return false
+      const next = new Set(seen).add(key)
+      return derived?.sources.every(source => isLive(world, source, next)) === true
     }
     default:
       return true
@@ -411,10 +414,13 @@ function agentDmOf(world: World, ref: Ref): Id | undefined {
 
 // Whether an item is inside an agent's scope: it, or something that contains it, is listed. An
 // item made from several sources is in scope only if every source is (AGT-04).
-export function inScope(world: World, scope: readonly Ref[], ref: Ref): boolean {
+export function inScope(world: World, scope: readonly Ref[], ref: Ref, seen: ReadonlySet<string> = new Set()): boolean {
   if (ref.kind === 'derived') {
+    const key = `derived:${ref.id}`
     const derived = world.get({ kind: 'derived', id: ref.id })
-    return derived !== undefined && derived.sources.length > 0 && derived.sources.every(s => inScope(world, scope, s))
+    if (!derived || derived.sources.length === 0 || seen.has(key)) return false
+    const next = new Set(seen).add(key)
+    return derived.sources.every(s => inScope(world, scope, s, next))
   }
   const listed = (r: Ref) => scope.some(s => s.kind === r.kind && s.id === r.id)
   return containersOf(world, ref).some(listed)

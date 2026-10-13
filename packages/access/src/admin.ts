@@ -41,7 +41,7 @@ export function adminCan(world: World, actor: Id, request: AdminRequest, context
       // role are what the console stored (C0.16).
       const proposal = world.proposal(request.proposalId)
       if (!proposal || proposal.approvedAt !== null || proposal.withdrawnAt !== null) return false
-      if (!TWO_PERSON_ROLES.includes(proposal.role)) return false
+      if (!TWO_PERSON_ROLES.includes(proposal.role) || proposal.proposedBy === proposal.personId) return false
       if (!isOwner(world, proposal.proposedBy) || !world.isActivePerson(proposal.personId)) return false
       if (world.holds(proposal.personId, proposal.role)) return false
       // An Owner or Admin other than the proposer and the grantee (CLAUDE.md, PRD-85).

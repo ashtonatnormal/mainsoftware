@@ -24,8 +24,8 @@ export function listAccessible(world: World, subject: Subject, kind: ResourceKin
 // its readers' first clause as `tokens` (the GIN-indexed pre-filter), any further clauses in
 // `more`, and its index class. sqlReadableBy (sql.ts) reads exactly this shape. A membership
 // change (joining, leaving, a team change, a role change) changes subjects' keys, not stored
-// rows; a grant, visibility, move, trash or restore changes the rows of the item and everything
-// under it, which C4.1's re-ACL job rewrites.
+// rows; a grant, visibility, move, trash or restore changes the rows of the item, everything under
+// it and everything derived from any of those, which C4.1's re-ACL job rewrites.
 export interface AclRow {
   tokens: readonly Token[]
   more: readonly (readonly Token[])[]

@@ -58,17 +58,17 @@ export class World {
   constructor(facts: Facts) {
     this.facts = facts
     this.orgId = facts.org.id
-    for (const p of facts.people) this.people.set(p.id, p)
+    for (const p of facts.people) once(this.people, 'person', p.id, p)
     for (const r of facts.roles) push(this.rolesByPerson, r.personId, r)
-    for (const p of facts.roleProposals) this.proposals.set(p.id, p)
-    for (const t of facts.teams) this.teams.set(t.id, t)
+    for (const p of facts.roleProposals) once(this.proposals, 'role proposal', p.id, p)
+    for (const t of facts.teams) once(this.teams, 'team', t.id, t)
     for (const m of facts.teamMembers) {
       if (m.removedAt !== null) continue
       push(this.teamsByPerson, m.personId, m.teamId)
       push(this.membersByTeam, m.teamId, m.personId)
     }
-    for (const a of facts.agents) this.agents.set(a.id, a)
-    for (const a of facts.assistants) this.assistants.set(a.id, a)
+    for (const a of facts.agents) once(this.agents, 'agent', a.id, a)
+    for (const a of facts.assistants) once(this.assistants, 'assistant', a.id, a)
     for (const m of facts.memberships) {
       push(this.membershipsBySpace, m.spaceId, m)
       push(this.membershipsByPrincipal, m.principalId, m)
@@ -268,6 +268,13 @@ export type FactOf<K extends ResourceKind> = K extends 'channel'
                           : K extends 'derived'
                             ? DerivedFact
                             : never
+
+// Two facts for one id would let the snapshot answer differently depending on which is read, so a
+// snapshot like that is refused outright (the database's primary keys never produce one).
+function once<V>(map: Map<Id, V>, what: string, id: Id, value: V): void {
+  if (map.has(id)) throw new Error(`Two ${what} facts share the id ${id}`)
+  map.set(id, value)
+}
 
 function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
   const list = map.get(key)

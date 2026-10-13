@@ -145,7 +145,7 @@ jobs:
       # The SQL access filter (sqlReadableBy, @hearth/access/sql) selects exactly what the
       # in-memory rule allows, for every subject in the fixture org, on Postgres 17, and still does
       # after membership changes with no row rewritten (C0.4, SRCH-04).
-      - run: node packages/access/src/testing/check-sql.ts
+      - run: node scripts/check-access-sql.ts
       # The Kysely types (apps/server/src/db/schema.ts) match the schema the migrations build.
       - run: npm run db:types
       - run: git diff --exit-code -- apps/server/src/db/schema.ts

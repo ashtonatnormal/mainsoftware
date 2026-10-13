@@ -105,7 +105,7 @@ export function audienceGap(world: World, audience: Audience | null, item: Ref):
 // Whether everyone who will see a place can read an item (Rule 2's bound; CHAT-14's forward
 // warning; Rule 3's insert warning). Strict: false for an unknown or empty audience.
 export function covers(world: World, audience: Audience | null, item: Ref): boolean {
-  if (!audience || audience.tokens.length === 0) return false
+  if (!audience || audience.orgId !== world.orgId || audience.tokens.length === 0) return false
   const gap = audienceGap(world, audience, item)
   return gap.count === 0 && !gap.includesFuture
 }
@@ -114,6 +114,7 @@ export function covers(world: World, audience: Audience | null, item: Ref): bool
 // where the readers exactly match the session's audience).
 export function sameAudience(world: World, a: Audience | null, b: Audience | null): boolean {
   if (!a || !b || a.tokens.length === 0 || b.tokens.length === 0) return false
+  if (a.orgId !== world.orgId || b.orgId !== world.orgId) return false
   const open = (x: Audience) =>
     x.tokens
       .filter(t => isOpenToken(world, t))
