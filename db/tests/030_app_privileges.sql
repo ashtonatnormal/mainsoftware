@@ -33,6 +33,7 @@ declare
     'sessions: INSERT', 'sessions: SELECT',
     'sessions.last_seen_at: UPDATE', 'sessions.revoke_reason: UPDATE', 'sessions.revoked_at: UPDATE', 'sessions.revoked_by: UPDATE',
     'notice_versions: INSERT', 'notice_versions: SELECT',
+    'audit_log_readers: SELECT',
     'notice_acknowledgments: SELECT',
     'notice_acknowledgments.device_id: INSERT', 'notice_acknowledgments.method: INSERT',
     'notice_acknowledgments.notice_version_id: INSERT', 'notice_acknowledgments.org_id: INSERT',

@@ -130,6 +130,9 @@ insert into public.role_assignments (org_id, person_id, role, team_id, created_b
   ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000009', 'team_admin', 'd0000000-0000-4000-8000-000000000006', 'b0000000-0000-4000-8000-000000000010', null, null),
   ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000003', 'team_admin', 'd0000000-0000-4000-8000-000000000002', 'b0000000-0000-4000-8000-000000000010', null, null);
 
+-- Nobody reads the audit log yet: the roles that may are chosen in the admin console (C0.16), so
+-- audit_log_readers starts empty here as it does in production.
+
 -- Accounts for everyone who has signed in: all but Nadia, who joined today.
 insert into public.users (id, org_id)
 select ('b0000000-0000-4000-8000-0000000000' || n)::uuid, 'a0000000-0000-4000-8000-000000000001'

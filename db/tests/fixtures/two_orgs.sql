@@ -120,6 +120,10 @@ begin
   insert into public.role_assignments (org_id, person_id, role, created_by, approved_by, approved_at)
     values (org, pg_temp.id(o, 'a9'), 'dpo', owner, admin, now());
   update public.people set deactivated_at = now(), deactivated_by = owner where id = pg_temp.id(o, 'a9');
+  -- Nobody may read the audit log until roles are chosen: this org once let Admins read it and
+  -- then stopped, so its only reader row is a removed one (050 adds current ones).
+  insert into public.audit_log_readers (org_id, role, created_by, removed_at, removed_by)
+    values (org, 'admin', owner, now(), owner);
 
   insert into public.devices (id, org_id, user_id, label) values (pg_temp.id(o, 'e1'), org, pg_temp.id(o, 'a8'), 'Test phone');
   insert into public.sessions (id, org_id, user_id, device_id, token_hash, expires_at)

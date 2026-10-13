@@ -245,7 +245,7 @@ select pg_temp.check((select s.revoked_at = d.signed_out_at and s.revoked_by = d
                       from public.sessions s join public.devices d on d.id = s.device_id
                       where s.id = 'f2000000-0000-4000-8000-0000000000e5'),
                      'signing the device out did not end its open session');
-select pg_temp.check((select revoked_at < now() and revoked_by = 'f2000000-0000-4000-8000-0000000000a8' and revoke_reason = 'sign_out'
+select pg_temp.check((select revoked_at = now() - interval '1 hour' and revoked_by = 'f2000000-0000-4000-8000-0000000000a8' and revoke_reason = 'sign_out'
                       from public.sessions where id = 'f2000000-0000-4000-8000-0000000000e6'),
                      'signing the device out changed a session that had already ended');
 select pg_temp.expect_error($$insert into public.sessions (org_id, user_id, device_id, token_hash, expires_at)

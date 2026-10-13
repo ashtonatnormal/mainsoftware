@@ -30,6 +30,16 @@ export interface AuditEvents {
   details: Generated<Json>
 }
 
+export interface AuditLogReaders {
+  id: Generated<string>
+  org_id: string
+  role: 'owner' | 'admin' | 'ai_admin' | 'leadership' | 'dpo' | 'compliance_officer'
+  created_at: Generated<Timestamp>
+  created_by: string
+  removed_at: Timestamp | null
+  removed_by: string | null
+}
+
 export interface DataAccessEvents {
   id: Generated<string>
   org_id: string
@@ -209,6 +219,7 @@ export interface WorkingHours {
 
 export interface DB {
   audit_events: AuditEvents
+  audit_log_readers: AuditLogReaders
   data_access_events: DataAccessEvents
   departments: Departments
   devices: Devices
