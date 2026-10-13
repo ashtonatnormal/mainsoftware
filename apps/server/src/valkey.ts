@@ -1,7 +1,9 @@
-// The Valkey client: ElastiCache for Valkey in AWS, the Compose stack's Valkey locally. C0.5's
-// rate limiter and C0.7's realtime fan-out use it; until then it only answers the readiness
-// check. Blocking commands, long scripts and any job queue need connections of their own,
-// because every command on this one gives up after a second.
+// The Valkey client: ElastiCache for Valkey in AWS, the Compose stack's Valkey locally. It answers
+// the readiness check, and from C0.5 holds the rate limiter's windows and sign-in state between
+// steps (auth/), and carries the revocation channel the realtime role subscribes to on a second
+// connection (createSubscriber); C0.7's realtime fan-out uses it too. Blocking commands, long
+// scripts and any job queue need connections of their own, because every command on this one
+// gives up after a second.
 import { Redis } from 'ioredis'
 import type { Logger } from 'pino'
 import type { Check } from '#src/ready.ts'
@@ -25,20 +27,33 @@ export function createValkey(url: string, logger: Logger): Redis {
     // backs off to 5 s).
     retryStrategy: times => Math.min(2 ** times * 50, 1000),
   })
-  // ioredis reports why a connection failed only through this event; a command just fails with
-  // "Connection is closed". Without a listener the error would crash the process. It fires on
-  // every reconnect attempt, so a repeat of the same error isn't logged again.
+  watch(client, logger, 'valkey')
+  return client
+}
+
+// A second connection for the revocation channel: a subscribed connection can run nothing else.
+// Commands queue while it connects (enableOfflineQueue), and ioredis re-subscribes after a reconnect;
+// the realtime re-check covers any message missed in between (T14).
+export function createSubscriber(client: Redis, logger: Logger): Redis {
+  const sub = client.duplicate({ connectionName: 'hearth-revocations', enableOfflineQueue: true })
+  watch(sub, logger, 'valkey subscriber')
+  return sub
+}
+
+// ioredis reports why a connection failed only through the error event; a command just fails
+// with "Connection is closed". Without a listener the error would crash the process. It fires on
+// every reconnect attempt, so a repeat of the same error isn't logged again.
+function watch(client: Redis, logger: Logger, name: string): void {
   let lastError: string | undefined
   client.on('error', (error: Error) => {
     if (error.message === lastError) return
     lastError = error.message
-    logger.warn({ err: error }, 'valkey connection error')
+    logger.warn({ err: error, connection: name }, `${name} connection error`)
   })
   client.on('ready', () => {
-    if (lastError !== undefined) logger.info('valkey connection restored')
+    if (lastError !== undefined) logger.info({ connection: name }, `${name} connection restored`)
     lastError = undefined
   })
-  return client
 }
 
 export function valkeyCheck(client: Redis): Check {

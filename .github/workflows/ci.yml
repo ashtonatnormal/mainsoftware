@@ -37,10 +37,11 @@ jobs:
   # Every npm workspace from the root (apps/*, packages/*, infra and demo/): what `npm run check`
   # runs locally (typecheck, lint, test), as separate steps so a failure names its step, then a
   # listing of the Rule 1-9 access suite (rules.test.ts, verbose), the build, the local database
-  # (npm run db:reset), the server's start-up check (scripts/check-server.sh) from source and from
-  # the image, and the image's migrate step. The tests include the guards in scripts/guards/ (no AI packages, no secret-shaped VITE_ variables, files the server
-  # loads that Node can run). Keep CLAUDE.md (Testing and CI) in step with this job. It waits for
-  # secrets and audit, so it gates merging on them too.
+  # (npm run db:reset), the integration tests (npm run test:integration), the server's start-up
+  # check (scripts/check-server.sh) from source and from the image, and the image's migrate step.
+  # The tests include the guards in scripts/guards/ (no AI packages, no secret-shaped VITE_
+  # variables, files the server loads that Node can run). Keep CLAUDE.md (Testing and CI) in step
+  # with this job. It waits for secrets and audit, so it gates merging on them too.
   check:
     needs: [secrets, audit]
     if: always()
@@ -75,6 +76,10 @@ jobs:
       # hearth_app, which `npm run db:reset` sets up (migrations, seed, a local login).
       - run: docker compose up -d --wait
       - run: npm run db:reset
+      # Sign-in, devices and socket revocation against the stack (BUILD-PLAN C0.5's "Done when"),
+      # listed case by case. Each run builds a throwaway database and its own Valkey key prefix,
+      # so it can run again.
+      - run: npm run test:integration
       - run: scripts/check-server.sh
       - run: docker build -f apps/server/Dockerfile -t hearth-server .
       - run: IMAGE=hearth-server scripts/check-server.sh
@@ -140,7 +145,10 @@ jobs:
       # that must see nothing.
       - run: scripts/test-db.sh
       # Refusals that must hold when two transactions race (someone leaving while given a role,
-      # a device signed out while a session starts), in two connections to a throwaway database.
+      # a device signed out while a session starts; from C0.5, a session, device or passkey for
+      # someone leaving, a session lookup during a deactivation, ending someone's sessions or
+      # resetting their PIN during a sign-in, a number removed during a sign-in, and an admin
+      # acting while being deactivated), in two connections to a throwaway database.
       - run: node apps/server/scripts/check-concurrency.ts
       # The SQL access filter (sqlReadableBy, @hearth/access/sql) selects exactly what the
       # in-memory rule allows, for every person, both assistants and the system principal in the

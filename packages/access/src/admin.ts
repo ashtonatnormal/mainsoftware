@@ -84,8 +84,11 @@ export function adminCan(world: World, actor: Id, request: AdminRequest, context
       return !ownerOnlyTarget || isOwner(world, actor)
     }
     case 'person.sign_out_devices':
-      // Signing out only removes sessions, so an Admin may do it for anyone, the Owner and DPO
-      // included (ACC-04: "admins can remotely sign out any user's devices").
+    case 'person.list_devices':
+      // Signing out only removes sessions, and the list shows only labels and dates, so an Admin
+      // may do either for anyone, the Owner and DPO included (ACC-04: "admins can remotely sign out
+      // any user's devices"). Someone who has left too, since their devices may need signing out
+      // (ACC-05).
       return world.person(request.person) !== undefined && (request.person === actor || isAdmin(world, actor))
     case 'team.create':
       return isAdmin(world, actor)

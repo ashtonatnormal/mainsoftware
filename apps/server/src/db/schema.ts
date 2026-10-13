@@ -106,6 +106,22 @@ export interface Orgs {
   created_at: Generated<Timestamp>
 }
 
+export interface Passkeys {
+  id: Generated<string>
+  org_id: string
+  user_id: string
+  credential_id: Buffer
+  public_key: Buffer
+  counter: Generated<Int8>
+  transports: Generated<string[]>
+  backed_up: boolean
+  created_at: Generated<Timestamp>
+  created_device_id: string | null
+  last_used_at: Timestamp | null
+  removed_at: Timestamp | null
+  removed_by: string | null
+}
+
 export interface People {
   id: string
   org_id: string
@@ -178,7 +194,8 @@ export interface Sessions {
   expires_at: Timestamp
   revoked_at: Timestamp | null
   revoked_by: string | null
-  revoke_reason: string | null
+  revoke_reason: 'sign_out' | 'device_sign_out' | 'deactivated' | 'pin_reset' | null
+  reauthenticated_at: Generated<Timestamp | null>
 }
 
 export interface TeamMemberships {
@@ -206,6 +223,14 @@ export interface Users {
   id: string
   org_id: string
   created_at: Generated<Timestamp>
+  pin_hash: string | null
+  pin_key_id: string | null
+  pin_set_at: Timestamp | null
+  pin_reset_at: Timestamp | null
+  pin_reset_by: string | null
+  pin_failures: Generated<number>
+  pin_last_failed_at: Timestamp | null
+  passkey_user_handle: Generated<string>
 }
 
 export interface WorkingHours {
@@ -226,6 +251,7 @@ export interface DB {
   notice_acknowledgments: NoticeAcknowledgments
   notice_versions: NoticeVersions
   orgs: Orgs
+  passkeys: Passkeys
   people: People
   phone_numbers: PhoneNumbers
   principals: Principals

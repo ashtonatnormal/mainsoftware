@@ -1,7 +1,8 @@
 // The facts every access decision is made from (PRD §7.2, B.4). They mirror the database rows
-// (C0.3 for people, roles and teams; the later stages for channels, rooms, sessions and the
-// Drive), with every fact that ends or narrows access a required field, so a loader that leaves
-// one out fails typecheck instead of widening access (`T | null` mirrors a nullable column).
+// (C0.3 for people, roles and teams; C0.5 for devices and passkeys; the later stages for channels,
+// rooms, sessions and the Drive), with every fact that ends or narrows access a required field, so
+// a loader that leaves one out fails typecheck instead of widening access (`T | null` mirrors a
+// nullable column).
 
 export type Id = string
 
@@ -226,6 +227,18 @@ export interface DerivedFact {
   id: Id
   sources: readonly Ref[]
 }
+// A device someone signed in on (ACC-04) and a passkey on their account (ACC-02). Only requests
+// about your own devices and passkeys read them, so a loader holds the requester's alone (T14).
+export interface DeviceFact {
+  id: Id
+  userId: Id
+  signedOutAt: number | null
+}
+export interface PasskeyFact {
+  id: Id
+  userId: Id
+  removedAt: number | null
+}
 export interface OrgSettings {
   // Who may create public channels and standalone rooms (ADM-03, ROOM-01).
   publicCreation: 'everyone' | 'admins'
@@ -258,6 +271,8 @@ export interface Facts {
   files: readonly FileFact[]
   comments: readonly CommentFact[]
   derived: readonly DerivedFact[]
+  devices: readonly DeviceFact[]
+  passkeys: readonly PasskeyFact[]
 }
 
 // Who acts: one case per principal kind (principals.kind, C0.3), the "union subject" of

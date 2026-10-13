@@ -1,9 +1,15 @@
 import { Writable } from 'node:stream'
+import type { Redis } from 'ioredis'
 import { pino } from 'pino'
 import { describe, expect, it } from 'vitest'
+import type { ApiDeps } from '#src/api.ts'
 import { buildApp } from '#src/app.ts'
+import { deriveKeys } from '#src/auth/crypto.ts'
+import type { Database } from '#src/db/database.ts'
 import { createLogger } from '#src/logger.ts'
+import { OffboardingRegistry } from '#src/offboarding.ts'
 import type { Check } from '#src/ready.ts'
+import { MemorySms } from '#src/testing/sms.ts'
 
 const APP_ORIGIN = 'https://hearth.example.com'
 const USER_CONTENT_ORIGIN = 'https://content.hearth.example.net'
@@ -149,5 +155,103 @@ describe('Origin check on state changes (CLAUDE.md, Security and privacy)', () =
     expect((await post({ origin: APP_ORIGIN })).statusCode).toBe(200)
     const get = await app().inject({ method: 'GET', url: '/health', headers: { origin: 'https://evil.example' } })
     expect(get.statusCode).toBe(200)
+  })
+})
+
+// An object that records and refuses any use: a dependency the request must never reach.
+function untouchable<T extends object>(name: string, touched: string[]): T {
+  return new Proxy({} as T, {
+    get(_target, property) {
+      touched.push(`${name}.${String(property)}`)
+      throw new Error(`${name} was touched`)
+    },
+  })
+}
+
+function apiApp(touched: string[]) {
+  const logger = pino({ level: 'silent' })
+  const api: ApiDeps = {
+    db: untouchable<Database>('db', touched),
+    valkey: untouchable<Redis>('valkey', touched),
+    keys: deriveKeys('unit-test-unit-test-unit-test-unit-test'),
+    sms: new MemorySms(),
+    keyPrefix: 'it:unit:',
+    offboarding: new OffboardingRegistry(logger),
+  }
+  return buildApp({ appOrigin: APP_ORIGIN, logger, checks: {}, api })
+}
+
+describe('C0.5 the api role through buildApp (CLAUDE.md, Security and privacy)', () => {
+  it('refuses a cross-origin code request 403 before anything touches Postgres or Valkey', async () => {
+    const touched: string[] = []
+    const app = apiApp(touched)
+    for (const origin of [undefined, 'null', USER_CONTENT_ORIGIN, 'https://evil.example']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/auth/otp/request',
+        headers: origin === undefined ? {} : { origin },
+        payload: { phone: '+6581234567' },
+      })
+      expect(res.statusCode, origin).toBe(403)
+    }
+    expect(touched).toEqual([])
+  })
+
+  it('answers a malformed number 400 invalid_phone with no-store, never echoing it, before Valkey or Postgres', async () => {
+    const touched: string[] = []
+    const res = await apiApp(touched).inject({
+      method: 'POST',
+      url: '/api/auth/otp/request',
+      headers: { origin: APP_ORIGIN },
+      payload: { phone: 'echo-marker' },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toBe('invalid_phone')
+    expect(res.headers['cache-control']).toBe('no-store')
+    expect(res.body).not.toContain('echo-marker')
+    expect(touched).toEqual([])
+  })
+
+  it('serves no /api route in an app built without the api role', async () => {
+    const res = await app().inject({
+      method: 'POST',
+      url: '/api/auth/otp/request',
+      headers: { origin: APP_ORIGIN },
+      payload: { phone: '+6581234567' },
+    })
+    expect(res.statusCode).toBe(404)
+  })
+})
+
+describe('C0.5 T14 request ids and the client address', () => {
+  function withEcho(trustProxy?: string[] | false) {
+    const instance = buildApp({ appOrigin: APP_ORIGIN, logger: pino({ level: 'silent' }), checks: {}, trustProxy })
+    instance.get('/whoami', async request => ({ id: request.id, ip: request.ip }))
+    return instance
+  }
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+  it('gives every request a random uuid, and never takes the client’s X-Request-Id', async () => {
+    const instance = withEcho()
+    const first = (await instance.inject({ url: '/whoami', headers: { 'x-request-id': 'chosen-by-client' } })).json()
+    const second = (await instance.inject({ url: '/whoami' })).json()
+    expect(first.id).toMatch(UUID)
+    expect(second.id).toMatch(UUID)
+    expect(first.id).not.toBe(second.id)
+  })
+
+  it('ignores X-Forwarded-For unless the peer is a trusted proxy', async () => {
+    const forwarded = { 'x-forwarded-for': '198.51.100.7' }
+    const untrusted = withEcho(['127.0.0.1'])
+    const fromElsewhere = await untrusted.inject({ url: '/whoami', headers: forwarded, remoteAddress: '203.0.113.9' })
+    expect(fromElsewhere.json().ip).toBe('203.0.113.9')
+    const fromProxy = await untrusted.inject({ url: '/whoami', headers: forwarded, remoteAddress: '127.0.0.1' })
+    expect(fromProxy.json().ip).toBe('198.51.100.7')
+    // No proxies (TRUST_PROXY unset or empty): even 127.0.0.1 isn't believed.
+    const nothingTrusted: Array<string[] | false | undefined> = [undefined, false, []]
+    for (const trustProxy of nothingTrusted) {
+      const res = await withEcho(trustProxy).inject({ url: '/whoami', headers: forwarded, remoteAddress: '127.0.0.1' })
+      expect(res.json().ip, String(trustProxy)).toBe('127.0.0.1')
+    }
   })
 })

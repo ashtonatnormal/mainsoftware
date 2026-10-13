@@ -429,7 +429,10 @@ export const RULE_6: readonly RuleCase[] = [
     ]
     for (const request of powers)
       expect(beforeAfter(world, gone, P.arjun, request), request.action).toEqual([true, false])
+    // Their self-service ends too: listing and signing out devices, and adding a passkey (ACC-02, ACC-04).
     expect(beforeAfter(world, gone, P.arjun, { action: 'devices.sign_out_own' }, {})).toEqual([true, false])
+    expect(beforeAfter(world, gone, P.arjun, { action: 'devices.list_own' }, {})).toEqual([true, false])
+    expect(beforeAfter(world, gone, P.arjun, { action: 'passkeys.add_own' })).toEqual([true, false])
     // Ashton, Owner and DPO, is offboarded: their assistant goes dark and the DPO console closes to them.
     const ownerGone = changed(deactivate(P.ashton))
     expect(keysOf(world, assistant(AS.ashton)).length).toBeGreaterThan(0)

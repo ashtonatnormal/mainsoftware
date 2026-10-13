@@ -1,14 +1,24 @@
 // The server's entry point: `node src/main.ts`, with ROLE choosing api, realtime or worker (T2).
-// All three roles come from one image and serve /health and /ready; what each adds arrives with
-// later steps (the api routes from C0.5, the realtime gateway in C0.7, the worker's jobs as they
-// are needed).
+// All three roles come from one image and serve /health and /ready. The api role adds the
+// sign-in, device and admin routes under /api, with its SMS provider and the offboarding handlers
+// (C0.5); the realtime role adds the WebSocket on /ws, which closes a session's sockets when the
+// api says it has ended (C0.5; C0.7's gateway grows from it); the worker adds nothing yet, its
+// jobs come as they're needed. Each role serves only its own routes (scripts/check-server.sh).
 import { setTimeout as delay } from 'node:timers/promises'
+import type { Redis } from 'ioredis'
+import type { ApiDeps } from '#src/api.ts'
 import { buildApp } from '#src/app.ts'
+import { deriveKeys } from '#src/auth/crypto.ts'
+import { createLogSmsProvider } from '#src/auth/sms/log.ts'
+import { valkeyPrefix } from '#src/auth/valkey-keys.ts'
 import { ConfigError, loadConfig } from '#src/config.ts'
+import { createDatabase } from '#src/db/database.ts'
 import { createPool, postgresCheck } from '#src/db/pool.ts'
 import { createLogger } from '#src/logger.ts'
+import { OffboardingRegistry, socketsHandler } from '#src/offboarding.ts'
+import type { RealtimeDeps } from '#src/realtime/index.ts'
 import { createS3, storageCheck } from '#src/storage/s3.ts'
-import { closeValkey, createValkey, valkeyCheck } from '#src/valkey.ts'
+import { closeValkey, createSubscriber, createValkey, valkeyCheck } from '#src/valkey.ts'
 
 // ECS stops a task with SIGTERM and kills it after its stop timeout (30 s by default). Requests
 // in flight get up to SHUTDOWN_TIMEOUT_MS to finish, and closing the connections after them at
@@ -38,8 +48,37 @@ process.on('unhandledRejection', error => {
 })
 
 const pool = createPool(config.databaseUrl, logger)
+const db = createDatabase(pool)
 const valkey = createValkey(config.valkeyUrl, logger)
+// h:<DEPLOY_ENV>:, so environments that ever share a Valkey never see each other's keys.
+const keyPrefix = valkeyPrefix(config.deployEnv)
 const s3 = createS3(config.s3)
+
+let api: ApiDeps | undefined
+let realtime: RealtimeDeps | undefined
+// The realtime role's second Valkey connection, for the revocation channel.
+let subscriber: Redis | undefined
+if (config.role === 'api') {
+  // loadConfig refuses the api role without AUTH_SECRET, so this holds.
+  if (config.auth === undefined) throw new Error('the api role has no sign-in settings')
+  const offboarding = new OffboardingRegistry(logger)
+  offboarding.register(socketsHandler({ db, valkey, keyPrefix, logger }))
+  api = {
+    db,
+    valkey,
+    keys: deriveKeys(config.auth.secret),
+    // Unset: no code can be sent, so code requests answer 503 unavailable.
+    sms:
+      config.auth.smsProvider === 'log'
+        ? createLogSmsProvider({ deployEnv: config.deployEnv, appOrigin: config.appOrigin })
+        : undefined,
+    keyPrefix,
+    offboarding,
+  }
+} else if (config.role === 'realtime') {
+  subscriber = createSubscriber(valkey, logger)
+  realtime = { db, subscriber, keyPrefix }
+}
 
 const app = buildApp({
   appOrigin: config.appOrigin,
@@ -49,6 +88,9 @@ const app = buildApp({
     valkey: valkeyCheck(valkey),
     storage: storageCheck(s3, config.s3.bucket),
   },
+  trustProxy: config.trustProxy,
+  api,
+  realtime,
 })
 
 // Fastify logs "Server listening at …" with the role, from the logger's base fields.
@@ -66,9 +108,15 @@ async function stop(signal: NodeJS.Signals): Promise<void> {
   // A server still binding its address can't be closed cleanly, so let listen() settle first.
   await listening.catch(() => {})
   // Stop taking requests and let those in flight finish, then close the connections they used.
+  // The api waits (at most 5 s) for work queued after its responses; the realtime role closes its
+  // sockets with 1001 and its revocation connection first, so this returns promptly.
   await app.close()
   await Promise.race([
-    Promise.allSettled([pool.end(), closeValkey(valkey)]),
+    Promise.allSettled([
+      pool.end(),
+      closeValkey(valkey),
+      ...(subscriber === undefined ? [] : [closeValkey(subscriber)]),
+    ]),
     delay(CLOSE_TIMEOUT_MS, undefined, { ref: false }),
   ])
   s3.destroy()

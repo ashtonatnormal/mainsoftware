@@ -56,7 +56,15 @@ export type AdminRequest =
   | { action: 'person.add'; roles: readonly { role: OrgRole; teamId: Id | null }[]; manager: Id | null }
   // A console edit or CSV re-import of an existing person's manager (ACC-03).
   | { action: 'person.set_manager'; person: Id; manager: Id | null }
-  | { action: 'person.deactivate' | 'person.reset_pin' | 'person.change_phone' | 'person.sign_out_devices'; person: Id }
+  | {
+      action:
+        | 'person.deactivate'
+        | 'person.reset_pin'
+        | 'person.change_phone'
+        | 'person.sign_out_devices'
+        | 'person.list_devices'
+      person: Id
+    }
   | { action: 'team.create' }
   | { action: 'team.archive'; team: Id }
   | { action: 'team.members.change'; team: Id; person: Id; op: 'add' | 'remove' }
@@ -70,13 +78,22 @@ export type AdminRequest =
   | { action: 'channel.transfer_ownership'; channel: Id; to: Id }
   | { action: 'privileged_console.open'; console: 'compliance' | 'dpo' }
 
-// Signing out your own devices (ACC-04): any active person, no re-authentication, never refused.
-export type SelfRequest = { action: 'devices.sign_out_own' }
+// Your own devices and passkeys (ACC-02, ACC-04), for any active person. Listing and signing out
+// devices need no re-authentication and are never refused, though a device you name must be yours
+// and still signed in. Adding or removing a passkey changes how the account is signed in to, so it
+// needs a fresh re-authentication (T14), and a passkey you name must be yours and not removed.
+export type SelfRequest =
+  // No device: this one, or all your others (the server says which).
+  | { action: 'devices.sign_out_own'; device?: Id }
+  | { action: 'devices.list_own' }
+  | { action: 'passkeys.add_own' }
+  | { action: 'passkeys.remove_own'; passkey: Id }
 
 export type Request = ContentRequest | CreateRequest | AdminRequest | SelfRequest
 
-// What the server knows about the session making the request. Every admin request needs a
-// recent re-authentication (§9.4); the server decides how recent and passes the result.
+// What the server knows about the session making the request. Every admin request, and adding or
+// removing your own passkey, needs a recent re-authentication (§9.4, T14); the server decides how
+// recent and passes the result.
 export interface RequestContext {
   reauthenticated?: boolean
 }
@@ -91,6 +108,7 @@ export const ADMIN_ACTIONS = new Set<string>([
   'person.reset_pin',
   'person.change_phone',
   'person.sign_out_devices',
+  'person.list_devices',
   'team.create',
   'team.archive',
   'team.members.change',
@@ -109,4 +127,15 @@ export const ADMIN_ACTIONS = new Set<string>([
 
 export function isAdminRequest(request: Request): request is AdminRequest {
   return ADMIN_ACTIONS.has(request.action)
+}
+
+export const SELF_ACTIONS = new Set<string>([
+  'devices.sign_out_own',
+  'devices.list_own',
+  'passkeys.add_own',
+  'passkeys.remove_own',
+])
+
+export function isSelfRequest(request: Request): request is SelfRequest {
+  return SELF_ACTIONS.has(request.action)
 }

@@ -26,6 +26,18 @@ const SENSITIVE_KEYS = [
   'valkeyUrl',
   'connectionString',
   'secretAccessKey',
+  // Sign-in (C0.5): a phone number in E.164 form, a WebAuthn challenge or credential id, and a
+  // sign-in attempt's id. Codes always travel under `otp`; never add 'code', which would blank
+  // err.code.
+  'e164',
+  'challenge',
+  'credentialId',
+  'attemptId',
+  // Postgres errors carry the row's values in `detail` (a unique violation names the phone
+  // number), and pino copies every property of an error.
+  'detail',
+  'hint',
+  'internalQuery',
 ]
 
 const key = (name: string) => (/^[A-Za-z_$][\w$]*$/.test(name) ? `.${name}` : `["${name}"]`)

@@ -12,7 +12,7 @@
 --   aa a former Admin (role revoked)
 --   ab an agent                     ac a8's assistant
 --   c1 department    d1 team    d2 archived team    e1 a8's device    e2 a8's session
---   e3 notice v1
+--   e3 notice v1     e7 a8's passkey (added on e1)
 
 -- pg_temp.id('1', 'a1') is org 1's Owner.
 create function pg_temp.id(org text, suffix text) returns uuid language sql immutable as $$
@@ -129,6 +129,9 @@ begin
   insert into public.sessions (id, org_id, user_id, device_id, token_hash, expires_at)
     values (pg_temp.id(o, 'e2'), org, pg_temp.id(o, 'a8'), pg_temp.id(o, 'e1'),
             decode(md5('session ' || o) || md5('token ' || o), 'hex'), now() + interval '30 days');
+  insert into public.passkeys (id, org_id, user_id, credential_id, public_key, backed_up, created_device_id)
+    values (pg_temp.id(o, 'e7'), org, pg_temp.id(o, 'a8'), decode(md5('credential ' || o), 'hex'),
+            decode(md5('public key ' || o) || md5('key ' || o), 'hex'), true, pg_temp.id(o, 'e1'));
   insert into public.notice_versions (id, org_id, version, body, published_by)
     values (pg_temp.id(o, 'e3'), org, 0, 'Test notice ' || o, pg_temp.id(o, 'a5'));
   insert into public.notice_acknowledgments (org_id, person_id, notice_version_id, method, device_id)

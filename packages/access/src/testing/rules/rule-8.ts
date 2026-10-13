@@ -11,6 +11,7 @@ import {
   type Id,
   keysOf,
   listAccessible,
+  type SelfRequest,
   type Subject,
   World,
 } from '../../index.ts'
@@ -21,12 +22,14 @@ import {
   agent,
   assistant,
   C,
+  DEV,
   F,
   FI,
   fixtureFacts,
   human,
   M,
   P,
+  PK,
   PROPOSAL,
   R,
   ref,
@@ -85,6 +88,7 @@ const ADMIN_REQUESTS: readonly AdminRequest[] = [
   { action: 'role.revoke', person: P.marcus, role: 'team_admin', teamId: T.operations },
   { action: 'person.deactivate', person: P.weiling },
   { action: 'person.sign_out_devices', person: P.ashton },
+  { action: 'person.list_devices', person: P.nadia },
   { action: 'team.members.change', team: T.finance, person: P.nadia, op: 'add' },
   { action: 'team.defaults.set', team: T.operations, spaces: [ref.channel(C.ops)] },
   { action: 'org.defaults.set', spaces: [ref.channel(C.general)] },
@@ -94,6 +98,16 @@ const ADMIN_REQUESTS: readonly AdminRequest[] = [
   { action: 'channel.transfer_ownership', channel: C.ops, to: P.marcus },
   { action: 'privileged_console.open', console: 'dpo' },
   { action: 'privileged_console.open', console: 'compliance' },
+]
+// Requests about your own devices and passkeys, naming ones the fixture holds (ACC-02, ACC-04).
+const SELF_REQUESTS: readonly SelfRequest[] = [
+  { action: 'devices.sign_out_own' },
+  { action: 'devices.sign_out_own', device: DEV.marcusPhone },
+  { action: 'devices.sign_out_own', device: DEV.marcusOld },
+  { action: 'devices.list_own' },
+  { action: 'passkeys.add_own' },
+  { action: 'passkeys.remove_own', passkey: PK.marcus },
+  { action: 'passkeys.remove_own', passkey: PK.formerDpo },
 ]
 
 // Every id in a set of facts: the org's, and each row's own.
@@ -119,6 +133,8 @@ function idsOf(f: Facts): Set<Id> {
     f.files,
     f.comments,
     f.derived,
+    f.devices,
+    f.passkeys,
   ]
   return new Set([f.org.id, ...rows.flatMap(list => list.map(row => row.id))])
 }
@@ -215,11 +231,16 @@ export const RULE_8: readonly RuleCase[] = [
         const before = ADMIN_REQUESTS.map(r => can(world, s, r, reauthenticated))
         const after = ADMIN_REQUESTS.map(r => can(injected, as(s), as(r), reauthenticated))
         expect(after, `${p} admin`).toEqual(before)
+        const ownBefore = SELF_REQUESTS.map(r => can(world, s, r, reauthenticated))
+        const ownAfter = SELF_REQUESTS.map(r => can(injected, as(s), as(r), reauthenticated))
+        expect(ownAfter, `${p} own devices and passkeys`).toEqual(ownBefore)
       }
-      // The admin decisions include both answers.
-      const decisions = everyone.flatMap(p => ADMIN_REQUESTS.map(r => can(world, human(p), r, reauthenticated)))
-      expect(decisions).toContain(true)
-      expect(decisions).toContain(false)
+      // The admin decisions, and those about a named device or passkey, include both answers.
+      for (const requests of [ADMIN_REQUESTS, SELF_REQUESTS.filter(r => 'device' in r || 'passkey' in r)]) {
+        const decisions = everyone.flatMap(p => requests.map(r => can(world, human(p), r, reauthenticated)))
+        expect(decisions).toContain(true)
+        expect(decisions).toContain(false)
+      }
     },
   ),
   c0(

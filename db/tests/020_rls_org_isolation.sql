@@ -44,6 +44,9 @@ select pg_temp.expect_error($$insert into public.principals (org_id, kind)
 select pg_temp.expect_error($$insert into public.sessions (org_id, user_id, device_id, token_hash, expires_at)
   values ('f1000000-0000-4000-8000-000000000000', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000e1',
           sha256('a token chosen in another org'), now() + interval '1 day')$$, '42501');
+select pg_temp.expect_error($$insert into public.passkeys (org_id, user_id, credential_id, public_key, backed_up)
+  values ('f1000000-0000-4000-8000-000000000000', 'f1000000-0000-4000-8000-0000000000a8',
+          decode(md5('planted credential'), 'hex'), decode(md5('a') || md5('b'), 'hex'), false)$$, '42501');
 select pg_temp.expect_error($$insert into public.audit_events (org_id, action)
   values ('f1000000-0000-4000-8000-000000000000', 'test.planted')$$, '42501');
 select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id)
@@ -51,12 +54,15 @@ select pg_temp.expect_error($$insert into public.data_access_events (org_id, typ
 select pg_temp.expect_rows($$update public.teams set name = name || ' (renamed)'$$, 2);
 select pg_temp.expect_rows($$update public.people set full_name = full_name || ' (renamed)'$$, 10);
 select pg_temp.expect_rows($$update public.sessions set last_seen_at = now()$$, 1);
+select pg_temp.expect_rows($$update public.passkeys set last_used_at = now()$$, 1);
 select pg_temp.expect_rows($$delete from public.working_hours$$, 1);
 reset role;
 select pg_temp.check(count(*) = 0, 'an org 2 update reached org 1')
 from public.people where org_id = 'f1000000-0000-4000-8000-000000000000' and full_name like '%(renamed)';
 select pg_temp.check(count(*) = 1, 'an org 2 delete reached org 1')
 from public.working_hours where org_id = 'f1000000-0000-4000-8000-000000000000';
+select pg_temp.check(count(*) = 0, 'an org 2 update reached an org 1 passkey')
+from public.passkeys where org_id = 'f1000000-0000-4000-8000-000000000000' and last_used_at is not null;
 
 -- A row can't point at another org's row: foreign keys between org-scoped tables include
 -- org_id. (As the superuser, so only the foreign key stands in the way.)

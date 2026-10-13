@@ -77,3 +77,32 @@ describe('C0.2 redacting logs', () => {
     expect(entry).toMatchObject({ role: 'api', method: 'GET', url: '/ready', statusCode: 200, msg: 'done' })
   })
 })
+
+describe('C0.5 redacting sign-in values (PDPA; the C0.13 log seam)', () => {
+  it("keeps a Postgres error's code but drops its detail, which names the row's values", () => {
+    const { logger, lines } = capture()
+    const error = Object.assign(new Error('duplicate key value violates unique constraint "phone_numbers_e164"'), {
+      code: '23505',
+      detail: 'Key (org_id, e164)=(a0000000-0000-4000-8000-000000000001, +6580000001) already exists.',
+      hint: 'a hint quoting +6580000002',
+      internalQuery: 'select +6580000003',
+    })
+    logger.error({ err: error }, 'insert failed')
+    const out = lines.join('')
+    for (const value of ['+6580000001', '+6580000002', '+6580000003']) expect(out).not.toContain(value)
+    expect(JSON.parse(lines[0] ?? '{}').err).toMatchObject({ code: '23505', detail: CENSOR })
+  })
+
+  it('drops numbers, challenges, credential ids and attempt ids under their own keys', () => {
+    const { logger, lines } = capture()
+    logger.info({
+      e164: '+6591234567',
+      passkey: { challenge: 'a-challenge-value', credentialId: 'a-credential-id' },
+      sign_in: { step: { attemptId: 'an-attempt-id' } },
+    })
+    const out = lines.join('')
+    for (const value of ['+6591234567', 'a-challenge-value', 'a-credential-id', 'an-attempt-id']) {
+      expect(out).not.toContain(value)
+    }
+  })
+})
