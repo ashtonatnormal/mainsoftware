@@ -33,14 +33,23 @@ select pg_temp.expect_error($$delete from public.audit_log_readers$$, '42501');
 reset role;
 
 -- The list's own rules: Team Admin can't be on it (the log covers the whole org); a role is on it
--- once at a time; adding or removing records who and when; a removal stays.
+-- once at a time, and a removed one can be added back as a new row; adding records who, and
+-- removing records who and when; a removal stays.
 select pg_temp.expect_error($$insert into public.audit_log_readers (org_id, role, created_by)
   values ('f1000000-0000-4000-8000-000000000000', 'team_admin', 'f1000000-0000-4000-8000-0000000000a1')$$, '23514');
 select pg_temp.expect_error($$insert into public.audit_log_readers (org_id, role, created_by)
   values ('f1000000-0000-4000-8000-000000000000', 'member', 'f1000000-0000-4000-8000-0000000000a1')$$, '23514');
+select pg_temp.expect_error($$insert into public.audit_log_readers (org_id, role)
+  values ('f1000000-0000-4000-8000-000000000000', 'owner')$$, '23502');
+-- Admin comes back (the fixture removed it), with AI Admin, Leadership, DPO and Compliance Officer.
 insert into public.audit_log_readers (org_id, role, created_by) values
+  ('f1000000-0000-4000-8000-000000000000', 'admin', 'f1000000-0000-4000-8000-0000000000a1'),
+  ('f1000000-0000-4000-8000-000000000000', 'ai_admin', 'f1000000-0000-4000-8000-0000000000a1'),
+  ('f1000000-0000-4000-8000-000000000000', 'leadership', 'f1000000-0000-4000-8000-0000000000a1'),
   ('f1000000-0000-4000-8000-000000000000', 'dpo', 'f1000000-0000-4000-8000-0000000000a1'),
   ('f1000000-0000-4000-8000-000000000000', 'compliance_officer', 'f1000000-0000-4000-8000-0000000000a1');
+select pg_temp.check(count(*) = 2, 'adding Admin back did not make a new row beside the removed one')
+from public.audit_log_readers where org_id = 'f1000000-0000-4000-8000-000000000000' and role = 'admin';
 select pg_temp.expect_error($$insert into public.audit_log_readers (org_id, role, created_by)
   values ('f1000000-0000-4000-8000-000000000000', 'dpo', 'f1000000-0000-4000-8000-0000000000a1')$$, '23505');
 select pg_temp.expect_error($$update public.audit_log_readers set removed_at = now()
@@ -51,14 +60,14 @@ select pg_temp.expect_error($$update public.audit_log_readers set removed_at = n
 insert into public.audit_log_readers (org_id, role, created_by)
 values ('f2000000-0000-4000-8000-000000000000', 'owner', 'f2000000-0000-4000-8000-0000000000a1');
 
--- With DPO and Compliance Officer on org 1's list, those two can read it.
+-- With Admin, AI Admin, Leadership, DPO and Compliance Officer on org 1's list, those can read it.
 do $$
 declare
   reader text;
   rows_read bigint;
   other_org bigint;
 begin
-  foreach reader in array array['a5', 'a6'] loop
+  foreach reader in array array['a2', 'a3', 'a4', 'a5', 'a6'] loop
     perform pg_temp.act_as('1', reader);
     select count(*), count(*) filter (where org_id <> pg_temp.id('1', '00'))
       into rows_read, other_org
@@ -75,13 +84,14 @@ begin
 end
 $$;
 
--- Everyone else is still refused, a DPO who has left (a9) included, and so is org 1's Owner
--- although org 2 lets its Owners read.
+-- Everyone else is still refused: a DPO who has left (a9) and a former Admin whose role was
+-- revoked (aa), although DPO and Admin are on the list; Team Admin (a7), a Member (a8) and an
+-- agent (ab); and org 1's Owner (a1), although org 2 lets its Owners read.
 do $$
 declare
   reader text;
 begin
-  foreach reader in array array['a1', 'a2', 'a3', 'a4', 'a7', 'a8', 'a9', 'aa', 'ab'] loop
+  foreach reader in array array['a1', 'a7', 'a8', 'a9', 'aa', 'ab'] loop
     perform pg_temp.act_as('1', reader);
     perform pg_temp.expect_error(
       $q$select count(*) from public.read_audit_events(now() - interval '1 day', now() + interval '1 day')$q$,
