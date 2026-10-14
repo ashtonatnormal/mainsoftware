@@ -1,9 +1,10 @@
 // The worker role (TECH-SPEC T15-T18): Hearth's job queue, scheduler and outbox consumers, in a
 // process that serves no routes but /health and /ready. It logs in as hearth_worker on two pools
 // (T18 item 8): a control pool for the loops (claims, heartbeats, outcomes, the scheduler, the flag
-// poll, the org list, metrics), each holding at most one connection at a time, and a work pool for
-// handlers' transactions and consumer rounds, so neither can starve the other: heartbeats and the
-// flag poll never wait behind work.
+// poll, the org list, metrics), each holding at most one connection at a time but the flag reads
+// (at most 3), the heartbeats (at most 2) and outcomes (one transaction per job, so up to
+// WORKER_CONCURRENCY at once), and a work pool for handlers' transactions and consumer rounds, so
+// neither can starve the other: heartbeats and the flag poll never wait behind work.
 //
 //   orgs       worker_org_ids(), at start and every 60 s (listOrgs); each org's flags are kept from
 //              the moment it is listed.
@@ -42,8 +43,9 @@ import { logOutboxLag, logQueueDepth, readOutboxLag, readQueueDepth } from '#src
 import type { Subscriptions } from '#src/pubsub.ts'
 import type { Check } from '#src/ready.ts'
 
-// The control pool's size (T18 item 8): a connection for each loop, and room to spare when every
-// flag read (3) and renewal (2) is stuck on a silent connection.
+// The control pool's size (T18 item 8): a connection for each loop, and 3 to spare when every flag
+// read (3) and renewal (2) is stuck on a silent connection, which claims, outcomes (up to one per
+// running job at once), the scheduler, the org list and metrics share, each waiting up to 2 s for one.
 export const CONTROL_POOL_SIZE = 8
 
 // The work pool's size: a connection for each job running at once, and one for each consumer.

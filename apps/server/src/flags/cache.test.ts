@@ -464,8 +464,8 @@ describe('C0.6 T17 items 6 and 7 the flags a process keeps', () => {
   })
 
   // A database whose reads for the orgs in `stuck` (all of them while `all` is set) hang for 31 s,
-  // the pool's query_timeout, and then fail, as on a silent connection.
-  function stuckDatabase() {
+  // the pool's query_timeout, and then fail, as on a silent connection. The cache's clock is `now`.
+  function stuckDatabase(now: () => number = () => Date.now()) {
     const state = { stuck: new Set<string>(), all: false, started: [] as string[] }
     const p = scriptedPool(
       (statement: Statement) => {
@@ -487,7 +487,7 @@ describe('C0.6 T17 items 6 and 7 the flags a process keeps', () => {
       db: p.db,
       registry: REGISTRY,
       logger: log.logger,
-      now: () => Date.now(),
+      now,
       random: () => 0.5,
     })
     return { state, flags, log }
@@ -527,6 +527,35 @@ describe('C0.6 T17 items 6 and 7 the flags a process keeps', () => {
     await vi.advanceTimersByTimeAsync(FLAG_STALE_MS + 10)
     expect(flags.confirmed(FOURTH_ORG)).toBe(false)
     expect(unconfirmedOrgs(log).filter(org => org === FOURTH_ORG)).toHaveLength(2)
+    flags.stop()
+  })
+
+  it('Qodo-18 round 5 #3: an org whose first read the limit defers logs flags_unconfirmed at once, and once only until it is read', async () => {
+    // The cache's clock starts at 0, as performance.now() does in a process that has just started.
+    const zero = Date.now()
+    const { state, flags, log } = stuckDatabase(() => Date.now() - zero)
+    for (const org of [ORG, OTHER_ORG, THIRD_ORG]) state.stuck.add(org)
+    // Four orgs kept at once: three reads hang, so FOURTH_ORG's first read waits. It has never been
+    // read, so it is unconfirmed already, and says so at once, not when a timer finds it stale.
+    for (const org of [ORG, OTHER_ORG, THIRD_ORG, FOURTH_ORG]) void flags.track(org)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(state.started).toEqual([ORG, OTHER_ORG, THIRD_ORG])
+    expect(unconfirmedOrgs(log)).toEqual([FOURTH_ORG])
+    expect(flags.confirmed(FOURTH_ORG)).toBe(false)
+    expect(flags.verdict(FOURTH_ORG, 'it.optional', null)).toBe('unconfirmed')
+    // Reloaded, then 20 s more of waiting: still unread, and never logged again.
+    void flags.reload(FOURTH_ORG)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(state.started).not.toContain(FOURTH_ORG)
+    expect(flags.verdict(FOURTH_ORG, 'it.optional', null)).toBe('unconfirmed')
+    expect(unconfirmedOrgs(log).filter(org => org === FOURTH_ORG)).toHaveLength(1)
+    // The stuck reads end at 31 s, and its waiting read then confirms it.
+    await vi.advanceTimersByTimeAsync(31_000 + 10 - (Date.now() - zero))
+    expect(state.started).toContain(FOURTH_ORG)
+    expect(flags.confirmed(FOURTH_ORG)).toBe(true)
+    expect(flags.verdict(FOURTH_ORG, 'it.optional', null)).toBe('on')
+    expect(log.events('flags_confirmed').map(line => line.org)).toEqual([FOURTH_ORG])
+    expect(unconfirmedOrgs(log).filter(org => org === FOURTH_ORG)).toHaveLength(1)
     flags.stop()
   })
 

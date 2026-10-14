@@ -10,8 +10,11 @@ export interface JobPolicy {
   leaseMs: number
   // How often the runner renews the leases of its running jobs, one statement per org.
   heartbeatMs: number
-  // How many orgs' renewals may be in flight at once, across all orgs, so the heartbeats never hold
-  // more than this many of the control pool's connections (T18 item 8).
+  // How many orgs' heartbeat renewals may be in flight at once, across all orgs, so the heartbeats
+  // never hold more than this many of the control pool's connections (T18 item 8). A slow claim's
+  // renewal of its own jobs before they start isn't one: it runs in the claim loop, on its one
+  // connection. With N orgs whose renewals each take d, every lease holds only while about
+  // N·d/2 + d stays under the watchdog's 25 s (T15 item 2).
   renewalsInFlight: number
   // How often an idle runner looks for jobs to claim (T15 item 19).
   pollMs: number

@@ -737,6 +737,100 @@ describe('C0.6 T15 item 2 heartbeats', () => {
     runner.halt()
   })
 
+  it('Qodo-18 round 5 #1: a job that joins an org already renewing is renewed a heartbeat after its own lease was set, so a slow claim’s job isn’t lost', async () => {
+    // The reviewer's probe. Job 1 runs from 0 s. Job 2's claim begins at 4.5 s and takes 6 s, so
+    // its renewal before it starts runs from 10.5 s to 20.4 s, and it counts from 10.5 s. The
+    // org's heartbeats take 6.5 s: in the first case every one, so the one begun at 20 s without
+    // job 2 is still in flight when it starts; in the second only those from 20.2 s on, so none is.
+    // On the org's own cadence its next would begin at 30 s and end at 36.5 s, after the watchdog
+    // stops job 2 (25 s after 10.5 s); it must begin at 20.5 s, or once the one in flight ends.
+    for (const renewalInFlight of [true, false]) {
+      const { run } = blocking()
+      const began = performance.now()
+      const script: Script = { claims: [[claimed(1)]] }
+      // When each renewal began, from the start, and which jobs it named.
+      const renewalsBegun: { at: number; ids: string[] }[] = []
+      let slowClaim = false
+      script.hold = statement => {
+        const at = performance.now() - began
+        if (statement.text.startsWith('with next as') && at >= 4500 && !slowClaim) {
+          slowClaim = true
+          script.claims.push([claimed(2)])
+          return new Promise<void>(resolve => setTimeout(resolve, 6000))
+        }
+        if (!isRenewal(statement)) return undefined
+        const ids = statement.values[1] as string[]
+        renewalsBegun.push({ at, ids })
+        if (ids.join() === jobId(2)) return new Promise<void>(resolve => setTimeout(resolve, 9900))
+        if (!renewalInFlight && at < 20_200) return undefined
+        return new Promise<void>(resolve => setTimeout(resolve, 6500))
+      }
+      const { runner, log } = start(script, { kinds: [run] })
+      await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 3)
+      expect(log.events('job_lease_lost')).toEqual([])
+      expect(runner.active).toBe(2)
+      // Renewed before it started, from 10.5 s; then its first heartbeat, with job 1's, began when
+      // the one in flight ended (26.5 s), or at 20.5 s.
+      expect(renewalsBegun.find(renewal => renewal.ids.length === 1 && renewal.ids[0] === jobId(2))?.at).toBe(10_500)
+      expect(renewalsBegun.find(renewal => renewal.ids.length === 2)?.at).toBe(renewalInFlight ? 26_500 : 20_500)
+      runner.halt()
+    }
+  })
+
+  it('Qodo-18 round 5 #2: a new org’s first heartbeat is due 10 s after its job’s lease was set, and the job starting wakes the heartbeats for it', async () => {
+    // A fresh org: the claim takes 10.2 s from 0 s, its renewal runs from 10.2 s to 20.1 s, and the
+    // job, counting from 10.2 s, starts at 20.1 s, just after the idle heartbeat loop's round at
+    // 20 s. Heartbeats take 6.5 s. Its first must begin at 20.2 s: one due 10 s after the job
+    // started (30.1 s), or one the loop first sees at its next round (30 s), would end after the
+    // watchdog stops the job (25 s after 10.2 s).
+    const { run } = blocking()
+    const began = performance.now()
+    let claims = 0
+    const renewalsBegun: { at: number; ids: string[] }[] = []
+    const { runner, log } = start(
+      {
+        claims: [[claimed(1)]],
+        hold: statement => {
+          const at = performance.now() - began
+          if (statement.text.startsWith('with next as') && ++claims === 1) {
+            return new Promise<void>(resolve => setTimeout(resolve, 10_200))
+          }
+          if (!isRenewal(statement)) return undefined
+          renewalsBegun.push({ at, ids: statement.values[1] as string[] })
+          return new Promise<void>(resolve => setTimeout(resolve, renewalsBegun.length === 1 ? 9900 : 6500))
+        },
+      },
+      { kinds: [run] },
+    )
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 3)
+    expect(log.events('job_lease_lost')).toEqual([])
+    expect(runner.active).toBe(1)
+    expect(renewalsBegun.slice(0, 3).map(renewal => renewal.at)).toEqual([10_200, 20_200, 30_200])
+    runner.halt()
+  })
+
+  it('Qodo-18 round 5 #2: halt() and stop() leave no timer behind, the heartbeat loop’s included', async () => {
+    for (const end of ['halt', 'stop'] as const) {
+      const { run } = blocking()
+      const { runner } = start({ claims: [[claimed(1)]] }, { kinds: [run] })
+      await until(() => runner.active === 1)
+      // Past a heartbeat, so the heartbeat loop sleeps until the org's next is due.
+      await vi.advanceTimersByTimeAsync(JOB_POLICY.heartbeatMs + 100)
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      if (end === 'halt') {
+        runner.halt()
+        await vi.advanceTimersByTimeAsync(0)
+      } else {
+        // Well short of the org's next heartbeat (20 s), so only a wake ends that loop's sleep.
+        const stopping = runner.stop(performance.now() + 5000)
+        await vi.advanceTimersByTimeAsync(5000)
+        await stopping
+      }
+      expect(runner.active).toBe(0)
+      expect(vi.getTimerCount()).toBe(0)
+    }
+  })
+
   it('Qodo-18 round 3 #3a: a renewal counts from when its statement began, not when it ended', async () => {
     const { run } = blocking()
     let beats = 0
