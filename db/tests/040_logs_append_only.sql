@@ -1,7 +1,8 @@
--- ADM-06, T12, CLAUDE.md Database: audit_events and data_access_events are append-only. hearth_app
--- can add a row for its own org and nothing else: no reading (not even through INSERT ...
--- RETURNING), changing, deleting or emptying them, and no reaching a data_access_events partition
--- directly.
+-- ADM-06, T12, T16, CLAUDE.md Database: audit_events, data_access_events and (from 0007) the outbox
+-- are append-only. hearth_app can add a row for its own org and nothing else: no reading (not even
+-- through INSERT ... RETURNING), changing, deleting or emptying them, no choosing a row's id, time
+-- or (for the outbox) position, and no reaching a data_access_events partition directly. Only the
+-- partitions job's role adds partitions.
 \ir fixtures/two_orgs.sql
 
 select pg_temp.act_as('1', 'a2');
@@ -68,12 +69,65 @@ begin
 end
 $$;
 
--- Adding partitions is the owner's (and later the scheduler's) job.
+-- The outbox: hearth_app adds an event in its own org, as the person acting, and nothing else.
+insert into public.outbox_events (org_id, type, entity_type, entity_id, actor_id, actor_kind, subject_ids, purpose, ids)
+values ('f1000000-0000-4000-8000-000000000000', 'person.deactivated', 'person', 'f1000000-0000-4000-8000-0000000000a9',
+        'f1000000-0000-4000-8000-0000000000a2', 'human', '{f1000000-0000-4000-8000-0000000000a9}', 'accounts', '{}');
+select pg_temp.expect_error($$select count(*) from public.outbox_events$$, '42501');
+select pg_temp.expect_error($$select tx_id from public.outbox_events$$, '42501');
+select pg_temp.expect_error($$update public.outbox_events set purpose = 'accounts'$$, '42501');
+select pg_temp.expect_error($$delete from public.outbox_events$$, '42501');
+select pg_temp.expect_error($$truncate public.outbox_events$$, '42501');
+select pg_temp.expect_error($$insert into public.outbox_events (org_id, type, entity_type, entity_id, actor_id, actor_kind, purpose)
+  values ('f1000000-0000-4000-8000-000000000000', 'person.deactivated', 'person', 'f1000000-0000-4000-8000-0000000000a9',
+          'f1000000-0000-4000-8000-0000000000a2', 'human', 'accounts') returning id$$, '42501');
+-- Its position and time are the database's: a writer that chose its tx_id could hide an event
+-- below every consumer's checkpoint.
+select pg_temp.expect_error($$insert into public.outbox_events (org_id, tx_id, type, entity_type, entity_id, actor_id, actor_kind, purpose)
+  values ('f1000000-0000-4000-8000-000000000000', '3', 'person.deactivated', 'person', 'f1000000-0000-4000-8000-0000000000a9',
+          'f1000000-0000-4000-8000-0000000000a2', 'human', 'accounts')$$, '42501');
+select pg_temp.expect_error($$insert into public.outbox_events (org_id, at, type, entity_type, entity_id, actor_id, actor_kind, purpose)
+  values ('f1000000-0000-4000-8000-000000000000', now() - interval '20 days', 'person.deactivated', 'person',
+          'f1000000-0000-4000-8000-0000000000a9', 'f1000000-0000-4000-8000-0000000000a2', 'human', 'accounts')$$, '42501');
+select pg_temp.expect_error($$insert into public.outbox_events (id, org_id, type, entity_type, entity_id, actor_id, actor_kind, purpose)
+  values (1, 'f1000000-0000-4000-8000-000000000000', 'person.deactivated', 'person', 'f1000000-0000-4000-8000-0000000000a9',
+          'f1000000-0000-4000-8000-0000000000a2', 'human', 'accounts')$$, '428C9');
+
+-- Adding partitions is the partitions job's (0007), never hearth_app's. With the furthest month
+-- dropped (as the superuser), the job's role makes it again, with row level security on and no
+-- grants.
 select pg_temp.expect_error($$select public.create_data_access_partitions(1)$$, '42501');
+reset role;
+select set_config('test.partition',
+  'data_access_events_' || to_char(date_trunc('month', now() at time zone 'UTC') + interval '12 months', 'YYYY_MM'), true);
+do $$ begin execute format('drop table public.%I', current_setting('test.partition')); end $$;
+select pg_temp.act_as_job('1', 'hearth_job_partitions');
+select public.create_data_access_partitions(12);
+reset role;
+select pg_temp.check(c.relrowsecurity and c.relacl is null and c.relowner = 'hearth_owner'::regrole,
+                     'the partition the job made has row level security off, a grant, or another owner')
+from pg_class c where c.oid = to_regclass('public.' || current_setting('test.partition'));
+select pg_temp.check(to_regclass('public.' || current_setting('test.partition')) is not null,
+                     'the partitions job did not make the missing month');
+-- The other job roles may not.
+do $$
+declare
+  r text;
+begin
+  foreach r in array array['hearth_queue', 'hearth_job_offboarding', 'hearth_job_purge', 'hearth_worker'] loop
+    perform set_config('role', r, true);
+    perform pg_temp.expect_error('select public.create_data_access_partitions(1)', '42501');
+    perform set_config('role', 'none', true);
+  end loop;
+end
+$$;
 
 -- The rows added above are there, unchanged, as the owner sees them.
-reset role;
 select pg_temp.check(count(*) = 1, 'the audit row hearth_app added is missing or doubled')
 from public.audit_events where action = 'test.added' and request_id = 'req-1';
 select pg_temp.check(count(*) = 1, 'the data access row hearth_app added is missing or doubled')
 from public.data_access_events where type = 'share' and object_id = 'f-1';
+select pg_temp.check(count(*) = 1 and min(actor_id::text) = 'f1000000-0000-4000-8000-0000000000a2'
+                     and min(tx_id::text) = pg_current_xact_id()::text and min(at) >= now(),
+                     'the outbox event hearth_app added is missing, doubled, or has another actor, position or time')
+from public.outbox_events where type = 'person.deactivated' and entity_id = 'f1000000-0000-4000-8000-0000000000a9';

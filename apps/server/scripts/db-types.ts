@@ -49,6 +49,9 @@ const TYPES: Record<string, string> = {
   timestamptz: 'Timestamp',
   uuid: 'string',
   varchar: 'string',
+  // A full transaction id (the outbox's positions, 0007), which pg returns as a string: it can
+  // exceed a JavaScript number. Positions are compared only in SQL, with parameters cast to xid8.
+  xid8: 'string',
 }
 
 function pascal(name: string): string {

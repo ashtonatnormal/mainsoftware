@@ -5,8 +5,9 @@
 // Each run builds its own throwaway database (auth_it_<random>, migrated with production's
 // migrator, owned by hearth_owner, the server connecting as hearth_app) and its own Valkey key
 // prefix (it:<random>:), and removes both when it stops, so a run can follow another at once and
-// leaves the local `hearth` database alone. It sets up hearth_owner and hearth_app's local
-// password itself, as scripts/db-local.sh does, so it needs only `docker compose up -d --wait`.
+// leaves the local `hearth` database alone. It sets up hearth_owner and the local password of
+// hearth_app and hearth_worker (the worker's login, 0007) itself, as scripts/db-local.sh does, so it
+// needs only `docker compose up -d --wait`.
 // It connects as the stack's superuser through the PG* variables (default
 // postgres:postgres@127.0.0.1:5432) and refuses any host but this machine.
 //
@@ -48,7 +49,8 @@ export const IPHONE_SAFARI =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
-// The password scripts/db-local.sh gives hearth_app on the local stack: not a secret.
+// The password scripts/db-local.sh gives hearth_app and hearth_worker on the local stack: not a
+// secret.
 const APP_PASSWORD = 'hearth-local'
 
 // The roles a test person may hold (a Team Admin would need a team, which no test here makes).
@@ -259,8 +261,10 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     const superuser = new PgClient({ ...c, database })
     await superuser.connect()
     closers.push(() => superuser.end())
-    // The migrations made hearth_app without a login; locally it signs in with a password.
+    // The migrations made hearth_app and hearth_worker without a login; locally they sign in with a
+    // password.
     await superuser.query(`alter role hearth_app login password '${APP_PASSWORD}'`)
+    await superuser.query(`alter role hearth_worker login password '${APP_PASSWORD}'`)
 
     const query = async <Row>(text: string, values: unknown[] = []): Promise<Row[]> =>
       (await superuser.query(text, values)).rows as Row[]

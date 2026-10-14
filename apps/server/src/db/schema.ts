@@ -79,6 +79,45 @@ export interface Devices {
   signed_out_by: string | null
 }
 
+export interface FeatureFlags {
+  id: Generated<string>
+  org_id: string
+  key: string
+  enabled: boolean
+  locked: boolean
+  audience: Generated<'org' | 'cohort'>
+  cohort_people: Generated<string[]>
+  cohort_roles: Generated<string[]>
+  revision: Generated<Int8>
+  updated_at: Generated<Timestamp>
+  updated_by: string | null
+}
+
+export interface Jobs {
+  id: Generated<string>
+  org_id: string
+  kind: string
+  feature_key: string
+  purpose: string
+  subject_id: string | null
+  payload: Generated<Json>
+  idempotency_key: string | null
+  state: Generated<'queued' | 'running' | 'succeeded' | 'dead' | 'cancelled'>
+  attempts: Generated<number>
+  max_attempts: Generated<number>
+  give_backs: Generated<number>
+  run_after: Generated<Timestamp>
+  lease_token: string | null
+  lease_expires_at: Timestamp | null
+  claimed_by: string | null
+  reason: string | null
+  schedule_run_id: string | null
+  created_at: Generated<Timestamp>
+  created_by: Generated<string>
+  started_at: Timestamp | null
+  finished_at: Timestamp | null
+}
+
 export interface NoticeAcknowledgments {
   id: Generated<string>
   org_id: string
@@ -104,6 +143,79 @@ export interface Orgs {
   name: string
   time_zone: Generated<string>
   created_at: Generated<Timestamp>
+}
+
+export interface OutboxCheckpoints {
+  org_id: string
+  consumer: string
+  role_name: string
+  last_tx: Generated<string>
+  last_id: Generated<Int8>
+  processed: Generated<Int8>
+  created_at: Generated<Timestamp>
+  updated_at: Generated<Timestamp>
+}
+
+export interface OutboxEvents {
+  id: GeneratedAlways<Int8>
+  org_id: string
+  tx_id: Generated<string>
+  at: Generated<Timestamp>
+  type:
+    | 'signin.started'
+    | 'signin.ended'
+    | 'account.pin_set'
+    | 'account.pin_reset'
+    | 'account.passkey_added'
+    | 'account.passkey_removed'
+    | 'person.deactivated'
+    | 'acl.changed'
+    | 'flag.changed'
+    | 'person.added'
+    | 'person.updated'
+    | 'person.phone_changed'
+    | 'department.changed'
+    | 'team.changed'
+    | 'team.membership_changed'
+    | 'role.changed'
+    | 'profile.updated'
+    | 'notice.published'
+    | 'notice.acknowledged'
+    | 'message.created'
+    | 'message.updated'
+    | 'message.deleted'
+    | 'voice_message.created'
+    | 'task.created'
+    | 'task.updated'
+    | 'task.deleted'
+    | 'task.overdue'
+    | 'session.started'
+    | 'session.ended'
+    | 'track_segment.written'
+    | 'redaction.applied'
+    | 'suggested_task.created'
+  version: Generated<number>
+  entity_type: string
+  entity_id: string
+  container_type: string | null
+  container_id: string | null
+  acl_tokens: string[] | null
+  acl_more: Json | null
+  index_class: 'normal' | 'dm' | 'agent_dm' | 'personal' | 'playback_only' | 'restricted' | null
+  acl_epoch: Int8 | null
+  actor_id: string
+  actor_kind: 'human' | 'agent' | 'assistant' | 'system'
+  subject_ids: Generated<string[]>
+  purpose: string
+  tombstone: Generated<boolean>
+  ids: Generated<Json>
+}
+
+export interface OutboxFloors {
+  org_id: string
+  last_tx: string
+  last_id: Int8
+  purged_at: Generated<Timestamp>
 }
 
 export interface Passkeys {
@@ -183,6 +295,39 @@ export interface RoleAssignments {
   revoked_by: string | null
 }
 
+export interface ScheduleRuns {
+  id: Generated<string>
+  org_id: string
+  schedule_id: string
+  scheduled_for: Timestamp
+  attempt: Generated<number>
+  on_interrupt: 'rerun' | 'review'
+  state: Generated<'queued' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'interrupted' | 'resumed' | 'dismissed'>
+  reason: string | null
+  created_at: Generated<Timestamp>
+  started_at: Timestamp | null
+  finished_at: Timestamp | null
+  reviewed_at: Timestamp | null
+  reviewed_by: string | null
+  review_note: string | null
+  resumed_from: string | null
+}
+
+export interface Schedules {
+  id: Generated<string>
+  org_id: string
+  key: string
+  origin: Generated<string>
+  kind: string
+  cron: string
+  on_interrupt: 'rerun' | 'review'
+  payload: Generated<Json>
+  next_run_at: Timestamp
+  last_fired_at: Timestamp | null
+  created_at: Generated<Timestamp>
+  retired_at: Timestamp | null
+}
+
 export interface Sessions {
   id: Generated<string>
   org_id: string
@@ -248,15 +393,22 @@ export interface DB {
   data_access_events: DataAccessEvents
   departments: Departments
   devices: Devices
+  feature_flags: FeatureFlags
+  jobs: Jobs
   notice_acknowledgments: NoticeAcknowledgments
   notice_versions: NoticeVersions
   orgs: Orgs
+  outbox_checkpoints: OutboxCheckpoints
+  outbox_events: OutboxEvents
+  outbox_floors: OutboxFloors
   passkeys: Passkeys
   people: People
   phone_numbers: PhoneNumbers
   principals: Principals
   profiles: Profiles
   role_assignments: RoleAssignments
+  schedule_runs: ScheduleRuns
+  schedules: Schedules
   sessions: Sessions
   team_memberships: TeamMemberships
   teams: Teams

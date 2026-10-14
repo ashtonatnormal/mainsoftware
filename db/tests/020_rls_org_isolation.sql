@@ -1,11 +1,13 @@
--- ACC-11, CLAUDE.md Database: acting in one org, hearth_app sees exactly that org's rows of every
--- table it can read (none of the other org's), and can't write, change or delete the other org's.
--- The fixture has a row of every table in both orgs, so a table missing from it fails here.
--- (015 pins the policies' text, which covers the write side for every table.)
+-- ACC-11, CLAUDE.md Database: acting in one org, every runtime role (hearth_app, and from 0007 the
+-- worker's job roles) sees exactly that org's rows of every table it can read (none of the other
+-- org's), and can't write, change or delete the other org's. The fixture has a row of every table
+-- in both orgs, so a table missing from it fails here. (015 pins the policies' text, which covers
+-- the write side for every table.)
 \ir fixtures/two_orgs.sql
 
 do $$
 declare
+  r text;
   t record;
   o text;
   key text;
@@ -13,22 +15,29 @@ declare
   seen bigint;
   other bigint;
 begin
-  foreach o in array array['1', '2'] loop
-    for t in
-      select format('%I.%I', n.nspname, c.relname) as name, c.relname
-      from pg_class c join pg_namespace n on n.oid = c.relnamespace
-      where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema' and c.relkind in ('r', 'p', 'v', 'm', 'f')
-        and has_any_column_privilege('hearth_app', c.oid, 'SELECT')
-    loop
-      key := case t.name when 'public.orgs' then 'id' else 'org_id' end;
-      execute format('select count(*) from %s where %I = $1', t.name, key) into own using pg_temp.id(o, '00');
-      perform pg_temp.check(own > 0, format('%s: the fixture has no row in org %s; add one to db/tests/fixtures/two_orgs.sql', t.name, o));
-      perform pg_temp.act_as(o, 'a1');
-      execute format('select count(*), count(*) filter (where %I <> $1) from %s', key, t.name)
-        into seen, other using pg_temp.id(o, '00');
-      perform set_config('role', 'none', true);
-      perform pg_temp.check(other = 0, format('%s: acting in org %s, hearth_app saw %s row(s) of another org', t.name, o, other));
-      perform pg_temp.check(seen = own, format('%s: acting in org %s, hearth_app saw %s of its %s row(s)', t.name, o, seen, own));
+  foreach r in array pg_temp.runtime_roles() loop
+    foreach o in array array['1', '2'] loop
+      for t in
+        select format('%I.%I', n.nspname, c.relname) as name, c.relname
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema' and c.relkind in ('r', 'p', 'v', 'm', 'f')
+          and has_any_column_privilege(r, c.oid, 'SELECT')
+      loop
+        key := case t.name when 'public.orgs' then 'id' else 'org_id' end;
+        execute format('select count(*) from %s where %I = $1', t.name, key) into own using pg_temp.id(o, '00');
+        perform pg_temp.check(own > 0, format('%s: the fixture has no row in org %s; add one to db/tests/fixtures/two_orgs.sql', t.name, o));
+        -- hearth_app as the Owner; a job role as Hearth's system principal, as the worker acts.
+        if r = 'hearth_app' then
+          perform pg_temp.act_as(o, 'a1');
+        else
+          perform pg_temp.act_as_job(o, r);
+        end if;
+        execute format('select count(*), count(*) filter (where %I <> $1) from %s', key, t.name)
+          into seen, other using pg_temp.id(o, '00');
+        perform set_config('role', 'none', true);
+        perform pg_temp.check(other = 0, format('%s: acting in org %s, %s saw %s row(s) of another org', t.name, o, r, other));
+        perform pg_temp.check(seen = own, format('%s: acting in org %s, %s saw %s of its %s row(s)', t.name, o, r, seen, own));
+      end loop;
     end loop;
   end loop;
 end
@@ -63,6 +72,38 @@ select pg_temp.check(count(*) = 1, 'an org 2 delete reached org 1')
 from public.working_hours where org_id = 'f1000000-0000-4000-8000-000000000000';
 select pg_temp.check(count(*) = 0, 'an org 2 update reached an org 1 passkey')
 from public.passkeys where org_id = 'f1000000-0000-4000-8000-000000000000' and last_used_at is not null;
+
+-- The same for the outbox and the worker's tables (0007): acting in org 2, no event, job, schedule,
+-- run or checkpoint of org 1's can be added, and changes reach only org 2's rows.
+select pg_temp.act_as('2', 'a1');
+select pg_temp.expect_error($$insert into public.outbox_events (org_id, type, entity_type, entity_id, actor_id, actor_kind, purpose)
+  values ('f1000000-0000-4000-8000-000000000000', 'person.deactivated', 'person', 'f1000000-0000-4000-8000-0000000000a8',
+          'f2000000-0000-4000-8000-0000000000a1', 'human', 'accounts')$$, '42501');
+reset role;
+select pg_temp.act_as_job('2', 'hearth_queue');
+select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose)
+  values ('f1000000-0000-4000-8000-000000000000', 'test.planted', 'core.system', 'service_operation')$$, '42501');
+select pg_temp.expect_error($$insert into public.schedules (org_id, key, kind, cron, on_interrupt, next_run_at)
+  values ('f1000000-0000-4000-8000-000000000000', 'test.planted', 'test.planted', '0 * * * *', 'rerun', now())$$, '42501');
+select pg_temp.expect_error($$insert into public.schedule_runs (org_id, schedule_id, scheduled_for, on_interrupt)
+  values ('f1000000-0000-4000-8000-000000000000', 'f1000000-0000-4000-8000-0000000000b1', now(), 'review')$$, '42501');
+select pg_temp.expect_rows($$update public.jobs set run_after = now() + interval '1 hour'$$, 2);
+select pg_temp.expect_rows($$update public.schedules set next_run_at = now() + interval '2 hours'$$, 1);
+select pg_temp.expect_rows($$update public.schedule_runs set reason = 'moved'$$, 1);
+reset role;
+select pg_temp.act_as_job('2', 'hearth_job_offboarding');
+select pg_temp.expect_error($$insert into public.outbox_checkpoints (org_id, consumer, role_name)
+  values ('f1000000-0000-4000-8000-000000000000', 'planted', 'hearth_job_offboarding')$$, '42501');
+select pg_temp.expect_rows($$update public.outbox_checkpoints set processed = processed + 1$$, 1);
+reset role;
+select pg_temp.check(count(*) = 0, 'an org 2 update reached an org 1 job')
+from public.jobs where org_id = 'f1000000-0000-4000-8000-000000000000' and run_after > now();
+select pg_temp.check(count(*) = 1, 'an org 2 update reached an org 1 schedule')
+from public.schedules where org_id = 'f1000000-0000-4000-8000-000000000000' and next_run_at = now() + interval '1 hour';
+select pg_temp.check(count(*) = 0, 'an org 2 update reached an org 1 schedule run')
+from public.schedule_runs where org_id = 'f1000000-0000-4000-8000-000000000000' and reason = 'moved';
+select pg_temp.check(count(*) = 1, 'an org 2 update reached an org 1 checkpoint')
+from public.outbox_checkpoints where org_id = 'f1000000-0000-4000-8000-000000000000' and processed = 0;
 
 -- A row can't point at another org's row: foreign keys between org-scoped tables include
 -- org_id. (As the superuser, so only the foreign key stands in the way.)

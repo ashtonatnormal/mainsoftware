@@ -1,32 +1,43 @@
 -- ACC-11, CLAUDE.md Database: a transaction with no org set (or an empty one) sees no row of any
--- table hearth_app can read, and can't write one. Every table in every schema is covered, found
--- from the catalogue (any SELECT, whole-table or on some columns), so a new table is checked the
+-- table a runtime role can read, and can't write one. Every runtime role (hearth_app, and from
+-- 0007 the worker's job roles) and every table in every schema are covered, found from the
+-- catalogue (any SELECT, whole-table or on some columns), so a new role or table is checked the
 -- day it lands.
 \ir fixtures/two_orgs.sql
 
 do $$
 declare
+  r text;
   t record;
   setting text;
   seen bigint;
+  checked bigint := 0;
 begin
+  perform pg_temp.check(pg_temp.runtime_roles() @> array['hearth_app', 'hearth_queue', 'hearth_job_offboarding',
+                                                         'hearth_job_partitions', 'hearth_job_purge'],
+                        format('the runtime roles found are %s', pg_temp.runtime_roles()));
   -- First with app.org_id never set in this session, then set to ''.
   foreach setting in array array['unset', ''] loop
     if setting <> 'unset' then
       perform set_config('app.org_id', setting, true);
     end if;
-    for t in
-      select format('%I.%I', n.nspname, c.relname) as name
-      from pg_class c join pg_namespace n on n.oid = c.relnamespace
-      where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema' and c.relkind in ('r', 'p', 'v', 'm', 'f')
-        and has_any_column_privilege('hearth_app', c.oid, 'SELECT')
-    loop
-      perform set_config('role', 'hearth_app', true);
-      execute format('select count(*) from %s', t.name) into seen;
-      perform set_config('role', 'none', true);
-      perform pg_temp.check(seen = 0, format('%s: hearth_app saw %s row(s) with app.org_id %s', t.name, seen, setting));
+    foreach r in array pg_temp.runtime_roles() loop
+      for t in
+        select format('%I.%I', n.nspname, c.relname) as name
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema' and c.relkind in ('r', 'p', 'v', 'm', 'f')
+          and has_any_column_privilege(r, c.oid, 'SELECT')
+      loop
+        perform set_config('role', r, true);
+        execute format('select count(*) from %s', t.name) into seen;
+        perform set_config('role', 'none', true);
+        perform pg_temp.check(seen = 0, format('%s: %s saw %s row(s) with app.org_id %s', t.name, r, seen, setting));
+        checked := checked + 1;
+      end loop;
     end loop;
   end loop;
+  -- hearth_app's tables and the job roles' (feature_flags, jobs, schedules, the outbox, ...).
+  perform pg_temp.check(checked > 40, format('only %s table reads were checked', checked));
 end
 $$;
 
@@ -39,6 +50,27 @@ select pg_temp.expect_error($$insert into public.audit_events (org_id, action)
   values ('f1000000-0000-4000-8000-000000000000', 'test.no_org')$$, '42501');
 select pg_temp.expect_error($$insert into public.data_access_events (org_id, type, subject_id, actor_id)
   values ('f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a8')$$, '42501');
+select pg_temp.expect_error($$insert into public.outbox_events (org_id, type, entity_type, entity_id, actor_id, actor_kind, purpose)
+  values ('f1000000-0000-4000-8000-000000000000', 'person.deactivated', 'person', 'f1000000-0000-4000-8000-0000000000a8',
+          'f1000000-0000-4000-8000-0000000000a1', 'human', 'accounts')$$, '42501');
 select pg_temp.expect_rows($$update public.teams set name = 'Renamed'$$, 0);
 select pg_temp.expect_rows($$update public.people set full_name = 'Renamed'$$, 0);
 select pg_temp.expect_rows($$delete from public.working_hours$$, 0);
+-- The worker's roles, as Hearth's system principal but with no org: nothing to claim, fire or move.
+reset role;
+select set_config('app.user_id', pg_temp.id('1', 'a0')::text, true);
+set local role hearth_queue;
+select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose)
+  values ('f1000000-0000-4000-8000-000000000000', 'test.no_org', 'core.system', 'service_operation')$$, '42501');
+select pg_temp.expect_error($$insert into public.schedules (org_id, key, kind, cron, on_interrupt, next_run_at)
+  values ('f1000000-0000-4000-8000-000000000000', 'test.no_org', 'test.no_org', '0 * * * *', 'rerun', now())$$, '42501');
+select pg_temp.expect_rows($$update public.jobs set run_after = now()$$, 0);
+select pg_temp.expect_rows($$update public.schedules set next_run_at = now()$$, 0);
+select pg_temp.expect_rows($$update public.schedule_runs set reason = 'test'$$, 0);
+reset role;
+set local role hearth_job_offboarding;
+select pg_temp.expect_error($$insert into public.outbox_checkpoints (org_id, consumer, role_name)
+  values ('f1000000-0000-4000-8000-000000000000', 'no_org', 'hearth_job_offboarding')$$, '42501');
+select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose)
+  values ('f1000000-0000-4000-8000-000000000000', 'test.no_org', 'core.system', 'accounts')$$, '42501');
+select pg_temp.expect_rows($$update public.outbox_checkpoints set processed = processed + 1$$, 0);

@@ -161,7 +161,10 @@ jobs:
       # Risky migrations also get an upgrade step here, after the DB tests:
       #   UP_TO=NNNN scripts/check-migrations.sh && scripts/check-<name>-upgrade.sh
       # builds the database up to the migration before NNNN, loads production-shaped data, applies
-      # NNNN and checks the data survived.
+      # NNNN and checks the data survived. 0007 (C0.6) has no step of its own: it changes no
+      # existing row and adds no rule to an existing table, and the two 0006 runs below apply it too
+      # (with everything after 0006) on top of the seeded data, giving the seed's org its flags, and
+      # compare the result with the fresh build.
       # 0006 (C0.5) on top of sessions and accounts 0005 allows, in its own scratch database: its
       # two new session rules mustn't fail on older rows, and its schema must match the fresh build
       # above (hearth_check) apart from the rule older rows leave NOT VALID. Once for each rule, so

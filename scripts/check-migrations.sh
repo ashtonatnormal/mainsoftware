@@ -15,9 +15,12 @@
 #     materialized view or foreign table granted to anyone, anything granted to PUBLIC, a
 #     function PUBLIC can execute, a SECURITY DEFINER function without search_path = '',
 #     TRUNCATE, TRIGGER or REFERENCES (on a table or a column) held by anyone but the owner, an
-#     object not owned by hearth_owner, a database hearth_owner doesn't own, or a hearth_app role
-#     that could bypass RLS. Objects that belong to an extension and the constructor functions
-#     Postgres makes for a range type are skipped. The migrator's own ledger (kysely_migration,
+#     object not owned by hearth_owner, a database hearth_owner doesn't own, or a runtime role that
+#     could bypass RLS: any role granted anything in the database (on a table, a column or a
+#     function), and any role that can use one of those by SET or INHERIT (hearth_worker, which
+#     takes a job role per transaction), must not be a superuser, have BYPASSRLS, own a relation
+#     or the database, or be a member of a role that does. Objects that belong to an extension and
+#     the constructor functions Postgres makes for a range type are skipped. The migrator's own ledger (kysely_migration,
 #     kysely_migration_lock) has no org_id or row level security, so those two checks skip it by
 #     name; it must still be the owner's and granted to nobody.
 #
@@ -133,7 +136,7 @@ PGUSER=$migrator PGPASSWORD=$migrator_pw PGDATABASE=$db MIGRATION_ROLE=$owner \
   { echo "Migrations failed: see the migrate: lines above." >&2; exit 1; }
 
 checks="
-with rel as (
+with recursive rel as (
   select c.oid, c.relkind, c.relrowsecurity, c.relacl, c.relowner, c.reloptions,
          format('%I.%I', n.nspname, c.relname) as name
   from pg_class c
@@ -154,6 +157,19 @@ with rel as (
     and not exists (select 1 from pg_depend d
                     where d.classid = 'pg_proc'::regclass and d.objid = p.oid
                       and (d.deptype = 'e' or (d.deptype = 'i' and d.refclassid = 'pg_type'::regclass)))
+), runtime (oid) as (
+  -- Every role granted something in this database (the owner aside), and every role that can use
+  -- one of them by SET or INHERIT, followed role by role: none may skip row level security
+  -- (CLAUDE.md, Database). An ADMIN-only grant (the one Postgres gives a role's creator) lets its
+  -- holder use nothing, so it isn't followed.
+  select a.grantee from rel cross join lateral aclexplode(relacl) a where a.grantee not in (0, rel.relowner)
+  union
+  select a.grantee from rel join pg_attribute att on att.attrelid = rel.oid and att.attnum > 0
+    cross join lateral aclexplode(att.attacl) a where a.grantee not in (0, rel.relowner)
+  union
+  select a.grantee from fn cross join lateral aclexplode(fn.proacl) a where a.grantee not in (0, fn.proowner)
+  union
+  select m.member from pg_auth_members m join runtime r on r.oid = m.roleid where m.set_option or m.inherit_option
 ), problems(problem, object) as (
   select 'Table without an org_id column (every record belongs to an org, ACC-11)', name
   from rel where relkind in ('r', 'p') and name <> 'public.orgs' and oid not in (select oid from ledger)
@@ -216,12 +232,14 @@ with rel as (
     and not exists (select 1 from pg_depend d
                     where d.classid = 'pg_namespace'::regclass and d.objid = n.oid and d.deptype = 'e')
   union all
-  select 'hearth_app could bypass RLS', 'hearth_app is a superuser or has BYPASSRLS'
-  from pg_roles where rolname = 'hearth_app' and (rolsuper or rolbypassrls)
+  select 'A runtime role could bypass RLS', r.rolname || ' is a superuser, has BYPASSRLS or owns something'
+  from pg_roles r where r.oid in (select oid from runtime)
+    and (r.rolsuper or r.rolbypassrls or exists (select 1 from rel where rel.relowner = r.oid)
+         or r.oid = (select datdba from pg_database where datname = current_database()))
   union all
-  select 'hearth_app could bypass RLS', 'hearth_app is a member of ' || r.rolname
+  select 'A runtime role could bypass RLS', a.rolname || ' is a member of ' || r.rolname
   from pg_roles a cross join pg_roles r
-  where a.rolname = 'hearth_app' and r.oid <> a.oid and pg_has_role(a.oid, r.oid, 'MEMBER')
+  where a.oid in (select oid from runtime) and r.oid <> a.oid and pg_has_role(a.oid, r.oid, 'MEMBER')
     and (r.rolsuper or r.rolbypassrls or exists (select 1 from rel where rel.relowner = r.oid)
          or r.oid = (select datdba from pg_database where datname = current_database()))
   union all
