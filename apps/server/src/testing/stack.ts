@@ -528,7 +528,9 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
         max: workPoolSize(concurrency, registries),
         applicationName: name,
       })
-      const subscriptions = new Subscriptions(createSubscriber(valkey, instanceLogger), instanceLogger)
+      // Named for the instance and the run (its Valkey key prefix), as CLIENT LIST shows it.
+      const subscriber = createSubscriber(valkey, instanceLogger, `${name}:${prefix}`)
+      const subscriptions = new Subscriptions(subscriber, instanceLogger)
       let closed: Promise<void> | undefined
       const close = () => {
         closed ??= (async () => {

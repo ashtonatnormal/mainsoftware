@@ -35,10 +35,11 @@ export function createValkey(url: string, logger: Logger): Redis {
 // nothing else. Commands queue while it connects (enableOfflineQueue). ioredis's own re-subscribe
 // after a reconnect is off: nothing could handle it failing (it would end the process), so
 // pubsub.ts subscribes again itself. Each channel's listener covers what it misses in between (the
-// realtime re-check, the flags poll; T14, T17).
-export function createSubscriber(client: Redis, logger: Logger): Redis {
+// realtime re-check, the flags poll; T14, T17). The integration harness names each worker
+// instance's connection, so a test can find it.
+export function createSubscriber(client: Redis, logger: Logger, connectionName = 'hearth-subscriber'): Redis {
   const sub = client.duplicate({
-    connectionName: 'hearth-subscriber',
+    connectionName,
     enableOfflineQueue: true,
     autoResubscribe: false,
   })

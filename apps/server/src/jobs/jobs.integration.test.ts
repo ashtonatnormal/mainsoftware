@@ -254,6 +254,20 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     }
   })
 
+  it('Qodo-18 #5: a worker the harness can’t start leaves no connection open', async () => {
+    // This run's worker instances' subscriber connections, by the name the harness gives them.
+    const subscribers = async () =>
+      String(await s.valkey.call('CLIENT', 'LIST'))
+        .split('\n')
+        .filter(line => line.includes(`name=hearth-worker-it-`) && line.includes(`:${s.prefix} `)).length
+    const before = await subscribers()
+    // An AI purpose before A0: startWorker refuses the registries.
+    const ai = kind('it.ai', async () => {}, { feature: 'ai.ask', purpose: 'org_brain' })
+    await expect(s.startWorker({ kinds: [ai] })).rejects.toThrow(/until A0/)
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(await subscribers()).toBe(before)
+  })
+
   it('T15 item 7: the same key in two transactions adds one job, and an enqueue that rolls back adds none', async () => {
     // A kind no worker here knows, so the rows stay as they were queued.
     const unclaimed = kind('it.unclaimed', async () => {})
