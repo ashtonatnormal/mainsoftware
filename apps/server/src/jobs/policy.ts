@@ -10,6 +10,9 @@ export interface JobPolicy {
   leaseMs: number
   // How often the runner renews the leases of its running jobs, one statement per org.
   heartbeatMs: number
+  // How many orgs' renewals may be in flight at once, across all orgs, so the heartbeats never hold
+  // more than this many of the control pool's connections (T18 item 8).
+  renewalsInFlight: number
   // How often an idle runner looks for jobs to claim (T15 item 19).
   pollMs: number
   // How often each running job's org is checked for flags gone unconfirmed (T15 item 11).
@@ -28,6 +31,7 @@ export interface JobPolicy {
 export const JOB_POLICY: JobPolicy = {
   leaseMs: 30_000,
   heartbeatMs: 10_000,
+  renewalsInFlight: 2,
   pollMs: 500,
   watchdogMs: 1000,
   drainMs: 3000,

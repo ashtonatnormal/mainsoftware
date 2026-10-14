@@ -6,6 +6,7 @@ describe('C0.6 T15 the queue’s numbers', () => {
     expect(JOB_POLICY).toEqual({
       leaseMs: 30_000,
       heartbeatMs: 10_000,
+      renewalsInFlight: 2,
       pollMs: 500,
       watchdogMs: 1000,
       drainMs: 3000,

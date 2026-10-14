@@ -117,7 +117,8 @@ export class FlagCache {
   // and the polls deferred while FLAG_READS_IN_FLIGHT are, in the order they were due.
   #inFlight = 0
   readonly #deferred = new Map<string, OrgFlags>()
-  // Whether flags_reads_limited has been logged since the deferred polls last all ran.
+  // Whether flags_reads_limited has been logged in this episode: from the first poll deferred until
+  // fewer than FLAG_READS_IN_FLIGHT reads are in flight and no poll is deferred.
   #limited = false
   #stopped = false
 
@@ -326,11 +327,22 @@ export class FlagCache {
   }
 
   // Too many reads are in flight: the org's poll waits until one settles. Whoever waits on a reload
-  // is let go at once, as after a failed read; the org goes unconfirmed if this lasts.
+  // is let go at once, as after a failed read; the org goes unconfirmed if this lasts, logged once
+  // (flags_unconfirmed) as for a read that fails, when it does.
   #defer(orgId: string, entry: OrgFlags): void {
     for (const waiter of entry.waiters.splice(0)) waiter()
     if (this.#stopped) return
     this.#deferred.set(orgId, entry)
+    if (!this.#fresh(entry)) this.#unconfirmed(orgId, entry)
+    else {
+      // When its last read goes stale, if it is still deferred then; #load, untrack() and stop()
+      // clear the timer.
+      const left = (entry.confirmedAt ?? 0) + this.#staleMs - this.#now()
+      entry.timer = setTimeout(() => {
+        if (this.#deferred.get(orgId) === entry && !this.#fresh(entry)) this.#unconfirmed(orgId, entry)
+      }, left + 1)
+      entry.timer.unref()
+    }
     if (!this.#limited) {
       this.#limited = true
       this.#logger.warn(
@@ -348,7 +360,9 @@ export class FlagCache {
       if (this.#stopped || this.#orgs.get(orgId) !== entry || entry.loading) continue
       void this.#load(orgId, entry)
     }
-    this.#limited = false
+    // The episode ends only once reads are free again with nothing waiting, not each time the
+    // deferred polls run and fill the reads again.
+    if (this.#deferred.size === 0 && this.#inFlight < FLAG_READS_IN_FLIGHT) this.#limited = false
   }
 
   // The read, or a FlagReadTimeout once it has taken FLAG_READ_WAIT_MS. Postgres's statement_timeout
@@ -439,12 +453,16 @@ export class FlagCache {
     const line = { event: 'flags_poll_failed', org: orgId, failures: entry.failures, failure: failureFields(error) }
     if (entry.failures >= FAILURES_BEFORE_ERROR) this.#logger.error(line, 'could not read the flags')
     else this.#logger.warn(line, 'could not read the flags')
-    if (!this.#fresh(entry) && !entry.unconfirmed) {
-      entry.unconfirmed = true
-      this.#logger.warn(
-        { event: 'flags_unconfirmed', org: orgId },
-        'the flags are unconfirmed: only what is locked on counts as on',
-      )
-    }
+    if (!this.#fresh(entry)) this.#unconfirmed(orgId, entry)
+  }
+
+  // The org's flags are unconfirmed: logged once until they are read again (flags_confirmed).
+  #unconfirmed(orgId: string, entry: OrgFlags): void {
+    if (entry.unconfirmed) return
+    entry.unconfirmed = true
+    this.#logger.warn(
+      { event: 'flags_unconfirmed', org: orgId },
+      'the flags are unconfirmed: only what is locked on counts as on',
+    )
   }
 }

@@ -577,22 +577,163 @@ describe('C0.6 T15 item 2 heartbeats', () => {
     }
   })
 
-  it('Qodo-18 round 3 #2: renews each org’s leases at once, so three orgs whose renewals take 9 s each lose no job', async () => {
+  it('Qodo-18 round 4 #2: a slow claim’s jobs count from when its renewal began, not when it ended', async () => {
     const { run } = blocking()
+    let claims = 0
+    let beats = 0
+    // The claim takes 20.5 s; the renewal before the job starts takes 9.9 s and renews it; every
+    // heartbeat after fails. Its lease runs from 20.5 s, so the watchdog must stop it by 45.5 s and
+    // a tick, not 25 s after the renewal ended (55.4 s, past the lease's end at 50.5 s).
+    const { runner, log } = start(
+      {
+        claims: [[claimed(1)]],
+        hold: statement =>
+          statement.text.startsWith('with next as') && ++claims === 1
+            ? new Promise<void>(resolve => setTimeout(resolve, 20_500))
+            : isRenewal(statement) && ++beats === 1
+              ? new Promise<void>(resolve => setTimeout(resolve, 9900))
+              : undefined,
+        renew: ids => (beats === 1 ? ids : new Error('Connection terminated unexpectedly')),
+      },
+      { kinds: [run] },
+    )
+    const began = performance.now()
+    const renewalBegan = began + 20_500
+    const margin = JOB_POLICY.heartbeatMs / 2
+    await until(() => runner.active === 1, 35_000)
+    await until(() => runner.active === 0, JOB_POLICY.leaseMs * 2)
+    expect(log.events('job_lease_lost').map(line => line.job)).toEqual([jobId(1)])
+    expect(performance.now()).toBeGreaterThan(renewalBegan + JOB_POLICY.leaseMs - margin)
+    expect(performance.now()).toBeLessThan(renewalBegan + JOB_POLICY.leaseMs - margin / 2)
+    runner.halt()
+  })
+
+  it('Qodo-18 round 4 #2: a claim under the slack counts its jobs from before its transaction began', async () => {
+    const { run } = blocking()
+    let claims = 0
+    // The claim takes 4.9 s, inside the 5 s slack, so no renewal before the job starts; every
+    // heartbeat fails. The lease runs from the claim's now(), no earlier than its start, so the
+    // watchdog must stop the job by 25 s and a tick from then, not from when the claim ended.
     const { p, runner, log } = start(
       {
-        claims: [[claimed(1)], [claimed(2)], [claimed(3)]],
-        hold: statement => (isRenewal(statement) ? new Promise<void>(resolve => setTimeout(resolve, 9000)) : undefined),
+        claims: [[claimed(1)]],
+        hold: statement =>
+          statement.text.startsWith('with next as') && ++claims === 1
+            ? new Promise<void>(resolve => setTimeout(resolve, 4900))
+            : undefined,
+        renew: () => new Error('Connection terminated unexpectedly'),
       },
-      { kinds: [run], orgs: [ORG, OTHER_ORG, THIRD_ORG] },
+      { kinds: [run] },
     )
-    await until(() => runner.active === 3)
+    const began = performance.now()
+    const margin = JOB_POLICY.heartbeatMs / 2
+    await until(() => runner.active === 1, 10_000)
+    // No renewal before it started.
+    expect(renewals(p)).toHaveLength(0)
+    await until(() => runner.active === 0, JOB_POLICY.leaseMs * 2)
+    expect(log.events('job_lease_lost').map(line => line.job)).toEqual([jobId(1)])
+    expect(performance.now()).toBeGreaterThan(began + JOB_POLICY.leaseMs - margin)
+    expect(performance.now()).toBeLessThan(began + JOB_POLICY.leaseMs - margin / 2)
+    runner.halt()
+  })
+
+  // Holds each renewal statement for as long as `ms` says (none: answered at once), counting how
+  // many are in flight, in all and per org (the org is the statement's last value).
+  function heldRenewals(ms: (orgId: string, n: number) => number | undefined) {
+    const inFlight = new Map<string, number>()
+    const seen = { most: 0, mostPerOrg: 0, started: [] as { org: string; at: number }[] }
+    const total = () => [...inFlight.values()].reduce((a, b) => a + b, 0)
+    const hold = (statement: Statement): Promise<void> | undefined => {
+      if (!isRenewal(statement)) return undefined
+      const org = String(statement.values.at(-1))
+      seen.started.push({ org, at: performance.now() })
+      const wait = ms(org, seen.started.filter(start => start.org === org).length)
+      if (wait === undefined) return undefined
+      inFlight.set(org, (inFlight.get(org) ?? 0) + 1)
+      seen.most = Math.max(seen.most, total())
+      seen.mostPerOrg = Math.max(seen.mostPerOrg, inFlight.get(org) ?? 0)
+      return new Promise<void>(resolve =>
+        setTimeout(() => {
+          inFlight.set(org, (inFlight.get(org) ?? 1) - 1)
+          resolve()
+        }, wait),
+      )
+    }
+    return { hold, seen }
+  }
+
+  it('Qodo-18 round 3 #2: renews two orgs’ leases at once, so two orgs whose renewals take 9 s each lose no job', async () => {
+    const { run } = blocking()
+    const held = heldRenewals(() => 9000)
+    const { p, runner, log } = start(
+      { claims: [[claimed(1)], [claimed(2)]], hold: held.hold },
+      { kinds: [run], orgs: [ORG, OTHER_ORG] },
+    )
+    await until(() => runner.active === 2)
     await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 5)
-    expect(runner.active).toBe(3)
+    expect(runner.active).toBe(2)
     expect(log.events('job_lease_lost')).toEqual([])
-    // Each org's renewal is its own statement and transaction.
+    // Both at once, each org's its own statement and transaction.
+    expect(held.seen.most).toBe(2)
     const orgs = renewals(p).map(s => s.values.at(-1))
-    expect(new Set(orgs)).toEqual(new Set([ORG, OTHER_ORG, THIRD_ORG]))
+    expect(new Set(orgs)).toEqual(new Set([ORG, OTHER_ORG]))
+    runner.halt()
+  })
+
+  it('Qodo-18 round 4 #1: an org whose renewal hangs for 31 s loses only its own jobs; another’s renew on time', async () => {
+    const { run } = blocking()
+    // ORG's first renewal hangs until the pool's query_timeout; OTHER_ORG's are answered at once.
+    const held = heldRenewals((org, n) => (org === ORG && n === 1 ? 31_000 : undefined))
+    const { runner, log } = start(
+      { claims: [[claimed(1)], [claimed(2)]], hold: held.hold },
+      { kinds: [run], orgs: [ORG, OTHER_ORG] },
+    )
+    await until(() => runner.active === 2)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 3)
+    expect(log.events('job_lease_lost').map(line => line.job)).toEqual([jobId(1)])
+    expect(runner.active).toBe(1)
+    // OTHER_ORG's renewals kept their cadence while ORG's hung: 10 s apart, start to start.
+    const others = held.seen.started.filter(start => start.org === OTHER_ORG).map(start => start.at)
+    expect(others.length).toBeGreaterThanOrEqual(8)
+    for (const [i, at] of others.entries()) {
+      if (i > 0) expect(at - (others[i - 1] ?? 0)).toBeLessThanOrEqual(JOB_POLICY.heartbeatMs + 20)
+    }
+    runner.halt()
+  })
+
+  it('Qodo-18 round 4 #1: with six orgs’ renewals slow, never more than renewalsInFlight run at once, and never two for one org', async () => {
+    const { run } = blocking()
+    const orgs = [ORG, OTHER_ORG, THIRD_ORG, ...[4, 5, 6].map(n => `a0000000-0000-4000-8000-00000000000${n}`)]
+    // Every renewal takes 15 s, longer than the interval.
+    const held = heldRenewals(() => 15_000)
+    const { runner } = start(
+      { claims: orgs.map((_, i) => [claimed(i + 1)]), hold: held.hold },
+      { kinds: [run], orgs, concurrency: orgs.length },
+    )
+    await until(() => runner.active === orgs.length)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 3)
+    expect(held.seen.started.length).toBeGreaterThanOrEqual(JOB_POLICY.renewalsInFlight * 2)
+    expect(held.seen.most).toBe(JOB_POLICY.renewalsInFlight)
+    expect(held.seen.mostPerOrg).toBe(1)
+    runner.halt()
+  })
+
+  it('Qodo-18 round 4 #1: an org whose renewal outlasts the interval isn’t renewed again until it ends, then at once', async () => {
+    const { run } = blocking()
+    // The first renewal (at 10 s) takes 15 s; every later one is answered at once.
+    const held = heldRenewals((_, n) => (n === 1 ? 15_000 : undefined))
+    const { runner, log } = start({ claims: [[claimed(1)]], hold: held.hold }, { kinds: [run] })
+    await until(() => runner.active === 1)
+    const claimedAt = performance.now()
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.heartbeatMs + 15_000 + 50)
+    const starts = held.seen.started.map(start => start.at - claimedAt)
+    expect(held.seen.mostPerOrg).toBe(1)
+    // The second began when the first ended (25 s), not at 20 s beside it.
+    expect(starts).toHaveLength(2)
+    expect(starts[1]).toBeGreaterThanOrEqual(JOB_POLICY.heartbeatMs + 15_000 - 20)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 2)
+    expect(runner.active).toBe(1)
+    expect(log.events('job_lease_lost')).toEqual([])
     runner.halt()
   })
 

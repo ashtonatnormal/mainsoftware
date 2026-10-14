@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
+import { FLAG_READS_IN_FLIGHT } from '#src/flags/cache.ts'
 import { defineJob } from '#src/jobs/kinds.ts'
 import { WORKER_POLICY } from '#src/jobs/policy.ts'
 import { captureLogger } from '#src/testing/logs.ts'
@@ -97,6 +98,9 @@ afterEach(() => {
 describe('C0.6 T18 the worker role', () => {
   it('sizes its pools: 8 for the control loops, and a connection per job and per consumer for work', () => {
     expect(CONTROL_POOL_SIZE).toBe(8)
+    // Qodo-18 round 4 #1: with every flag read and renewal stuck, 3 connections stay for claims and
+    // outcomes (T18 item 8).
+    expect(CONTROL_POOL_SIZE - FLAG_READS_IN_FLIGHT - WORKER_POLICY.jobs.renewalsInFlight).toBeGreaterThanOrEqual(3)
     expect(workPoolSize(4, registries())).toBe(5)
   })
 

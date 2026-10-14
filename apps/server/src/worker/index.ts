@@ -42,7 +42,8 @@ import { logOutboxLag, logQueueDepth, readOutboxLag, readQueueDepth } from '#src
 import type { Subscriptions } from '#src/pubsub.ts'
 import type { Check } from '#src/ready.ts'
 
-// The control pool's size (T18 item 8): a connection for each loop, and room to spare.
+// The control pool's size (T18 item 8): a connection for each loop, and room to spare when every
+// flag read (3) and renewal (2) is stuck on a silent connection.
 export const CONTROL_POOL_SIZE = 8
 
 // The work pool's size: a connection for each job running at once, and one for each consumer.

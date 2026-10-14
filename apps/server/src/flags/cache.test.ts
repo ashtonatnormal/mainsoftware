@@ -463,6 +463,94 @@ describe('C0.6 T17 items 6 and 7 the flags a process keeps', () => {
     expect(state.started).toHaveLength(before)
   })
 
+  // A database whose reads for the orgs in `stuck` (all of them while `all` is set) hang for 31 s,
+  // the pool's query_timeout, and then fail, as on a silent connection.
+  function stuckDatabase() {
+    const state = { stuck: new Set<string>(), all: false, started: [] as string[] }
+    const p = scriptedPool(
+      (statement: Statement) => {
+        if (statement.text.includes("from principals where org_id = $1 and kind = 'system'")) return [{ id: SYSTEM }]
+        if (statement.text.startsWith('select "key"')) return [row('it.optional')]
+        return []
+      },
+      async statement => {
+        if (!statement.text.startsWith('select "key"')) return
+        const org = String(statement.values[0])
+        state.started.push(org)
+        if (state.all || state.stuck.has(org)) {
+          await new Promise<void>((_, reject) => setTimeout(() => reject(new Error('Query read timeout')), 31_000))
+        }
+      },
+    )
+    const log = captureLogger('api')
+    const flags = new FlagCache({
+      db: p.db,
+      registry: REGISTRY,
+      logger: log.logger,
+      now: () => Date.now(),
+      random: () => 0.5,
+    })
+    return { state, flags, log }
+  }
+  const FOURTH_ORG = 'a0000000-0000-4000-8000-000000000004'
+  const unconfirmedOrgs = (log: ReturnType<typeof captureLogger>) =>
+    log.events('flags_unconfirmed').map(line => line.org)
+
+  it('Qodo-18 round 4 #4: an org whose polls the read limit defers logs flags_unconfirmed once when it goes stale, as a failing one does', async () => {
+    const { state, flags, log } = stuckDatabase()
+    void flags.track(FOURTH_ORG)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(flags.confirmed(FOURTH_ORG)).toBe(true)
+    const confirmedAt = Date.now()
+    // Three other orgs' reads hang, so FOURTH_ORG's next poll (at 2 s) waits.
+    for (const org of [ORG, OTHER_ORG, THIRD_ORG]) state.stuck.add(org)
+    void flags.track(ORG)
+    void flags.track(OTHER_ORG)
+    void flags.track(THIRD_ORG)
+    await vi.advanceTimersByTimeAsync(FLAG_STALE_MS - 10)
+    expect(flags.confirmed(FOURTH_ORG)).toBe(true)
+    expect(unconfirmedOrgs(log)).not.toContain(FOURTH_ORG)
+    await vi.advanceTimersByTimeAsync(confirmedAt + FLAG_STALE_MS + 10 - Date.now())
+    expect(flags.confirmed(FOURTH_ORG)).toBe(false)
+    expect(unconfirmedOrgs(log).filter(org => org === FOURTH_ORG)).toHaveLength(1)
+    // Still deferred, polled and reloaded: never logged again until it is read.
+    void flags.reload(FOURTH_ORG)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(unconfirmedOrgs(log).filter(org => org === FOURTH_ORG)).toHaveLength(1)
+    expect(log.events('flags_confirmed')).toEqual([])
+    // The stuck reads end at 31 s, and the deferred poll then confirms it.
+    await vi.advanceTimersByTimeAsync(confirmedAt + 31_000 + 10 - Date.now())
+    expect(flags.confirmed(FOURTH_ORG)).toBe(true)
+    expect(log.events('flags_confirmed').map(line => line.org)).toEqual([FOURTH_ORG])
+    // The other orgs' new reads hang again, so its next poll waits and it goes stale once more: a
+    // new episode, logged once more.
+    await vi.advanceTimersByTimeAsync(FLAG_STALE_MS + 10)
+    expect(flags.confirmed(FOURTH_ORG)).toBe(false)
+    expect(unconfirmedOrgs(log).filter(org => org === FOURTH_ORG)).toHaveLength(2)
+    flags.stop()
+  })
+
+  it('Qodo-18 round 4 #4: logs flags_reads_limited once an episode, however often the deferred polls run and refill, and again in the next', async () => {
+    const { state, flags, log } = stuckDatabase()
+    state.all = true
+    for (const org of [ORG, OTHER_ORG, THIRD_ORG]) void flags.track(org)
+    // Two minutes of an outage: the three orgs' reads hang, each one's next poll waits, and each
+    // stuck read ends at 31 s, when the deferred polls run, drain the queue and hang again.
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(state.started.length).toBeGreaterThan(2 * FLAG_READS_IN_FLIGHT)
+    expect(log.events('flags_reads_limited')).toHaveLength(1)
+    // Reads answer again: once every stuck read has ended, nothing is deferred and the episode ends.
+    state.all = false
+    await vi.advanceTimersByTimeAsync(40_000)
+    for (const org of [ORG, OTHER_ORG, THIRD_ORG]) expect(flags.confirmed(org)).toBe(true)
+    expect(log.events('flags_reads_limited')).toHaveLength(1)
+    // The next outage is a new episode.
+    state.all = true
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(log.events('flags_reads_limited')).toHaveLength(2)
+    flags.stop()
+  })
+
   it('FLAGS-1: stops waiting for a read that never ends, counts it as failed, polls again, and drops its late result', async () => {
     // A connection whose peer went silent: the first read's select never answers until released.
     const db = database([row('it.optional')])

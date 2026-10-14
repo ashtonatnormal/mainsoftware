@@ -13,11 +13,14 @@
 //               it (jobs/gate.ts), after reloading the org's flags if they say the feature is off,
 //               and its handler runs with an AbortSignal, a timer for the kind's timeoutMs and the
 //               lineage revisions it was admitted under, which every commit's fence compares.
-//   heartbeats  Every 10 s from the start of the last, one statement per org, bounded to 10 s,
-//               every org's at once, renews every running job's lease. A job whose lease wasn't renewed has lost it
-//               (lease_lost), unless its finishing commit is in flight, which then reports for
-//               itself, or has committed: nothing aborts a job after that (T15 item 3). A heartbeat
-//               that fails is tried again 1 s later (a tenth of the interval), not a whole interval;
+//   heartbeats  One statement per org, bounded to 10 s, renews every running job's lease there,
+//               each org on its own cadence (10 s from the start of its last), never two at once
+//               for an org, and at most 2 orgs' at once (renewalsInFlight): an org waiting on a
+//               slow renewal holds up no other, unless that many hang at once. A job whose lease
+//               wasn't renewed has lost it (lease_lost), unless its finishing commit is in flight,
+//               which then reports for itself, or has committed: nothing aborts a job after that
+//               (T15 item 3). A renewal that fails is tried again 1 s later (a tenth of the
+//               interval), not a whole interval;
 //               once 25 s have passed since the start of the last heartbeat that renewed a job's
 //               lease (the lease less a margin of half a heartbeat), the watchdog aborts it
 //               (lease_lost) before the lease can run out and the sweep give it to another worker.
@@ -126,6 +129,15 @@ interface Running {
   done: Promise<void>
 }
 
+// An org's renewals: when the next is due and when the last began (monotonic), whether one is in
+// flight, and whether the last that ended failed.
+interface Beat {
+  next: number
+  started: number
+  inFlight: boolean
+  failed: boolean
+}
+
 // A loop that has failed this many times in a row logs at error level (C0.13 alarms on it).
 const FAILURES_BEFORE_ERROR = 3
 
@@ -184,6 +196,10 @@ export class JobRunner {
   readonly #failures = new Map<string, number>()
   readonly #claims = new Sleeper()
   readonly #ticks = new Sleeper()
+  // Each org's renewals (heartbeats), how many are in flight, and what wakes their loop.
+  readonly #beats = new Map<string, Beat>()
+  readonly #beatWake = new Sleeper()
+  #renewing = 0
   readonly #loops: Promise<void>[] = []
   #orgs: () => readonly string[] = () => []
   #unlisten: (() => void) | undefined
@@ -259,6 +275,7 @@ export class JobRunner {
     this.#unlisten?.()
     this.#claims.wake()
     this.#ticks.wake()
+    this.#beatWake.wake()
     for (const r of this.#running.values()) {
       if (!r.controller.signal.aborted) r.controller.abort(new JobAborted('shutdown'))
     }
@@ -391,6 +408,8 @@ export class JobRunner {
     // Keyed by the claim's lease, not the job: a job whose lease ran out while its handler went on
     // (a zombie) can be claimed again by this same worker, and each attempt is its own.
     this.#running.set(row.lease_token, r)
+    // Its org's renewals may not have begun yet.
+    this.#beatWake.wake()
     r.done = this.#runAttempt(r)
       .catch(error => this.#loopFailed('attempts', orgId, error))
       .finally(() => {
@@ -713,53 +732,84 @@ export class JobRunner {
 
   // --- Leases and flags ------------------------------------------------------------------------
 
-  // Heartbeats run heartbeatMs apart, start to start, so a slow one doesn't push the next later. One
-  // that fails for any org is tried again after a tenth of that, while the lease still has time.
+  // Each org's renewals keep their own cadence: heartbeatMs apart, start to start, so a slow one
+  // doesn't push the next later, and one that fails is tried again a tenth of that after it ended.
+  // An org has at most one renewal in flight, and while it waits on one (however long) no other
+  // org's renewal waits for it. At most renewalsInFlight run at once across all orgs (T18 item 8):
+  // an org due while they're all taken waits for one to end, earliest due first, so if that many
+  // hang (a silent connection holds one until the pool's 31 s query_timeout), every other org's
+  // renewals wait too and the watchdog stops their jobs (lease_lost) rather than let a lease run
+  // out under them.
   async #heartbeats(): Promise<void> {
+    const { heartbeatMs, renewalsInFlight } = this.#policy
     while (!this.#halted) {
-      const began = this.#now()
-      const clean = await this.#beat()
-      if (this.#halted) break
-      const wait = clean ? this.#policy.heartbeatMs - (this.#now() - began) : this.#policy.heartbeatMs / 10
-      await this.#ticks.sleep(wait)
-    }
-  }
-
-  // One statement per org renews every running job of this worker's there (T15 item 2), each org's
-  // in its own transaction and all at once, so one slow org doesn't hold back another's renewals.
-  // Answers whether every org's statement succeeded.
-  async #beat(): Promise<boolean> {
-    let clean = true
-    if (!this.#heartbeatsPaused) {
+      const now = this.#now()
       const byOrg = new Map<string, Running[]>()
       for (const r of this.#running.values()) {
         if (r.decision !== undefined) continue
         byOrg.set(r.orgId, [...(byOrg.get(r.orgId) ?? []), r])
       }
-      const beats = [...byOrg].map(async ([orgId, jobs]) => {
-        if (this.#halted) return
-        try {
-          const started = this.#now()
-          const renewed = await this.#renew(
-            orgId,
-            jobs.map(r => r.row),
-          )
-          this.#failures.delete(`heartbeats:${orgId}`)
-          for (const r of jobs) {
-            // Each attempt by its own lease (a zombie and the attempt that replaced it share a job).
-            // A finishing commit in flight reports for itself (it may have succeeded already).
-            if (renewed.has(r.row.lease_token)) r.renewedAt = Math.max(r.renewedAt, started)
-            else if (r.decision === undefined && r.attempt?.finishing !== true) this.#abort(r, 'lease_lost')
-          }
-        } catch (error) {
-          clean = false
-          this.#loopFailed('heartbeats', orgId, error)
+      for (const [orgId, beat] of this.#beats) {
+        if (!beat.inFlight && !byOrg.has(orgId)) this.#beats.delete(orgId)
+      }
+      // An org's first renewal is due a heartbeat after its jobs' leases were set.
+      for (const [orgId, jobs] of byOrg) {
+        if (this.#beats.has(orgId)) continue
+        const next = Math.min(...jobs.map(r => r.renewedAt)) + heartbeatMs
+        this.#beats.set(orgId, { next, inFlight: false, failed: false, started: next })
+      }
+      const waiting = [...this.#beats].filter(([orgId, beat]) => !beat.inFlight && byOrg.has(orgId))
+      if (!this.#heartbeatsPaused) {
+        const due = waiting.filter(([, beat]) => beat.next <= now).sort(([, a], [, b]) => a.next - b.next)
+        for (const [orgId, beat] of due) {
+          if (this.#renewing >= renewalsInFlight) break
+          void this.#beat(orgId, beat, byOrg.get(orgId) ?? [])
         }
-      })
-      await Promise.all(beats)
+      }
+      // Healthy while no org's last renewal failed and none has been in flight past an interval.
+      const late = [...this.#beats.values()].some(
+        beat => beat.failed || (beat.inFlight && now - beat.started > heartbeatMs),
+      )
+      if (!late) this.#lastBeat = now
+      // Until the next org is due; a renewal ending, a job starting or a halt wakes it sooner.
+      let wait = heartbeatMs
+      if (!this.#heartbeatsPaused && this.#renewing < renewalsInFlight) {
+        for (const [, beat] of waiting) if (!beat.inFlight) wait = Math.min(wait, beat.next - now)
+      }
+      await this.#beatWake.sleep(wait)
     }
-    if (clean) this.#lastBeat = this.#now()
-    return clean
+  }
+
+  // One statement renews every running job of this worker's in the org (T15 item 2), in its own
+  // transaction. Each job then counts from when the statement began, if it renewed it.
+  async #beat(orgId: string, beat: Beat, jobs: readonly Running[]): Promise<void> {
+    const started = this.#now()
+    beat.inFlight = true
+    beat.started = started
+    beat.next = started + this.#policy.heartbeatMs
+    this.#renewing++
+    try {
+      const renewed = await this.#renew(
+        orgId,
+        jobs.map(r => r.row),
+      )
+      beat.failed = false
+      this.#failures.delete(`heartbeats:${orgId}`)
+      for (const r of jobs) {
+        // Each attempt by its own lease (a zombie and the attempt that replaced it share a job).
+        // A finishing commit in flight reports for itself (it may have succeeded already).
+        if (renewed.has(r.row.lease_token)) r.renewedAt = Math.max(r.renewedAt, started)
+        else if (r.decision === undefined && r.attempt?.finishing !== true) this.#abort(r, 'lease_lost')
+      }
+    } catch (error) {
+      beat.failed = true
+      beat.next = this.#now() + this.#policy.heartbeatMs / 10
+      this.#loopFailed('heartbeats', orgId, error)
+    } finally {
+      beat.inFlight = false
+      this.#renewing--
+      this.#beatWake.wake()
+    }
   }
 
   // Renews these jobs' leases in the org, each matched by its own lease token, in one statement as

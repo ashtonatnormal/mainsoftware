@@ -244,6 +244,18 @@ describe('C0.6 T16 item 7 check-catalogues: every way to write is covered', () =
     ).toEqual([{ table: 'jobs', op: 'INSERT' }])
   })
 
+  it('Qodo-18 round 4 #3: reads each MERGE’s THEN UPDATE SET within its own statement, so two MERGEs never share columns', () => {
+    expect(
+      bodyWrites(`merge into public.jobs j using src s on j.id = s.id
+          when matched then update set state = 'cancelled';
+        merge into public.schedule_runs r using src s on r.id = s.id
+          when matched then update set reason = 'crash';`),
+    ).toEqual([
+      { table: 'jobs', op: 'UPDATE', column: 'state' },
+      { table: 'schedule_runs', op: 'UPDATE', column: 'reason' },
+    ])
+  })
+
   it('R2DB-3: reads MERGE INTO as an INSERT, a DELETE and an UPDATE of the columns it sets', () => {
     expect(
       bodyWrites(`merge into public.jobs j using src s on j.id = s.id
