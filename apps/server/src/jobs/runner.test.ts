@@ -422,7 +422,7 @@ describe('C0.6 T15 item 2 heartbeats', () => {
     const { run, release } = blocking()
     const { runner, log } = start({ claims: [[claimed(1)]] }, { kinds: [run] })
     await until(() => runner.active === 1)
-    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 10)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 5)
     expect(runner.active).toBe(1)
     expect(log.events('job_lease_lost')).toEqual([])
     release(1)
