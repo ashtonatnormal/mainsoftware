@@ -7,7 +7,7 @@
 // index, A4 their agents and assistant, C2.2 their rooms, C4.1 and C4.3 their Drive items), each
 // with a name in OFFBOARDING_HANDLERS.
 //
-// The registry runs in the worker, durably (TECH-SPEC T14 items 13 and 21, T16 item 9):
+// The registry runs in the worker, durably (TECH-SPEC T14 item 13, T16 item 9):
 //   - the offboarding consumer reads person.deactivated from the outbox and checks that the person
 //     has really left (an event is a claim, never proof: one that names someone still at the org is
 //     logged at error level and passed over), then queues one offboarding.handler job per handler,

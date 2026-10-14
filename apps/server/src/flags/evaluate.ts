@@ -17,9 +17,13 @@ export interface FlagState {
   cohort: { people: readonly string[]; roles: readonly string[] }
 }
 
-// Who a flag is evaluated for: a person and the org-wide roles they hold now (unrevoked, while
-// they're still at the org). A job for nobody, or an outbox consumer working for the whole org,
-// has no subject, and a flag with a cohort is off for it.
+// Who a flag is evaluated for: a person and the org-wide roles they hold (unrevoked, while they're
+// still at the org), as read when the caller asked: for a job, at its claim, re-read at every claim,
+// so a role revoked or a person deactivated while an attempt runs applies from the next claim, within
+// the kind's timeoutMs; the database fence covers flag changes only (TECH-SPEC T15 item 9, T17 item
+// 3). The first cohort-gated job kind that touches personal data (A0) re-reads it inside each
+// commit. A job for nobody, or an outbox consumer working for the whole org, has no subject, and a
+// flag with a cohort is off for it.
 export interface FlagSubject {
   personId: string
   roles: readonly string[]

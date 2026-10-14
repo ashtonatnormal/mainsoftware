@@ -3,7 +3,7 @@
 // and every process that keeps that org's flags reloads them from Postgres at once (cache.ts).
 // Postgres holds the truth: the message only says when to look, so a lost one costs at most the
 // 2 s poll, and a stray one (another local run, say) costs one reload. It holds ids, a flag key and
-// numbers, never a person. Publishing is best effort, as revocation's is.
+// numbers, never a person. Publishing is best effort, as the api's revocation publish is.
 import { FLAG_KEY, FLAG_KEY_MAX } from '@hearth/shared'
 import type { Redis } from 'ioredis'
 import type { Logger } from 'pino'
