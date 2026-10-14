@@ -179,7 +179,7 @@ function setColumns(text: string, from: number): string[] {
 // captures nothing, and is reported as the table '?', which no entry lists, so the check fails
 // rather than miss the write.
 const TABLE = String.raw`(?:public|"public")\s*\.\s*${IDENT}?`
-const tableOf = (raw: string | undefined): string => (raw === undefined ? '?' : ident(raw))
+const tableName = (raw: string | undefined): string => (raw === undefined ? '?' : ident(raw))
 
 // The writes a function's body makes: every `insert into`, `update` (by each column its SET list
 // names) and `delete from` a table of public, with or without ONLY, an upsert's `on conflict ... do
@@ -192,12 +192,12 @@ export function bodyWrites(source: string): Array<{ table: string; op: Grant['op
   const found: Array<{ at: number; table: string; op: Grant['op']; column?: string }> = []
   const inserts: Array<{ at: number; table: string }> = []
   for (const match of text.matchAll(new RegExp(String.raw`\binsert\s+into\s+${TABLE}`, 'gu'))) {
-    const table = tableOf(match[1])
+    const table = tableName(match[1])
     inserts.push({ at: match.index, table })
     found.push({ at: match.index, table, op: 'INSERT' })
   }
   for (const match of text.matchAll(new RegExp(String.raw`\bdelete\s+from\s+(?:only\s+)?${TABLE}`, 'gu'))) {
-    found.push({ at: match.index, table: tableOf(match[1]), op: 'DELETE' })
+    found.push({ at: match.index, table: tableName(match[1]), op: 'DELETE' })
   }
   const update = new RegExp(
     String.raw`\bupdate\s+(?:only\s+)?${TABLE}(?:\s*\*)?(?:\s+(?:as\s+)?(?!set\b)${IDENT_ANY})?\s+set\b`,
@@ -205,12 +205,12 @@ export function bodyWrites(source: string): Array<{ table: string; op: Grant['op
   )
   for (const match of text.matchAll(update)) {
     for (const column of setColumns(text, match.index + match[0].length)) {
-      found.push({ at: match.index, table: tableOf(match[1]), op: 'UPDATE', column })
+      found.push({ at: match.index, table: tableName(match[1]), op: 'UPDATE', column })
     }
   }
   for (const match of text.matchAll(new RegExp(String.raw`\bupdate\s+(?:only\s+)?${TABLE}`, 'gu'))) {
     if (!found.some(write => write.at === match.index)) {
-      found.push({ at: match.index, table: tableOf(match[1]), op: 'UPDATE', column: '?' })
+      found.push({ at: match.index, table: tableName(match[1]), op: 'UPDATE', column: '?' })
     }
   }
   for (const match of text.matchAll(/\bon\s+conflict\b[^;]*?\bdo\s+update\s+set\b/g)) {
@@ -220,7 +220,7 @@ export function bodyWrites(source: string): Array<{ table: string; op: Grant['op
     }
   }
   for (const match of text.matchAll(new RegExp(String.raw`\bmerge\s+into\s+(?:only\s+)?${TABLE}`, 'gu'))) {
-    const table = tableOf(match[1])
+    const table = tableName(match[1])
     found.push({ at: match.index, table, op: 'INSERT' }, { at: match.index, table, op: 'DELETE' })
     const end = text.indexOf(';', match.index)
     const statement = text.slice(match.index, end < 0 ? text.length : end)
@@ -301,7 +301,9 @@ export function bodyProblems(
       if (granted) continue
       const add = op === 'UPDATE' ? `'${table}.${column}:UPDATE'` : `'${table}:${op}'`
       problems.push(
-        column === '?'
+        table === '?'
+          ? `public.${fn.key} runs ${op === 'INSERT' ? 'insert into' : op === 'DELETE' ? 'delete from' : 'update'} a table of public whose name check-catalogues can't read: write it as a plain or quoted identifier`
+          : column === '?'
           ? `public.${fn.key} runs update public.${table}, but check-catalogues can't read which columns it sets: name them in a plain SET list`
           : `public.${fn.key} runs ${verbOf(op, table, column)}, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add ${add} to its writes`,
       )
