@@ -1,13 +1,13 @@
 import { FLAGS } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import type { Coverage } from '#src/outbox/coverage.ts'
-import type { Fn } from './catalogues.ts'
 import {
   bodyProblems,
   bodyWrites,
   contentProblems,
   coverageProblems,
   eventProblems,
+  type Fn,
   flagProblems,
   matchProblems,
   roleProblems,

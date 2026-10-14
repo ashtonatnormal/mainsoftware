@@ -529,18 +529,6 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
         applicationName: name,
       })
       const subscriptions = new Subscriptions(createSubscriber(valkey, instanceLogger), instanceLogger)
-      const worker = startWorker({
-        control: createDatabase(control),
-        work: createDatabase(work),
-        subscriptions,
-        keyPrefix: prefix,
-        logger: instanceLogger,
-        concurrency,
-        registries,
-        flagRegistry: TEST_REGISTRY,
-        policy: o.policy ?? TEST_WORKER_POLICY,
-        ...(o.flags === undefined ? {} : { flags: o.flags }),
-      })
       let closed: Promise<void> | undefined
       const close = () => {
         closed ??= (async () => {
@@ -548,6 +536,25 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
           await Promise.allSettled([control.end(), work.end()])
         })()
         return closed
+      }
+      let worker: Worker
+      try {
+        worker = startWorker({
+          control: createDatabase(control),
+          work: createDatabase(work),
+          subscriptions,
+          keyPrefix: prefix,
+          logger: instanceLogger,
+          concurrency,
+          registries,
+          flagRegistry: TEST_REGISTRY,
+          policy: o.policy ?? TEST_WORKER_POLICY,
+          ...(o.flags === undefined ? {} : { flags: o.flags }),
+        })
+      } catch (error) {
+        // Nothing started: the pools and the subscriber close, so a refused start leaks nothing.
+        await close()
+        throw error
       }
       const instance: WorkerInstance = {
         worker,
