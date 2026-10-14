@@ -5,16 +5,17 @@
 
 // The job runner (jobs/runner.ts).
 export interface JobPolicy {
-  // How long a claim lasts unless renewed (T15 item 2): another worker's lease sweep requeues a job
-  // whose lease has run out.
+  // How long a claim lasts unless renewed (T15 item 2): a lease sweep requeues a job whose lease has
+  // run out (or ends it dead with no attempts left).
   leaseMs: number
   // How often the runner renews the leases of its running jobs, one statement per org.
   heartbeatMs: number
   // How many orgs' heartbeat renewals may be in flight at once, across all orgs, so the heartbeats
   // never hold more than this many of the control pool's connections (T18 item 8). A slow claim's
   // renewal of its own jobs before they start isn't one: it runs in the claim loop, on its one
-  // connection. With N orgs whose renewals each take d, every lease holds only while about
-  // N·d/2 + d stays under the watchdog's 25 s (T15 item 2).
+  // connection. Past two orgs it also spreads slow renewals out (about N·d/2 apart for N orgs whose
+  // renewals each take d), so it bounds how slow renewals may get before jobs lose their leases;
+  // T15 item 2 gives the measured limits.
   renewalsInFlight: number
   // How often an idle runner looks for jobs to claim (T15 item 19).
   pollMs: number

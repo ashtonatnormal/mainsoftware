@@ -15,8 +15,9 @@
 //               lineage revisions it was admitted under, which every commit's fence compares.
 //   heartbeats  One statement per org, bounded to 10 s, renews every running job's lease there,
 //               each org on its own cadence (10 s from the start of its last, and no later than
-//               10 s after a job that joins it had its lease set), never two heartbeats at once
-//               for an org, and at most 2 orgs' at once (renewalsInFlight): an org waiting on a
+//               10 s after a job that joins it had its lease set, or, if a renewal is in flight
+//               then, when that one ends), never two heartbeats at once for an org, and at most
+//               2 orgs' at once (renewalsInFlight): an org waiting on a
 //               slow renewal holds up no other, unless that many hang at once. Both limits count
 //               heartbeats only: a slow claim's renewal before its jobs start is the claim loop's
 //               own, on the one connection that loop holds. A job whose lease wasn't renewed has

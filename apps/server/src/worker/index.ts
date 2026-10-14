@@ -43,9 +43,10 @@ import { logOutboxLag, logQueueDepth, readOutboxLag, readQueueDepth } from '#src
 import type { Subscriptions } from '#src/pubsub.ts'
 import type { Check } from '#src/ready.ts'
 
-// The control pool's size (T18 item 8): a connection for each loop, and 3 to spare when every flag
-// read (3) and renewal (2) is stuck on a silent connection, which claims, outcomes (up to one per
-// running job at once), the scheduler, the org list and metrics share, each waiting up to 2 s for one.
+// The control pool's size (T18 item 8): when every flag read (3) and heartbeat renewal (2) is stuck
+// on a silent connection, 3 are left, which claims (a slow claim's renewal included), outcomes (up to
+// one per running job at once), the scheduler, the org list and metrics share, each waiting up to
+// 2 s for one.
 export const CONTROL_POOL_SIZE = 8
 
 // The work pool's size: a connection for each job running at once, and one for each consumer.
