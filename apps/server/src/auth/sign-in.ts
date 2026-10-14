@@ -203,14 +203,16 @@ async function attemptAt(
 }
 
 // Whether the step can go on: the attempt's person is still here (read FOR SHARE) and the number
-// its code went to is still theirs. The number is read with no lock, since the steps lock users or
-// passkeys next; issueSession's FOR SHARE read stops any session if it changes meanwhile. A step
-// that finds either has gone answers as it would for a leaver: the attempt is dropped, nothing is
-// counted, and nothing of the account is shown (ACC-03, ACC-05, T14).
-async function stillSigningIn(trx: InOrg, attempt: Named): Promise<boolean> {
+// its code went to is still theirs. A step that locks users or passkeys next reads the number with
+// no lock (`locked: false`), since phone_numbers comes after them in the lock order, and reads it
+// again FOR SHARE before anything it writes or shows commits; issueSession does so before any
+// session. A step that locks nothing else reads it FOR SHARE here. A step that finds either has
+// gone answers as it would for a leaver: the attempt is dropped, nothing is counted, and nothing
+// of the account is shown (ACC-03, ACC-05, T14).
+async function stillSigningIn(trx: InOrg, attempt: Named, options: { locked: boolean }): Promise<boolean> {
   const { orgId, personId, phoneNumberId } = attempt
   if (!(await stillHere(trx, orgId, personId))) return false
-  return numberStillTheirs(trx, orgId, personId, phoneNumberId, { locked: false })
+  return numberStillTheirs(trx, orgId, personId, phoneNumberId, options)
 }
 
 async function dropQuietly(api: Api, info: ReqInfo, key: string): Promise<void> {
@@ -472,7 +474,7 @@ export async function setPin(
   // Refuse before hashing, which costs a PIN slot: someone who has left or whose number has gone,
   // or a PIN set meanwhile.
   const ready = await withOrg(api.db, { orgId, system: true }, async trx => {
-    if (!(await stillSigningIn(trx, attempt))) return 'left'
+    if (!(await stillSigningIn(trx, attempt, { locked: true }))) return 'left'
     const user = await trx
       .selectFrom('users')
       .select('pin_hash')
@@ -540,7 +542,7 @@ export async function verifyPinStep(
       withOrg(api.db, { orgId, system: true }, async trx => {
         // Someone who has left, or whose number has gone, gets the same answer for a right and a
         // wrong PIN, and no count.
-        if (!(await stillSigningIn(trx, attempt))) return { kind: 'left' } as const
+        if (!(await stillSigningIn(trx, attempt, { locked: false }))) return { kind: 'left' } as const
         const check = await checkPin(
           trx,
           api.keys,
@@ -584,7 +586,9 @@ export async function passkeyOptions(api: Api, attemptId: string | undefined, in
   await enforce(api, info, [windowOf(api, LIMITS.authPerIp, ipTag(api, info))])
   const { orgId, personId } = attempt
   const found = await withOrg(api.db, { orgId, system: true }, async trx => {
-    if (!(await stillSigningIn(trx, attempt))) return undefined
+    // FOR SHARE: a removal of the number waits until the options are built, so no passkey of an
+    // account whose number has gone is listed.
+    if (!(await stillSigningIn(trx, attempt, { locked: true }))) return undefined
     const user = await trx
       .selectFrom('users')
       .select('pin_hash')
@@ -628,7 +632,7 @@ export async function passkeyVerify(
     info,
     key,
     withOrg(api.db, { orgId, system: true }, async trx => {
-      if (!(await stillSigningIn(trx, attempt))) return { kind: 'left' } as const
+      if (!(await stillSigningIn(trx, attempt, { locked: false }))) return { kind: 'left' } as const
       const failed = async (passkey?: string) => {
         // As for a refused PIN: a number removed since the unlocked read writes no failure.
         if (!(await numberStillTheirs(trx, orgId, personId, attempt.phoneNumberId))) throw new AttemptStale()

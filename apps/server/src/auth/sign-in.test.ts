@@ -282,29 +282,34 @@ describe('ACC-03 T14 a sign-in step after the number was removed or moved', () =
 
   // The step-up for someone with a PIN and a passkey whose number has gone: each step drops the
   // attempt and answers attempt_expired, before the PIN or any passkey is read.
-  async function refusedAt(step: 'set_pin' | 'step_up', run: (c: ReturnType<typeof context>) => Promise<unknown>) {
+  async function refusedAt(
+    step: 'set_pin' | 'step_up',
+    lock: 'none' | 'for share',
+    run: (c: ReturnType<typeof context>) => Promise<unknown>,
+  ) {
     const pool = orgPool({ numberRemoved: true, pinHash: step === 'set_pin' ? null : pin, passkeys: 1 })
     const held = valkeyWith({ v: 1, numberTag: 't', step, ...named })
     const c = context(held.valkey, pool)
     expect(await refusal(run(c))).toMatchObject({ status: 401, code: 'attempt_expired', clear: ['attempt'] })
     expect(held.store.has(names.attempt(keyName(ATTEMPT_ID)))).toBe(false)
     const number = pool.texts().find(text => text.startsWith('select 1 from phone_numbers'))
-    // Read with no lock, since users and passkeys come before phone_numbers in the lock order.
-    expect(number).toMatch(/removed_at is null$/)
+    // With no lock where users or passkeys are locked next (they come before phone_numbers in the
+    // lock order), and FOR SHARE where nothing else is.
+    expect(number).toMatch(lock === 'none' ? /removed_at is null$/ : /removed_at is null for share$/)
     // Nothing of the account was read or written: no PIN, no failure count, no passkey.
     expect(pool.texts().filter(text => /pin_hash|pin_failures|passkeys|insert into/.test(text))).toEqual([])
   }
 
   it('refuses the PIN at the step-up, right or wrong, without counting it', async () => {
-    await refusedAt('step_up', c => verifyPinStep(c.api, { pin: '381904' }, ATTEMPT_ID, c.info))
+    await refusedAt('step_up', 'none', c => verifyPinStep(c.api, { pin: '381904' }, ATTEMPT_ID, c.info))
   })
 
   it('refuses passkey options, showing none of the passkeys', async () => {
-    await refusedAt('step_up', c => passkeyOptions(c.api, ATTEMPT_ID, c.info))
+    await refusedAt('step_up', 'for share', c => passkeyOptions(c.api, ATTEMPT_ID, c.info))
   })
 
   it('refuses a new PIN before hashing it', async () => {
-    await refusedAt('set_pin', c => setPin(c.api, { pin: '381904' }, ATTEMPT_ID, c.info))
+    await refusedAt('set_pin', 'for share', c => setPin(c.api, { pin: '381904' }, ATTEMPT_ID, c.info))
   })
 
   it('rolls back a wrong PIN whose number was removed after the unlocked read, counting nothing', async () => {
