@@ -282,7 +282,12 @@ export class ConsumerRunner {
         const key = `${consumer.name}:${orgId}`
         try {
           const result = await this.round(consumer, orgId)
-          this.#failures.delete(key)
+          if (result === 'behind' || result === 'future') {
+            clean = false
+            this.#lastPass.delete(consumer.name)
+          } else {
+            this.#failures.delete(key)
+          }
           if (result === 'full') again = true
         } catch (error) {
           clean = false
