@@ -338,7 +338,7 @@ describe('C0.6 T15 item 2 heartbeats', () => {
   })
 })
 
-describe('C0.6 T15 the outcome of each attempt (design §5.7)', () => {
+describe('C0.6 T15 items 2 to 6, 9 and 12: the outcome of each attempt', () => {
   it('succeeded: the job_finish of its last effect ends it; a handler that returns without one is finished for it', async () => {
     const quiet = kind(async () => {}, { kind: 'it.quiet' })
     const { p, runner, log } = start(

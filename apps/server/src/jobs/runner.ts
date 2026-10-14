@@ -21,7 +21,7 @@
 //               with. Every second, a job whose org's flags have gone unconfirmed (8 s) is aborted.
 //   outcomes    Written by hearth_queue on the control pool, only while the job is still running
 //               under the lease this worker holds (no row: the sweep took it, or it finished). See
-//               the table in the design (T15): succeeded (job_finish, in the effect's transaction);
+//               TECH-SPEC T15 items 2 to 6: succeeded (job_finish, in the effect's transaction);
 //               cancelled; given back at once, uncounted (the flag changed, an essential feature
 //               off, flags unconfirmed or a shutdown, the last two counted in give_backs, which end
 //               in dead at 20); retried after a back-off; dead with a reason code. A review run's job

@@ -3,7 +3,7 @@
 // projections"): real routes append the events, and a test consumer, run by the ConsumerRunner as
 // hearth_job_offboarding on hearth_worker's login, records every delivery in it_deliveries, which
 // has no unique constraint, so a duplicate shows up rather than merging. The cases under "with the
-// worker" (design §8.2 cases 2-7, 9 and 10) run the consumer in worker instances (testing/stack.ts
+// worker" (T16 items 1 to 5) run the consumer in worker instances (testing/stack.ts
 // startWorker), which fail mid-round, lose their connection, are killed after a commit, and run
 // three at once while writers commit; the job queue's own cases are in jobs/jobs.integration.test.ts.
 //
@@ -276,7 +276,7 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
     }
   })
 
-  it('§8.2 case 1(b): a real route whose transaction fails after all its writes leaves no account, session or event; the next sign-in emits each once', async () => {
+  it('C0 exit T16 item 4: a real route whose transaction fails after all its writes leaves no account, session or event; the next sign-in emits each once', async () => {
     const person = await s.person()
     // The set-PIN request writes the account, the PIN, the device, the session and their events,
     // then fails at its last audit row.
@@ -305,8 +305,8 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
     expect((await about()).map(row => row.type).sort()).toEqual(['account.pin_set', 'signin.started'])
   })
 
-  describe('with the worker (§8.2 cases 2-7, 9 and 10)', () => {
-    // The worker's test consumer (design §8.1): for each event it re-reads the person's state and
+  describe('with the worker (T16 items 1 to 5)', () => {
+    // The worker's test consumer: for each event it re-reads the person's state and
     // upserts their projection row (convergent), records a one-off effect per event in it_effects
     // (deduplicated, as a push would be) and every delivery in it_deliveries (never deduplicated,
     // so a duplicate shows), all in the round's transaction. `hook` runs after a batch's effects.
@@ -397,7 +397,7 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
       }
     }
 
-    it('§8.2 case 3: a round that fails after writing its effects commits none of them, and the next round applies the batch once', async () => {
+    it('T16 item 4: a round that fails after writing its effects commits none of them, and the next round applies the batch once', async () => {
       await appendPinSets(4)
       let failed = false
       hook = async () => {
@@ -419,7 +419,7 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
       }
     })
 
-    it('§8.2 case 4: a round whose connection dies between its effects and its checkpoint commits nothing, and the next applies it once', async () => {
+    it('T16 item 4: a round whose connection dies between its effects and its checkpoint commits nothing, and the next applies it once', async () => {
       await appendPinSets(3)
       let pid: number | undefined
       let release: () => void = () => {}
@@ -447,7 +447,7 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
       }
     })
 
-    it('§8.2 case 5: a worker killed right after a batch commits; another resumes from the stored checkpoint, delivering each event once', async () => {
+    it('T16 items 3 and 4: a worker killed right after a batch commits; another resumes from the stored checkpoint, delivering each event once', async () => {
       await appendPinSets(12)
       let committedUpTo: string | undefined
       hook = async (_trx, events) => {
@@ -480,7 +480,7 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
       }
     })
 
-    it('§8.2 case 6: three workers run one consumer while 8 writers commit 200 events, 10% rolled back: each committed event is delivered once, in order', async () => {
+    it('T16 items 1, 3 and 4: three workers run one consumer while 8 writers commit 200 events, 10% rolled back: each committed event is delivered once, in order', async () => {
       const people = await Promise.all(Array.from({ length: 40 }, () => s.person()))
       const workers = await Promise.all([1, 2, 3].map(() => worker([projection('it_w6', 10)])))
       try {
@@ -553,7 +553,7 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
       }
     })
 
-    it('§8.2 case 7: a replay rebuilds the identical projection, whole or in two parts', async () => {
+    it('C0 exit T16 item 5: a replay rebuilds the identical projection, whole or in two parts', async () => {
       const incremental = await projectionHash()
       const spec = projection('it_w6', 10)
       const rebuild = async (twoParts: boolean) => {
@@ -581,7 +581,7 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
       expect(await rebuild(true)).toBe(incremental)
     })
 
-    it('§8.2 case 2: a duplicate delivery (a replay from the oldest event) changes neither the projection nor the one-off effects', async () => {
+    it('T16 items 4 and 5: a duplicate delivery (a replay from the oldest event) changes neither the projection nor the one-off effects', async () => {
       const spec = projection('it_w6', 10)
       const [hash, effects, before, processed] = [
         await projectionHash(),
@@ -605,7 +605,7 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
       expect(Number((await checkpoint('it_w6'))?.processed)).toBe(processed + all)
     })
 
-    it('§8.2 case 9: two writes to one person, the lower transaction id committing second: the projection ends at the final state', async () => {
+    it('T16 item 1: two writes to one person, the lower transaction id committing second: the projection ends at the final state', async () => {
       const person = await s.person()
       let commitFirst: () => void = () => {}
       const held = new Promise<void>(resolve => {
@@ -654,7 +654,7 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
       }
     })
 
-    it('§8.2 case 10: a long transaction holds consumers back without anything skipped; outbox_lag shows what it holds', async () => {
+    it('T16 items 2 and 19: a long transaction holds consumers back without anything skipped; outbox_lag shows what it holds', async () => {
       const w = await worker([projection('it_w')])
       try {
         await caughtUp('it_w')

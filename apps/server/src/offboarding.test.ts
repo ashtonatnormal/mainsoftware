@@ -148,7 +148,7 @@ describe('C0.6 T16 item 9 the offboarding consumer: the event is a claim, the ro
 })
 
 describe('C0.6 T16 item 9 the offboarding.handler job', () => {
-  it('holds the design’s numbers and logs offboarding_handler_dead when it goes dead', () => {
+  it('holds its numbers (10 attempts of at most 60 s) and logs offboarding_handler_dead when it goes dead', () => {
     const job = offboardingJob(new OffboardingRegistry())
     expect(job).toMatchObject({
       kind: 'offboarding.handler',

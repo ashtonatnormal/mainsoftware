@@ -66,7 +66,7 @@ describe('C0.6 T15 the job registries', () => {
     expect(production.schedules).toBe(SCHEDULES)
   })
 
-  it('C0.6 T15 items 16 and 17: the maintenance kinds and their schedules hold the design’s numbers', () => {
+  it('C0.6 T15 items 16 and 17: the maintenance kinds and their schedules hold TECH-SPEC’s numbers', () => {
     expect(MAINTENANCE_KINDS).toEqual([partitionsJob, purgeJob])
     expect(partitionsJob).toMatchObject({
       feature: 'core.system',

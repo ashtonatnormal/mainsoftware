@@ -98,7 +98,7 @@ const TEST_FLAG_ROWS = `values ${Object.entries(TEST_FLAGS)
   .map(([key, spec]) => `('${key}', ${spec.default})`)
   .join(', ')}`
 
-// The worker's intervals in the integration tests (design §8.1): leases of 2 s renewed every 0.5 s,
+// The worker's intervals in the integration tests: leases of 2 s renewed every 0.5 s,
 // the lease sweep (the scheduler's tick) every 0.5 s, polls every 100 ms, metrics every 200 ms and a
 // 1 s drain; the 5 s stop deadline and everything else as in production.
 export const TEST_WORKER_POLICY: WorkerPolicy = {

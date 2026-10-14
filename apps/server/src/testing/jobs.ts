@@ -1,5 +1,5 @@
 // The tables the worker's integration tests write to (test-only; the image leaves testing/ out),
-// made by the superuser in the run's throwaway database (design §8.1). Each is org-scoped under the
+// made by the superuser in the run's throwaway database (TECH-SPEC T15, T16). Each is org-scoped under the
 // standard policy and granted to hearth_job_offboarding, the role the test kinds and the test
 // consumer run as, so no test role is created on the shared server; grants are per database, so
 // nothing reaches another run's. None deduplicates where a duplicate must show:
@@ -9,7 +9,7 @@
 //   it_effects       a deduplicated one-off effect per (consumer, event), standing in for a push
 //   it_projection    a convergent projection of each person: left, live sessions, passkeys
 // and it_fail_next, whose actions make the next audit row with that action fail, so a test can make
-// a real route's transaction fail after all its writes (design §8.2 case 1(b)).
+// a real route's transaction fail after all its writes (the C0 exit's "rolled-back writes emit nothing").
 import type { Stack } from '#src/testing/stack.ts'
 
 const POLICY = `using (org_id = nullif(current_setting('app.org_id', true), '')::uuid)

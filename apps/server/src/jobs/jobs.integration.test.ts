@@ -3,7 +3,7 @@
 // own pools as hearth_worker, at the test policy's short intervals (leases of 2 s, the sweep every
 // 0.5 s, polls every 100 ms). The test kinds run as hearth_job_offboarding and write to the
 // harness's test tables (testing/jobs.ts), which never deduplicate, so a job's effect committed
-// twice shows as two rows. Durable offboarding (§5.10) runs through the real api, the production
+// twice shows as two rows. Durable offboarding (T16 item 9) runs through the real api, the production
 // consumer and the production handler job.
 //
 // Each case starts and stops its own instances, which know only the kinds the case gives them (and
@@ -187,7 +187,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     }
   })
 
-  it('C0.6 Done (§8.2 case 13): a job’s effect and its end commit together, once', async () => {
+  it('C0.6 Done (T15 item 3): a job’s effect and its end commit together, once', async () => {
     const effect = kind('it.effect', recordEffect)
     await withWorker({ kinds: [effect] }, async () => {
       const id = await queue(effect, { payload: {} })
@@ -201,7 +201,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     })
   })
 
-  it('§8.2 case 14: a crash before the finishing commit: after the lease the sweep requeues it, and another worker commits it once', async () => {
+  it('T15 item 2: a crash before the finishing commit: after the lease the sweep requeues it, and another worker commits it once', async () => {
     const a = await s.startWorker({ kinds: [waiting] })
     await a.ready()
     const id = await queue(waiting, { payload: {} })
@@ -223,7 +223,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     })
   })
 
-  it('§8.2 case 15: a zombie worker’s lease runs out while its handler goes on; another attempt commits; the zombie’s commit gets HF002 and rolls back', async () => {
+  it('T15 items 2 and 3: a zombie worker’s lease runs out while its handler goes on; another attempt commits; the zombie’s commit gets HF002 and rolls back', async () => {
     const a = await s.startWorker({ kinds: [waiting] })
     a.pauseHeartbeats()
     try {
@@ -252,7 +252,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     }
   })
 
-  it('§8.2 case 16: the same key in two transactions adds one job, and an enqueue that rolls back adds none', async () => {
+  it('T15 item 7: the same key in two transactions adds one job, and an enqueue that rolls back adds none', async () => {
     // A kind no worker here knows, so the rows stay as they were queued.
     const unclaimed = kind('it.unclaimed', async () => {})
     const key = `dup:${randomUUID()}`
@@ -271,7 +271,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     expect(await s.query('select id from jobs where idempotency_key = $1', [rolledBack])).toEqual([])
   })
 
-  it('§8.2 case 17: retries after a growing back-off until it works, and the dead letter after the last attempt, its failure logged without its message', async () => {
+  it('T15 items 4 and 5: retries after a growing back-off until it works, and the dead letter after the last attempt, its failure logged without its message', async () => {
     const started = new Map<string, number[]>()
     const flaky = kind(
       'it.flaky',
@@ -318,7 +318,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     })
   })
 
-  it('§8.2 case 18: a job that blocks the event loop past the flag watchdog is given back uncounted each time, then dead at the 20th give-back', async () => {
+  it('T15 item 6: a job that blocks the event loop past the flag watchdog is given back uncounted each time, then dead at the 20th give-back', async () => {
     const blocks = kind('it.blocks', async ctx => {
       const until = Date.now() + 900
       while (Date.now() < until) {
@@ -347,7 +347,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     })
   })
 
-  it('§8.2 case 19: a job whose feature isn’t its kind’s is never run: dead (job_mismatch)', async () => {
+  it('T15 item 1: a job whose feature isn’t its kind’s is never run: dead (job_mismatch)', async () => {
     const effect = kind('it.effect', recordEffect)
     await withWorker({ kinds: [effect] }, async () => {
       const id = randomUUID()
@@ -366,7 +366,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     })
   })
 
-  it('§5.8 steps 4 and 5: queued work of an optional feature switched off is cancelled; a kind nobody knows is dead after 7 days', async () => {
+  it('T15 items 9 and 20: queued work of an optional feature switched off is cancelled; a kind nobody knows is dead after 7 days', async () => {
     const optional = kind('it.optional_work', async ctx => recordEffect(ctx), { feature: 'it.optional' })
     await setFlag('it.optional', false, admin)
     try {
@@ -399,7 +399,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     }
   })
 
-  it('§8.2 case 21: a deactivation offboards through the worker’s job when the api’s own publish is off, and a re-run publishes again harmlessly', async () => {
+  it('T16 item 9 T14 item 13: a deactivation offboards through the worker’s job when the api’s own publish is off, and a re-run publishes again harmlessly', async () => {
     await withWorker({}, async () => {
       // With the api's publish (C0.5's path): the socket closes at once, and the worker's job runs too.
       const first = await s.person({ pin: s.newPin() })
@@ -471,7 +471,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     })
   })
 
-  it('§8.2 case 22: a forged person.deactivated for someone still at the org queues no handler, logs an error and closes nothing', async () => {
+  it('T16 item 9: a forged person.deactivated for someone still at the org queues no handler, logs an error and closes nothing', async () => {
     await withWorker({}, async () => {
       const stays = await s.person({ pin: s.newPin() })
       const socket = opened(await s.openSocket(await s.signIn(stays)))
@@ -506,7 +506,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     })
   })
 
-  it('§8.2 case 23 (A2: without the resume): a review run cut short waits as interrupted, by a crash or by its flag, and nothing retries it', async () => {
+  it('T15 item 15 (resuming comes with A4 or A5.4): a review run cut short waits as interrupted, by a crash or by its flag, and nothing retries it', async () => {
     const reviewed = kind('it.reviewed', ctx => {
       gateOf(ctx.job.id).started.resolve()
       return new Promise<void>((_, reject) => {
@@ -570,7 +570,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     })
   })
 
-  it('§8.2 case 24: stop() with a job stuck in the database resolves within 5 s; the job goes back uncounted; its handler commits nothing', async () => {
+  it('T15 item 12: stop() with a job stuck in the database resolves within 5 s; the job goes back uncounted; its handler commits nothing', async () => {
     const stuck = kind('it.stuck', async ctx => {
       gateOf(ctx.job.id).started.resolve()
       // Deaf to its signal: a statement stuck in the database.
@@ -608,7 +608,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
   })
 
   // The clean-up deletes old rows, so it runs last.
-  it('§8.2 case 20: the partitions and the clean-up run for real from their schedules', async () => {
+  it('T15 items 16 and 17: the partitions and the clean-up run for real from their schedules', async () => {
     // The newest partition gone, and rows past their periods next to young ones.
     const [newest] = await s.query<{ name: string }>(
       `select c.relname as name from pg_inherits i join pg_class c on c.oid = i.inhrelid

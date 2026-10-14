@@ -411,7 +411,7 @@ const readAuditLog = (reader: string): Step => ({
   sql: "select count(*) from public.read_audit_events(now() - interval '1 day', now() + interval '1 day')",
 })
 
-// C0.6 (0007): the statements the worker and the flags route make (design §5.6-§5.9), each as the
+// C0.6 (0007): the statements the worker and the flags route make (TECH-SPEC T15 to T17), each as the
 // role that makes it.
 
 // A flag change through set_feature_flag(), by the Owner unless a step names someone.
@@ -606,7 +606,7 @@ const resetConsumer = (consumer: string): Step => ({
         update public.outbox_checkpoints set last_tx = '0', last_id = 0, updated_at = now()
         where org_id = '${ORG}' and consumer = '${consumer}'`,
 })
-// The floor and the batch in one statement (design §5.6 step 4), from a checkpoint.
+// The floor and the batch in one statement (TECH-SPEC T16 item 6), from a checkpoint.
 const FLOOR_AND_BATCH = `
   with f as (select last_tx, last_id from public.outbox_floors where org_id = $1),
   b as (

@@ -57,7 +57,7 @@ describe('C0.6 T15 which failures are worth trying again', () => {
   })
 })
 
-describe('C0.6 §10.3 what a failure may log: never its message', () => {
+describe('C0.6 T15 item 5: what a failure may log, never its message', () => {
   it('keeps a Postgres error’s code and the names of what refused, and drops its message, detail and where', () => {
     const fields = failureFields(new DatabaseError(`duplicate key value ${SENTINEL}`))
     expect(fields).toMatchObject({

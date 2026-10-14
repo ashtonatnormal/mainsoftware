@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { BACKOFF_JITTER, backoffMs, JOB_POLICY, jittered, SCHEDULER_POLICY, WORKER_POLICY } from '#src/jobs/policy.ts'
 
 describe('C0.6 T15 the queue’s numbers', () => {
-  it('holds the design’s defaults (T15 items 2, 6, 12 and 19; T16 item 19)', () => {
+  it('holds TECH-SPEC’s defaults (T15 items 2, 6, 12 and 19; T16 item 19)', () => {
     expect(JOB_POLICY).toEqual({
       leaseMs: 30_000,
       heartbeatMs: 10_000,

@@ -46,7 +46,7 @@ let workerFlags: FlagCache
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-// A job that posts every 50 ms through ctx.commit() until it is stopped (design §8.3); run again
+// A job that posts every 50 ms through ctx.commit() until it is stopped (T15 item 9, T17 item 8); run again
 // after it was given back (a give-back doesn't count the attempt), it finishes after 3 more posts.
 // Its gate is checked at every post, and every commit ends with the fence, so no post can commit
 // after its flag changed.
@@ -423,7 +423,7 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
       enqueue(trx, s.org.id, kind, { payload: {}, ...(subjectId === undefined ? {} : { subjectId }) }),
     )
 
-  it('§8.3 case 3: an optional feature turned off through the route cancels its running job within 10 s; no post commits after the reply', async () => {
+  it('T15 item 9 T17 item 8: an optional feature turned off through the route cancels its running job within 10 s; no post commits after the reply', async () => {
     const job = await queue(postsOptional)
     await within(10_000, () => true)
     await eventuallyAsync(
@@ -450,7 +450,7 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
     }
   })
 
-  it('§8.3 case 4: an essential feature turned off gives its job back uncounted; it isn’t claimed while off and posts again when back on', async () => {
+  it('T15 item 9: an essential feature turned off gives its job back uncounted; it isn’t claimed while off and posts again when back on', async () => {
     const job = await queue(postsEssential)
     await eventuallyAsync(
       () => posted(job),
@@ -479,7 +479,7 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
     expect((await jobOf(job))?.attempts).toBe(1)
   })
 
-  it('§8.3 case 5: a cohort narrowed to leave a person out cancels their running job within 10 s, and another’s carries on', async () => {
+  it('T15 item 9 T17 item 3: a cohort narrowed to leave a person out cancels their running job within 10 s, and another’s carries on', async () => {
     const [a, b] = [await s.person(), await s.person()]
     const wave = await set(adminClient, { key: 'it.optional', enabled: true, audience: 'cohort', people: [a.id, b.id] })
     expect(wave.status).toBe(200)
@@ -520,7 +520,7 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
     }
   })
 
-  it('§8.3 case 6: a real worker process, on its own database, has a flag change within 10 s and stops cleanly on SIGTERM', async () => {
+  it('T17 item 6 T15 item 12: a real worker process, on its own database, has a flag change within 10 s and stops cleanly on SIGTERM', async () => {
     const c = {
       host: process.env.PGHOST ?? '127.0.0.1',
       port: Number(process.env.PGPORT ?? 5432),
