@@ -1,6 +1,7 @@
 // The server's configuration, read once from the environment and validated with zod. Every
 // variable is documented in the root .env.example. Error messages name the variable and the
-// problem, never its value: DATABASE_URL holds a password.
+// problem, never its value: DATABASE_URL and AUTH_SECRET are secrets.
+import { isIP } from 'node:net'
 import { z } from 'zod'
 
 export const ROLES = ['api', 'realtime', 'worker'] as const
@@ -14,6 +15,40 @@ const origin = z.string().refine(value => URL.canParse(value) && new URL(value).
 })
 
 const flag = z.enum(['true', 'false']).transform(value => value === 'true')
+
+export const DEPLOY_ENVS = ['local', 'test', 'nonprod', 'prod'] as const
+export type DeployEnv = (typeof DEPLOY_ENVS)[number]
+
+// The local stack's sign-in secret, as .env.example sets it. It is public, so it's refused
+// anywhere but this machine (see isLoopbackOrigin). Low in entropy on purpose, so secret scanners
+// don't flag the example file (config.test.ts checks .env.example holds exactly this).
+export const LOCAL_AUTH_SECRET = 'hearth-local-hearth-local-hearth-local-hearth'
+
+// True when the app's origin is on this machine. A deployment people use can't have one, because
+// their browsers' Origin header would never match it, so this is a second condition for the
+// local-only settings, independent of DEPLOY_ENV (T14).
+export function isLoopbackOrigin(appOrigin: string): boolean {
+  if (!URL.canParse(appOrigin)) return false
+  return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(appOrigin).hostname)
+}
+
+// TRUST_PROXY: a comma-separated list of IP addresses or CIDR ranges. Fastify ignores a hop count
+// (it trusts nothing for a number), and a count could be spoofed by a client that reaches the load
+// balancer directly, so only a list is accepted.
+function proxyList(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(entry => entry !== '')
+}
+
+function isProxyEntry(entry: string): boolean {
+  const [address = '', prefix, ...rest] = entry.split('/')
+  const version = isIP(address)
+  if (version === 0 || rest.length > 0) return false
+  if (prefix === undefined) return true
+  return /^\d{1,3}$/.test(prefix) && Number(prefix) <= (version === 4 ? 32 : 128)
+}
 
 function percentEncoded(value: string): boolean {
   // Not a URL at all is reported once, by the URL check.
@@ -48,6 +83,14 @@ const schema = z.object({
   // Only for the local store's dummy keys; unset in AWS, where the ECS task role signs requests.
   S3_ACCESS_KEY_ID: z.string().min(1).optional(),
   S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  // Where this server runs. Settings meant only for this machine are refused anywhere else.
+  DEPLOY_ENV: z.enum(DEPLOY_ENVS),
+  // The api role's sign-in secret; every sign-in key is derived from it (auth/crypto.ts).
+  AUTH_SECRET: z.string().min(32, 'must be at least 32 characters').optional(),
+  // How sign-in codes are sent: log (this machine only) or unset (none can be sent). C0.12 adds AWS.
+  SMS_PROVIDER: z.enum(['log']).optional(),
+  // IPs or CIDR ranges of the proxies in front of the server, comma-separated; unset or empty: none.
+  TRUST_PROXY: z.string().optional(),
 })
 
 export interface Config {
@@ -65,6 +108,11 @@ export interface Config {
     forcePathStyle: boolean
     credentials: { accessKeyId: string; secretAccessKey: string } | undefined
   }
+  deployEnv: DeployEnv
+  // The proxies to trust for X-Forwarded-For; false when there are none (locally).
+  trustProxy: string[] | false
+  // The api role's sign-in settings; undefined for realtime and worker, which never read the secret.
+  auth: { secret: string; smsProvider: 'log' | undefined } | undefined
 }
 
 export class ConfigError extends Error {
@@ -75,9 +123,30 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   // An empty variable counts as unset, so a blank line in .env falls back to the default.
   const present = Object.fromEntries(Object.entries(env).filter(([, value]) => value !== ''))
   const parsed = schema
-    .refine(e => (e.S3_ACCESS_KEY_ID === undefined) === (e.S3_SECRET_ACCESS_KEY === undefined), {
-      message: 'set both S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, or neither',
-      path: ['S3_SECRET_ACCESS_KEY'],
+    .superRefine((e, ctx) => {
+      const problem = (path: string, message: string) => ctx.addIssue({ code: 'custom', path: [path], message })
+      if ((e.S3_ACCESS_KEY_ID === undefined) !== (e.S3_SECRET_ACCESS_KEY === undefined)) {
+        problem('S3_SECRET_ACCESS_KEY', 'set both S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, or neither')
+      }
+      const onThisMachine = isLoopbackOrigin(e.APP_ORIGIN)
+      if (e.ROLE === 'api' && e.AUTH_SECRET === undefined) problem('AUTH_SECRET', 'required for the api role')
+      // Refused whatever the role: the value is public, so no deployment may hold it.
+      const localOrTest = e.DEPLOY_ENV === 'local' || e.DEPLOY_ENV === 'test'
+      if (e.AUTH_SECRET === LOCAL_AUTH_SECRET && !(localOrTest && onThisMachine)) {
+        problem(
+          'AUTH_SECRET',
+          "the local stack's value from .env.example works only on this machine (DEPLOY_ENV local or test, and a localhost APP_ORIGIN)",
+        )
+      }
+      if (e.SMS_PROVIDER === 'log' && !(e.DEPLOY_ENV === 'local' && onThisMachine)) {
+        problem(
+          'SMS_PROVIDER',
+          'log prints sign-in codes, so it runs only on this machine (DEPLOY_ENV local and a localhost APP_ORIGIN)',
+        )
+      }
+      if (!proxyList(e.TRUST_PROXY).every(isProxyEntry)) {
+        problem('TRUST_PROXY', 'each entry must be an IP address or CIDR range')
+      }
     })
     .safeParse(present)
   if (!parsed.success) {
@@ -85,6 +154,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError(`Invalid configuration (see .env.example):\n${problems.join('\n')}`)
   }
   const e = parsed.data
+  const proxies = proxyList(e.TRUST_PROXY)
   return {
     role: e.ROLE,
     host: e.HOST,
@@ -103,5 +173,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
           ? { accessKeyId: e.S3_ACCESS_KEY_ID, secretAccessKey: e.S3_SECRET_ACCESS_KEY }
           : undefined,
     },
+    deployEnv: e.DEPLOY_ENV,
+    trustProxy: proxies.length > 0 ? proxies : false,
+    auth:
+      e.ROLE === 'api' && e.AUTH_SECRET !== undefined
+        ? { secret: e.AUTH_SECRET, smsProvider: e.SMS_PROVIDER }
+        : undefined,
   }
 }

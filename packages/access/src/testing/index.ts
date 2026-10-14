@@ -7,7 +7,8 @@
 // - a restricted "People 1:1s" room with sessions (RMS-55), and spaces, sessions and items no
 //   role holder is in, so a role that widened reads would be caught;
 // - a group DM with join and leave eras, a person who has left with a role never revoked, a
-//   revoked Admin, an archived team with a Team Admin, a pending DPO grant, and a second org.
+//   revoked Admin, an archived team with a Team Admin, a pending DPO grant, and a second org;
+// - a few devices and passkeys, live and ended, for the requests about your own (C0.5).
 // Everything here is made up; nothing is anyone's data. Test-only: the server image leaves out
 // testing/ folders.
 import type {
@@ -195,6 +196,18 @@ export const DV = {
   empty: 'dv-no-sources',
 } as const
 export const PROPOSAL = { priyaDpo: 'pr-priya-dpo' } as const
+// Devices and passkeys (ACC-02, ACC-04): Marcus's phone, which is signed in, a device Marcus has
+// signed out of, and the phone of the DPO who has left, never signed out; a passkey of each kind.
+export const DEV = {
+  marcusPhone: 'dev-marcus-phone',
+  marcusOld: 'dev-marcus-old', // signed out
+  formerDpoPhone: 'dev-former-dpo-phone',
+} as const
+export const PK = {
+  marcus: 'pk-marcus',
+  marcusRemoved: 'pk-marcus-removed', // removed
+  formerDpo: 'pk-former-dpo',
+} as const
 
 // Messages, by space, in sequence order. A null author means the space's first human member.
 export const M = {
@@ -730,6 +743,16 @@ export function fixtureFacts(): Facts {
       { id: DV.restrictedNote, sources: [ref.session(S.peopleAshton)] },
       { id: DV.empty, sources: [] },
     ],
+    devices: [
+      { id: DEV.marcusPhone, userId: P.marcus, signedOutAt: null },
+      { id: DEV.marcusOld, userId: P.marcus, signedOutAt: 1 },
+      { id: DEV.formerDpoPhone, userId: P.formerDpo, signedOutAt: null },
+    ],
+    passkeys: [
+      { id: PK.marcus, userId: P.marcus, removedAt: null },
+      { id: PK.marcusRemoved, userId: P.marcus, removedAt: 1 },
+      { id: PK.formerDpo, userId: P.formerDpo, removedAt: null },
+    ],
   }
 }
 
@@ -773,6 +796,8 @@ export function otherOrgFacts(): Facts {
     ],
     comments: [],
     derived: [],
+    devices: [],
+    passkeys: [],
   }
 }
 

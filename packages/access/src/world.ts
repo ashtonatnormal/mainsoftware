@@ -5,6 +5,7 @@ import type {
   CommentFact,
   ConversationFact,
   DerivedFact,
+  DeviceFact,
   EventFact,
   Facts,
   FileFact,
@@ -13,6 +14,7 @@ import type {
   MembershipFact,
   MessageFact,
   OrgRole,
+  PasskeyFact,
   PersonFact,
   Ref,
   ResourceKind,
@@ -67,6 +69,8 @@ export class World {
   private readonly memberships = new Map<Id, MembershipFact>()
   private readonly membershipsBySpace = new Map<Id, MembershipFact[]>()
   private readonly membershipsByPrincipal = new Map<Id, MembershipFact[]>()
+  private readonly devices = new Map<Id, DeviceFact>()
+  private readonly passkeys = new Map<Id, PasskeyFact>()
   private readonly byKind = new Map<ResourceKind, Map<Id, unknown>>()
 
   constructor(facts: Facts) {
@@ -83,6 +87,8 @@ export class World {
     }
     for (const a of facts.agents) once(this.agents, 'agent', a.id, a)
     for (const a of facts.assistants) once(this.assistants, 'assistant', a.id, a)
+    for (const d of facts.devices) once(this.devices, 'device', d.id, d)
+    for (const k of facts.passkeys) once(this.passkeys, 'passkey', k.id, k)
     // A group-DM era is a token named by its membership id alone (keys.ts), so the id is unique.
     for (const m of facts.memberships) {
       once(this.memberships, 'membership', m.id, m)
@@ -156,6 +162,15 @@ export class World {
   }
   proposal(id: Id): RoleProposalFact | undefined {
     return this.proposals.get(id)
+  }
+
+  // Devices and passkeys (ACC-02, ACC-04), whether or not they have ended.
+
+  device(id: Id): DeviceFact | undefined {
+    return this.devices.get(id)
+  }
+  passkey(id: Id): PasskeyFact | undefined {
+    return this.passkeys.get(id)
   }
 
   // Teams.

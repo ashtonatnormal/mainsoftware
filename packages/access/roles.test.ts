@@ -1,11 +1,12 @@
 // The per-role matrix for admin actions (CLAUDE.md Database: "The full per-role matrix (Member,
 // Team Admin, Admin, Owner, AI Admin, Leadership, DPO, Compliance Officer, including the roles that
 // must be refused) lives in packages/access's tests"; ACC-10; BUILD-PLAN C0.4). Every admin request
-// in src/requests.ts, the create request and devices.sign_out_own is decided by can() for every
-// actor below, after a fresh re-authentication, and each row writes out exactly who it allows:
-// every other actor must be refused. After the matrix come the dimensions one row can't show:
-// re-authentication, the two-person rule, changing your own roles, ended roles, roles with no admin
-// power yet, and a run of every admin action an Admin may take, which never opens #leadership.
+// in src/requests.ts, the create request and every request about your own devices and passkeys is
+// decided by can() for every actor below, after a fresh re-authentication, and each row writes out
+// exactly who it allows: every other actor must be refused. After the matrix come the dimensions
+// one row can't show: re-authentication, the two-person rule, changing your own roles, ended roles,
+// roles with no admin power yet, and a run of every admin action an Admin may take, which never
+// opens #leadership.
 //
 // The actors are the fixture org (src/testing) plus one persona per role holding exactly that role,
 // so each role's powers show on their own, and the seed's combined holders, which show that roles
@@ -26,21 +27,25 @@ import {
   type Request,
   type ResourceKind,
   type RoleProposalFact,
+  type SelfRequest,
   type Subject,
   World,
 } from './src/index.ts'
+import { ADMIN_ACTIONS as ROUTED_ADMIN_ACTIONS, SELF_ACTIONS } from './src/requests.ts'
 import {
   AG,
   AS,
   agent,
   assistant,
   C,
+  DEV,
   fixtureFacts,
   human,
   M,
   ORG_2_PEOPLE,
   otherOrgFacts,
   P,
+  PK,
   PROPOSAL,
   R,
   ref,
@@ -603,6 +608,47 @@ const SECTIONS: readonly Section[] = [
     ],
   },
   {
+    ids: 'ACC-04 ADM-02',
+    title: 'person.list_devices (labels and dates only, so any Admin, for anyone)',
+    rows: [
+      {
+        name: 'an Admin or Owner lists the devices of someone with no role',
+        request: { action: 'person.list_devices', person: P.nadia },
+        allowed: ADMINS,
+      },
+      {
+        name: 'an Admin lists the Owner and DPO’s devices, and Ashton may list their own',
+        request: { action: 'person.list_devices', person: P.ashton },
+        allowed: ADMINS,
+      },
+      {
+        name: 'an Admin lists a Compliance Officer’s devices, and Wei Ling may list their own',
+        request: { action: 'person.list_devices', person: P.weiling },
+        allowed: plus(ADMINS, ['weiling']),
+      },
+      {
+        name: 'an Admin lists another Admin’s devices',
+        request: { action: 'person.list_devices', person: ONE.admin },
+        allowed: ADMINS,
+      },
+      {
+        name: 'ACC-05: an Admin may list the devices of someone who has left, to sign them out',
+        request: { action: 'person.list_devices', person: P.formerDpo },
+        allowed: ADMINS,
+      },
+      {
+        name: 'nobody lists the devices of someone not on the roster',
+        request: { action: 'person.list_devices', person: X.unknownPerson },
+        allowed: NOBODY,
+      },
+      {
+        name: 'ACC-11: nobody here lists the devices of someone in another org',
+        request: { action: 'person.list_devices', person: ORG_2_PEOPLE.owner },
+        allowed: NOBODY,
+      },
+    ],
+  },
+  {
     ids: 'ADM-03',
     title: 'team.create and team.archive',
     rows: [
@@ -1074,13 +1120,63 @@ const SECTIONS: readonly Section[] = [
     ],
   },
   {
-    ids: 'ACC-04',
-    title: 'devices.sign_out_own (no re-authentication needed, never refused to someone active)',
+    ids: 'ACC-02 ACC-04 T14',
+    title: 'your own devices and passkeys (devices need no re-authentication; passkeys need a fresh one)',
     rows: [
       {
-        name: 'everyone active signs out their own devices',
+        name: 'everyone active signs out this device or all their others',
         request: { action: 'devices.sign_out_own' },
         allowed: ACTIVE_PEOPLE,
+      },
+      {
+        name: 'everyone active lists their own devices',
+        request: { action: 'devices.list_own' },
+        allowed: ACTIVE_PEOPLE,
+      },
+      {
+        name: 'a device named by id is signed out only by its owner',
+        request: { action: 'devices.sign_out_own', device: DEV.marcusPhone },
+        allowed: ['marcus'],
+      },
+      {
+        name: 'a device already signed out isn’t signed out again',
+        request: { action: 'devices.sign_out_own', device: DEV.marcusOld },
+        allowed: NOBODY,
+      },
+      {
+        name: 'ACC-05: the device of someone who has left is nobody’s to sign out this way, not even theirs',
+        request: { action: 'devices.sign_out_own', device: DEV.formerDpoPhone },
+        allowed: NOBODY,
+      },
+      {
+        name: 'a device not in the snapshot is refused, like someone else’s',
+        request: { action: 'devices.sign_out_own', device: 'dev-missing' },
+        allowed: NOBODY,
+      },
+      {
+        name: 'everyone active adds a passkey after re-authenticating',
+        request: { action: 'passkeys.add_own' },
+        allowed: ACTIVE_PEOPLE,
+      },
+      {
+        name: 'a passkey is removed only by its owner',
+        request: { action: 'passkeys.remove_own', passkey: PK.marcus },
+        allowed: ['marcus'],
+      },
+      {
+        name: 'a passkey already removed isn’t removed again',
+        request: { action: 'passkeys.remove_own', passkey: PK.marcusRemoved },
+        allowed: NOBODY,
+      },
+      {
+        name: 'ACC-05: the passkey of someone who has left is nobody’s to remove this way, not even theirs',
+        request: { action: 'passkeys.remove_own', passkey: PK.formerDpo },
+        allowed: NOBODY,
+      },
+      {
+        name: 'a passkey not in the snapshot is refused, like someone else’s',
+        request: { action: 'passkeys.remove_own', passkey: 'pk-missing' },
+        allowed: NOBODY,
       },
     ],
   },
@@ -1101,6 +1197,7 @@ const ADMIN_ACTION_IDS: Record<AdminRequest['action'], string> = {
   'person.reset_pin': 'ADM-02 ACC-06',
   'person.change_phone': 'ADM-02 ACC-06',
   'person.sign_out_devices': 'ADM-02 ACC-04',
+  'person.list_devices': 'ADM-02 ACC-04',
   'team.create': 'ADM-03',
   'team.archive': 'ADM-03',
   'team.members.change': 'ADM-03 ACC-07',
@@ -1118,6 +1215,16 @@ const ADMIN_ACTION_IDS: Record<AdminRequest['action'], string> = {
 }
 const ADMIN_ACTIONS = Object.keys(ADMIN_ACTION_IDS) as AdminRequest['action'][]
 const isAdminRow = (row: Row) => (ADMIN_ACTIONS as string[]).includes(row.request.action)
+
+// Every request about your own devices and passkeys, the same way.
+const SELF_ACTION_IDS: Record<SelfRequest['action'], string> = {
+  'devices.sign_out_own': 'ACC-04',
+  'devices.list_own': 'ACC-04',
+  'passkeys.add_own': 'ACC-02 T14',
+  'passkeys.remove_own': 'ACC-02 T14',
+}
+const SELF_KINDS = Object.keys(SELF_ACTION_IDS) as SelfRequest['action'][]
+const PASSKEY_ACTIONS: readonly SelfRequest['action'][] = ['passkeys.add_own', 'passkeys.remove_own']
 
 // Rows whose world puts a role on the audit-log readers list: there the log is read through the
 // list, not through the role's own powers (D45).
@@ -1146,11 +1253,17 @@ describe('ACC-10 CLAUDE.md Database: the matrix', () => {
     }
   })
 
-  test('ACC-10 ADM-02: the matrix decides every admin request kind, the create request and devices.sign_out_own', () => {
+  test('ACC-10 ADM-02 ACC-04: can() routes exactly the admin and self actions the request types name', () => {
+    // A kind added to a type but not to the set can() routes by would be decided as content.
+    expect([...ROUTED_ADMIN_ACTIONS].sort()).toEqual([...ADMIN_ACTIONS].sort())
+    expect([...SELF_ACTIONS].sort()).toEqual([...SELF_KINDS].sort())
+  })
+
+  test('ACC-10 ADM-02 ACC-04: the matrix decides every admin request kind, the create request and every request about your own devices and passkeys', () => {
     const actions = new Set(ALL_ROWS.map(r => r.request.action))
     for (const action of ADMIN_ACTIONS) expect(actions.has(action), action).toBe(true)
     expect(actions.has('create')).toBe(true)
-    expect(actions.has('devices.sign_out_own')).toBe(true)
+    for (const action of SELF_KINDS) expect(actions.has(action), action).toBe(true)
     // Every actor is refused somewhere, every holder of a live role is allowed some admin request
     // (AI Admin and Leadership only by being on the audit-log readers list), and a Member, a
     // revoked Admin and the Team Admin of an archived team none, so no row set passes by allowing
@@ -1194,16 +1307,38 @@ describe('§9.4 ADM-02: every admin request needs a fresh re-authentication', ()
     })
   }
 
-  test('§9.4 ACC-04: signing out your own devices and creating things need no re-authentication', () => {
-    for (const row of ALL_ROWS.filter(
-      r => r.request.action === 'devices.sign_out_own' || r.request.action === 'create',
-    )) {
+  test('§9.4 ACC-04: listing and signing out your own devices and creating things need no re-authentication', () => {
+    const rows = ALL_ROWS.filter(
+      r =>
+        r.request.action === 'devices.sign_out_own' ||
+        r.request.action === 'devices.list_own' ||
+        r.request.action === 'create',
+    )
+    for (const row of rows) {
       expect(allowedIn(worldOf(row), row.request), row.name).toEqual(
         ACTORS.filter(a => can(worldOf(row), a.subject, row.request)).map(a => a.key),
       )
     }
     expect(can(W, human(ONE.member), { action: 'devices.sign_out_own' })).toBe(true)
+    expect(can(W, human(ONE.member), { action: 'devices.list_own' })).toBe(true)
+    expect(can(W, human(P.marcus), { action: 'devices.sign_out_own', device: DEV.marcusPhone })).toBe(true)
   })
+
+  for (const action of PASSKEY_ACTIONS) {
+    test(`${SELF_ACTION_IDS[action]}: ${action} needs a fresh re-authentication, even on your own account`, () => {
+      const rows = ALL_ROWS.filter(r => r.request.action === action)
+      expect(rows.some(r => r.allowed.length > 0)).toBe(true)
+      for (const row of rows) {
+        const w = worldOf(row)
+        for (const context of [undefined, {}, { reauthenticated: false }]) {
+          expect(
+            ACTORS.filter(a => can(w, a.subject, row.request, context)).map(a => a.key),
+            `${JSON.stringify(context)}: ${row.name}`,
+          ).toEqual([])
+        }
+      }
+    })
+  }
 })
 
 describe('ACC-10 A0 T13: what each role adds', () => {
@@ -1510,15 +1645,48 @@ describe('R9-03 D16 ACC-11: only a person on this org’s roster holds admin pow
 })
 
 describe('ACC-04 ACC-06: device sign-out and the lone Owner', () => {
-  test('ACC-04: every active person signs out their own devices, either way, and nobody else’s without Admin', () => {
+  test('ACC-04: every active person lists and signs out their own devices, either way, and nobody else’s without Admin', () => {
     for (const a of ACTORS) {
       if (a.subject.kind !== 'human') continue
       const active = (ACTIVE_PEOPLE as readonly string[]).includes(a.key)
+      const me = a.subject.id
       expect(can(W, a.subject, { action: 'devices.sign_out_own' }), a.key).toBe(active)
-      expect(can(W, a.subject, { action: 'person.sign_out_devices', person: a.subject.id }, REAUTH), a.key).toBe(active)
+      expect(can(W, a.subject, { action: 'devices.list_own' }), a.key).toBe(active)
+      expect(can(W, a.subject, { action: 'person.sign_out_devices', person: me }, REAUTH), a.key).toBe(active)
+      expect(can(W, a.subject, { action: 'person.list_devices', person: me }, REAUTH), a.key).toBe(active)
     }
-    expect(can(W, human(ONE.member), { action: 'person.sign_out_devices', person: P.nadia }, REAUTH)).toBe(false)
-    expect(can(W, human(ONE.dpo), { action: 'person.sign_out_devices', person: P.nadia }, REAUTH)).toBe(false)
+    for (const action of ['person.sign_out_devices', 'person.list_devices'] as const) {
+      expect(can(W, human(ONE.member), { action, person: P.nadia }, REAUTH), action).toBe(false)
+      expect(can(W, human(ONE.dpo), { action, person: P.nadia }, REAUTH), action).toBe(false)
+    }
+  })
+
+  test('ACC-04 ACC-02: a device or passkey is decided by the snapshot’s owner and end, never by the request', () => {
+    // Marcus's phone moved to Nadia's account in the snapshot: now Nadia's to sign out, not Marcus's.
+    const moved = matrixWorld(f => ({
+      ...f,
+      devices: f.devices.map(d => (d.id === DEV.marcusPhone ? { ...d, userId: P.nadia } : d)),
+      passkeys: f.passkeys.map(k => (k.id === PK.marcus ? { ...k, userId: P.nadia } : k)),
+    }))
+    const signOut = { action: 'devices.sign_out_own', device: DEV.marcusPhone } as const
+    const remove = { action: 'passkeys.remove_own', passkey: PK.marcus } as const
+    expect(can(moved, human(P.nadia), signOut)).toBe(true)
+    expect(can(moved, human(P.marcus), signOut)).toBe(false)
+    expect(can(moved, human(P.nadia), remove, REAUTH)).toBe(true)
+    expect(can(moved, human(P.marcus), remove, REAUTH)).toBe(false)
+    // Signed out and removed in the snapshot: refused to Marcus too.
+    const ended = matrixWorld(f => ({
+      ...f,
+      devices: f.devices.map(d => (d.id === DEV.marcusPhone ? { ...d, signedOutAt: 2 } : d)),
+      passkeys: f.passkeys.map(k => (k.id === PK.marcus ? { ...k, removedAt: 2 } : k)),
+    }))
+    expect(can(ended, human(P.marcus), signOut)).toBe(false)
+    expect(can(ended, human(P.marcus), remove, REAUTH)).toBe(false)
+    // An Admin's powers reach no one else's device or passkey through these requests.
+    for (const id of [P.arjun, P.ashton, ONE.admin]) {
+      expect(can(W, human(id), signOut), id).toBe(false)
+      expect(can(W, human(id), remove, REAUTH), id).toBe(false)
+    }
   })
 
   test('ACC-06 T13: in the seed org nobody changes the lone Owner’s phone or PIN, but any Admin signs out the Owner’s devices', () => {
@@ -1532,6 +1700,7 @@ describe('ACC-04 ACC-06: device sign-out and the lone Owner', () => {
       }
     }
     expect(can(seed, human(P.arjun), { action: 'person.sign_out_devices', person: P.ashton }, REAUTH)).toBe(true)
+    expect(can(seed, human(P.arjun), { action: 'person.list_devices', person: P.ashton }, REAUTH)).toBe(true)
     expect(can(seed, human(P.arjun), { action: 'person.sign_out_devices', person: P.weiling }, REAUTH)).toBe(true)
     expect(can(seed, human(P.marcus), { action: 'person.sign_out_devices', person: P.ashton }, REAUTH)).toBe(false)
   })

@@ -1,9 +1,9 @@
 // The cross-site request check (CLAUDE.md, Security and privacy). Every state change from a
 // browser must come from the app's own origin, so one hook at the root refuses any request that
 // isn't a GET or HEAD unless its Origin header is exactly the app origin. A missing or "null"
-// Origin is refused too. The WebSocket upgrade handler (C0.5, C0.7) calls isAppOrigin before
-// accepting. Provider webhooks (LiveKit, SMS) will be the only exemption, and they verify the
-// provider's signature instead; none exist yet.
+// Origin is refused too. The WebSocket upgrade handler (realtime/socket.ts) calls isAppOrigin
+// before accepting. Provider webhooks (LiveKit, SMS) will be the only exemption, and they verify
+// the provider's signature instead; none exist yet.
 import type { FastifyInstance } from 'fastify'
 import { pathOf } from '#src/logger.ts'
 

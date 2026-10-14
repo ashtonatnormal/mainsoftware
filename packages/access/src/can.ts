@@ -5,14 +5,15 @@ import { keysOf } from './keys.ts'
 import type { Id, Ref, Subject, Token } from './model.ts'
 import { allows, readersOf } from './readers.ts'
 import type { ContentRequest, CreateRequest, Request, RequestContext } from './requests.ts'
-import { isAdminRequest } from './requests.ts'
+import { isAdminRequest, isSelfRequest } from './requests.ts'
+import { selfCan } from './self.ts'
 import type { World } from './world.ts'
 
 // Whether a subject may do what it asks, decided from the snapshot alone. Every access check in
 // Hearth comes here (Principle 1). An unknown subject, resource or target gives false, the same
 // answer as a refusal, so the result never shows whether something exists (CHT-57, PRD-108).
 export function can(world: World, subject: Subject, request: Request, context: RequestContext = {}): boolean {
-  if (request.action === 'devices.sign_out_own') return subject.kind === 'human' && world.isActivePerson(subject.id)
+  if (isSelfRequest(request)) return subject.kind === 'human' && selfCan(world, subject.id, request, context)
   if (isAdminRequest(request)) return subject.kind === 'human' && adminCan(world, subject.id, request, context)
   if (request.action === 'create') return canCreate(world, subject, request)
   return canContent(world, subject, request)

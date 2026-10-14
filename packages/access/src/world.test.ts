@@ -3,7 +3,27 @@
 // by nobody. A fact the snapshot doesn't hold counts as absent, and an absent fact denies.
 import { describe, expect, test } from 'vitest'
 import { type Facts, NOBODY, readersOf, World } from './index.ts'
-import { AG, AS, C, CV, E, F, FI, fixtureFacts, fixtureWorld, M, ORG, P, R, ref, S, T, TH } from './testing/index.ts'
+import {
+  AG,
+  AS,
+  C,
+  CV,
+  DEV,
+  E,
+  F,
+  FI,
+  fixtureFacts,
+  fixtureWorld,
+  M,
+  ORG,
+  P,
+  PK,
+  R,
+  ref,
+  S,
+  T,
+  TH,
+} from './testing/index.ts'
 
 const world = fixtureWorld()
 
@@ -23,6 +43,8 @@ const INDEXED: readonly [keyof Facts, string][] = [
   ['comments', 'comment'],
   ['derived', 'derived'],
   ['memberships', 'membership'],
+  ['devices', 'device'],
+  ['passkeys', 'passkey'],
 ]
 
 describe('World construction (B.4)', () => {
@@ -192,6 +214,20 @@ describe('teams (ACC-05, T13)', () => {
     expect(w.membersOf(T.fleet)).toEqual([])
     expect(w.membersOf(T.operations)).not.toContain(P.kelvin)
     expect(w.isTeamMember(P.kelvin, T.operations)).toBe(false)
+  })
+})
+
+describe('devices and passkeys (ACC-02, ACC-04)', () => {
+  test('finds a device or passkey by id whether or not it has ended, and nothing the snapshot lacks', () => {
+    expect(world.device(DEV.marcusPhone)).toEqual({ id: DEV.marcusPhone, userId: P.marcus, signedOutAt: null })
+    expect(world.device(DEV.marcusOld)?.signedOutAt).toBe(1)
+    expect(world.passkey(PK.marcus)).toEqual({ id: PK.marcus, userId: P.marcus, removedAt: null })
+    expect(world.passkey(PK.marcusRemoved)?.removedAt).toBe(1)
+    expect(world.device('dev-missing')).toBeUndefined()
+    expect(world.passkey('pk-missing')).toBeUndefined()
+    // Each is looked up under its own kind only.
+    expect(world.device(PK.marcus)).toBeUndefined()
+    expect(world.passkey(DEV.marcusPhone)).toBeUndefined()
   })
 })
 

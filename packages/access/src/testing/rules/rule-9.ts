@@ -15,11 +15,31 @@ import {
   type RequestContext,
   type ResourceKind,
   type RoleProposalFact,
+  type SelfRequest,
   type Subject,
   type World,
 } from '../../index.ts'
 import * as accessSql from '../../sql.ts'
-import { AG, AS, agent, assistant, C, CV, FI, human, P, PROPOSAL, R, ref, S, SEED_PEOPLE, system, T } from '../index.ts'
+import {
+  AG,
+  AS,
+  agent,
+  assistant,
+  C,
+  CV,
+  DEV,
+  FI,
+  human,
+  P,
+  PK,
+  PROPOSAL,
+  R,
+  ref,
+  S,
+  SEED_PEOPLE,
+  system,
+  T,
+} from '../index.ts'
 import { ai, c0, core, type RuleCase } from './case.ts'
 import { allows, changed, reads, refsOf, world } from './helpers.ts'
 
@@ -83,6 +103,7 @@ const ADMIN_REQUESTS: readonly AdminRequest[] = [
   { action: 'person.reset_pin', person: P.nadia },
   { action: 'person.change_phone', person: P.nadia },
   { action: 'person.sign_out_devices', person: P.nadia },
+  { action: 'person.list_devices', person: P.nadia },
   { action: 'team.create' },
   { action: 'team.archive', team: T.fleet },
   { action: 'team.members.change', team: T.finance, person: P.nadia, op: 'add' },
@@ -98,6 +119,14 @@ const ADMIN_REQUESTS: readonly AdminRequest[] = [
   { action: 'channel.transfer_ownership', channel: C.ops, to: P.marcus },
   { action: 'privileged_console.open', console: 'dpo' },
   { action: 'privileged_console.open', console: 'compliance' },
+]
+// One of every request about your own devices and passkeys, naming Marcus's, which Marcus may make.
+const SELF_REQUESTS: readonly SelfRequest[] = [
+  { action: 'devices.sign_out_own' },
+  { action: 'devices.sign_out_own', device: DEV.marcusPhone },
+  { action: 'devices.list_own' },
+  { action: 'passkeys.add_own' },
+  { action: 'passkeys.remove_own', passkey: PK.marcus },
 ]
 const DPO_CONSOLE = { action: 'privileged_console.open', console: 'dpo' } as const
 const COMPLIANCE_CONSOLE = { action: 'privileged_console.open', console: 'compliance' } as const
@@ -233,7 +262,7 @@ export const RULE_9: readonly RuleCase[] = [
   ),
   c0(
     'R9-03',
-    'Rule 9 D16 PA-03 ACC-10: only people hold roles; the Owner’s assistant, agents and system jobs are refused every admin request',
+    'Rule 9 D16 PA-03 ACC-10 ACC-04: only people hold roles; the Owner’s assistant, agents and system jobs are refused every admin request and every request about a person’s own devices and passkeys',
     () => {
       // Ashton, Owner and DPO, may make most of these themselves, so their assistant's refusals matter.
       const ashtons = ADMIN_REQUESTS.filter(r => can(world, human(P.ashton), r, reauthenticated))
@@ -241,7 +270,16 @@ export const RULE_9: readonly RuleCase[] = [
       const nonHumans: Subject[] = [...Object.values(AS).map(assistant), ...Object.values(AG).map(agent), system]
       for (const s of nonHumans) {
         for (const r of ADMIN_REQUESTS) expect(can(world, s, r, reauthenticated), `${s.id} ${r.action}`).toBe(false)
-        expect(can(world, s, { action: 'devices.sign_out_own' }), s.id).toBe(false)
+        // Nor any request about a person's own devices and passkeys (ACC-02, ACC-04).
+        for (const r of SELF_REQUESTS) expect(can(world, s, r, reauthenticated), `${s.id} ${r.action}`).toBe(false)
+      }
+      // Marcus may make each of those, so the refusals aren't for a missing device or passkey; a
+      // non-human subject carrying Marcus's id is still refused, never treated as Marcus.
+      for (const r of SELF_REQUESTS) {
+        expect(can(world, human(P.marcus), r, reauthenticated), r.action).toBe(true)
+        for (const s of [assistant(P.marcus), agent(P.marcus), { kind: 'system', id: P.marcus } as const]) {
+          expect(can(world, s, r, reauthenticated), `${s.kind} ${r.action}`).toBe(false)
+        }
       }
       // A role row that names an assistant or an agent gives it nothing, whichever kind of subject
       // it is asked as.
@@ -489,8 +527,11 @@ export const RULE_9: readonly RuleCase[] = [
           expect(allows(world, actor, { action, person: P.kelvin }, reauthenticated), `${actor} ${action}`).toBe(false)
         }
       }
-      // Everyone signs out their own devices, with no re-authentication (ACC-04).
-      for (const p of SEED_PEOPLE) expect(allows(world, p, { action: 'devices.sign_out_own' }), p).toBe(true)
+      // Everyone lists and signs out their own devices, with no re-authentication (ACC-04).
+      for (const p of SEED_PEOPLE) {
+        expect(allows(world, p, { action: 'devices.sign_out_own' }), p).toBe(true)
+        expect(allows(world, p, { action: 'devices.list_own' }), p).toBe(true)
+      }
     },
   ),
   c0(
