@@ -72,13 +72,37 @@ grant update (pin_hash, pin_key_id, pin_set_at, pin_reset_at, pin_reset_by, pin_
 -- hours, so no time zone's daylight saving can stretch it), and the server ends it sooner after
 -- 30 days unused. Why a session ended is one of these codes; C0.16 adds phone_changed with the
 -- phone change.
+--
+-- Sessions made before 0006 are brought into line first, so the new rules can't fail the
+-- migration on an old row (none exist today: nothing wrote a session before C0.5, the seed has
+-- none, and no production database exists before C0.11; scripts/check-sign-in-upgrade.sh tests
+-- the upgrade on rows 0003 allowed):
+-- - one meant to last more than 90 days now ends 90 days after it started, which ends it at once
+--   if that has passed;
+-- - one that ended for a reason outside these codes keeps it, since why a session ended is history
+--   (keep_history refuses the change). So the rule on reasons is added NOT VALID, which Postgres
+--   applies to every row written from now on, and validated below when no older reason is left.
+update public.sessions set expires_at = created_at + interval '2160 hours'
+  where expires_at - created_at > interval '2160 hours';
 alter table public.sessions
   add column reauthenticated_at timestamptz,
   add constraint sessions_reauthenticated_after_start check (reauthenticated_at >= created_at),
   add constraint sessions_at_most_90_days check (expires_at - created_at <= interval '2160 hours'),
   drop constraint sessions_revoke_reason_check,
-  add constraint sessions_revoke_reason check (revoke_reason in ('sign_out', 'device_sign_out', 'deactivated', 'pin_reset'));
--- Set after the column exists, so sessions made before 0006 (none outside tests) stay unstamped.
+  add constraint sessions_revoke_reason
+    check (revoke_reason in ('sign_out', 'device_sign_out', 'deactivated', 'pin_reset')) not valid;
+do $$
+begin
+  if exists (select 1 from public.sessions
+             where revoke_reason not in ('sign_out', 'device_sign_out', 'deactivated', 'pin_reset')) then
+    raise notice 'sessions_revoke_reason stays NOT VALID: sessions that ended before 0006 keep reasons outside its codes';
+  else
+    alter table public.sessions validate constraint sessions_revoke_reason;
+  end if;
+end
+$$;
+-- Set after the column exists, so sessions made before 0006 stay unstamped: none counts as a
+-- recent re-authentication.
 alter table public.sessions alter column reauthenticated_at set default now();
 
 -- The times that decide whether a session is live and fresh are the database's. A new session
