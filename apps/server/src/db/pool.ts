@@ -73,8 +73,10 @@ const APP_ROLE_CHECK = `
 // BYPASSRLS, hearth_owner, an owner of a table or of the database), and it may not be a member of
 // hearth_app, so WORKER_DATABASE_URL can't act as the api, nor of any of Postgres's predefined roles
 // (pg_read_all_data, pg_write_all_data and the like, which read or write every table their RLS
-// policies let through), as 0007 refuses when hearth_worker already exists. rds_iam, which IAM
-// sign-in on RDS needs, isn't one of them.
+// policies let through). And, as 0007 refuses when hearth_worker already exists, every role it is
+// a member of must be rds_iam (powerless, which IAM sign-in on RDS needs) or shaped like a job role,
+// held by SET and never INHERIT or ADMIN: hearth_queue or a hearth_job_ name, with no power, a
+// member of no role and owning nothing, so a job role a later migration adds passes.
 const WORKER_ROLE_CHECK = `
   with skips as (
     select o.oid from pg_roles o
@@ -84,6 +86,21 @@ const WORKER_ROLE_CHECK = `
   select exists (select 1 from skips s where pg_has_role(r.oid, s.oid, 'usage') or pg_has_role(r.oid, s.oid, 'set'))
       or exists (select 1 from pg_roles a where a.rolname = 'hearth_app' and pg_has_role(r.oid, a.oid, 'member'))
       or exists (select 1 from pg_roles p where p.rolname like 'pg\\_%' and pg_has_role(r.oid, p.oid, 'member'))
+      or exists (
+        select 1 from pg_auth_members m join pg_roles g on g.oid = m.roleid
+        where m.member = r.oid
+          and not (g.rolname = 'rds_iam' and not g.rolsuper and not g.rolbypassrls
+                   and not exists (select 1 from pg_auth_members x where x.member = g.oid))
+          and not ((g.rolname = 'hearth_queue' or g.rolname like 'hearth\\_job\\_%')
+                   and not (g.rolcanlogin or g.rolsuper or g.rolbypassrls or g.rolcreaterole or g.rolcreatedb
+                            or g.rolreplication)
+                   and not exists (select 1 from pg_auth_members x where x.member = g.oid)
+                   and not exists (select 1 from pg_shdepend d
+                                   where d.refclassid = 'pg_authid'::regclass and d.refobjid = g.oid
+                                     and d.deptype = 'o'
+                                     and d.dbid in (0, (select o.oid from pg_database o
+                                                        where o.datname = current_database())))
+                   and not m.inherit_option and not m.admin_option))
     as bypasses_rls
   from pg_roles r where r.rolname = current_user`
 
@@ -120,7 +137,7 @@ export function workerRoleCheck(pool: Pick<Pool, 'query'>): Check {
     pool,
     WORKER_ROLE_CHECK,
     [],
-    'WORKER_DATABASE_URL connects as a role that can bypass row level security or act as hearth_app; it must be hearth_worker',
+    'WORKER_DATABASE_URL connects as a role that can bypass row level security, act as hearth_app or hold a role other than a job role by SET; it must be hearth_worker',
   )
 }
 

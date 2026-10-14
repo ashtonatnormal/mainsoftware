@@ -123,11 +123,74 @@ describe('C0.6 T16 item 7 check-catalogues: every way to write is covered', () =
         select 1 from public.people for no key update;
         DELETE  FROM  public.Jobs;`),
     ).toEqual([
-      { table: 'people', op: 'UPDATE' },
+      { table: 'people', op: 'UPDATE', column: 'full_name' },
       { table: 'audit_events', op: 'INSERT' },
       { table: 'outbox_floors', op: 'INSERT' },
+      { table: 'outbox_floors', op: 'UPDATE', column: 'last_id' },
       { table: 'jobs', op: 'DELETE' },
     ])
+  })
+
+  it('R2DB-3: reads an upsert’s DO UPDATE SET as an UPDATE of each column it sets', () => {
+    expect(
+      bodyWrites(`insert into public.outbox_floors as f (org_id, last_tx) values (o, t)
+        on conflict (org_id) do update set last_tx = excluded.last_tx, last_id = greatest(f.last_id, 1)
+        where f.org_id = o;`),
+    ).toEqual([
+      { table: 'outbox_floors', op: 'INSERT' },
+      { table: 'outbox_floors', op: 'UPDATE', column: 'last_tx' },
+      { table: 'outbox_floors', op: 'UPDATE', column: 'last_id' },
+    ])
+  })
+
+  it('R2DB-3: reads ONLY, quoted names and every column of a SET list, and stops where the list ends', () => {
+    expect(bodyWrites('delete from only public.jobs; update only public.schedules set paused = true;')).toEqual([
+      { table: 'jobs', op: 'DELETE' },
+      { table: 'schedules', op: 'UPDATE', column: 'paused' },
+    ])
+    expect(
+      bodyWrites(`delete from "public"."jobs";
+        update public."people" p set "full_name" = n, title = case when x then 'a' else 'b' end,
+          (manager_id, department_id) = (m, d), tags = array[1, 2]
+        from public.teams t, public.orgs o where p.id = t.id returning p.id, p.org_id;`),
+    ).toEqual([
+      { table: 'jobs', op: 'DELETE' },
+      { table: 'people', op: 'UPDATE', column: 'full_name' },
+      { table: 'people', op: 'UPDATE', column: 'title' },
+      { table: 'people', op: 'UPDATE', column: 'manager_id' },
+      { table: 'people', op: 'UPDATE', column: 'department_id' },
+      { table: 'people', op: 'UPDATE', column: 'tags' },
+    ])
+    expect(
+      bodyWrites('with d as (delete from public.jobs returning id) update public.t set a = 1 returning a, b'),
+    ).toEqual([
+      { table: 'jobs', op: 'DELETE' },
+      { table: 't', op: 'UPDATE', column: 'a' },
+    ])
+  })
+
+  it('R2DB-3: reads MERGE INTO as an INSERT, a DELETE and an UPDATE of the columns it sets', () => {
+    expect(
+      bodyWrites(`merge into public.jobs j using src s on j.id = s.id
+        when matched and s.done then update set state = 'succeeded', lease_token = null
+        when matched then delete
+        when not matched then insert (id) values (s.id);`),
+    ).toEqual([
+      { table: 'jobs', op: 'INSERT' },
+      { table: 'jobs', op: 'DELETE' },
+      { table: 'jobs', op: 'UPDATE', column: 'state' },
+      { table: 'jobs', op: 'UPDATE', column: 'lease_token' },
+    ])
+  })
+
+  it('R2DB-3: ignores writes named in comments and string literals', () => {
+    expect(
+      bodyWrites(`-- we never delete from public.people
+        /* nor insert into public.jobs /* nested */ here */
+        raise exception 'update public.people set full_name = x';
+        perform pg_catalog.format(E'delete from public.jobs \\' it', $q$insert into public.jobs$q$);
+        select $1;`),
+    ).toEqual([])
   })
 
   it('CONTRACT-1: names a function whose body writes a table its writes leave out, unless every caller holds that write', () => {
@@ -162,10 +225,10 @@ describe('C0.6 T16 item 7 check-catalogues: every way to write is covered', () =
         source: 'insert into public.audit_events values (1);',
       },
     ]
-    expect(bodyProblems(entries, body, grants)).toEqual([
-      "public.rename_person(uuid, text) runs delete from public.jobs, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add it to its writes",
-      "public.rename_person(uuid, text) runs insert into public.feature_flags, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add it to its writes",
-      "public.end_all() runs insert into public.audit_events, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add it to its writes",
+    expect(bodyProblems(entries, body, grants, {})).toEqual([
+      "public.rename_person(uuid, text) runs delete from public.jobs, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add 'jobs:DELETE' to its writes",
+      "public.rename_person(uuid, text) runs insert into public.feature_flags, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add 'feature_flags:INSERT' to its writes",
+      "public.end_all() runs insert into public.audit_events, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add 'audit_events:INSERT' to its writes",
     ])
     // A caller without the grant doesn't excuse it.
     expect(
@@ -173,8 +236,90 @@ describe('C0.6 T16 item 7 check-catalogues: every way to write is covered', () =
         entries,
         body.slice(1, 2).map(fn => ({ ...fn, executors: ['hearth_app', 'hearth_queue'] })),
         grants,
+        {},
       ),
     ).toEqual([expect.stringContaining('public.set_x(text) runs insert into public.audit_events')])
+  })
+
+  it('R2DB-3: compares an UPDATE column by column, in the caller-grant excuse too', () => {
+    const entries: Record<string, Coverage> = {
+      'finish(uuid)': { exempt: 'a check', writes: ['jobs.state:UPDATE'] },
+      'rename(uuid)': { events: ['person.updated'], writes: [] },
+    }
+    const fns = [
+      {
+        key: 'finish(uuid)',
+        definer: true,
+        trigger: false,
+        executors: ['hearth_queue'],
+        source: 'update public.jobs set state = 1, lease_token = null where id = $1;',
+      },
+      // hearth_app may update people.full_name, but not people.title.
+      {
+        key: 'rename(uuid)',
+        definer: true,
+        trigger: false,
+        executors: ['hearth_app'],
+        source: 'update public.people set full_name = n, title = t;',
+      },
+    ]
+    expect(bodyProblems(entries, fns, grants, {})).toEqual([
+      "public.finish(uuid) runs update public.jobs set lease_token, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add 'jobs.lease_token:UPDATE' to its writes",
+      "public.rename(uuid) runs update public.people set title, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add 'people.title:UPDATE' to its writes",
+    ])
+    // An upsert's update counts too: the floor's last_tx is written by the DO UPDATE.
+    expect(
+      bodyProblems(
+        { 'floor(uuid)': { exempt: 'a check', writes: ['outbox_floors:INSERT', 'outbox_floors.last_id:UPDATE'] } },
+        [
+          {
+            key: 'floor(uuid)',
+            definer: true,
+            trigger: false,
+            executors: ['hearth_queue'],
+            source:
+              'insert into public.outbox_floors (org_id) values (o) on conflict (org_id) do update set last_id = 1, last_tx = 2;',
+          },
+        ],
+        grants,
+        {},
+      ),
+    ).toEqual([expect.stringContaining("add 'outbox_floors.last_tx:UPDATE' to its writes")])
+  })
+
+  it('R2DB-3: refuses a body it can’t read: BEGIN ATOMIC, and EXECUTE outside DYNAMIC_DDL', () => {
+    const entries: Record<string, Coverage> = {
+      'atomic()': { exempt: 'a check', writes: [] },
+      'dynamic()': { exempt: 'a check', writes: [] },
+      'ddl()': { exempt: 'a check', writes: [] },
+      'quiet()': { exempt: 'a check', writes: [] },
+    }
+    const fns = [
+      { key: 'atomic()', definer: true, trigger: false, executors: [], source: '', atomic: true },
+      {
+        key: 'dynamic()',
+        definer: true,
+        trigger: false,
+        executors: [],
+        source: "begin execute pg_catalog.format('delete from public.%I', t); end",
+      },
+      { key: 'ddl()', definer: true, trigger: false, executors: [], source: "begin execute 'create table x ()'; end" },
+      // The word only in a comment or a message is no EXECUTE.
+      {
+        key: 'quiet()',
+        definer: true,
+        trigger: false,
+        executors: [],
+        source: "begin -- never execute anything\n raise exception 'cannot execute this'; end",
+      },
+    ]
+    expect(bodyProblems(entries, fns, grants, { 'ddl()': 'creates a table' })).toEqual([
+      "public.atomic() is written with BEGIN ATOMIC, whose writes check-catalogues can't read: write its body as a quoted string (as $$ ... $$)",
+      "public.dynamic() runs dynamic SQL (EXECUTE), whose writes check-catalogues can't read: write them as plain statements, or, if it only changes the schema, add it to DYNAMIC_DDL in apps/server/scripts/catalogues.ts with why",
+    ])
+    expect(bodyProblems(entries, fns.slice(2), grants, { 'ddl()': 'x', 'gone()': 'y' })).toEqual([
+      'DYNAMIC_DDL in apps/server/scripts/catalogues.ts lists gone(), which no reachable function is: remove it',
+    ])
   })
 })
 

@@ -899,8 +899,10 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
   [
     'T17 PRD-65: a job for someone a cohort is narrowed to leave out waits for the change, then commits nothing',
     async watcher => {
+      // Narrowed to b4, who is still at the org (b1 and b2 have left by now, and a cohort may
+      // name only people still here).
       await refused(
-        setFlag('k04', true, { people: ['b2'] }),
+        setFlag('k04', true, { people: ['b4'] }),
         finishJob('14', '24', [1], 'effect:04'),
         "That feature's flags have changed since this work checked them.",
       )(watcher)
@@ -1220,6 +1222,14 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
         await purgeSide.end()
       }
     },
+  ],
+  [
+    'T17 R2E2E-2: a cohort cannot name someone being deactivated at the same moment',
+    refused(
+      deactivate('b6'),
+      setFlag('k16', true, { people: ['b6'] }),
+      'A cohort can only name people who are still at this organisation.',
+    ),
   ],
   [
     'T17 CLAUDE.md: an Admin being deactivated cannot change a flag at the same moment',

@@ -62,6 +62,13 @@ describe('C0.6 T18 the worker’s readiness: its login skips no row level securi
     expect(sent[0]?.text).toContain("p.rolname like 'pg\\_%' and pg_has_role(r.oid, p.oid, 'member')")
   })
 
+  it('R2DB-1: allows only rds_iam and roles shaped like a job role, held by SET, as 0007 does', async () => {
+    const sent: { text: string; values: unknown[] }[] = []
+    await workerRoleCheck(pool([{ bypasses_rls: false }], sent))(signal)
+    expect(sent[0]?.text).toContain("(g.rolname = 'hearth_queue' or g.rolname like 'hearth\\_job\\_%')")
+    expect(sent[0]?.text).toContain('and not m.inherit_option and not m.admin_option')
+  })
+
   it('names each job role the login can no longer take', async () => {
     const all = JOB_ROLES.map(role => ({ role, can_set: true }))
     await expect(workerRolesCheck(pool(all))(signal)).resolves.toBeUndefined()

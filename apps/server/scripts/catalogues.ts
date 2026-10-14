@@ -14,12 +14,14 @@ export interface Grant {
 
 // A function a runtime transaction can reach: one a runtime role may execute, a SECURITY DEFINER
 // function, or a trigger function. `key` is '<name>(<argument types>)'; `source` its body
-// (pg_proc.prosrc) and `executors` the runtime roles that may execute it, for bodyProblems.
+// (pg_proc.prosrc), `atomic` whether it is written with BEGIN ATOMIC (pg_proc.prosqlbody, with no
+// source) and `executors` the runtime roles that may execute it, for bodyProblems.
 export interface Fn {
   key: string
   definer: boolean
   trigger: boolean
   source?: string
+  atomic?: boolean
   executors?: readonly string[]
 }
 
@@ -69,50 +71,235 @@ export function coverageProblems(
   return problems
 }
 
-// The tables a function's body writes, by operation: every `insert into`, `update` and `delete from`
-// a schema-qualified table of public, as every SECURITY DEFINER function must name them under
-// search_path = '' (and as every function here does). A write built in dynamic SQL (EXECUTE) isn't
-// seen.
-export function bodyWrites(source: string): Array<{ table: string; op: Grant['op'] }> {
-  const found = new Map<string, { table: string; op: Grant['op'] }>()
-  for (const match of source.matchAll(/\b(insert\s+into|update|delete\s+from)\s+public\.([a-z_][a-z0-9_]*)\b/gi)) {
-    const verb = (match[1] ?? '').toLowerCase()
-    const op = verb.startsWith('insert') ? 'INSERT' : verb.startsWith('delete') ? 'DELETE' : 'UPDATE'
-    const table = (match[2] ?? '').toLowerCase()
-    found.set(`${table}:${op}`, { table, op })
+// A function's body with its comments gone and every string literal (quoted, E'', dollar-quoted)
+// emptied, in lower case, so a write named in a comment or a message isn't read as one. Quoted
+// identifiers stay, quotes and all.
+export function stripSql(source: string): string {
+  let out = ''
+  let i = 0
+  const n = source.length
+  while (i < n) {
+    const c = source[i]
+    if (c === '-' && source[i + 1] === '-') {
+      while (i < n && source[i] !== '\n') i += 1
+      out += ' '
+    } else if (c === '/' && source[i + 1] === '*') {
+      let depth = 0
+      do {
+        if (source[i] === '/' && source[i + 1] === '*') {
+          depth += 1
+          i += 2
+        } else if (source[i] === '*' && source[i + 1] === '/') {
+          depth -= 1
+          i += 2
+        } else i += 1
+      } while (i < n && depth > 0)
+      out += ' '
+    } else if (c === "'") {
+      const escapes = /[eE]/.test(source[i - 1] ?? '') && !/[A-Za-z0-9_$]/.test(source[i - 2] ?? '')
+      i += 1
+      while (i < n) {
+        if (escapes && source[i] === '\\') i += 2
+        else if (source[i] === "'" && source[i + 1] === "'") i += 2
+        else if (source[i] === "'") {
+          i += 1
+          break
+        } else i += 1
+      }
+      out += "''"
+    } else if (c === '$' && !/[A-Za-z0-9_$]/.test(source[i - 1] ?? '')) {
+      const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(source.slice(i))?.[0]
+      if (tag === undefined) {
+        out += c
+        i += 1
+      } else {
+        const end = source.indexOf(tag, i + tag.length)
+        i = end < 0 ? n : end + tag.length
+        out += "''"
+      }
+    } else if (c === '"') {
+      const start = i
+      i += 1
+      while (i < n && !(source[i] === '"' && source[i + 1] !== '"')) i += source[i] === '"' ? 2 : 1
+      i += 1
+      out += source.slice(start, i)
+    } else {
+      out += c
+      i += 1
+    }
   }
-  return [...found.values()]
+  return out.toLowerCase()
 }
 
-// Every table a function's body writes is in its entry's `writes`, with the same operation (an
-// UPDATE by any column), unless every runtime role that may execute it holds that write itself, so
-// its grant's entry covers it (set_feature_flag()'s audit row). A trigger runs for whoever writes
-// its table, so only its `writes` count. Without this, a function could write a table its entry
-// doesn't list, and the sweep would credit the write to another function's entry.
+// The columns a SET list names, read from just after `set`: each item, at the start and after
+// each comma outside brackets, is `column = ...` or `(a, b) = ...`, and the list ends at the first
+// item that isn't one (a FROM list's second table, RETURNING's second column), a semicolon or the
+// bracket that closes its statement. A list it can't read gives '?', which no entry lists, so the
+// check fails rather than miss a column.
+function setColumns(text: string, from: number): string[] {
+  const columns: string[] = []
+  const ITEM = /^\s*(?:"?([a-z_][a-z0-9_]*)"?\s*(?:\[[^\]]*\]\s*)?|\(([^()]*)\)\s*)=(?!=)/
+  let depth = 0
+  let item = true
+  let i = from
+  while (i < text.length) {
+    if (item) {
+      const match = ITEM.exec(text.slice(i))
+      if (match === null) break
+      columns.push(
+        ...(match[1] !== undefined
+          ? [match[1]]
+          : (match[2] ?? '').split(',').map(name => /^\s*"?([a-z_][a-z0-9_]*)"?\s*$/.exec(name)?.[1] ?? '?')),
+      )
+      i += match[0].length
+      item = false
+      continue
+    }
+    const c = text[i]
+    if (depth === 0 && (c === ';' || c === ')' || c === ']')) break
+    if (c === '(' || c === '[') depth += 1
+    else if (c === ')' || c === ']') depth -= 1
+    else if (c === ',' && depth === 0) item = true
+    i += 1
+  }
+  return columns.length > 0 ? columns : ['?']
+}
+
+// A schema-qualified table of public, quoted or not.
+const TABLE = String.raw`"?public"?\s*\.\s*"?([a-z_][a-z0-9_]*)"?`
+
+// The writes a function's body makes: every `insert into`, `update` (by each column its SET list
+// names) and `delete from` a table of public, with or without ONLY, an upsert's `on conflict ... do
+// update set` as an UPDATE of its columns, and `merge into` as an INSERT, a DELETE and an UPDATE of
+// the columns its `then update set` names. Every SECURITY DEFINER function must schema-qualify its
+// tables under search_path = '' (and every function here does). Dynamic SQL (EXECUTE) and BEGIN
+// ATOMIC bodies can't be read this way, and bodyProblems refuses them.
+export function bodyWrites(source: string): Array<{ table: string; op: Grant['op']; column?: string }> {
+  const text = stripSql(source)
+  const found: Array<{ at: number; table: string; op: Grant['op']; column?: string }> = []
+  const inserts: Array<{ at: number; table: string }> = []
+  for (const match of text.matchAll(new RegExp(String.raw`\binsert\s+into\s+${TABLE}`, 'g'))) {
+    const table = match[1] ?? ''
+    inserts.push({ at: match.index, table })
+    found.push({ at: match.index, table, op: 'INSERT' })
+  }
+  for (const match of text.matchAll(new RegExp(String.raw`\bdelete\s+from\s+(?:only\s+)?${TABLE}`, 'g'))) {
+    found.push({ at: match.index, table: match[1] ?? '', op: 'DELETE' })
+  }
+  const update = new RegExp(
+    String.raw`\bupdate\s+(?:only\s+)?${TABLE}(?:\s*\*)?(?:\s+(?:as\s+)?(?!set\b)"?[a-z_][a-z0-9_]*"?)?\s+set\b`,
+    'g',
+  )
+  for (const match of text.matchAll(update)) {
+    for (const column of setColumns(text, match.index + match[0].length)) {
+      found.push({ at: match.index, table: match[1] ?? '', op: 'UPDATE', column })
+    }
+  }
+  for (const match of text.matchAll(new RegExp(String.raw`\bupdate\s+(?:only\s+)?${TABLE}`, 'g'))) {
+    if (!found.some(write => write.at === match.index)) {
+      found.push({ at: match.index, table: match[1] ?? '', op: 'UPDATE', column: '?' })
+    }
+  }
+  for (const match of text.matchAll(/\bon\s+conflict\b[^;]*?\bdo\s+update\s+set\b/g)) {
+    const insert = inserts.filter(row => row.at < match.index).at(-1)
+    for (const column of setColumns(text, match.index + match[0].length)) {
+      found.push({ at: match.index, table: insert?.table ?? '?', op: 'UPDATE', column })
+    }
+  }
+  for (const match of text.matchAll(new RegExp(String.raw`\bmerge\s+into\s+(?:only\s+)?${TABLE}`, 'g'))) {
+    const table = match[1] ?? ''
+    found.push({ at: match.index, table, op: 'INSERT' }, { at: match.index, table, op: 'DELETE' })
+    const end = text.indexOf(';', match.index)
+    const statement = text.slice(match.index, end < 0 ? text.length : end)
+    for (const clause of statement.matchAll(/\bthen\s+update\s+set\b/g)) {
+      for (const column of setColumns(text, match.index + clause.index + clause[0].length)) {
+        found.push({ at: match.index, table, op: 'UPDATE', column })
+      }
+    }
+  }
+  const seen = new Map<string, { table: string; op: Grant['op']; column?: string }>()
+  for (const { at: _, ...write } of found.sort((a, b) => a.at - b.at)) {
+    const key = `${write.table}:${write.op}:${write.column ?? ''}`
+    if (!seen.has(key)) seen.set(key, write)
+  }
+  return [...seen.values()]
+}
+
+// Functions whose body runs dynamic SQL (EXECUTE) that only changes the schema and writes no row,
+// with why; bodyProblems refuses EXECUTE in any other. Adding one is a reviewed change.
+export const DYNAMIC_DDL: Readonly<Record<string, string>> = {
+  'create_data_access_partitions(integer)':
+    "creates data_access_events' month partitions and turns on their row level security",
+}
+
+const verbOf = (op: Grant['op'], table: string, column?: string): string =>
+  op === 'INSERT'
+    ? `insert into public.${table}`
+    : op === 'DELETE'
+      ? `delete from public.${table}`
+      : column === undefined
+        ? `update public.${table}`
+        : `update public.${table} set ${column}`
+
+// Every write a function's body makes is in its entry's `writes`, with the same operation and, for
+// an UPDATE, the same column, unless every runtime role that may execute it holds that write itself
+// (the same column, for an UPDATE), so its grant's entry covers it (set_feature_flag()'s audit row).
+// A trigger runs for whoever writes its table, so only its `writes` count. Without this, a function
+// could write a table or a column its entry doesn't list, and the sweep would credit the write to
+// another function's entry. A body this can't read is refused: one written with BEGIN ATOMIC
+// (Postgres keeps no source text for it), and dynamic SQL outside DYNAMIC_DDL.
 export function bodyProblems(
   writes: Readonly<Record<string, Coverage>>,
   functions: readonly Fn[],
   grants: readonly Grant[],
+  dynamic: Readonly<Record<string, string>> = DYNAMIC_DDL,
 ): string[] {
   const problems: string[] = []
   for (const fn of functions) {
+    if (fn.atomic === true) {
+      problems.push(
+        `public.${fn.key} is written with BEGIN ATOMIC, whose writes check-catalogues can't read: write its body as a quoted string (as $$ ... $$)`,
+      )
+      continue
+    }
+    if (fn.source !== undefined && /\bexecute\b/.test(stripSql(fn.source)) && dynamic[fn.key] === undefined) {
+      problems.push(
+        `public.${fn.key} runs dynamic SQL (EXECUTE), whose writes check-catalogues can't read: write them as plain statements, or, if it only changes the schema, add it to DYNAMIC_DDL in apps/server/scripts/catalogues.ts with why`,
+      )
+    }
     const declared = writes[fn.key]?.writes
     if (declared === undefined || fn.source === undefined) continue
-    for (const { table, op } of bodyWrites(fn.source)) {
-      const listed = declared.some(write =>
-        op === 'UPDATE' ? write.startsWith(`${table}.`) && write.endsWith(':UPDATE') : write === `${table}:${op}`,
-      )
+    for (const { table, op, column } of bodyWrites(fn.source)) {
+      const listed = declared.includes(op === 'UPDATE' ? `${table}.${column}:UPDATE` : `${table}:${op}`)
       if (listed) continue
       const executors = fn.executors ?? []
       const granted =
         !fn.trigger &&
         executors.length > 0 &&
-        executors.every(role => grants.some(grant => grant.role === role && grant.table === table && grant.op === op))
+        executors.every(role =>
+          grants.some(
+            grant =>
+              grant.role === role &&
+              grant.table === table &&
+              grant.op === op &&
+              (op !== 'UPDATE' || grant.column === column),
+          ),
+        )
       if (granted) continue
+      const add = op === 'UPDATE' ? `'${table}.${column}:UPDATE'` : `'${table}:${op}'`
       problems.push(
-        `public.${fn.key} runs ${op === 'INSERT' ? 'insert into' : op === 'DELETE' ? 'delete from' : 'update'} public.${table}, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add it to its writes`,
+        column === '?'
+          ? `public.${fn.key} runs update public.${table}, but check-catalogues can't read which columns it sets: name them in a plain SET list`
+          : `public.${fn.key} runs ${verbOf(op, table, column)}, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add ${add} to its writes`,
       )
     }
+  }
+  const keys = new Set(functions.map(fn => fn.key))
+  for (const key of Object.keys(dynamic)) {
+    if (!keys.has(key))
+      problems.push(
+        `DYNAMIC_DDL in apps/server/scripts/catalogues.ts lists ${key}, which no reachable function is: remove it`,
+      )
   }
   return problems
 }

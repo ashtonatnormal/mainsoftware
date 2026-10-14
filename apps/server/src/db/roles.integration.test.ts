@@ -271,10 +271,86 @@ describe('C0.6 T18 item 4 /ready: each login is held to its role’s rule', () =
       }
     }
     expect(await run('')).toBe('passed')
-    for (const role of ['pg_write_all_data', 'pg_read_all_data', 'pg_signal_backend']) {
+    for (const role of ['pg_write_all_data', 'pg_read_all_data', 'pg_signal_backend', 'hearth_app']) {
       expect(await run(`grant ${role} to hearth_worker with inherit false, set true`)).toBe(
         `hearth_worker already exists and is a member of ${role}; it may only hold job roles, by SET`,
       )
+    }
+    // R2DB-1: a job role a later migration adds is told by its shape, so a powerless one held by
+    // SET passes; held by INHERIT, or with a power, or a member of a role, it is refused.
+    const future = 'create role hearth_job_future nologin; '
+    const refused =
+      'hearth_worker already exists and is a member of hearth_job_future; it may only hold job roles, by SET'
+    expect(await run(`${future}grant hearth_job_future to hearth_worker with inherit false, set true`)).toBe('passed')
+    expect(await run(`${future}grant hearth_job_future to hearth_worker with inherit true, set true`)).toBe(refused)
+    expect(
+      await run(`${future}grant hearth_job_future to hearth_worker with inherit false, set true, admin true`),
+    ).toBe(refused)
+    expect(
+      await run(
+        'create role hearth_job_future nologin createrole; grant hearth_job_future to hearth_worker with inherit false, set true',
+      ),
+    ).toBe(refused)
+    expect(
+      await run(
+        `${future}grant hearth_app to hearth_job_future; grant hearth_job_future to hearth_worker with inherit false, set true`,
+      ),
+    ).toBe(refused)
+    expect(
+      await run(
+        `${future}create table hearth_job_future_t (); alter table hearth_job_future_t owner to hearth_job_future; grant hearth_job_future to hearth_worker with inherit false, set true`,
+      ),
+    ).toBe(refused)
+    expect(
+      await run('create role hearth_future nologin; grant hearth_future to hearth_worker with inherit false, set true'),
+    ).toBe('hearth_worker already exists and is a member of hearth_future; it may only hold job roles, by SET')
+  })
+
+  it('R2DB-1: a fresh database migrates on a server whose hearth_worker already holds a later job role', async () => {
+    // The real failure: once a later migration has added a job role, every later build on the same
+    // server applies 0007 again over the hearth_worker it finds.
+    const role = `hearth_job_x_${randomBytes(3).toString('hex')}`
+    const fresh = `roles_it_fresh_${randomBytes(4).toString('hex')}`
+    const server = new PgClient({ ...superuser, database: 'postgres' })
+    await server.connect()
+    try {
+      await server.query(`create role ${role} nologin`)
+      await server.query(`grant ${role} to hearth_worker with inherit false, set true`)
+      await server.query(`create database ${fresh} owner hearth_owner template template0`)
+      const target = new URL(url(superuser.user, superuser.password))
+      target.pathname = `/${fresh}`
+      const { error } = await migrate({ databaseUrl: target.toString(), role: 'hearth_owner' })
+      expect(error).toBeUndefined()
+    } finally {
+      await server.query(`drop database if exists ${fresh} with (force)`)
+      await server.query(`drop role if exists ${role}`)
+      await server.end()
+    }
+  })
+
+  it('R2DB-1: the worker’s check agrees with 0007: a later job role by SET passes, by INHERIT it is refused', async () => {
+    const suffix = randomBytes(3).toString('hex')
+    const login = `roles_it_jobs_${suffix}`
+    const job = `hearth_job_future_${suffix}`
+    await admin.query(`create role ${login} login noinherit password '${PASSWORD}'`)
+    await admin.query(`create role ${job} nologin`)
+    await admin.query(`grant hearth_queue, ${job} to ${login} with inherit false, set true`)
+    const pool = createPool(url(login, PASSWORD), logger, { max: 1 })
+    try {
+      await expect(workerRoleCheck(pool)(signal)).resolves.toBeUndefined()
+      await admin.query(`revoke ${job} from ${login}`)
+      await admin.query(`grant ${job} to ${login} with inherit true, set true`)
+      await expect(workerRoleCheck(pool)(signal)).rejects.toThrow(/hearth_worker/)
+      await admin.query(`revoke ${job} from ${login}`)
+      await admin.query(`create role ${job}_other nologin`)
+      await admin.query(`grant ${job}_other to ${login} with inherit false, set true`)
+      await admin.query(`alter role ${job}_other rename to roles_it_other_${suffix}`)
+      await expect(workerRoleCheck(pool)(signal)).rejects.toThrow(/hearth_worker/)
+    } finally {
+      await pool.end()
+      await admin.query(`drop role if exists ${login}`)
+      await admin.query(`drop role if exists ${job}`)
+      await admin.query(`drop role if exists roles_it_other_${suffix}`)
     }
   })
 

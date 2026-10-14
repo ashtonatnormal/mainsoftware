@@ -1,7 +1,7 @@
 // The structural guarantee behind the database's is_ids_only() (migration 0007; TECH-SPEC T15 item
 // 8, T16 item 15): outbox events' ids and job payloads hold ids, never someone's details. Each
 // event type's ids schema and each job kind's payload schema must be a z.strictObject whose every
-// field, optional or not, is one of:
+// field, optional or not, is named by a key as IDS_KEY says and is one of:
 //   z.uuid()                                   an id
 //   z.enum([...]) or z.literal(...)            codes: lower-case, dotted, under 64 characters
 //                                              (or a literal boolean)
@@ -15,6 +15,9 @@ import type { z } from 'zod'
 // A code as is_ids_only() accepts one.
 export const CODE = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/
 export const CODE_MAX = 63
+// A field name as is_ids_only() accepts one: lower case, no dots, at most 63 characters, so a
+// camelCase name (teamId) or someone's details used as a key are refused here, not by the insert.
+export const IDS_KEY = /^[a-z][a-z0-9_]{0,62}$/
 export const IDS_NUMBER_MAX = 1_000_000
 export const IDS_LIST_MAX = 100
 
@@ -104,6 +107,7 @@ export function idsProblems(schema: z.ZodType): string[] {
   const problems: string[] = []
   if (def.catchall?._zod.def.type !== 'never') problems.push('not a z.strictObject, so it would keep unknown keys')
   for (const [field, value] of Object.entries(def.shape)) {
+    if (!IDS_KEY.test(field)) problems.push(`${JSON.stringify(field)}: a field name that is not a lower-case code`)
     const problem = leafProblem(value, true)
     if (problem !== undefined) problems.push(`${field}: ${problem}`)
   }

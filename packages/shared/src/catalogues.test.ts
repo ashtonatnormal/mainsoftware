@@ -172,6 +172,17 @@ describe('T15 item 8 T16 item 15: ids only', () => {
     }
   })
 
+  it('R2DB-2: refuses a field name is_ids_only() would refuse, such as camelCase or free text', () => {
+    expect(idsProblems(z.strictObject({ teamId: uuid }))).toEqual([
+      '"teamId": a field name that is not a lower-case code',
+    ])
+    expect(idsProblems(z.strictObject({ 'Mel Member +65 9123 4567': z.boolean() }))).toEqual([
+      '"Mel Member +65 9123 4567": a field name that is not a lower-case code',
+    ])
+    expect(idsProblems(z.strictObject({ [`a${'b'.repeat(63)}`]: uuid }))).toHaveLength(1)
+    expect(idsProblems(z.strictObject({ [`a${'b'.repeat(62)}`]: uuid, team_2: uuid }))).toEqual([])
+  })
+
   it('refuses a schema that keeps unknown keys, and one that is not an object', () => {
     expect(idsProblems(z.object({ a: uuid }))).toEqual([expect.stringMatching(/strictObject/)])
     expect(idsProblems(z.looseObject({ a: uuid }))).toEqual([expect.stringMatching(/strictObject/)])

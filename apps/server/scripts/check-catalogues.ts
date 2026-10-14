@@ -5,7 +5,8 @@
 //      apps/server/src/outbox/coverage.ts: every INSERT, UPDATE (by column) and DELETE any runtime
 //      role holds on one, every function of public such a role may execute, and every SECURITY
 //      DEFINER and trigger function there, each with an event or a reasoned exemption; each
-//      function's entry lists every table its body writes; no stale entry; MATCH names real
+//      function's entry lists every table (every column, for an UPDATE) its body writes, and no
+//      body is one this can't read (BEGIN ATOMIC, or EXECUTE outside DYNAMIC_DDL); no stale entry; MATCH names real
 //      columns; no content table (packages/shared CONTENT_TABLES, or one an event with an ACL
 //      snapshot covers) is exempt, by grant or through a function. scripts/check-migrations.sh
 //      refuses any other schema, and rules, so nothing writes outside what this reads. Postgres's
@@ -96,6 +97,7 @@ const FUNCTIONS = `
   with runtime as (${RUNTIME})
   select p.proname || '(' || oidvectortypes(p.proargtypes) || ')' as key, p.prosecdef as definer,
          p.prorettype = 'trigger'::regtype as trigger, p.prosrc as source,
+         p.prosqlbody is not null as atomic,
          array(select r.rolname::text from runtime r where has_function_privilege(r.oid, p.oid, 'EXECUTE') order by 1)
            as executors
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace

@@ -141,8 +141,8 @@ select pg_temp.check(revision = 3 and enabled and updated_by = pg_temp.id('1', '
 from public.feature_flags where org_id = pg_temp.id('1', '00') and key = 't';
 
 -- 6. A locked flag is refused (HF003), core.system and every ai.* flag included, before anything
--- is written; an unknown flag is 22023; a cohort naming anyone who isn't a person of this org (a
--- person of another org, a team, an id that names nothing) is HF004.
+-- is written; an unknown flag is 22023; a cohort naming anyone who isn't a person still at this org
+-- (a person of another org, one who has left, a team, an id that names nothing) is HF004.
 select pg_temp.act_as('1', 'a1');
 select pg_temp.expect_error($$select pg_temp.set_flag('core.system', false, 'org', '{}', '{}')$$, 'HF003');
 select pg_temp.expect_error($$select pg_temp.set_flag('ai.ask', true, 'org', '{}', '{}')$$, 'HF003');
@@ -151,7 +151,10 @@ select pg_temp.expect_error($$select pg_temp.set_flag('t.locked', false, 'org', 
 select pg_temp.expect_error($$select pg_temp.set_flag('no.such_flag', true, 'org', '{}', '{}')$$, '22023');
 select pg_temp.expect_error($$select pg_temp.set_flag(null, true, 'org', '{}', '{}')$$, '22023');
 select pg_temp.expect_error($$select pg_temp.set_flag('t', true, 'cohort', '{f2000000-0000-4000-8000-0000000000a8}', '{}')$$, 'HF004',
-                            'A cohort can only name people of this organisation.');
+                            'A cohort can only name people who are still at this organisation.');
+-- R2E2E-2: nor anyone who has left (a9, deactivated), alone or beside someone still here.
+select pg_temp.expect_error($$select pg_temp.set_flag('t', true, 'cohort', '{f1000000-0000-4000-8000-0000000000a9}', '{}')$$, 'HF004');
+select pg_temp.expect_error($$select pg_temp.set_flag('t', true, 'cohort', '{f1000000-0000-4000-8000-0000000000a8,f1000000-0000-4000-8000-0000000000a9}', '{}')$$, 'HF004');
 select pg_temp.expect_error($$select pg_temp.set_flag('t', true, 'cohort', '{f1000000-0000-4000-8000-0000000000d1}', '{}')$$, 'HF004');
 select pg_temp.expect_error($$select pg_temp.set_flag('t', true, 'cohort', '{f1000000-0000-4000-8000-0000000000a8,f1000000-0000-4000-8000-0000000000ff}', '{}')$$, 'HF004');
 select pg_temp.expect_error($$select pg_temp.set_flag('t', true, 'cohort', array[null]::uuid[], '{}')$$, 'HF004');

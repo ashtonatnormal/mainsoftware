@@ -33,6 +33,9 @@ export interface ScheduledInput {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+// An idempotency key is ids and codes joined by ':' (run:<uuid>, <uuid>:sockets), as jobs' CHECK
+// says (0007), so it can't carry someone's details.
+export const IDEMPOTENCY_KEY = /^[a-z0-9_.-]+(:[a-z0-9_.-]+)*$/
 
 // A job the input refuses. Its message names the rule, never a value.
 export class EnqueueRefused extends Error {
@@ -55,8 +58,8 @@ export async function enqueue<P extends object>(
     throw new EnqueueRefused('a subject is a lower-case uuid')
   }
   const key = input.idempotencyKey
-  if (key !== undefined && (key.length < 1 || key.length > 200)) {
-    throw new EnqueueRefused('an idempotency key is 1 to 200 characters')
+  if (key !== undefined && (key.length < 1 || key.length > 200 || !IDEMPOTENCY_KEY.test(key))) {
+    throw new EnqueueRefused("an idempotency key is 1 to 200 characters of ids and codes joined by ':'")
   }
   const id = randomUUID()
   const values = sql`${id}::uuid, ${orgId}::uuid, ${kind.kind}, ${kind.feature}, ${kind.purpose},

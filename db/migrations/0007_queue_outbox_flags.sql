@@ -79,16 +79,25 @@ begin
     if r.rolinherit or r.rolsuper or r.rolbypassrls or r.rolcreaterole or r.rolcreatedb or r.rolreplication then
       raise exception 'hearth_worker already exists with a power it must not have (inherit, superuser, bypassrls, createrole, createdb or replication)';
     end if;
-    -- What it belongs to, and nothing else: the job roles, by SET and never INHERIT or ADMIN, and
-    -- on RDS the powerless rds_iam, which IAM sign-in needs. An allow-list, so a predefined role
-    -- (pg_read_all_data, pg_write_all_data and the like), which has none of the powers above, is
-    -- refused too.
+    -- What it belongs to, and nothing else: job roles, by SET and never INHERIT or ADMIN, and on
+    -- RDS the powerless rds_iam, which IAM sign-in needs. A job role is told by its shape, not a
+    -- list of names, so one a later migration adds still passes on a server that already has it:
+    -- hearth_queue or a hearth_job_ name, with no power (login, superuser, bypassrls, createrole,
+    -- createdb, replication), a member of no role, and owning nothing here or server-wide. An
+    -- allow-list, so a predefined role (pg_read_all_data, pg_write_all_data and the like), which
+    -- has none of the powers above, is refused too, as are hearth_app and hearth_owner.
     select string_agg(g.rolname, ', ') into bad
     from pg_auth_members m join pg_roles g on g.oid = m.roleid
     where m.member = r.oid
       and not (g.rolname = 'rds_iam' and not g.rolsuper and not g.rolbypassrls
                and not exists (select 1 from pg_auth_members x where x.member = g.oid))
-      and not (g.rolname in ('hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge')
+      and not ((g.rolname = 'hearth_queue' or g.rolname like 'hearth\_job\_%')
+               and not (g.rolcanlogin or g.rolsuper or g.rolbypassrls or g.rolcreaterole or g.rolcreatedb
+                        or g.rolreplication)
+               and not exists (select 1 from pg_auth_members x where x.member = g.oid)
+               and not exists (select 1 from pg_shdepend d
+                               where d.refclassid = 'pg_authid'::regclass and d.refobjid = g.oid and d.deptype = 'o'
+                                 and d.dbid in (0, (select o.oid from pg_database o where o.datname = current_database())))
                and not m.inherit_option and not m.admin_option);
     if bad is not null then
       raise exception 'hearth_worker already exists and is a member of %; it may only hold job roles, by SET', bad;
@@ -453,7 +462,8 @@ create trigger schedule_runs_keep_history before update of reviewed_at, reviewed
 -- delay (a retry), queued at once and uncounted (give_backs counts those, so a job that can never
 -- finish ends), dead (no attempts left, or a failure that won't go away), or cancelled (its
 -- optional feature was switched off). reason is a code: why it was retried, cancelled or died. A
--- key makes adding the same job twice add it once.
+-- key makes adding the same job twice add it once; it is made of ids and codes joined by ':'
+-- (run:<uuid>, <uuid>:sockets), so it can't carry someone's details either.
 create table public.jobs (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.orgs (id),
@@ -462,7 +472,8 @@ create table public.jobs (
   purpose text not null check (purpose ~ '^[a-z][a-z0-9_]{0,62}$'),
   subject_id uuid,
   payload jsonb not null default '{}' constraint jobs_payload_ids_only check (public.is_ids_only(payload)),
-  idempotency_key text check (length(idempotency_key) between 1 and 200),
+  idempotency_key text check (length(idempotency_key) between 1 and 200
+                               and idempotency_key ~ '^[a-z0-9_.-]+(:[a-z0-9_.-]+)*$'),
   state text not null default 'queued' check (state in ('queued', 'running', 'succeeded', 'dead', 'cancelled')),
   attempts integer not null default 0 check (attempts >= 0),
   max_attempts integer not null default 5 check (max_attempts between 1 and 100),
@@ -630,13 +641,13 @@ revoke execute on function public.job_finish(uuid, uuid, bigint[]) from public;
 -- migration changes a lock. The flag's row is then taken FOR NO KEY UPDATE, which waits for the
 -- fences that hold it FOR SHARE but not for the jobs being queued for it (their foreign keys hold
 -- it FOR KEY SHARE), so a busy feature can still be switched off. A cohort names people of this
--- org and org-wide roles. It is kept sorted and without repeats, so the same cohort sent in
+-- org who are still at it, and org-wide roles. It is kept sorted and without repeats, so the same cohort sent in
 -- another order changes nothing. Returns the new revision (the same one when nothing changed, and
 -- then nothing is written). Writes the audit event (ADM-06), naming who joined and left the
 -- cohort; the server appends the outbox event (flag.changed) in the same transaction and, after
 -- the commit, tells every process on Valkey. The messages can be shown as they are. Hearth's own
--- codes let the server tell a locked flag (HF003) and a cohort naming someone outside this org
--- (HF004) from a refused person (42501) and an unknown flag (22023).
+-- codes let the server tell a locked flag (HF003) and a cohort naming someone outside this org or
+-- who has left it (HF004) from a refused person (42501) and an unknown flag (22023).
 create function public.set_feature_flag(
   flag_key text,
   to_enabled boolean,
@@ -674,13 +685,17 @@ begin
   if flag.locked then
     raise exception 'The flag % is locked: only a release changes it.', flag_key using errcode = 'HF003';
   end if;
-  select * into flag from public.feature_flags f where f.org_id = org and f.id = flag.id for no key update;
   people := array(select distinct x from pg_catalog.unnest(coalesce(people, '{}')) x order by x);
   roles := array(select distinct x from pg_catalog.unnest(coalesce(roles, '{}')) x order by x);
-  if exists (select 1 from pg_catalog.unnest(people) x where not exists (
-               select 1 from public.people p where p.org_id = org and p.id = x)) then
-    raise exception 'A cohort can only name people of this organisation.' using errcode = 'HF004';
+  -- Each person named must be of this org and still at it, read FOR SHARE (people before the flag's
+  -- row, in the lock order), so a deactivation in progress makes this wait and then refuse.
+  if (select pg_catalog.count(*) from (
+        select 1 from public.people p
+        where p.org_id = org and p.id = any (people) and p.deactivated_at is null
+        for share) named) <> pg_catalog.cardinality(people) then
+    raise exception 'A cohort can only name people who are still at this organisation.' using errcode = 'HF004';
   end if;
+  select * into flag from public.feature_flags f where f.org_id = org and f.id = flag.id for no key update;
   if flag.enabled = to_enabled and flag.audience = to_audience and flag.cohort_people = people
      and flag.cohort_roles = roles then
     return flag.revision;

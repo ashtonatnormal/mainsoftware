@@ -83,6 +83,14 @@ select pg_temp.expect_rows($$insert into public.jobs (org_id, kind, feature_key,
   values ('f1000000-0000-4000-8000-000000000000', 'test.other', 'core.system', 'service_operation',
           'f1000000-0000-4000-8000-0000000000a9:sockets') on conflict do nothing$$, 1);
 
+-- R2E2E-1: a key is ids and codes joined by ':', so free text (someone's details) is refused (23514).
+select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose, idempotency_key)
+  values ('f1000000-0000-4000-8000-000000000000', 'test.other', 'core.system', 'service_operation',
+          'Priya Nair, +65 9123 4567, resigned')$$, '23514', '%jobs_idempotency_key_check%');
+select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose, idempotency_key)
+  values ('f1000000-0000-4000-8000-000000000000', 'test.other', 'core.system', 'service_operation',
+          'reminder:Buy milk')$$, '23514', '%jobs_idempotency_key_check%');
+
 -- 3. A job names a feature that has a flag in its org (23503), a person of its org (23503), and a
 -- payload of ids only (23514).
 select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose)

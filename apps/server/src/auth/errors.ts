@@ -38,7 +38,7 @@ export const MESSAGES = {
   flag_locked: 'That flag is locked: only a release can change it.',
   purpose_refused: "That feature isn't cleared for use yet.",
   invalid_cohort:
-    "That cohort can't be used. Name 1 to 1,000 people of this organisation and roles, or none for everyone.",
+    "That cohort can't be used. Name 1 to 1,000 people still at this organisation and roles, or none for everyone.",
   try_again: 'Something else changed this at the same moment. Try again.',
   internal: 'Something went wrong on our side. Try again.',
 } as const satisfies Record<string, string>

@@ -7,7 +7,8 @@
 //   3. turning on a feature whose purposes the gate refuses answers 409 purpose_refused: the seam
 //      C0.9's purpose register fills (until then every AI purpose is refused, jobs/gate.ts);
 //   4. set_feature_flag() (migration 0007) re-checks the person and their role FOR SHARE, refuses a
-//      locked flag (HF003) and a cohort naming anyone outside the org (HF004), bumps the revision
+//      locked flag (HF003) and a cohort naming anyone outside the org or who has left it (HF004,
+//      reading them FOR SHARE), bumps the revision
 //      and writes the audit event (ADM-06), naming who joined and left the cohort;
 //   5. on a real change, flag.changed goes to the outbox in the same transaction (T16).
 // After the commit, the change is published on the flags channel, so every process reloads the
