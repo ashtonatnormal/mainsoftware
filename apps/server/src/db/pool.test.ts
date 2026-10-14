@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import { Writable } from 'node:stream'
 import type { Pool } from 'pg'
 import { describe, expect, it } from 'vitest'
-import { appRoleCheck, createPool, workerRoleCheck, workerRolesCheck } from '#src/db/pool.ts'
+import { appRoleCheck, BoundedClient, createPool, workerRoleCheck, workerRolesCheck } from '#src/db/pool.ts'
 import { JOB_ROLES } from '#src/db/roles.ts'
 import { createLogger } from '#src/logger.ts'
 
@@ -98,6 +98,8 @@ describe('C0.6 T18 item 8 pools', () => {
         query_timeout: 31_000,
         keepAlive: true,
         keepAliveInitialDelayMillis: 10_000,
+        // R2RT-1: and the client ends itself then, so the pool never hands it out again.
+        Client: BoundedClient,
       })
       expect(plain.options.max).toBe(10)
       expect(plain.options).not.toHaveProperty('application_name')

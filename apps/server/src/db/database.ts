@@ -33,8 +33,9 @@
 //
 // Every transaction lasts at most 30 s (transaction_timeout). Postgres then ends the session
 // (25P04, FATAL), so the caller sees a lost connection, with no SQLSTATE. Any transaction holding an xid holds every outbox consumer back (T16 item 2), so none
-// may run long. Only read-only work, which takes no xid, may ask for up to 5 minutes, still in
-// statements of at most 31 s each (the pool's query_timeout, pool.ts). It is set per transaction,
+// may run long. Only read-only work, which takes no xid, may ask for up to 5 minutes, and each of
+// its statements must still answer within 31 s (the pool's query_timeout, pool.ts), or the client
+// gives up on it and drops the connection. It is set per transaction,
 // not on the connection, because a timer already running can't then be raised.
 import { Kysely, PostgresDialect, sql, type Transaction } from 'kysely'
 import type { Pool } from 'pg'

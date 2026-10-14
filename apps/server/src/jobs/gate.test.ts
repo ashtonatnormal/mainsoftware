@@ -43,7 +43,7 @@ function flagsSaying(verdict: FlagVerdict, flagClass: 'essential' | 'optional' =
 }
 const kind = { feature: 'it.feature', purpose: 'service_operation', providers: [] } as const
 const job = { orgId: ORG, subjectId: PERSON }
-const subject = { personId: PERSON, roles: [] }
+const subject = { personId: PERSON, active: true, roles: [] }
 const failing = (overrides: Partial<Gate>): Gate => ({ ...C06_GATE, ...overrides })
 
 function refusalOf(run: () => void): unknown {

@@ -17,21 +17,24 @@ export interface FlagState {
   cohort: { people: readonly string[]; roles: readonly string[] }
 }
 
-// Who a flag is evaluated for: a person and the org-wide roles they hold (unrevoked, while they're
-// still at the org), as read when the caller asked: for a job, at its claim, re-read at every claim,
+// Who a flag is evaluated for: a person, whether they're still at the org, and the org-wide roles
+// they hold (unrevoked, while they're still at the org), as read when the caller asked: for a job, at its claim, re-read at every claim,
 // so a role revoked or a person deactivated while an attempt runs applies from the next claim, within
 // the kind's timeoutMs; the database fence covers flag changes only (TECH-SPEC T15 item 9, T17 item
 // 3). The first cohort-gated job kind that touches personal data (A0) re-reads it inside each
 // commit. A job for nobody, or an outbox consumer working for the whole org, has no subject, and a
-// flag with a cohort is off for it.
+// flag with a cohort is off for it. So is one for someone who has left, even where the cohort names
+// them: a cohort counts a person only while they're at the org. A kind whose subject is a leaver by
+// design (offboarding, deletion) sits under a whole-org flag, which is on for everyone.
 export interface FlagSubject {
   personId: string
+  active: boolean
   roles: readonly string[]
 }
 
 function inCohort(state: FlagState, subject: FlagSubject | null): boolean {
   if (state.audience === 'org') return true
-  if (subject === null) return false
+  if (subject === null || !subject.active) return false
   return state.cohort.people.includes(subject.personId) || subject.roles.some(role => state.cohort.roles.includes(role))
 }
 

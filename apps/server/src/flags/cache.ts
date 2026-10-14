@@ -280,8 +280,9 @@ export class FlagCache {
   // The read, or a FlagReadTimeout once it has taken FLAG_READ_WAIT_MS. Postgres's statement_timeout
   // and transaction_timeout don't help when the connection's peer has gone silent (a failover, a
   // dropped network path): their error never arrives. The race settles without the read, and a read
-  // that ends later changes nothing (Promise.race keeps the first outcome and handles the rest). The
-  // pool's own bounds (keepAlive, query_timeout; pool.ts) later free its connection.
+  // that ends later changes nothing (Promise.race keeps the first outcome and handles the rest). Its
+  // connection is freed by the pool's query_timeout: once a statement has gone unanswered for 31 s,
+  // the client ends itself and the pool drops it (BoundedClient, pool.ts).
   async #bounded<T>(read: Promise<T>): Promise<T> {
     let timer: NodeJS.Timeout | undefined
     const timeout = new Promise<never>((_, reject) => {

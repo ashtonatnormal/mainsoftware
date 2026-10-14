@@ -423,9 +423,11 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
 
     // The worker's copy evaluates the cohort for each person (T17 item 3).
     await within(10_000, () => workerFlags.revisionsOf(s.org.id, 'it.essential')?.at(-1) === before + 1)
-    expect(workerFlags.isOn(s.org.id, 'it.essential', { personId: member.id, roles: [] })).toBe(true)
-    expect(workerFlags.isOn(s.org.id, 'it.essential', { personId: admin.id, roles: ['dpo'] })).toBe(true)
-    expect(workerFlags.isOn(s.org.id, 'it.essential', { personId: admin.id, roles: ['admin'] })).toBe(false)
+    expect(workerFlags.isOn(s.org.id, 'it.essential', { personId: member.id, active: true, roles: [] })).toBe(true)
+    expect(workerFlags.isOn(s.org.id, 'it.essential', { personId: admin.id, active: true, roles: ['dpo'] })).toBe(true)
+    expect(workerFlags.isOn(s.org.id, 'it.essential', { personId: admin.id, active: true, roles: ['admin'] })).toBe(
+      false,
+    )
     expect(workerFlags.isOn(s.org.id, 'it.essential', null)).toBe(false)
 
     // Narrowed: the member leaves the cohort.
@@ -437,7 +439,7 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
     })
     expect(await events()).toHaveLength(2)
     await within(10_000, () => workerFlags.revisionsOf(s.org.id, 'it.essential')?.at(-1) === before + 2)
-    expect(workerFlags.isOn(s.org.id, 'it.essential', { personId: member.id, roles: [] })).toBe(false)
+    expect(workerFlags.isOn(s.org.id, 'it.essential', { personId: member.id, active: true, roles: [] })).toBe(false)
 
     // And back to the whole org.
     const whole = await set(adminClient, { key: 'it.essential', enabled: true })
@@ -557,7 +559,7 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
     const wave = await set(adminClient, { key: 'it.optional', enabled: true, audience: 'cohort', people: [a.id, b.id] })
     expect(wave.status).toBe(200)
     try {
-      await within(10_000, () => workerFlags.isOn(s.org.id, 'it.optional', { personId: a.id, roles: [] }))
+      await within(10_000, () => workerFlags.isOn(s.org.id, 'it.optional', { personId: a.id, active: true, roles: [] }))
       const forA = await queue(postsOptional, a.id)
       const forB = await queue(postsOptional, b.id)
       await eventuallyAsync(

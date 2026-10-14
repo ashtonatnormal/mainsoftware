@@ -17,7 +17,9 @@ function flag(key: string, change: Partial<FlagState> = {}): FlagState {
 }
 
 const rows = (...states: FlagState[]) => new Map(states.map(state => [state.key, state]))
-const person = (personId: string, roles: string[] = []) => ({ personId, roles })
+const person = (personId: string, roles: string[] = []) => ({ personId, active: true, roles })
+// Someone who has left: the claim gives them no roles (runner.ts).
+const leaver = (personId: string) => ({ personId, active: false, roles: [] })
 
 describe('C0.6 T17 item 2 a flag is on only when every flag above it is on', () => {
   it('reads the dotted lineage from the top', () => {
@@ -66,6 +68,14 @@ describe('C0.6 T17 item 3 cohorts: people and org-wide roles, any of which match
   it('is off with a cohort for no one (a job for nobody, a consumer for the whole org)', () => {
     expect(evaluate(rows(cohort([A], [])), 'it.wave', null)).toBe('off')
     expect(evaluate(rows(flag('it.wave')), 'it.wave', null)).toBe('on')
+  })
+
+  it('R2E2E-2: counts a person named in the cohort only while they are at the org; a whole-org flag stays on for a leaver', () => {
+    expect(evaluate(rows(cohort([A], [])), 'it.wave', leaver(A))).toBe('off')
+    expect(evaluate(rows(cohort([A], ['dpo'])), 'it.wave', { ...leaver(A), roles: ['dpo'] })).toBe('off')
+    // Offboarding runs under core.system, on for the whole org, and its subject has left by design.
+    expect(evaluate(rows(flag('core.system')), 'core.system', leaver(A))).toBe('on')
+    expect(lineageEnabled(rows(cohort([A], [])), 'it.wave')).toBe(true)
   })
 
   it('applies a cohort above the flag too, and an enabled cohort flag still needs enabled', () => {

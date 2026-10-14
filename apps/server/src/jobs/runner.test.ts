@@ -3,6 +3,7 @@ import { sql } from 'kysely'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import type { FlagVerdict } from '#src/flags/cache.ts'
+import { evaluate, type FlagState, type FlagSubject } from '#src/flags/evaluate.ts'
 import type { JobContext } from '#src/jobs/context.ts'
 import { JobRefused, PermanentJobError } from '#src/jobs/errors.ts'
 import { C06_GATE, type Gate } from '#src/jobs/gate.ts'
@@ -16,6 +17,7 @@ const ORG = 'a0000000-0000-4000-8000-000000000001'
 const OTHER_ORG = 'a0000000-0000-4000-8000-000000000002'
 const SYSTEM = 'c0000000-0000-4000-8000-000000000001'
 const PERSON = 'b0000000-0000-4000-8000-000000000001'
+const OTHER = 'b0000000-0000-4000-8000-000000000002'
 const RUN = 'f0000000-0000-4000-8000-000000000001'
 
 const jobId = (n: number) => `d0000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -259,8 +261,48 @@ describe('C0.6 T15 items 1 and 11 claims', () => {
       { kinds: [record], flags },
     )
     await until(() => seen.length === 2)
-    expect(flags.verdict).toHaveBeenCalledWith(ORG, 'it.optional', { personId: PERSON, roles: ['admin', 'dpo'] })
-    expect(flags.verdict).toHaveBeenCalledWith(ORG, 'it.optional', { personId: SYSTEM, roles: [] })
+    expect(flags.verdict).toHaveBeenCalledWith(ORG, 'it.optional', {
+      personId: PERSON,
+      active: true,
+      roles: ['admin', 'dpo'],
+    })
+    expect(flags.verdict).toHaveBeenCalledWith(ORG, 'it.optional', { personId: SYSTEM, active: false, roles: [] })
+    runner.halt()
+  })
+
+  it('R2E2E-2: a leaver named by id in a cohort is out of it from the next claim, and a subject with no row is no one at the org', async () => {
+    const seen: unknown[] = []
+    const record = kind(async ctx => {
+      seen.push(ctx.job.subjectId)
+    })
+    const flags = fakeFlags()
+    // The cache's verdict for one enabled flag whose cohort names both (cache.ts).
+    const cohort: FlagState = {
+      key: 'it.optional',
+      enabled: true,
+      locked: false,
+      revision: 1,
+      audience: 'cohort',
+      cohort: { people: [PERSON, OTHER], roles: [] },
+    }
+    flags.verdict.mockImplementation((_orgId: string, key: string, subject: unknown) =>
+      evaluate(new Map([[key, cohort]]), key, subject as FlagSubject | null) === 'on' ? 'on' : 'not_in_cohort',
+    )
+    const { p, runner } = start(
+      {
+        claims: [[claimed(1, { subject_id: PERSON }), claimed(2, { subject_id: OTHER })]],
+        subjects: [{ id: PERSON, active: false, roles: [] }],
+      },
+      { kinds: [record], flags },
+    )
+    await until(() => updates(p).length === 2)
+    expect(flags.verdict).toHaveBeenCalledWith(ORG, 'it.optional', { personId: PERSON, active: false, roles: [] })
+    expect(flags.verdict).toHaveBeenCalledWith(ORG, 'it.optional', { personId: OTHER, active: false, roles: [] })
+    for (const update of updates(p)) {
+      expect(update.text).toContain("set state = 'cancelled'")
+      expect(update.values[0]).toBe('not_in_cohort')
+    }
+    expect(seen).toEqual([])
     runner.halt()
   })
 })

@@ -56,7 +56,7 @@ function setup(
     kind: options.kind ?? kindWith(),
     job: { id: JOB, orgId: ORG, kind: 'it.work', attempt: 1, maxAttempts: 5, subjectId: PERSON, payload: {} },
     lease: LEASE,
-    subject: { personId: PERSON, roles: [] },
+    subject: { personId: PERSON, active: true, roles: [] },
     seen: [3, 4],
     signal: controller.signal,
     log: captureLogger().logger,

@@ -304,8 +304,8 @@ export class JobRunner {
       const people = [...new Set(jobs.flatMap(job => (job.subject_id === null ? [] : [job.subject_id])))]
       const subjects = new Map<string, FlagSubject>()
       if (people.length > 0) {
-        // Who each job is for, as the flags' cohorts see them: the org-wide roles they hold now,
-        // none once they have left (T17 item 3).
+        // Who each job is for, as the flags' cohorts see them: whether they're still at the org and
+        // the org-wide roles they hold now, none once they have left (T17 item 3).
         const { rows } = await sql<{ id: string; active: boolean; roles: string[] }>`
           select p.id, p.deactivated_at is null as active,
                  coalesce(array_agg(r.role order by r.role) filter (where r.role is not null), '{}') as roles
@@ -315,7 +315,7 @@ export class JobRunner {
           group by p.id, p.deactivated_at`.execute(trx)
         for (const row of rows) {
           const roles = row.active ? row.roles.filter(role => (COHORT_ROLES as readonly string[]).includes(role)) : []
-          subjects.set(row.id, { personId: row.id, roles })
+          subjects.set(row.id, { personId: row.id, active: row.active, roles })
         }
       }
       return { jobs, runs, subjects }
@@ -324,10 +324,11 @@ export class JobRunner {
       const kind = this.#kinds.get(job.kind)
       // The claim names only the kinds this worker knows.
       if (kind === undefined) continue
+      // A subject with no row in the org is no one at it, so no cohort holds them.
       const subject =
         job.subject_id === null
           ? null
-          : (claimed.subjects.get(job.subject_id) ?? { personId: job.subject_id, roles: [] })
+          : (claimed.subjects.get(job.subject_id) ?? { personId: job.subject_id, active: false, roles: [] })
       const review = job.schedule_run_id !== null && claimed.runs.get(job.schedule_run_id) === 'review'
       this.#begin(orgId, job, kind, review, subject)
     }
