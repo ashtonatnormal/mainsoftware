@@ -21,7 +21,7 @@ import { type Database, withOrg } from '#src/db/database.ts'
 import type { JobRole } from '#src/db/roles.ts'
 import { failureFields } from '#src/db/sqlstate.ts'
 import { readFlagsMessage } from '#src/flags/channel.ts'
-import { evaluate, type FlagState, type FlagSubject } from '#src/flags/evaluate.ts'
+import { evaluate, type FlagState, type FlagSubject, lineageEnabled } from '#src/flags/evaluate.ts'
 import type { Subscriptions } from '#src/pubsub.ts'
 
 // How often each org's flags are read again (±10%), how long one read may take, and how long a
@@ -29,6 +29,9 @@ import type { Subscriptions } from '#src/pubsub.ts'
 export const FLAG_POLL_MS = 2000
 export const FLAG_READ_TIMEOUT = '2s'
 export const FLAG_STALE_MS = 8000
+
+// What verdict() says about a feature for someone.
+export type FlagVerdict = 'on' | 'off' | 'not_in_cohort' | 'unconfirmed'
 // A read that has failed this many times in a row is logged at error level (C0.13 alarms on it).
 const FAILURES_BEFORE_ERROR = 3
 
@@ -162,10 +165,27 @@ export class FlagCache {
   // this process doesn't know. While the org's flags are unconfirmed (never read, or not read for
   // 8 s), only a flag locked on, with everything above it locked on, counts as on.
   isOn(orgId: string, key: string, subject: FlagSubject | null): boolean {
-    if (!Object.hasOwn(this.registry, key)) return false
+    return this.verdict(orgId, key, subject) === 'on'
+  }
+
+  // isOn() with the reason when it isn't (the job runner's outcomes, T15 items 9 and 11): 'off' when
+  // the feature or a flag above it is switched off (or the key isn't known here), 'not_in_cohort'
+  // when every flag is enabled but a cohort leaves the subject out, 'unconfirmed' when the org's
+  // flags are unconfirmed and the feature isn't locked on.
+  verdict(orgId: string, key: string, subject: FlagSubject | null): FlagVerdict {
+    if (!Object.hasOwn(this.registry, key)) return 'off'
     const entry = this.#orgs.get(orgId)
-    if (entry?.states === undefined || !this.#fresh(entry)) return this.#lockedOn(key)
-    return evaluate(entry.states, key, subject, level => Object.hasOwn(this.registry, level)) === 'on'
+    if (entry?.states === undefined || !this.#fresh(entry)) return this.#lockedOn(key) ? 'on' : 'unconfirmed'
+    const registered = (level: string) => Object.hasOwn(this.registry, level)
+    if (evaluate(entry.states, key, subject, registered) === 'on') return 'on'
+    return lineageEnabled(entry.states, key, registered) ? 'not_in_cohort' : 'off'
+  }
+
+  // Whether the org's flags were read within the last 8 s: the worker claims nothing for an org
+  // whose flags it hasn't confirmed (T15 item 11).
+  confirmed(orgId: string): boolean {
+    const entry = this.#orgs.get(orgId)
+    return entry !== undefined && this.#fresh(entry)
   }
 
   // The revisions of the feature's flag and every flag above it that has a row, registered or not,

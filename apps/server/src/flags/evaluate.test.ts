@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evaluate, type FlagState } from '#src/flags/evaluate.ts'
+import { evaluate, type FlagState, lineageEnabled } from '#src/flags/evaluate.ts'
 
 const A = 'b0000000-0000-4000-8000-00000000000a'
 const B = 'b0000000-0000-4000-8000-00000000000b'
@@ -73,5 +73,22 @@ describe('C0.6 T17 item 3 cohorts: people and org-wide roles, any of which match
     expect(evaluate(above, 'it.child', person(A))).toBe('on')
     expect(evaluate(above, 'it.child', person(B))).toBe('off')
     expect(evaluate(rows({ ...cohort([A], []), enabled: false }), 'it.wave', person(A))).toBe('off')
+  })
+})
+
+describe('C0.6 T15 item 9 lineageEnabled(): off for everyone, or only outside a cohort', () => {
+  it('is true when the flag and every flag above it is enabled, whatever the cohorts name', () => {
+    const states = rows(flag('it', { audience: 'cohort', cohort: { people: [A], roles: [] } }), flag('it.child'))
+    expect(lineageEnabled(states, 'it.child')).toBe(true)
+    // Off for B only because of the cohort: the runner cancels B's job as not_in_cohort.
+    expect(evaluate(states, 'it.child', person(B))).toBe('off')
+  })
+
+  it('is false when the flag or one above it is switched off, or a row is missing', () => {
+    expect(lineageEnabled(rows(flag('it', { enabled: false }), flag('it.child')), 'it.child')).toBe(false)
+    expect(lineageEnabled(rows(flag('it'), flag('it.child', { enabled: false })), 'it.child')).toBe(false)
+    expect(lineageEnabled(rows(flag('it')), 'it.child')).toBe(false)
+    expect(lineageEnabled(rows(flag('ai.agents')), 'ai.agents', key => key === 'ai')).toBe(false)
+    expect(lineageEnabled(rows(flag('core.system')), 'core.system')).toBe(true)
   })
 })

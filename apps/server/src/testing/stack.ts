@@ -13,7 +13,10 @@
 //
 // From C0.6 every write a runtime role commits is recorded for the outbox's contract sweep
 // (testing/writes.ts), and each org also has the test flags (TEST_FLAGS: it.*), which every flag
-// cache in the run knows (A5).
+// cache in the run knows (A5). startWorker() runs a worker instance (worker/index.ts) on its own
+// two pools as hearth_worker and its own Valkey subscriber, with the production kinds and consumers,
+// the test's own, and the production schedules only when a test asks for them (so the 03:17 and
+// 03:47 schedules can't fire mid-run), at the test policy's short intervals.
 //
 // The org has nobody in it at the start: each test makes its own people, so a test reads no
 // other test's state, and `-t` on one test works. Requests go through Fastify's inject from
@@ -41,13 +44,17 @@ import { createPool } from '#src/db/pool.ts'
 import type { JobRole } from '#src/db/roles.ts'
 import { FlagCache } from '#src/flags/cache.ts'
 import { AfterResponse } from '#src/http.ts'
+import type { JobKind, RetiredSchedule, ScheduleDef } from '#src/jobs/kinds.ts'
+import { JOB_POLICY, SCHEDULER_POLICY, WORKER_POLICY, type WorkerPolicy } from '#src/jobs/policy.ts'
 import { createLogger } from '#src/logger.ts'
+import type { OutboxConsumer } from '#src/outbox/consumers.ts'
 import { Subscriptions } from '#src/pubsub.ts'
 import { registerRealtime } from '#src/realtime/index.ts'
 import type { SocketServer } from '#src/realtime/socket.ts'
 import { MemorySms } from '#src/testing/sms.ts'
 import { installWriteTracking } from '#src/testing/writes.ts'
 import { closeValkey, createSubscriber, createValkey } from '#src/valkey.ts'
+import { CONTROL_POOL_SIZE, productionRegistries, startWorker, type Worker, workPoolSize } from '#src/worker/index.ts'
 
 // The app's origin in every test. Passkeys are bound to its host name, hearth.test.
 export const APP_ORIGIN = 'https://hearth.test'
@@ -90,6 +97,48 @@ export const TEST_REGISTRY: Readonly<Record<string, FlagSpec>> = { ...FLAGS, ...
 const TEST_FLAG_ROWS = `values ${Object.entries(TEST_FLAGS)
   .map(([key, spec]) => `('${key}', ${spec.default})`)
   .join(', ')}`
+
+// The worker's intervals in the integration tests (design §8.1): leases of 2 s renewed every 0.5 s,
+// the lease sweep (the scheduler's tick) every 0.5 s, polls every 100 ms, metrics every 200 ms and a
+// 1 s drain; the 5 s stop deadline and everything else as in production.
+export const TEST_WORKER_POLICY: WorkerPolicy = {
+  ...WORKER_POLICY,
+  jobs: { ...JOB_POLICY, leaseMs: 2000, heartbeatMs: 500, pollMs: 100, watchdogMs: 100, drainMs: 1000 },
+  scheduler: { ...SCHEDULER_POLICY, tickMs: 500 },
+  consumerPollMs: 100,
+  metricsMs: 200,
+  orgsMs: 1000,
+}
+
+export interface WorkerInstanceOptions {
+  // The test's own kinds, consumers and schedules, beside the production kinds and consumers.
+  kinds?: readonly JobKind[]
+  consumers?: readonly OutboxConsumer[]
+  schedules?: readonly (ScheduleDef | RetiredSchedule)[]
+  // Whether the production schedules (03:17 partitions, 03:47 clean-up) are written too.
+  productionSchedules?: boolean
+  // Whether the production consumers (offboarding) run too: true unless a test turns them off.
+  productionConsumers?: boolean
+  policy?: WorkerPolicy
+  // The worker's flag cache's poll and staleness.
+  flags?: { pollMs?: number; staleMs?: number }
+  concurrency?: number
+}
+
+export interface WorkerInstance {
+  worker: Worker
+  // Its pools' application_name, which kill() ends the connections of.
+  name: string
+  // Resolves once every loop has run a round (the worker's readiness check passes).
+  ready(): Promise<void>
+  // A graceful stop (the worker's own, within its 5 s), then its pools and subscriber close.
+  stop(): Promise<void>
+  // A crash: its loops and timers stop at once, its connections are ended, and its leases are left
+  // to expire.
+  kill(): Promise<void>
+  // A zombie: its jobs run on, but their leases aren't renewed.
+  pauseHeartbeats(paused?: boolean): void
+}
 
 // The roles a test person may hold (a Team Admin would need a team, which no test here makes).
 export type PersonRole = 'owner' | 'admin' | 'ai_admin' | 'leadership' | 'dpo' | 'compliance_officer'
@@ -205,6 +254,8 @@ export interface Stack {
   startApi(options: { valkeyUrl?: string; publishDeactivated?: boolean }): Promise<FastifyInstance>
   // Another realtime app: a shorter re-check, and optionally no revocation subscriber.
   startRealtime(options: { recheckMs: number; subscribe: boolean }): Promise<RealtimeApp>
+  // A worker instance (worker/index.ts), stopped when the stack stops.
+  startWorker(options?: WorkerInstanceOptions): Promise<WorkerInstance>
   track(resource: { close(): Promise<unknown> }): void
   stop(): Promise<void>
 }
@@ -454,6 +505,80 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       await app.listen({ host: '127.0.0.1', port: 0 })
       const { port } = app.server.address() as AddressInfo
       return { app, server, url: `ws://127.0.0.1:${port}/ws`, flags }
+    }
+
+    // Worker instances, each on its own pools and subscriber, logging into the run's lines with its
+    // name.
+    const workerLogger = createLogger({ logLevel: 'debug', role: 'worker' }, captureLogs(logs))
+    let workerCount = 0
+    async function startWorkerInstance(o: WorkerInstanceOptions = {}): Promise<WorkerInstance> {
+      workerCount++
+      const name = `hearth-worker-it-${workerCount}`
+      const instanceLogger = workerLogger.child({ instance: name })
+      const production = productionRegistries({ valkey, keyPrefix: prefix, logger: instanceLogger })
+      const registries = {
+        kinds: [...production.kinds, ...(o.kinds ?? [])],
+        schedules: [...(o.productionSchedules === true ? production.schedules : []), ...(o.schedules ?? [])],
+        consumers: [...(o.productionConsumers === false ? [] : production.consumers), ...(o.consumers ?? [])],
+      }
+      const concurrency = o.concurrency ?? 4
+      const workerUrl = url(c, database, 'hearth_worker', APP_PASSWORD)
+      const control = createPool(workerUrl, instanceLogger, { max: CONTROL_POOL_SIZE, applicationName: name })
+      const work = createPool(workerUrl, instanceLogger, {
+        max: workPoolSize(concurrency, registries),
+        applicationName: name,
+      })
+      const subscriptions = new Subscriptions(createSubscriber(valkey, instanceLogger), instanceLogger)
+      const worker = startWorker({
+        control: createDatabase(control),
+        work: createDatabase(work),
+        subscriptions,
+        keyPrefix: prefix,
+        logger: instanceLogger,
+        concurrency,
+        registries,
+        flagRegistry: TEST_REGISTRY,
+        policy: o.policy ?? TEST_WORKER_POLICY,
+        ...(o.flags === undefined ? {} : { flags: o.flags }),
+      })
+      let closed: Promise<void> | undefined
+      const close = () => {
+        closed ??= (async () => {
+          await subscriptions.close()
+          await Promise.allSettled([control.end(), work.end()])
+        })()
+        return closed
+      }
+      const instance: WorkerInstance = {
+        worker,
+        name,
+        async ready() {
+          const deadline = Date.now() + 10_000
+          for (;;) {
+            try {
+              await worker.check(new AbortController().signal)
+              return
+            } catch (error) {
+              if (Date.now() > deadline) throw error
+            }
+            await new Promise(resolve => setTimeout(resolve, 20))
+          }
+        },
+        async stop() {
+          await worker.stop()
+          await close()
+        },
+        async kill() {
+          worker.halt()
+          await query('select pg_terminate_backend(pid) from pg_stat_activity where application_name = $1', [name])
+          await close()
+        },
+        pauseHeartbeats(paused = true) {
+          worker.runner.pauseHeartbeats(paused)
+        },
+      }
+      closers.push(() => instance.stop())
+      return instance
     }
 
     const { app: api, flags: apiFlags } = await startApiOn(valkey, logger)
@@ -781,6 +906,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
         return (await startApiOn(apiValkey, logger, o)).app
       },
       startRealtime: ({ recheckMs, subscribe }) => startRealtimeApp(recheckMs, subscribe),
+      startWorker: startWorkerInstance,
       track,
       stop: stopAll,
     }

@@ -8,6 +8,10 @@
 // closed: C0.9 replaces the first three with the registers and isProcessingAllowed, and A0 the
 // fourth with spend caps.
 import { isAiPurpose, type ProviderKey, PURPOSES, type PurposeKey } from '@hearth/shared'
+import type { FlagCache } from '#src/flags/cache.ts'
+import type { FlagSubject } from '#src/flags/evaluate.ts'
+import { JobAborted, JobRefused } from '#src/jobs/errors.ts'
+import type { JobKind } from '#src/jobs/kinds.ts'
 
 export interface Gate {
   // Whether the org may process personal data for this purpose at all. C0.6: never for an AI
@@ -29,4 +33,34 @@ export const C06_GATE: Gate = {
   providerCleared: () => false,
   processingAllowed: (_orgId, _subjectId, purpose) => PURPOSES[purpose]?.consent === false,
   overCap: () => false,
+}
+
+// Admits a job, or throws why not, in T15 item 10's order, judging the kind's registry entry (never
+// the job row) for the job's person: the job isn't aborted (its signal says why); its feature is on
+// for its person (JobAborted: flag_off, not_in_cohort, or unconfirmed when the org's flags are
+// unconfirmed); the purpose gate allows its purpose and every provider it names is cleared, its
+// person's processing switch allows its purpose, and an optional feature isn't over its spend cap
+// (JobRefused). The runner calls it before run(), and JobContext again at every step(), read() and
+// commit(). Synchronous: every check reads memory.
+export function admit(
+  gate: Gate,
+  flags: Pick<FlagCache, 'verdict' | 'registry'>,
+  kind: Pick<JobKind, 'feature' | 'purpose' | 'providers'>,
+  job: { orgId: string; subjectId: string | null },
+  subject: FlagSubject | null,
+  signal?: AbortSignal,
+): void {
+  if (signal?.aborted) throw signal.reason instanceof JobAborted ? signal.reason : new JobAborted('shutdown')
+  const verdict = flags.verdict(job.orgId, kind.feature, subject)
+  if (verdict !== 'on') throw new JobAborted(verdict === 'off' ? 'flag_off' : verdict)
+  if (!gate.purposeAllowed(job.orgId, kind.purpose)) throw new JobRefused('purpose_refused')
+  if ((kind.providers ?? []).some(provider => !gate.providerCleared(job.orgId, provider))) {
+    throw new JobRefused('provider_not_cleared')
+  }
+  if (job.subjectId !== null && !gate.processingAllowed(job.orgId, job.subjectId, kind.purpose)) {
+    throw new JobRefused('processing_not_allowed')
+  }
+  // A cap can only ever pause an optional feature (D10).
+  const spec = Object.hasOwn(flags.registry, kind.feature) ? flags.registry[kind.feature] : undefined
+  if (spec?.class === 'optional' && gate.overCap(job.orgId, kind.feature)) throw new JobRefused('over_cap')
 }

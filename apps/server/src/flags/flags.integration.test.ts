@@ -1,8 +1,11 @@
 // Changing a feature flag through the production path, and the change reaching every process
 // (BUILD-PLAN C0.6 "Done when": a flag flip within 10 s; the C0 exit's "a flag change reaches every
-// process within 10 s"; TECH-SPEC T17). The api app, the realtime app and a worker's cache (read as
-// hearth_queue on hearth_worker's login) each keep their own copy of the org's flags, with their own
-// Valkey subscriber: they share only Postgres and Valkey, which is what a change crosses.
+// process within 10 s"; TECH-SPEC T17). The api app, the realtime app and a worker instance
+// (worker/index.ts, its flags read as hearth_queue on hearth_worker's login) each keep their own
+// copy of the org's flags, with their own pools and Valkey subscriber: they share only Postgres and
+// Valkey, which is what a change crosses. The worker runs test jobs that post through ctx.commit()
+// every 50 ms, so a change can be seen to stop them, and a real worker process (node src/main.ts)
+// on a database of its own shows the same in production's wiring.
 // `npm run test:integration` runs it with the stack up (`docker compose up -d --wait`).
 //
 // Every bound is a number far above what is expected (10 s against milliseconds by Valkey, or about
@@ -12,20 +15,94 @@
 //
 // afterAll checks the outbox's contract for the run (every committed write covered; flag.changed
 // appended), and, when every test passed, that each of the route's own error codes was answered.
+import { type ChildProcess, spawn } from 'node:child_process'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { createServer } from 'node:net'
+import { fileURLToPath } from 'node:url'
+import { sql } from 'kysely'
+import { Client as PgClient } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { z } from 'zod'
+import { withOrg } from '#src/db/database.ts'
+import { migrate } from '#src/db/migrations.ts'
 import type { FlagCache } from '#src/flags/cache.ts'
 import { FLAG_ERRORS } from '#src/flags/set.ts'
-import type { Client, Person, Stack } from '#src/testing/stack.ts'
+import type { JobContext } from '#src/jobs/context.ts'
+import { enqueue } from '#src/jobs/enqueue.ts'
+import { defineJob, type JobKind } from '#src/jobs/kinds.ts'
+import { installJobTables } from '#src/testing/jobs.ts'
+import type { Client, Person, Stack, WorkerInstance } from '#src/testing/stack.ts'
 import { startStack } from '#src/testing/stack.ts'
-import { expectEveryWriteCovered } from '#src/testing/writes.ts'
+import { everyTestPassed, expectEveryWriteCovered } from '#src/testing/writes.ts'
 
 let s: Stack
 let admin: Person
 let member: Person
 let adminClient: Client
 let memberClient: Client
-// The worker's copy, as the worker reads it.
+// The worker instance, and its copy of the flags.
+let worker: WorkerInstance
 let workerFlags: FlagCache
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+// A job that posts every 50 ms through ctx.commit() until it is stopped (design §8.3); run again
+// after it was given back (a give-back doesn't count the attempt), it finishes after 3 more posts.
+// Its gate is checked at every post, and every commit ends with the fence, so no post can commit
+// after its flag changed.
+const posting = (name: string, feature: string): JobKind =>
+  defineJob({
+    kind: name,
+    feature,
+    purpose: 'service_operation',
+    role: 'hearth_job_offboarding',
+    payload: z.strictObject({}),
+    idempotentCommits: true,
+    timeoutMs: 60_000,
+    async run(ctx: JobContext<object>) {
+      const before = await ctx.read(async trx => {
+        const { rows } = await sql<{
+          n: number
+        }>`select count(*)::int as n from it_posts where job_id = ${ctx.job.id}`.execute(trx)
+        return rows[0]?.n ?? 0
+      })
+      for (let n = 1; ; n++) {
+        ctx.step('post')
+        await ctx.commit(async trx => {
+          await sql`insert into it_posts (org_id, job_id, n) values (${ctx.job.orgId}, ${ctx.job.id}, ${n})`.execute(
+            trx,
+          )
+        })
+        if (before > 0 && n >= 3) return
+        await sleep(50)
+      }
+    },
+  })
+const postsOptional = posting('it.posts', 'it.optional')
+const postsEssential = posting('it.posts_essential', 'it.essential')
+
+// A port nothing listens on, for the real worker process.
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer()
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      server.close(() => resolve(typeof address === 'object' && address !== null ? address.port : 0))
+    })
+  })
+}
+
+// Polls every 20 ms until check passes on what read gives, for at most `ms`.
+async function eventuallyAsync<T>(read: () => Promise<T>, check: (value: T) => boolean, ms = 10_000): Promise<T> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    const value = await read()
+    if (check(value)) return value
+    if (Date.now() > deadline) throw new Error(`still not as expected after ${ms} ms: ${JSON.stringify(value)}`)
+    await sleep(20)
+  }
+}
 
 const set = (client: Client, body: Record<string, unknown>) => client.post('/api/admin/flags/set', body)
 
@@ -92,8 +169,10 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
     // A sign-in counts as a re-authentication, which the route needs from the last 5 minutes.
     adminClient = await s.signIn(admin)
     memberClient = await s.signIn(member)
-    workerFlags = s.flagCache({ as: 'hearth_queue', subscribe: true })
-    await workerFlags.track(s.org.id)
+    await installJobTables(s)
+    worker = await s.startWorker({ kinds: [postsOptional, postsEssential] })
+    await worker.ready()
+    workerFlags = worker.worker.flags
     // The api keeps the org from its first signed-in request, realtime from its first socket.
     expect((await adminClient.get('/api/devices')).status).toBe(200)
     const opened = await s.openSocket(adminClient)
@@ -109,9 +188,9 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
         expect(reply.cacheControl, `${reply.method} ${reply.url}`).toBe('no-store')
         expect(reply.error, `${reply.method} ${reply.url}`).not.toBe('internal')
       }
-      const all = suite.tasks.every(task => task.type !== 'test' || task.result?.state === 'pass')
-      await expectEveryWriteCovered(s.superuser, 'flags', { allPassed: all && suite.tasks.length > 0 })
-      if (all && suite.tasks.length > 0) {
+      const all = everyTestPassed(suite)
+      await expectEveryWriteCovered(s.superuser, 'flags', { allPassed: all })
+      if (all) {
         const answered = new Set(s.replies.map(reply => reply.error))
         expect(FLAG_ERRORS.filter(code => !answered.has(code))).toEqual([])
       }
@@ -329,5 +408,224 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
     const whole = await set(adminClient, { key: 'it.essential', enabled: true })
     expect(whole.body).toEqual({ key: 'it.essential', enabled: true, revision: before + 3 })
     expect(await flagRow('it.essential')).toMatchObject({ audience: 'org', cohort_people: [], cohort_roles: [] })
+  })
+  const posted = async (job: string) =>
+    (await s.query<{ n: number }>('select count(*)::int as n from it_posts where job_id = $1', [job]))[0]?.n ?? 0
+  const jobOf = async (id: string) =>
+    (
+      await s.query<{ state: string; reason: string | null; attempts: number }>(
+        'select state, reason, attempts from jobs where id = $1',
+        [id],
+      )
+    )[0]
+  const queue = (kind: JobKind, subjectId?: string) =>
+    withOrg(s.worker, { orgId: s.org.id, system: true, as: 'hearth_job_offboarding' }, trx =>
+      enqueue(trx, s.org.id, kind, { payload: {}, ...(subjectId === undefined ? {} : { subjectId }) }),
+    )
+
+  it('§8.3 case 3: an optional feature turned off through the route cancels its running job within 10 s; no post commits after the reply', async () => {
+    const job = await queue(postsOptional)
+    await within(10_000, () => true)
+    await eventuallyAsync(
+      () => posted(job),
+      n => n >= 3,
+    )
+    const started = Date.now()
+    const reply = await set(adminClient, { key: 'it.optional', enabled: false })
+    expect(reply.status).toBe(200)
+    const atReply = await posted(job)
+    try {
+      await eventuallyAsync(
+        () => jobOf(job),
+        row => row?.state === 'cancelled',
+      )
+      console.info(`turned off: the job ended ${Date.now() - started} ms after the request`)
+      expect(Date.now() - started).toBeLessThan(10_000)
+      expect(await jobOf(job)).toMatchObject({ state: 'cancelled', reason: 'flag_off' })
+      expect(await posted(job)).toBe(atReply)
+      await sleep(2000)
+      expect(await posted(job)).toBe(atReply)
+    } finally {
+      expect((await set(adminClient, { key: 'it.optional', enabled: true })).status).toBe(200)
+    }
+  })
+
+  it('§8.3 case 4: an essential feature turned off gives its job back uncounted; it isn’t claimed while off and posts again when back on', async () => {
+    const job = await queue(postsEssential)
+    await eventuallyAsync(
+      () => posted(job),
+      n => n >= 3,
+    )
+    expect((await set(adminClient, { key: 'it.essential', enabled: false })).status).toBe(200)
+    const atReply = await posted(job)
+    try {
+      const back = await eventuallyAsync(
+        () => jobOf(job),
+        row => row?.state === 'queued',
+      )
+      expect(back).toMatchObject({ reason: 'flag_off', attempts: 0 })
+      await sleep(1500)
+      expect(await jobOf(job)).toMatchObject({ state: 'queued', attempts: 0 })
+      expect(await posted(job)).toBe(atReply)
+    } finally {
+      expect((await set(adminClient, { key: 'it.essential', enabled: true })).status).toBe(200)
+    }
+    // Back on: claimed again, it posts again and, on this attempt, finishes.
+    await eventuallyAsync(
+      () => jobOf(job),
+      row => row?.state === 'succeeded',
+    )
+    expect(await posted(job)).toBeGreaterThan(atReply)
+    expect((await jobOf(job))?.attempts).toBe(1)
+  })
+
+  it('§8.3 case 5: a cohort narrowed to leave a person out cancels their running job within 10 s, and another’s carries on', async () => {
+    const [a, b] = [await s.person(), await s.person()]
+    const wave = await set(adminClient, { key: 'it.optional', enabled: true, audience: 'cohort', people: [a.id, b.id] })
+    expect(wave.status).toBe(200)
+    try {
+      await within(10_000, () => workerFlags.isOn(s.org.id, 'it.optional', { personId: a.id, roles: [] }))
+      const forA = await queue(postsOptional, a.id)
+      const forB = await queue(postsOptional, b.id)
+      await eventuallyAsync(
+        async () => Math.min(await posted(forA), await posted(forB)),
+        n => n >= 3,
+      )
+      const started = Date.now()
+      const narrowed = await set(adminClient, { key: 'it.optional', enabled: true, audience: 'cohort', people: [b.id] })
+      expect(narrowed.status).toBe(200)
+      const atReply = await posted(forA)
+      const bAtReply = await posted(forB)
+      await eventuallyAsync(
+        () => jobOf(forA),
+        row => row?.state === 'cancelled',
+      )
+      console.info(`narrowed: the job ended ${Date.now() - started} ms after the request`)
+      expect(Date.now() - started).toBeLessThan(10_000)
+      expect(await jobOf(forA)).toMatchObject({ reason: 'not_in_cohort' })
+      await sleep(1000)
+      expect(await posted(forA)).toBe(atReply)
+      // B's job carries on: it posts after the reply. (A post whose commit was in flight across the
+      // change is refused by the fence and the job given back at once, uncounted, to run on.)
+      await eventuallyAsync(
+        () => posted(forB),
+        n => n > bAtReply,
+      )
+      expect(['running', 'queued', 'succeeded']).toContain((await jobOf(forB))?.state)
+      expect(s.logs.filter(line => line.job === forB && line.event === 'job_cancelled')).toEqual([])
+    } finally {
+      // Off ends B's job; then the whole org again.
+      expect((await set(adminClient, { key: 'it.optional', enabled: false })).status).toBe(200)
+      expect((await set(adminClient, { key: 'it.optional', enabled: true })).status).toBe(200)
+    }
+  })
+
+  it('§8.3 case 6: a real worker process, on its own database, has a flag change within 10 s and stops cleanly on SIGTERM', async () => {
+    const c = {
+      host: process.env.PGHOST ?? '127.0.0.1',
+      port: Number(process.env.PGPORT ?? 5432),
+      user: process.env.PGUSER ?? 'postgres',
+      password: process.env.PGPASSWORD ?? 'postgres',
+    }
+    const database = `worker_it_${randomBytes(4).toString('hex')}`
+    const admin = new PgClient({ ...c, database: 'postgres' })
+    await admin.connect()
+    let child: ChildProcess | undefined
+    try {
+      await admin.query(`create database ${database} owner hearth_owner template template0`)
+      const url = (user: string, password: string) =>
+        `postgres://${user}:${encodeURIComponent(password)}@${c.host}:${c.port}/${database}`
+      const { error } = await migrate({ databaseUrl: url(c.user, c.password), role: 'hearth_owner' })
+      if (error) throw error
+      const db = new PgClient({ ...c, database })
+      await db.connect()
+      const org = randomUUID()
+      const system = randomUUID()
+      try {
+        await db.query("insert into orgs (id, name) values ($1, 'Worker process test')", [org])
+        await db.query("insert into principals (id, org_id, kind, system_key) values ($1, $2, 'system', 'hearth')", [
+          system,
+          org,
+        ])
+        await db.query(
+          "insert into feature_flags (org_id, key, enabled, locked) values ($1, 'it.optional', true, false)",
+          [org],
+        )
+        const port = await freePort()
+        // The process reads .env.example as the server's own npm run dev does; these override it.
+        child = spawn(process.execPath, ['--env-file=../../.env.example', 'src/main.ts'], {
+          cwd: fileURLToPath(new URL('../../', import.meta.url)),
+          env: {
+            ...process.env,
+            ROLE: 'worker',
+            PORT: String(port),
+            DEPLOY_ENV: 'test',
+            SMS_PROVIDER: '',
+            LOG_LEVEL: 'info',
+            WORKER_DATABASE_URL: url('hearth_worker', 'hearth-local'),
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
+        const lines: Record<string, unknown>[] = []
+        const text: string[] = []
+        let buffer = ''
+        child.stdout?.on('data', chunk => {
+          buffer += String(chunk)
+          const parts = buffer.split('\n')
+          buffer = parts.pop() ?? ''
+          for (const part of parts) {
+            text.push(part)
+            try {
+              lines.push(JSON.parse(part) as Record<string, unknown>)
+            } catch {
+              // Kept in `text` for the failure message.
+            }
+          }
+        })
+        child.stderr?.on('data', chunk => text.push(String(chunk)))
+        const exited = new Promise<number | null>(resolve => child?.once('exit', code => resolve(code)))
+        // Ready within 20 s.
+        const readyBy = Date.now() + 20_000
+        for (;;) {
+          const status = await fetch(`http://127.0.0.1:${port}/ready`)
+            .then(response => response.status)
+            .catch(() => 0)
+          if (status === 200) break
+          if (Date.now() > readyBy) throw new Error(`the worker never became ready:\n${text.join('\n')}`)
+          await sleep(100)
+        }
+        // A change, told on h:test:flags as the api would.
+        const [row] = (
+          await db.query<{ revision: string }>(
+            `update feature_flags set enabled = false, revision = revision + 1, updated_by = $2, updated_at = now()
+             where org_id = $1 and key = 'it.optional' returning revision::text`,
+            [org, system],
+          )
+        ).rows
+        const revision = Number(row?.revision)
+        const told = Date.now()
+        await s.valkey.publish(
+          'h:test:flags',
+          JSON.stringify({ v: 1, org, key: 'it.optional', revision, at: Date.now() }),
+        )
+        await within(10_000, () =>
+          lines.some(
+            line => line.event === 'flags_changed' && line.key === 'it.optional' && line.revision === revision,
+          ),
+        )
+        console.info(`a real worker process had the change ${Date.now() - told} ms after it was told`)
+        child.kill('SIGTERM')
+        const code = await Promise.race([exited, sleep(15_000).then(() => 'timed out')])
+        expect(code, text.join('\n')).toBe(0)
+        expect(lines.some(line => line.msg === 'stopped')).toBe(true)
+        expect(lines.filter(line => Number(line.level) >= 50)).toEqual([])
+      } finally {
+        await db.end()
+      }
+    } finally {
+      if (child !== undefined && child.exitCode === null) child.kill('SIGKILL')
+      await admin.query(`drop database if exists ${database} with (force)`).catch(() => {})
+      await admin.end()
+    }
   })
 })

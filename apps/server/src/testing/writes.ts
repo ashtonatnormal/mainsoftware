@@ -68,6 +68,9 @@ export async function installWriteTracking(superuser: Pick<PgClient, 'query'>): 
     end
     $$;
     revoke execute on function public.it_track_write() from public;
+    -- A partition made later (create_data_access_partitions(), which runs as hearth_owner) gets a
+    -- clone of its parent's row triggers, which takes EXECUTE on their function.
+    grant execute on function public.it_track_write() to hearth_owner;
     -- Each event's position and what it names, kept where the clean-up can't delete it, so a run
     -- that purges the outbox can still be swept.
     create table public.it_events (xid xid8 not null, type text not null, entity_id uuid not null, subject_ids uuid[] not null);
@@ -185,4 +188,23 @@ export async function expectEveryWriteCovered(
     if (missing.length > 0) throw new Error(`the ${suite} suite never appended ${missing.join(', ')}`)
   }
   return sweep
+}
+
+// Whether every test of a suite, nested suites' included, ran and passed: only then may an afterAll
+// require the suite's whole share of the contract (a test skipped with -t emits nothing).
+interface TaskLike {
+  type: string
+  result?: { state?: string } | undefined
+  tasks?: readonly TaskLike[]
+}
+export function everyTestPassed(suite: { tasks: readonly TaskLike[] }): boolean {
+  const tests: TaskLike[] = []
+  const walk = (tasks: readonly TaskLike[]) => {
+    for (const task of tasks) {
+      if (task.type === 'test') tests.push(task)
+      else walk(task.tasks ?? [])
+    }
+  }
+  walk(suite.tasks)
+  return tests.length > 0 && tests.every(task => task.result?.state === 'pass')
 }

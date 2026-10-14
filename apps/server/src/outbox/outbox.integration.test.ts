@@ -2,8 +2,10 @@
 // in effect" and the C0 exit's "rolled-back writes emit nothing; replay rebuilds identical
 // projections"): real routes append the events, and a test consumer, run by the ConsumerRunner as
 // hearth_job_offboarding on hearth_worker's login, records every delivery in it_deliveries, which
-// has no unique constraint, so a duplicate shows up rather than merging. The worker's own loops
-// (claims, kill, zombies, the offboarding consumer) are tested with the worker.
+// has no unique constraint, so a duplicate shows up rather than merging. The cases under "with the
+// worker" (design §8.2 cases 2-7, 9 and 10) run the consumer in worker instances (testing/stack.ts
+// startWorker), which fail mid-round, lose their connection, are killed after a commit, and run
+// three at once while writers commit; the job queue's own cases are in jobs/jobs.integration.test.ts.
 //
 // Cases that purge the outbox run last, after every case that replays from the oldest event.
 
@@ -15,14 +17,28 @@ import { C06_GATE } from '#src/jobs/gate.ts'
 import { appendOutbox } from '#src/outbox/append.ts'
 import { BelowFloor, ConsumerRunner, type OutboxConsumer, type RoundResult } from '#src/outbox/consumers.ts'
 import { readOutboxLag, readQueueDepth } from '#src/outbox/lag.ts'
+import type { OutboxRow } from '#src/outbox/positions.ts'
+import { installJobTables } from '#src/testing/jobs.ts'
 import { captureLogger } from '#src/testing/logs.ts'
 import type { Person, Stack } from '#src/testing/stack.ts'
 import { startStack } from '#src/testing/stack.ts'
-import { expectEveryWriteCovered } from '#src/testing/writes.ts'
+import { everyTestPassed, expectEveryWriteCovered } from '#src/testing/writes.ts'
 
 let s: Stack
 let flags: FlagCache
 const log = captureLogger()
+
+// Polls every 20 ms until check passes, for at most `ms`.
+async function eventually<T>(read: () => Promise<T>, check: (value: T) => boolean, ms = 10_000): Promise<T> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    const value = await read()
+    if (check(value)) return value
+    if (Date.now() > deadline) throw new Error(`still not as expected after ${ms} ms: ${JSON.stringify(value)}`)
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+}
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 // Every event a round handled, recorded in the round's own transaction.
 function consumer(name: string, change: Partial<OutboxConsumer> = {}): OutboxConsumer {
@@ -92,17 +108,10 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
 
   beforeAll(async () => {
     s = await startStack()
-    // The test consumer's projection: org-scoped, under the standard policy, granted to the role
-    // the test consumer runs as. Grants are per database, so nothing reaches another run's.
-    await s.query(`
-      create table it_deliveries (
-        org_id uuid not null, consumer text not null, event_id bigint not null, type text not null,
-        round_xid xid8 not null default pg_current_xact_id());
-      alter table it_deliveries enable row level security;
-      create policy org_isolation on it_deliveries
-        using (org_id = nullif(current_setting('app.org_id', true), '')::uuid)
-        with check (org_id = nullif(current_setting('app.org_id', true), '')::uuid);
-      grant select, insert on it_deliveries to hearth_job_offboarding`)
+    // The test consumers' tables (it_deliveries, it_effects, it_projection, it_fail_next):
+    // org-scoped, under the standard policy, granted to the role the test consumers run as. Grants
+    // are per database, so nothing reaches another run's.
+    await installJobTables(s)
     flags = s.flagCache({ as: 'hearth_queue' })
     await flags.track(s.org.id)
     admin = await s.person({ roles: ['admin'], pin: s.newPin() })
@@ -112,8 +121,7 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
   afterAll(async ({}, suite) => {
     if (s === undefined) return
     try {
-      const all = suite.tasks.every(task => task.type !== 'test' || task.result?.state === 'pass')
-      await expectEveryWriteCovered(s.superuser, 'outbox', { allPassed: all && suite.tasks.length > 0 })
+      await expectEveryWriteCovered(s.superuser, 'outbox', { allPassed: everyTestPassed(suite) })
     } finally {
       await s.stop()
     }
@@ -266,6 +274,430 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
     } finally {
       await s.query("delete from outbox_checkpoints where consumer = 'it_future'")
     }
+  })
+
+  it('§8.2 case 1(b): a real route whose transaction fails after all its writes leaves no account, session or event; the next sign-in emits each once', async () => {
+    const person = await s.person()
+    // The set-PIN request writes the account, the PIN, the device, the session and their events,
+    // then fails at its last audit row.
+    await s.query("insert into it_fail_next (action) values ('auth.pin_set')")
+    try {
+      const browser = s.client()
+      expect((await browser.post('/api/auth/otp/request', { phone: person.e164 })).status).toBe(200)
+      const verified = await browser.post('/api/auth/otp/verify', { code: await s.sms.nextCode(person.e164) })
+      expect(verified.json<{ next: string }>().next).toBe('set_pin')
+      const failed = await browser.post('/api/auth/pin/set', { pin: s.newPin() })
+      expect([failed.status, failed.error]).toEqual([500, 'internal'])
+    } finally {
+      await s.query("delete from it_fail_next where action = 'auth.pin_set'")
+    }
+    const about = () =>
+      s.query<{ type: string }>(
+        'select type from outbox_events where entity_id = $1 or $1 = any(subject_ids) order by tx_id, id',
+        [person.id],
+      )
+    expect(await s.query('select 1 from users where id = $1', [person.id])).toEqual([])
+    expect(await s.query('select 1 from sessions where user_id = $1', [person.id])).toEqual([])
+    expect(await s.query('select 1 from devices where user_id = $1', [person.id])).toEqual([])
+    expect(await about()).toEqual([])
+    // A fresh sign-in (the first consumed its attempt) commits each once.
+    await s.signIn(person)
+    expect((await about()).map(row => row.type).sort()).toEqual(['account.pin_set', 'signin.started'])
+  })
+
+  describe('with the worker (§8.2 cases 2-7, 9 and 10)', () => {
+    // The worker's test consumer (design §8.1): for each event it re-reads the person's state and
+    // upserts their projection row (convergent), records a one-off effect per event in it_effects
+    // (deduplicated, as a push would be) and every delivery in it_deliveries (never deduplicated,
+    // so a duplicate shows), all in the round's transaction. `hook` runs after a batch's effects.
+    let hook: ((trx: InOrg, events: readonly OutboxRow[]) => Promise<void>) | undefined
+    const PROJECTED = [
+      'signin.started',
+      'signin.ended',
+      'account.pin_set',
+      'account.pin_reset',
+      'account.passkey_added',
+      'account.passkey_removed',
+      'person.deactivated',
+    ] as const
+    const projection = (name: string, batch = 50): OutboxConsumer => ({
+      name,
+      role: 'hearth_job_offboarding',
+      feature: 'core.system',
+      purpose: 'accounts',
+      types: PROJECTED,
+      start: 'oldest',
+      batch,
+      lagBudgetMs: 10_000,
+      handle: async (trx, events, { orgId }) => {
+        for (const event of events) {
+          await sql`insert into it_projection (org_id, person_id, deactivated, live_sessions, passkeys)
+            select ${orgId}, p.id, p.deactivated_at is not null,
+              (select count(*) from sessions x
+               where x.org_id = p.org_id and x.user_id = p.id and x.revoked_at is null and x.expires_at > now()),
+              (select count(*) from passkeys k where k.org_id = p.org_id and k.user_id = p.id and k.removed_at is null)
+            from people p where p.org_id = ${orgId} and p.id = ${event.entity.id}
+            on conflict (person_id) do update set deactivated = excluded.deactivated,
+              live_sessions = excluded.live_sessions, passkeys = excluded.passkeys`.execute(trx)
+          await sql`insert into it_effects (org_id, consumer, event_id, type)
+            values (${orgId}, ${name}, ${event.id}, ${event.type}) on conflict do nothing`.execute(trx)
+          await sql`insert into it_deliveries (org_id, consumer, event_id, type)
+            values (${orgId}, ${name}, ${event.id}, ${event.type})`.execute(trx)
+        }
+        await hook?.(trx, events)
+      },
+    })
+    const worker = (consumers: OutboxConsumer[]) => s.startWorker({ consumers, productionConsumers: false })
+
+    // Every committed event of the projected types, and how often the consumer delivered each.
+    const deliveryCounts = (name: string) =>
+      s.query<{ id: string; n: number }>(
+        `select e.id::text as id, count(d.event_id)::int as n from outbox_events e
+         left join it_deliveries d on d.event_id = e.id and d.consumer = $1
+         where e.org_id = $2 and e.type = any($3) group by e.id order by e.id`,
+        [name, s.org.id, [...PROJECTED]],
+      )
+    const atHead = async (name: string) => {
+      const [top, at] = [await head(), await checkpoint(name)]
+      return top !== undefined && at?.last_tx === top.tx_id && at.last_id === top.id
+    }
+    const caughtUp = (name: string, ms = 15_000) =>
+      eventually(
+        () => atHead(name),
+        done => done,
+        ms,
+      )
+    const expectDeliveredOnce = async (name: string) => {
+      const counts = await deliveryCounts(name)
+      expect(counts.length).toBeGreaterThan(0)
+      expect(counts.filter(row => row.n !== 1)).toEqual([])
+    }
+    const projectionHash = async () =>
+      (
+        await s.query<{ hash: string }>(
+          `select md5(coalesce(string_agg(format('%s:%s:%s:%s', person_id, deactivated, live_sessions, passkeys), ','
+                    order by person_id), '')) as hash from it_projection where org_id = $1`,
+          [s.org.id],
+        )
+      )[0]?.hash
+    // Events no route need make: a PIN set, as the person (ids only, no write).
+    const pinSet = (person: Person) => (trx: InOrg) =>
+      appendOutbox(trx, {
+        orgId: s.org.id,
+        type: 'account.pin_set',
+        entity: { type: 'person', id: person.id },
+        subjects: [person.id],
+        purpose: 'accounts',
+        ids: {},
+      })
+    const appendPinSets = async (count: number) => {
+      for (let n = 0; n < count; n++) {
+        const person = await s.person()
+        await withOrg(s.db, { orgId: s.org.id, userId: admin.id }, pinSet(person))
+      }
+    }
+
+    it('§8.2 case 3: a round that fails after writing its effects commits none of them, and the next round applies the batch once', async () => {
+      await appendPinSets(4)
+      let failed = false
+      hook = async () => {
+        if (failed) return
+        failed = true
+        throw new Error('the round fails after its effects')
+      }
+      const w = await worker([projection('it_w')])
+      try {
+        await caughtUp('it_w')
+        expect(failed).toBe(true)
+        await expectDeliveredOnce('it_w')
+        expect(s.logs.filter(line => line.event === 'worker_loop_failed' && line.loop === 'outbox:it_w')).toHaveLength(
+          1,
+        )
+      } finally {
+        hook = undefined
+        await w.stop()
+      }
+    })
+
+    it('§8.2 case 4: a round whose connection dies between its effects and its checkpoint commits nothing, and the next applies it once', async () => {
+      await appendPinSets(3)
+      let pid: number | undefined
+      let release: () => void = () => {}
+      const held = new Promise<void>(resolve => {
+        release = resolve
+      })
+      hook = async trx => {
+        if (pid !== undefined) return
+        pid = (await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(trx)).rows[0]?.pid ?? 0
+        await held
+      }
+      const w = await worker([projection('it_w')])
+      try {
+        await eventually(
+          async () => pid,
+          value => value !== undefined,
+        )
+        await s.query('select pg_terminate_backend($1)', [pid])
+        release()
+        await caughtUp('it_w')
+        await expectDeliveredOnce('it_w')
+      } finally {
+        hook = undefined
+        await w.stop()
+      }
+    })
+
+    it('§8.2 case 5: a worker killed right after a batch commits; another resumes from the stored checkpoint, delivering each event once', async () => {
+      await appendPinSets(12)
+      let committedUpTo: string | undefined
+      hook = async (_trx, events) => {
+        committedUpTo ??= events.at(-1)?.id
+      }
+      const a = await worker([projection('it_w', 3)])
+      try {
+        // The batch's checkpoint has committed: kill the worker before it knows any more.
+        await eventually(
+          async () =>
+            committedUpTo !== undefined &&
+            (
+              await s.query('select 1 from it_deliveries where consumer = $1 and event_id = $2', [
+                'it_w',
+                committedUpTo,
+              ])
+            ).length === 1,
+          done => done,
+        )
+      } finally {
+        await a.kill()
+      }
+      hook = undefined
+      const b = await worker([projection('it_w', 3)])
+      try {
+        await caughtUp('it_w')
+        await expectDeliveredOnce('it_w')
+      } finally {
+        await b.stop()
+      }
+    })
+
+    it('§8.2 case 6: three workers run one consumer while 8 writers commit 200 events, 10% rolled back: each committed event is delivered once, in order', async () => {
+      const people = await Promise.all(Array.from({ length: 40 }, () => s.person()))
+      const workers = await Promise.all([1, 2, 3].map(() => worker([projection('it_w6', 10)])))
+      try {
+        let rolledBack = 0
+        const writers = Array.from({ length: 8 }, async (_, w) => {
+          for (let i = 0; i < 25; i++) {
+            const person = people[(w * 25 + i) % people.length] as Person
+            const rollBack = (w * 25 + i) % 10 === 3
+            try {
+              await withOrg(s.db, { orgId: s.org.id, userId: admin.id }, async trx => {
+                // The first of a third of the people leaves for real; every other event is a PIN set.
+                const left =
+                  people.indexOf(person) % 3 === 0
+                    ? await trx
+                        .updateTable('people')
+                        .set({ deactivated_at: sql<Date>`now()`, deactivated_by: admin.id })
+                        .where('org_id', '=', s.org.id)
+                        .where('id', '=', person.id)
+                        .where('deactivated_at', 'is', null)
+                        .returning('id')
+                        .execute()
+                    : []
+                if (left.length > 0) {
+                  await appendOutbox(trx, {
+                    orgId: s.org.id,
+                    type: 'person.deactivated',
+                    entity: { type: 'person', id: person.id },
+                    subjects: [person.id],
+                    purpose: 'accounts',
+                    ids: {},
+                  })
+                } else {
+                  await pinSet(person)(trx)
+                }
+                if (rollBack) throw new Error('rolled back')
+              })
+            } catch (error) {
+              if ((error as Error).message !== 'rolled back') throw error
+              rolledBack++
+            }
+          }
+        })
+        await Promise.all(writers)
+        expect(rolledBack).toBe(20)
+        await caughtUp('it_w6', 30_000)
+        await expectDeliveredOnce('it_w6')
+        // Nothing delivered that didn't commit, and the deliveries, round by round, only move forward.
+        const order = await s.query<{ tx_id: string; id: string; known: boolean }>(
+          `select e.tx_id::text, d.event_id::text as id, e.id is not null as known from it_deliveries d
+           left join outbox_events e on e.id = d.event_id
+           where d.consumer = 'it_w6' order by d.round_xid, e.tx_id, e.id`,
+        )
+        expect(order.every(row => row.known)).toBe(true)
+        for (let n = 1; n < order.length; n++) {
+          const [before, after] = [order[n - 1], order[n]]
+          const forward =
+            BigInt(after?.tx_id ?? 0) > BigInt(before?.tx_id ?? 0) ||
+            (after?.tx_id === before?.tx_id && BigInt(after?.id ?? 0) > BigInt(before?.id ?? 0))
+          expect(forward, `delivery ${n} went back`).toBe(true)
+        }
+        // Three instances, one consumer: the others' rounds found it busy, never failed.
+        expect(s.logs.filter(line => line.event === 'worker_loop_failed' && line.loop === 'outbox:it_w6')).toEqual([])
+        const [{ left } = { left: 0 }] = await s.query<{ left: number }>(
+          'select count(*)::int as left from it_projection where org_id = $1 and deactivated',
+          [s.org.id],
+        )
+        expect(left).toBeGreaterThan(0)
+      } finally {
+        await Promise.all(workers.map(w => w.stop()))
+      }
+    })
+
+    it('§8.2 case 7: a replay rebuilds the identical projection, whole or in two parts', async () => {
+      const incremental = await projectionHash()
+      const spec = projection('it_w6', 10)
+      const rebuild = async (twoParts: boolean) => {
+        await s.query('delete from it_projection; delete from it_effects')
+        await ConsumerRunner.reset(s.worker, spec, s.org.id, 'oldest')
+        if (twoParts) {
+          // Part of the way, then killed, then another worker tails from the stored checkpoint.
+          const total = (await s.query('select 1 from outbox_events where org_id = $1', [s.org.id])).length
+          const first = await worker([spec])
+          await eventually(
+            async () => Number((await checkpoint('it_w6'))?.processed ?? 0),
+            n => n >= total / 2,
+            15_000,
+          ).finally(() => first.kill())
+        }
+        const rest = await worker([spec])
+        try {
+          await caughtUp('it_w6')
+        } finally {
+          await rest.stop()
+        }
+        return projectionHash()
+      }
+      expect(await rebuild(false)).toBe(incremental)
+      expect(await rebuild(true)).toBe(incremental)
+    })
+
+    it('§8.2 case 2: a duplicate delivery (a replay from the oldest event) changes neither the projection nor the one-off effects', async () => {
+      const spec = projection('it_w6', 10)
+      const [hash, effects, before, processed] = [
+        await projectionHash(),
+        await s.query('select consumer, event_id from it_effects order by consumer, event_id'),
+        await deliveryCounts('it_w6'),
+        Number((await checkpoint('it_w6'))?.processed),
+      ]
+      await ConsumerRunner.reset(s.worker, spec, s.org.id, 'oldest')
+      const w = await worker([spec])
+      try {
+        await caughtUp('it_w6')
+      } finally {
+        await w.stop()
+      }
+      expect(await projectionHash()).toBe(hash)
+      expect(await s.query('select consumer, event_id from it_effects order by consumer, event_id')).toEqual(effects)
+      // Every event was delivered once more, and counted.
+      const after = await deliveryCounts('it_w6')
+      expect(after.map(row => ({ id: row.id, n: row.n - 1 }))).toEqual(before)
+      const all = (await s.query('select 1 from outbox_events where org_id = $1', [s.org.id])).length
+      expect(Number((await checkpoint('it_w6'))?.processed)).toBe(processed + all)
+    })
+
+    it('§8.2 case 9: two writes to one person, the lower transaction id committing second: the projection ends at the final state', async () => {
+      const person = await s.person()
+      let commitFirst: () => void = () => {}
+      const held = new Promise<void>(resolve => {
+        commitFirst = resolve
+      })
+      let appended: () => void = () => {}
+      const firstAppended = new Promise<void>(resolve => {
+        appended = resolve
+      })
+      // The first transaction (lower xid) sets nothing but appends, and stays open.
+      const first = withOrg(s.db, { orgId: s.org.id, userId: admin.id }, async trx => {
+        await pinSet(person)(trx)
+        appended()
+        await held
+      })
+      await firstAppended
+      // The second deactivates the person and commits first.
+      await withOrg(s.db, { orgId: s.org.id, userId: admin.id }, async trx => {
+        await trx
+          .updateTable('people')
+          .set({ deactivated_at: sql<Date>`now()`, deactivated_by: admin.id })
+          .where('org_id', '=', s.org.id)
+          .where('id', '=', person.id)
+          .execute()
+        await appendOutbox(trx, {
+          orgId: s.org.id,
+          type: 'person.deactivated',
+          entity: { type: 'person', id: person.id },
+          subjects: [person.id],
+          purpose: 'accounts',
+          ids: {},
+        })
+      })
+      const w = await worker([projection('it_w')])
+      try {
+        await sleep(300)
+        commitFirst()
+        await first
+        await caughtUp('it_w')
+        expect(await s.query('select deactivated from it_projection where person_id = $1', [person.id])).toEqual([
+          { deactivated: true },
+        ])
+        await expectDeliveredOnce('it_w')
+      } finally {
+        await w.stop()
+      }
+    })
+
+    it('§8.2 case 10: a long transaction holds consumers back without anything skipped; outbox_lag shows what it holds', async () => {
+      const w = await worker([projection('it_w')])
+      try {
+        await caughtUp('it_w')
+        const person = await s.person()
+        let commitLong: () => void = () => {}
+        const held = new Promise<void>(resolve => {
+          commitLong = resolve
+        })
+        let appended: () => void = () => {}
+        const longAppended = new Promise<void>(resolve => {
+          appended = resolve
+        })
+        const long = withOrg(s.db, { orgId: s.org.id, userId: admin.id }, async trx => {
+          await pinSet(person)(trx)
+          appended()
+          await held
+        })
+        await longAppended
+        const others = Array.from({ length: 3 }, () => s.person())
+        for (const other of await Promise.all(others)) {
+          await withOrg(s.db, { orgId: s.org.id, userId: admin.id }, pinSet(other))
+        }
+        const linesBefore = s.logs.length
+        // 3 s held: nothing past the open transaction is delivered, and the lag line says so.
+        await sleep(3000)
+        const delivered = await s.query<{ n: number }>(
+          "select count(*)::int as n from it_deliveries d join outbox_events e on e.id = d.event_id where d.consumer = 'it_w' and e.entity_id = any($1)",
+          [[person.id]],
+        )
+        expect(delivered).toEqual([{ n: 0 }])
+        const lag = s.logs
+          .slice(linesBefore)
+          .filter(line => line.event === 'outbox_lag' && line.consumer === 'it_w' && Number(line.heldBackEvents) > 0)
+        expect(lag.length).toBeGreaterThan(0)
+        expect(Number(lag.at(-1)?.heldBackSeconds)).toBeGreaterThan(1)
+        commitLong()
+        await long
+        await caughtUp('it_w')
+        await expectDeliveredOnce('it_w')
+      } finally {
+        await w.stop()
+      }
+    })
   })
 
   it('T16 item 6: after a clean-up, a consumer below the floor stops, and one starting at the oldest kept event misses nothing', async () => {

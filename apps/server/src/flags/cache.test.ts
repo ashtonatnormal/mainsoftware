@@ -178,6 +178,37 @@ describe('C0.6 T17 items 6 and 7 the flags a process keeps', () => {
     flags.stop()
   })
 
+  it('C0.6 T15 items 9 and 11: says why a feature isn’t on, and whether an org’s flags are confirmed', async () => {
+    const db = database([
+      row('core.system', { locked: true }),
+      row('it.optional'),
+      row('it.wave', { audience: 'cohort', cohort_people: [PERSON], cohort_roles: [] }),
+      row('ai', { enabled: false, locked: true }),
+      row('ai.ask', { enabled: false, locked: true }),
+    ])
+    const { flags } = cache(db)
+    // Never read: unconfirmed, unless locked on.
+    expect(flags.confirmed(ORG)).toBe(false)
+    expect(flags.verdict(ORG, 'it.optional', null)).toBe('unconfirmed')
+    expect(flags.verdict(ORG, 'core.system', null)).toBe('on')
+    await flags.track(ORG)
+    expect(flags.confirmed(ORG)).toBe(true)
+    expect(flags.confirmed(OTHER_ORG)).toBe(false)
+    expect(flags.verdict(ORG, 'it.optional', null)).toBe('on')
+    expect(flags.verdict(ORG, 'it.wave', { personId: PERSON, roles: [] })).toBe('on')
+    expect(flags.verdict(ORG, 'it.wave', { personId: SYSTEM, roles: [] })).toBe('not_in_cohort')
+    expect(flags.verdict(ORG, 'it.wave', null)).toBe('not_in_cohort')
+    expect(flags.verdict(ORG, 'ai.ask', null)).toBe('off')
+    expect(flags.verdict(ORG, 'it.unknown', null)).toBe('off')
+    // Not read for 8 s: unconfirmed again.
+    db.state.failing = true
+    await vi.advanceTimersByTimeAsync(FLAG_STALE_MS + FLAG_POLL_MS)
+    expect(flags.confirmed(ORG)).toBe(false)
+    expect(flags.verdict(ORG, 'it.optional', null)).toBe('unconfirmed')
+    expect(flags.verdict(ORG, 'core.system', null)).toBe('on')
+    flags.stop()
+  })
+
   it('gives the lineage’s revisions from the top, as the fences read them, and nothing for a feature with no row', async () => {
     const db = database([
       row('ai', { revision: '4', enabled: false, locked: true }),

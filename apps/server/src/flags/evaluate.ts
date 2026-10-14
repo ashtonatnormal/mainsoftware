@@ -51,3 +51,23 @@ export function evaluate(
   }
   return 'on'
 }
+
+// Whether the flag and every flag above it is enabled, whoever the cohorts name: so a feature that
+// is off for someone only because a cohort leaves them out can be told from one switched off
+// (the runner cancels the first as not_in_cohort, T15 item 9). False when a row is missing, as
+// evaluate() is 'unknown' then.
+export function lineageEnabled(
+  states: ReadonlyMap<string, FlagState>,
+  key: string,
+  registered: (key: string) => boolean = () => false,
+): boolean {
+  for (const level of flagLineage(key)) {
+    const state = states.get(level)
+    if (state === undefined) {
+      if (level === key || registered(level)) return false
+      continue
+    }
+    if (!state.enabled) return false
+  }
+  return true
+}
