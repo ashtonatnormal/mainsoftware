@@ -163,8 +163,12 @@ jobs:
       # builds the database up to the migration before NNNN, loads production-shaped data, applies
       # NNNN and checks the data survived.
       # 0006 (C0.5) on top of sessions and accounts 0005 allows, in its own scratch database: its
-      # new session rules mustn't fail on older rows, and the result must match the fresh build
-      # above (hearth_check).
+      # two new session rules mustn't fail on older rows, and its schema must match the fresh build
+      # above (hearth_check) apart from the rule older rows leave NOT VALID. Once for each rule, so
+      # each is seen both validated and left NOT VALID.
       - env:
           CHECK_DB: hearth_upgrade_check
-        run: UP_TO=0006 scripts/check-migrations.sh && scripts/check-sign-in-upgrade.sh
+        run: UP_TO=0006 scripts/check-migrations.sh && scripts/check-sign-in-upgrade.sh sessions_revoke_reason
+      - env:
+          CHECK_DB: hearth_upgrade_check
+        run: UP_TO=0006 scripts/check-migrations.sh && scripts/check-sign-in-upgrade.sh sessions_at_most_90_days

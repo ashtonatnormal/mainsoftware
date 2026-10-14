@@ -73,30 +73,47 @@ grant update (pin_hash, pin_key_id, pin_set_at, pin_reset_at, pin_reset_by, pin_
 -- 30 days unused. Why a session ended is one of these codes; C0.16 adds phone_changed with the
 -- phone change.
 --
--- Sessions made before 0006 are brought into line first, so the new rules can't fail the
--- migration on an old row (none exist today: nothing wrote a session before C0.5, the seed has
--- none, and no production database exists before C0.11; scripts/check-sign-in-upgrade.sh tests
--- the upgrade on rows 0003 allowed):
--- - one meant to last more than 90 days now ends 90 days after it started, which ends it at once
---   if that has passed;
--- - one that ended for a reason outside these codes keeps it, since why a session ended is history
---   (keep_history refuses the change). So the rule on reasons is added NOT VALID, which Postgres
---   applies to every row written from now on, and validated below when no older reason is left.
+-- Sessions made before 0006 can't fail it (none exist today: nothing wrote a session before C0.5,
+-- the seed has none, and no production database exists before C0.11;
+-- scripts/check-sign-in-upgrade.sh applies it to rows 0005 allows). The table is locked first, so
+-- no session is written in between.
+-- - Someone who left has their open sessions ended and their devices signed out, as of when they
+--   left, as people_end_sessions below does from now on.
+-- - A revoked session keeps its times and reason, since how it ended is history (keep_history
+--   refuses a change of reason).
+-- - One not revoked, expired or not, must still take an update (a sign-out or PIN reset revokes it
+--   with one), and Postgres checks every rule on each row an update writes. So one meant to last
+--   more than 90 days now ends 90 days after it started, at once if that has passed. One with no
+--   finite start can't be capped.
+-- The two rules an older session may break are added NOT VALID, which still holds every row
+-- written from now on, and validated just below unless such a session is left, as none is on any
+-- database today; pg_constraint.convalidated shows which are. A migration that replaces one (C0.16
+-- adds phone_changed) adds it NOT VALID and validates it the same way.
+lock table public.sessions in access exclusive mode;
+update public.sessions s
+set revoked_at = p.deactivated_at, revoked_by = p.deactivated_by, revoke_reason = 'deactivated'
+from public.people p
+where p.org_id = s.org_id and p.id = s.user_id and p.deactivated_at is not null and s.revoked_at is null;
+update public.devices d
+set signed_out_at = p.deactivated_at, signed_out_by = p.deactivated_by
+from public.people p
+where p.org_id = d.org_id and p.id = d.user_id and p.deactivated_at is not null and d.signed_out_at is null;
 update public.sessions set expires_at = created_at + interval '2160 hours'
-  where expires_at - created_at > interval '2160 hours';
+  where revoked_at is null and isfinite(created_at) and expires_at > created_at + interval '2160 hours';
 alter table public.sessions
   add column reauthenticated_at timestamptz,
   add constraint sessions_reauthenticated_after_start check (reauthenticated_at >= created_at),
-  add constraint sessions_at_most_90_days check (expires_at - created_at <= interval '2160 hours'),
+  add constraint sessions_at_most_90_days check (expires_at - created_at <= interval '2160 hours') not valid,
   drop constraint sessions_revoke_reason_check,
   add constraint sessions_revoke_reason
     check (revoke_reason in ('sign_out', 'device_sign_out', 'deactivated', 'pin_reset')) not valid;
 do $$
 begin
-  if exists (select 1 from public.sessions
-             where revoke_reason not in ('sign_out', 'device_sign_out', 'deactivated', 'pin_reset')) then
-    raise notice 'sessions_revoke_reason stays NOT VALID: sessions that ended before 0006 keep reasons outside its codes';
-  else
+  if not exists (select 1 from public.sessions where expires_at > created_at + interval '2160 hours') then
+    alter table public.sessions validate constraint sessions_at_most_90_days;
+  end if;
+  if not exists (select 1 from public.sessions
+                 where revoke_reason not in ('sign_out', 'device_sign_out', 'deactivated', 'pin_reset')) then
     alter table public.sessions validate constraint sessions_revoke_reason;
   end if;
 end

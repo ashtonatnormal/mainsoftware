@@ -254,14 +254,14 @@ reset role;
 
 -- 10. Sessions (T5): at most 90 days; the database writes when one started, was last seen and last
 -- re-authenticated (a sign-in counts as one); why one ended is one of the known codes.
--- 0006 adds the rule on why a session ended NOT VALID and validates it when no session made
--- before 0006 kept an older reason, as on every build without such sessions (with them, it stays
--- NOT VALID and still applies to new rows: scripts/check-sign-in-upgrade.sh).
+-- 0006 adds the rules on length and on why a session ended NOT VALID and validates each unless a
+-- session made before 0006 breaks it, as none does on a build without such sessions (with them,
+-- the rule stays NOT VALID and still applies to new rows: scripts/check-sign-in-upgrade.sh).
+select pg_temp.act_as('1', 'a8');
 select pg_temp.check(bool_and(convalidated) and count(*) = 3,
                      'the session rules were not all validated on a database with no older sessions')
 from pg_constraint where conrelid = 'public.sessions'::regclass
   and conname in ('sessions_revoke_reason', 'sessions_at_most_90_days', 'sessions_reauthenticated_after_start');
-select pg_temp.act_as('1', 'a8');
 select pg_temp.expect_error(format($$insert into public.sessions (org_id, user_id, device_id, token_hash, expires_at)
   values (%L, %L, %L, sha256('too long'), now() + interval '2161 hours')$$,
   pg_temp.id('1', '00'), pg_temp.id('1', 'a8'), pg_temp.id('1', 'e1')), '23514', '%sessions_at_most_90_days%');
