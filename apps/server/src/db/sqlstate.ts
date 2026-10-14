@@ -20,11 +20,14 @@ export const INVALID_PARAMETER = '22023'
 export const INSUFFICIENT_PRIVILEGE = '42501'
 
 // The SQLSTATE of a Postgres error (pg's DatabaseError carries it as code), or undefined for
-// anything else. Node's own network errors also carry a code (ECONNRESET), which isn't one.
+// anything else. Node's own network errors also carry a code (ECONNRESET), which isn't one, and
+// some of those are five letters too (EPIPE, EPERM, EBUSY). No SQLSTATE class starts with E
+// (Postgres's start with a digit, F, H, P or X; Hearth's own are HF), so a leading E is refused
+// and such an error reaches retryable()'s NETWORK check.
 export function sqlstateOf(error: unknown): string | undefined {
   if (typeof error !== 'object' || error === null || !('code' in error)) return undefined
   const { code } = error
-  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? code : undefined
+  return typeof code === 'string' && /^(?!E)[0-9A-Z]{5}$/.test(code) ? code : undefined
 }
 
 // Worth trying again: a serialisation failure (40001), a deadlock (40P01), a lock not granted in

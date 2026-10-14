@@ -41,6 +41,16 @@ describe('C0.6 T15 which failures are worth trying again', () => {
     expect(retryable(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))).toBe(true)
   })
 
+  it('retries a broken pipe, whose five-letter code (EPIPE) is no SQLSTATE (CodeRabbit)', () => {
+    const epipe = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
+    expect(sqlstateOf(epipe)).toBeUndefined()
+    expect(retryable(epipe)).toBe(true)
+    for (const code of ['EPERM', 'EBUSY']) expect(sqlstateOf({ code }), code).toBeUndefined()
+    const fields = failureFields(epipe)
+    expect(fields.code).toBe('EPIPE')
+    expect(fields.sqlstate).toBeUndefined()
+  })
+
   it('does not retry a constraint failure, a refusal, Hearth’s own codes or a plain bug', () => {
     for (const code of ['23505', '23514', '23503', '42501', '22023', 'HF001', 'HF002', 'HF003', 'HF004']) {
       expect(retryable(pgError(code)), code).toBe(false)
