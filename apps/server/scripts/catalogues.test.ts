@@ -1,6 +1,7 @@
 import { FLAGS } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import type { Coverage } from '#src/outbox/coverage.ts'
+import type { Fn } from './catalogues.ts'
 import {
   bodyProblems,
   bodyWrites,
@@ -166,6 +167,44 @@ describe('C0.6 T16 item 7 check-catalogues: every way to write is covered', () =
     ).toEqual([
       { table: 'jobs', op: 'DELETE' },
       { table: 't', op: 'UPDATE', column: 'a' },
+    ])
+  })
+
+  it('Qodo-18 #3: reads quoted table and column names of any case and characters, and refuses a name it can’t read', () => {
+    expect(
+      bodyWrites(`insert into public."AuditData" (org_id) values (o);
+        INSERT INTO "public"."Audit ""Log""" (org_id) values (o);
+        delete from only public."Jobs-Old";
+        update public."People" "P" set "FullName" = n, ("Title", plain) = (t, p), "Tags"[1] = x where "P".id = y;
+        merge into public."Café" c using s on c.id = s.id when matched then update set "Prix" = 1;
+        update public.people set "Full""Name" = n;`),
+    ).toEqual([
+      { table: 'AuditData', op: 'INSERT' },
+      { table: 'Audit "Log"', op: 'INSERT' },
+      { table: 'Jobs-Old', op: 'DELETE' },
+      { table: 'People', op: 'UPDATE', column: 'FullName' },
+      { table: 'People', op: 'UPDATE', column: 'Title' },
+      { table: 'People', op: 'UPDATE', column: 'plain' },
+      { table: 'People', op: 'UPDATE', column: 'Tags' },
+      { table: 'Café', op: 'INSERT' },
+      { table: 'Café', op: 'DELETE' },
+      { table: 'Café', op: 'UPDATE', column: 'Prix' },
+      { table: 'people', op: 'UPDATE', column: 'Full"Name' },
+    ])
+    // Unquoted names fold to lower case, as Postgres folds them.
+    expect(bodyWrites('UPDATE public.People SET FullName = n;')).toEqual([
+      { table: 'people', op: 'UPDATE', column: 'fullname' },
+    ])
+    // A name after public. it can't read is the table '?', which no entry lists.
+    expect(bodyWrites('insert into public.9x (a) values (1);')).toEqual([{ table: '?', op: 'INSERT' }])
+    const fn: Fn = { key: 'f()', definer: true, trigger: false, source: 'insert into public."AuditData" (a) values (1);' }
+    expect(bodyProblems({ 'f()': { exempt: 'a check', writes: ['auditdata:INSERT'] } }, [fn], [], {})).toEqual([
+      expect.stringContaining('runs insert into public.AuditData, but its entry'),
+    ])
+    expect(bodyProblems({ 'f()': { exempt: 'a check', writes: ['AuditData:INSERT'] } }, [fn], [], {})).toEqual([])
+    const unreadable: Fn = { ...fn, source: 'delete from public.9x;' }
+    expect(bodyProblems({ 'f()': { exempt: 'a check', writes: [] } }, [unreadable], [], {})).toEqual([
+      expect.stringContaining("runs delete from a table of public whose name check-catalogues can't read"),
     ])
   })
 
