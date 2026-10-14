@@ -167,6 +167,13 @@ export const EVENTS = {
 
 export type EventType = keyof typeof EVENTS
 
+// The tables that hold content: every write to one appends its event with an ACL snapshot, and none
+// may be exempt (CLAUDE.md, Build order; apps/server/scripts/check-catalogues.ts refuses an
+// exemption, by grant or through a function's writes, that touches one). Named here, apart from the
+// coverage entries, so a content table whose every entry is exempt is still caught. Each content
+// step adds its tables (C1.1's messages first).
+export const CONTENT_TABLES: readonly string[] = []
+
 export const EVENT_TYPES = Object.keys(EVENTS) as [EventType, ...EventType[]]
 
 export type EmittedEventType = {

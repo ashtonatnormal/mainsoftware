@@ -92,6 +92,10 @@ select pg_temp.expect_error($$insert into public.schedules (org_id, key, kind, c
 select pg_temp.expect_error($$insert into public.schedules (org_id, key, kind, cron, on_interrupt, payload, next_run_at)
   values ('f1000000-0000-4000-8000-000000000000', 'test.texty', 'test.texty', '0 * * * *', 'rerun', '{"note": "Remind Mel"}', now())$$,
   '23514', '%schedules_payload_ids_only%');
+-- Free text as a key is refused too (SQL-1).
+select pg_temp.expect_error($$insert into public.schedules (org_id, key, kind, cron, on_interrupt, payload, next_run_at)
+  values ('f1000000-0000-4000-8000-000000000000', 'test.texty', 'test.texty', '0 * * * *', 'rerun', '{"Remind Mel": true}', now())$$,
+  '23514', '%schedules_payload_ids_only%');
 select pg_temp.expect_error($$insert into public.schedules (org_id, key, kind, cron, on_interrupt, next_run_at)
   values ('f1000000-0000-4000-8000-000000000000', 'test.bad_cron', 'test.bad_cron', 'every day', 'rerun', now())$$, '23514');
 select pg_temp.expect_error($$insert into public.schedules (org_id, key, origin, kind, cron, on_interrupt, next_run_at)
@@ -193,6 +197,16 @@ select pg_temp.id('1', 'c9'), pg_temp.id('1', '00'), 'test.nightly', 'core.syste
 from public.schedule_runs r where r.org_id = pg_temp.id('1', '00') and r.state = 'succeeded' and r.finished_at < now() - interval '90 days';
 select set_config('app.user_id', '', true);
 select set_config('test.audit_max', (select coalesce(max(id), 0)::text from public.audit_events), true);
+-- Only Hearth itself cleans up (SQL-4): with a person (the DPO) or another org's Hearth as the
+-- transaction's principal, the purge job's role is refused (42501), so the audit row can't name them.
+select set_config('app.org_id', pg_temp.id('1', '00')::text, true), set_config('app.user_id', pg_temp.id('1', 'a5')::text, true);
+set local role hearth_job_purge;
+select pg_temp.expect_error($$select public.purge_schedule_runs(10)$$, '42501', 'Only Hearth itself cleans up%');
+reset role;
+select set_config('app.user_id', pg_temp.id('2', 'a0')::text, true);
+set local role hearth_job_purge;
+select pg_temp.expect_error($$select public.purge_schedule_runs(10)$$, '42501', 'Only Hearth itself cleans up%');
+reset role;
 select pg_temp.act_as_job('1', 'hearth_job_purge');
 select pg_temp.expect_error($$select public.purge_schedule_runs(0)$$, '22023');
 select pg_temp.expect_error($$select public.purge_schedule_runs(10001)$$, '22023');

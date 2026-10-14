@@ -2,6 +2,8 @@ import { FLAGS } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import type { Coverage } from '#src/outbox/coverage.ts'
 import {
+  bodyProblems,
+  bodyWrites,
   contentProblems,
   coverageProblems,
   eventProblems,
@@ -81,10 +83,98 @@ describe('C0.6 T16 item 7 check-catalogues: every way to write is covered', () =
       'hearth_app messages.body:UPDATE': { exempt: 'nobody reads it' },
     }
     expect(contentProblems(content, type => type === 'message.created')).toEqual([
-      expect.stringContaining("'hearth_app messages.body:UPDATE' is exempt, but messages holds content"),
+      expect.stringContaining("'hearth_app messages.body:UPDATE' is exempt, but writes messages, which holds content"),
     ])
     expect(contentProblems(content, () => false)).toEqual([])
     expect(contentProblems(writes)).toEqual([])
+  })
+
+  it('CONTRACT-7: a content table is content whatever its entries say: an all-exempt one, or one a function writes, is refused', () => {
+    // Every entry exempt, by grant and through a definer function: nothing carries a snapshot, so
+    // only CONTENT_TABLES says messages is content.
+    const exempt: Record<string, Coverage> = {
+      'hearth_app messages:INSERT': { exempt: 'nobody reads it' },
+      'post_message(uuid, text)': { exempt: 'a check', writes: ['messages:INSERT'] },
+      'hearth_app people:INSERT': { exempt: 'not content' },
+    }
+    expect(contentProblems(exempt, () => false, ['messages'])).toEqual([
+      "'hearth_app messages:INSERT' is exempt, but writes messages, which holds content, whose every write appends its event with an ACL snapshot",
+      "'post_message(uuid, text)' is exempt, but writes messages, which holds content, whose every write appends its event with an ACL snapshot",
+    ])
+    expect(contentProblems(exempt, () => false, [])).toEqual([])
+    // A grant covered by a snapshot event makes the table content, so an exempt function writing
+    // it is refused too.
+    const mixed: Record<string, Coverage> = {
+      'hearth_app messages:INSERT': { events: ['message.created'] },
+      'post_message(uuid, text)': { exempt: 'a check', writes: ['messages:INSERT'] },
+    }
+    expect(contentProblems(mixed, type => type === 'message.created', [])).toEqual([
+      expect.stringContaining("'post_message(uuid, text)' is exempt, but writes messages"),
+    ])
+  })
+
+  it('CONTRACT-1: reads the tables a function body writes, schema-qualified, by operation', () => {
+    expect(
+      bodyWrites(`
+        update public.people set full_name = x where id = y;
+        insert into public.audit_events (org_id) values (o);
+        insert into public.outbox_floors as f (org_id) values (o) on conflict (org_id) do update set last_id = 1;
+        delete from public.jobs j using doomed d where j.id = d.id;
+        select 1 from public.people for no key update;
+        DELETE  FROM  public.Jobs;`),
+    ).toEqual([
+      { table: 'people', op: 'UPDATE' },
+      { table: 'audit_events', op: 'INSERT' },
+      { table: 'outbox_floors', op: 'INSERT' },
+      { table: 'jobs', op: 'DELETE' },
+    ])
+  })
+
+  it('CONTRACT-1: names a function whose body writes a table its writes leave out, unless every caller holds that write', () => {
+    const entries: Record<string, Coverage> = {
+      'rename_person(uuid, text)': { events: ['person.updated'], writes: ['people.full_name:UPDATE'] },
+      'set_x(text)': { events: ['flag.changed'], writes: ['feature_flags.enabled:UPDATE'] },
+      'end_all()': { exempt: 'a check', writes: [] },
+    }
+    const body = [
+      {
+        key: 'rename_person(uuid, text)',
+        definer: true,
+        trigger: false,
+        executors: ['hearth_app'],
+        source:
+          'update public.people set full_name = n; delete from public.jobs; insert into public.feature_flags (key) values (k);',
+      },
+      // Its audit row is covered by its one caller's own grant.
+      {
+        key: 'set_x(text)',
+        definer: true,
+        trigger: false,
+        executors: ['hearth_app'],
+        source: 'update public.feature_flags set enabled = e; insert into public.audit_events (action) values (a);',
+      },
+      // A trigger's caller is whoever writes its table, so only its writes count.
+      {
+        key: 'end_all()',
+        definer: false,
+        trigger: true,
+        executors: [],
+        source: 'insert into public.audit_events values (1);',
+      },
+    ]
+    expect(bodyProblems(entries, body, grants)).toEqual([
+      "public.rename_person(uuid, text) runs delete from public.jobs, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add it to its writes",
+      "public.rename_person(uuid, text) runs insert into public.feature_flags, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add it to its writes",
+      "public.end_all() runs insert into public.audit_events, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add it to its writes",
+    ])
+    // A caller without the grant doesn't excuse it.
+    expect(
+      bodyProblems(
+        entries,
+        body.slice(1, 2).map(fn => ({ ...fn, executors: ['hearth_app', 'hearth_queue'] })),
+        grants,
+      ),
+    ).toEqual([expect.stringContaining('public.set_x(text) runs insert into public.audit_events')])
   })
 })
 

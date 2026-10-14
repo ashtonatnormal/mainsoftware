@@ -1,10 +1,16 @@
 // Checks that the catalogues in code match the database the migrations build, both ways (C0.6;
 // TECH-SPEC T16 item 7, T17 item 1, T18), against the scratch database scripts/check-migrations.sh
 // builds (CHECK_DB, default hearth_check):
-//   1. every way a runtime transaction can write is covered by apps/server/src/outbox/coverage.ts:
-//      every INSERT, UPDATE (by column) and DELETE any runtime role holds, every function such a
-//      role may execute, and every SECURITY DEFINER and trigger function, each with an event or a
-//      reasoned exemption; no stale entry; MATCH names real columns; no content table is exempt;
+//   1. every way a runtime transaction can write a table in schema public is covered by
+//      apps/server/src/outbox/coverage.ts: every INSERT, UPDATE (by column) and DELETE any runtime
+//      role holds on one, every function of public such a role may execute, and every SECURITY
+//      DEFINER and trigger function there, each with an event or a reasoned exemption; each
+//      function's entry lists every table its body writes; no stale entry; MATCH names real
+//      columns; no content table (packages/shared CONTENT_TABLES, or one an event with an ACL
+//      snapshot covers) is exempt, by grant or through a function. scripts/check-migrations.sh
+//      refuses any other schema, and rules, so nothing writes outside what this reads. Postgres's
+//      own functions (pg_catalog's, such as the large-object ones every role may call by default)
+//      aren't the schema's and aren't checked;
 //   2. packages/shared EVENTS' names equal migration 0007's outbox_events_type list;
 //   3. packages/shared FLAGS equals feature_flag_defaults() (keys, defaults and locks), with every
 //      ai.* flag off and locked in both;
@@ -23,6 +29,7 @@ import { Client } from 'pg'
 import { JOB_ROLES } from '#src/db/roles.ts'
 import { MATCH, WRITES } from '#src/outbox/coverage.ts'
 import {
+  bodyProblems,
   contentProblems,
   coverageProblems,
   eventProblems,
@@ -88,7 +95,9 @@ const GRANTS = `
 const FUNCTIONS = `
   with runtime as (${RUNTIME})
   select p.proname || '(' || oidvectortypes(p.proargtypes) || ')' as key, p.prosecdef as definer,
-         p.prorettype = 'trigger'::regtype as trigger
+         p.prorettype = 'trigger'::regtype as trigger, p.prosrc as source,
+         array(select r.rolname::text from runtime r where has_function_privilege(r.oid, p.oid, 'EXECUTE') order by 1)
+           as executors
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
   where n.nspname = 'public'
     and not exists (select 1 from pg_depend d where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
@@ -147,6 +156,7 @@ try {
 
   const problems = [
     ...coverageProblems(WRITES, grants, functions),
+    ...bodyProblems(WRITES, functions, grants),
     ...matchProblems(WRITES, MATCH, columns),
     ...contentProblems(WRITES),
     ...(check === undefined ? ['outbox_events has no outbox_events_type check'] : eventProblems(EVENT_TYPES, types)),

@@ -46,7 +46,6 @@ declare
   job text;
   r pg_roles%rowtype;
   bad text;
-  db_owner oid := (select d.datdba from pg_database d where d.datname = current_database());
 begin
   foreach job in array array['hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge'] loop
     select * into r from pg_roles where rolname = job;
@@ -80,17 +79,17 @@ begin
     if r.rolinherit or r.rolsuper or r.rolbypassrls or r.rolcreaterole or r.rolcreatedb or r.rolreplication then
       raise exception 'hearth_worker already exists with a power it must not have (inherit, superuser, bypassrls, createrole, createdb or replication)';
     end if;
-    -- What it belongs to: job roles, by SET and never INHERIT, and on RDS the powerless rds_iam,
-    -- which IAM sign-in needs.
+    -- What it belongs to, and nothing else: the job roles, by SET and never INHERIT or ADMIN, and
+    -- on RDS the powerless rds_iam, which IAM sign-in needs. An allow-list, so a predefined role
+    -- (pg_read_all_data, pg_write_all_data and the like), which has none of the powers above, is
+    -- refused too.
     select string_agg(g.rolname, ', ') into bad
     from pg_auth_members m join pg_roles g on g.oid = m.roleid
     where m.member = r.oid
       and not (g.rolname = 'rds_iam' and not g.rolsuper and not g.rolbypassrls
                and not exists (select 1 from pg_auth_members x where x.member = g.oid))
-      and (m.inherit_option or m.admin_option
-           or g.rolsuper or g.rolbypassrls or g.rolcreaterole or g.rolcreatedb or g.rolreplication or g.rolcanlogin
-           or g.rolname in ('hearth_owner', 'hearth_app') or g.oid = db_owner
-           or exists (select 1 from pg_auth_members x where x.member = g.oid));
+      and not (g.rolname in ('hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge')
+               and not m.inherit_option and not m.admin_option);
     if bad is not null then
       raise exception 'hearth_worker already exists and is a member of %; it may only hold job roles, by SET', bad;
     end if;
@@ -190,17 +189,19 @@ create trigger orgs_add_feature_flags after insert on public.orgs
 insert into public.feature_flags (org_id, key, enabled, locked)
 select o.id, d.key, d.enabled, d.locked from public.orgs o cross join public.feature_flag_defaults() d;
 
--- Whether a jsonb object holds only ids (T16): each value a uuid, a code (lower-case letters,
--- digits and underscores, dotted, at most 63 characters), a whole number from 0 to 1,000,000, a
--- boolean, or a list of at most 100 uuids. It refuses what most often carries someone's details:
--- free text, a phone number written as a number, text spelled out as a list of numbers, nested
--- objects. It is the database's backstop for outbox events, job payloads and schedule payloads;
--- the guarantee is the schemas of the event catalogue and the job kinds, whose every field is a
--- uuid, an enum, a boolean or a bounded number (packages/shared, catalogues.test.ts). It runs in
--- CHECK constraints, so every role that writes those tables needs EXECUTE on it.
+-- Whether a jsonb object holds only ids (T16): each key a code (lower-case letters, digits and
+-- underscores, at most 63 characters), and each value a uuid, a code (the same, dotted), a whole
+-- number from 0 to 1,000,000, a boolean, or a list of at most 100 uuids. It refuses what most
+-- often carries someone's details: free text, as a value or as a key, a phone number written as a
+-- number, text spelled out as a list of numbers, nested objects (so a key can only be at the top).
+-- It is the database's backstop for outbox events, job payloads and schedule payloads; the
+-- guarantee is the schemas of the event catalogue and the job kinds, whose every field is a uuid,
+-- an enum, a boolean or a bounded number (packages/shared, catalogues.test.ts). It runs in CHECK
+-- constraints, so every role that writes those tables needs EXECUTE on it.
 create function public.is_ids_only(j jsonb) returns boolean
 language sql immutable set search_path = '' as $$
   select pg_catalog.jsonb_typeof(j) = 'object' and pg_catalog.pg_column_size(j) <= 8192
+    and not pg_catalog.jsonb_path_exists(j, 'strict $.keyvalue() ? (!(@.key like_regex "^[a-z][a-z0-9_]{0,62}$"))', '{}', true)
     and not pg_catalog.jsonb_path_exists(j, 'strict $.* ? (!(
           (@.type() == "string"
             && @ like_regex "^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z][a-z0-9_]*(\\.[a-z0-9_]+)*)$"
@@ -276,8 +277,19 @@ create table public.outbox_events (
   constraint outbox_events_acl_whole check (
     (acl_tokens is null) = (acl_more is null) and (acl_tokens is null) = (index_class is null)
     and (acl_tokens is null) = (acl_epoch is null)),
-  check (acl_more is null or jsonb_typeof(acl_more) = 'array'),
-  check (array_position(acl_tokens, null) is null),
+  -- Its tokens are the ones @hearth/access makes (keys.ts: a prefix for the org, a team, a team's
+  -- admins, a space's members, a membership era or a person, then that id), nothing else: tokens a
+  -- list of them, more a list of lists of them (aclOf's tokens and more).
+  constraint outbox_events_acl_tokens check (
+    array_position(acl_tokens, null) is null
+    and not pg_catalog.jsonb_path_exists(pg_catalog.to_jsonb(acl_tokens), 'strict $[*] ? (!(
+          @.type() == "string" && @ like_regex "^(o|t|ta|m|e|p):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))')),
+  constraint outbox_events_acl_more check (
+    acl_more is null
+    or (pg_catalog.jsonb_typeof(acl_more) = 'array'
+        and not pg_catalog.jsonb_path_exists(acl_more, 'strict $[*] ? (@.type() != "array")', '{}', true)
+        and not pg_catalog.jsonb_path_exists(acl_more, 'strict $[*] ? (@.type() == "array")[*] ? (!(
+              @.type() == "string" && @ like_regex "^(o|t|ta|m|e|p):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))', '{}', true))),
   -- The actor's kind is its principal's.
   foreign key (org_id, actor_id, actor_kind) references public.principals (org_id, id, kind)
 );
@@ -354,13 +366,14 @@ create table public.outbox_floors (
   purged_at timestamptz not null default now()
 );
 
--- Schedules (INF-SCHED, T15): a 5-field cron expression, in UTC, that fires a job kind. Hearth's own
--- schedules come from the server's registry (apps/server/src/jobs/schedules.ts, origin
--- 'registry'), which the worker writes here for each org; A5 adds rows people make. A key's kind,
--- cron, payload and interrupt policy never change, so two versions of the worker running at once
--- during a deploy can't undo each other: a change is a new key, with the old key retired. A retired
--- schedule stays retired, and is never deleted. on_interrupt says what happens to a run cut short:
--- rerun (it goes back to the queue: safe to repeat) or review (it waits for a person, AGT-10).
+-- Schedules (INF-SCHED, T15): a 5-field cron expression, in UTC, that fires a job kind. Hearth's
+-- own schedules come from the server's registry (SCHEDULES in apps/server/src/jobs/maintenance.ts,
+-- origin 'registry'), which the worker writes here for each org; A5 adds rows people make. A key's
+-- kind, cron, payload and interrupt policy never change, so two versions of the worker running at
+-- once during a deploy can't undo each other: a change is a new key, with the old key retired. A
+-- retired schedule stays retired, and is never deleted. on_interrupt says what happens to a run cut
+-- short: rerun (it goes back to the queue: safe to repeat) or review (it waits for a person,
+-- AGT-10).
 create table public.schedules (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.orgs (id),
@@ -505,24 +518,27 @@ language sql stable security definer set search_path = '' as $$
 $$;
 revoke execute on function public.worker_org_ids() from public;
 
--- The fences (feature_fence, job_fence, job_finish) are SECURITY DEFINER because their FOR SHARE and
--- FOR NO KEY UPDATE locks need UPDATE on the table, which no runtime role is given on flags or
--- jobs. Unlike set_feature_flag(), they neither re-check an ACC-10 role nor write an audit event:
--- they act for no person, only for the worker's own roles (the only ones that may run them), and
--- decide only whether work already admitted may still commit. They change no flag and nobody's
--- data (job_finish ends the job and its run, the queue's own bookkeeping), and every flag change
--- they compare against is checked and audited in set_feature_flag().
+-- The fences (feature_fence, job_fence, job_finish) are SECURITY DEFINER because their FOR SHARE
+-- and FOR NO KEY UPDATE locks need UPDATE on the table, which none of the job roles that run them
+-- holds on flags or jobs. Unlike set_feature_flag(), they neither re-check an ACC-10 role nor write
+-- an audit event: they act for no person, only for the worker's own roles (the only ones that may
+-- run them), and decide only whether work already admitted may still commit. They change no flag
+-- and nobody's data (job_finish ends the job and its run, the queue's own bookkeeping), and every
+-- flag change they compare against is checked and audited in set_feature_flag().
 
 -- Refuses unless a feature is on for the org the server set, exactly as the server checked it: the
 -- flag and every flag above it enabled, and each still at the revision the server saw (seen, in
 -- order from the top: ai, ai.agents, ai.agents.<id>). Cohorts are the server's to evaluate (T17),
--- and every change to a flag (on, off, a cohort, a lock) bumps its revision, so a feature narrowed
--- to exclude someone refuses here too. The flags are read FOR SHARE, so a change in progress makes
--- this wait and then refuse, and one that starts later waits for this transaction. In the
--- transaction that makes a feature's effect visible, nothing it writes can commit after the flag
--- was changed (PRD-65: "zero posts afterwards"). The messages can be shown as they are; the code is
--- Hearth's own (HF001), so the server can tell a changed flag from a failure, and it reloads the
--- flags to see whether the feature is off or only changed.
+-- and every change to a flag (on, off, a cohort, a lock) bumps its revision, so a flag changed to
+-- exclude someone refuses here too. The fence covers flag changes only: whether someone is in a
+-- cohort (their roles, whether they're still at the org) is read when a job is claimed, so a role
+-- revoked or a person deactivated while an attempt runs applies from the next claim. The flags are
+-- read FOR SHARE, so a change in progress makes this wait and then refuse, and one that starts
+-- later waits for this transaction. In the transaction that makes a feature's effect visible,
+-- nothing it writes can commit after the flag was changed (PRD-65: "zero posts afterwards"). The
+-- messages can be shown as they are; the code is Hearth's own (HF001), so the server can tell a
+-- changed flag from a failure, and it reloads the flags to see whether the feature is off or only
+-- changed.
 create function public.feature_fence(feature text, seen bigint[]) returns void
 language plpgsql volatile security definer set search_path = '' as $$
 declare
@@ -688,7 +704,8 @@ revoke execute on function public.set_feature_flag(text, boolean, text, uuid[], 
 
 -- The clean-up (T15, T16): the only way rows leave the outbox and the queue. Each call deletes at
 -- most one batch, oldest first, in the org the server set, and writes one audit event for it
--- (ADM-06; never one per row), with Hearth's system principal as the actor. The ages are fixed
+-- (ADM-06; never one per row), with Hearth's system principal as the actor: each refuses a
+-- transaction that acts as anyone else, so the audit row can't name a person. The ages are fixed
 -- here, so no bug in the worker can delete a row early; changing one is a migration (C0.10 makes
 -- them retention classes).
 
@@ -712,6 +729,10 @@ declare
 begin
   if org is null or actor is null then
     raise exception 'No org or user is set for this transaction' using errcode = 'insufficient_privilege';
+  end if;
+  if not exists (select 1 from public.principals p
+                 where p.org_id = org and p.id = actor and p.kind = 'system' and p.system_key = 'hearth') then
+    raise exception 'Only Hearth itself cleans up; this transaction acts as someone else' using errcode = 'insufficient_privilege';
   end if;
   if batch is null or batch not between 1 and 10000 then
     raise exception 'A clean-up batch is 1 to 10,000 rows.' using errcode = 'invalid_parameter_value';
@@ -764,6 +785,10 @@ begin
   if org is null or actor is null then
     raise exception 'No org or user is set for this transaction' using errcode = 'insufficient_privilege';
   end if;
+  if not exists (select 1 from public.principals p
+                 where p.org_id = org and p.id = actor and p.kind = 'system' and p.system_key = 'hearth') then
+    raise exception 'Only Hearth itself cleans up; this transaction acts as someone else' using errcode = 'insufficient_privilege';
+  end if;
   if batch is null or batch not between 1 and 10000 then
     raise exception 'A clean-up batch is 1 to 10,000 rows.' using errcode = 'invalid_parameter_value';
   end if;
@@ -798,6 +823,10 @@ declare
 begin
   if org is null or actor is null then
     raise exception 'No org or user is set for this transaction' using errcode = 'insufficient_privilege';
+  end if;
+  if not exists (select 1 from public.principals p
+                 where p.org_id = org and p.id = actor and p.kind = 'system' and p.system_key = 'hearth') then
+    raise exception 'Only Hearth itself cleans up; this transaction acts as someone else' using errcode = 'insufficient_privilege';
   end if;
   if batch is null or batch not between 1 and 10000 then
     raise exception 'A clean-up batch is 1 to 10,000 rows.' using errcode = 'invalid_parameter_value';

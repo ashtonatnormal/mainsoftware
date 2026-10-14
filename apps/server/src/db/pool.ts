@@ -57,7 +57,10 @@ const APP_ROLE_CHECK = `
 // The worker's login holds nothing itself and takes job roles by SET, so the question is wider:
 // nothing it is, or can become by SET or use by INHERIT, may skip row level security (a superuser,
 // BYPASSRLS, hearth_owner, an owner of a table or of the database), and it may not be a member of
-// hearth_app, so WORKER_DATABASE_URL can't act as the api.
+// hearth_app, so WORKER_DATABASE_URL can't act as the api, nor of any of Postgres's predefined roles
+// (pg_read_all_data, pg_write_all_data and the like, which read or write every table their RLS
+// policies let through), as 0007 refuses when hearth_worker already exists. rds_iam, which IAM
+// sign-in on RDS needs, isn't one of them.
 const WORKER_ROLE_CHECK = `
   with skips as (
     select o.oid from pg_roles o
@@ -66,6 +69,7 @@ const WORKER_ROLE_CHECK = `
        or exists (select 1 from pg_database d where d.datname = current_database() and d.datdba = o.oid))
   select exists (select 1 from skips s where pg_has_role(r.oid, s.oid, 'usage') or pg_has_role(r.oid, s.oid, 'set'))
       or exists (select 1 from pg_roles a where a.rolname = 'hearth_app' and pg_has_role(r.oid, a.oid, 'member'))
+      or exists (select 1 from pg_roles p where p.rolname like 'pg\\_%' and pg_has_role(r.oid, p.oid, 'member'))
     as bypasses_rls
   from pg_roles r where r.rolname = current_user`
 

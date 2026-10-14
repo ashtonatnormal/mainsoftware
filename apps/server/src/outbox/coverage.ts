@@ -1,9 +1,11 @@
-// Every way a runtime transaction can write, and what covers it (TECH-SPEC T16 item 7): an outbox
-// event the transaction must append, or an exemption with its reason. CLAUDE.md asks every content
-// write to append its event with an ACL snapshot, and D41's seams every write to be covered, so
-// nothing here is left undecided:
-//   - content writes always append their event (no exemption is allowed for a content table, whose
-//     events carry a snapshot: check-catalogues.ts refuses one);
+// Every way a runtime transaction can write a table in schema public (the only schema
+// scripts/check-migrations.sh allows; Postgres's own catalogue functions aside), and what covers
+// it (TECH-SPEC T16 item 7): an outbox event the transaction must append, or an exemption with its
+// reason. CLAUDE.md asks every content write to append its event with an ACL snapshot, and D41's
+// seams every write to be covered, so nothing here is left undecided:
+//   - content writes always append their event (no exemption is allowed for a content table,
+//     packages/shared CONTENT_TABLES or one whose events carry a snapshot, by its grant or through
+//     a function: check-catalogues.ts refuses one);
 //   - other writes append their catalogue event where a consumer may act on them (sign-ins,
 //     credentials, deactivation, flags), including the grants a later step will use first, which
 //     name that step's reserved events (C0.9, C0.15, C0.16);
@@ -13,7 +15,7 @@
 // Two checks hold the code to it. apps/server/scripts/check-catalogues.ts (CI's migrations job)
 // requires an entry here for every write grant any runtime role holds, every function such a role
 // may execute and every SECURITY DEFINER and trigger function in the schema, and no entry for
-// anything else. The integration suites' sweep (testing/writes.ts) records every committed write
+// anything else, and each function's `writes` to name every table its body writes. The integration suites' sweep (testing/writes.ts) records every committed write
 // and requires each to be exempt or to have, in its own transaction, an event of a listed type
 // naming the row's MATCH column as its entity or among its subjects.
 //
@@ -333,8 +335,9 @@ export function writeKey(table: string, op: WriteOp, column?: string): string {
 }
 
 // The entries that can cover one write a role made: its grant's, or failing that every function
-// that says it makes that write (a definer function, or a trigger, writing on the role's behalf),
-// any one of which covers it. Empty when nothing here explains the write.
+// that says it makes that write (a definer function, or a trigger, writing on the role's behalf).
+// The sweep can't tell which of them made it, so an exemption excuses it only when every one is
+// exempt. Empty when nothing here explains the write.
 export function coverageOf(
   role: string,
   table: string,

@@ -146,7 +146,9 @@ export async function sweepWrites(superuser: Pick<PgClient, 'query'>): Promise<S
         problems.push(`transaction ${write.xid} wrote ${what}, which apps/server/src/outbox/coverage.ts doesn't cover`)
         continue
       }
-      if (candidates.some(({ coverage }) => 'exempt' in coverage)) continue
+      // Which function made a write isn't recorded, so an exemption excuses it only when every
+      // entry that could have made it is exempt; otherwise the events of those that aren't are due.
+      if (candidates.every(({ coverage }) => 'exempt' in coverage)) continue
       const types = new Set<string>(candidates.flatMap(({ coverage }) => ('events' in coverage ? coverage.events : [])))
       const appended = byTx.get(write.xid) ?? []
       const named = appended.some(

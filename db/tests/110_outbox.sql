@@ -72,6 +72,9 @@ begin
     '{"nested": {"session": "f1000000-0000-4000-8000-0000000000e2"}}',
     '{"lists": [["f1000000-0000-4000-8000-0000000000e2"]]}',
     '{"missing": null}',
+    '{"Mel Member, +65 9123 4567, diagnosed with depression": true}', -- free text as a key (SQL-1)
+    '{"Session": "f1000000-0000-4000-8000-0000000000e2"}',              -- a key not a code
+    '{"' || repeat('k', 64) || '": true}',                              -- a key of 64 characters
     '{"many": [' || (select string_agg('"f1000000-0000-4000-8000-0000000000e2"', ',') from generate_series(1, 101)) || ']}',
     '[]', '"f1000000-0000-4000-8000-0000000000e2"'
   ] loop
@@ -96,7 +99,40 @@ select pg_temp.expect_error($$insert into public.outbox_events (org_id, type, en
 select pg_temp.expect_error($$insert into public.outbox_events (org_id, type, entity_type, entity_id, actor_id, actor_kind, purpose, subject_ids)
   values ('f1000000-0000-4000-8000-000000000000', 'signin.started', 'person', 'f1000000-0000-4000-8000-0000000000a8',
           'f1000000-0000-4000-8000-0000000000a8', 'human', 'accounts', array[null]::uuid[])$$, '23514');
--- A whole snapshot passes.
+-- A snapshot holds only the tokens @hearth/access makes (SQL-1): free text, a token with another
+-- prefix or an upper-case id, a null in more, or more that isn't a list of token lists is refused.
+do $$
+declare
+  bad text[];
+begin
+  foreach bad slice 1 in array array[
+    array['{"Mel Member said: I quit"}', '[]', 'outbox_events_acl_tokens'],
+    array['{x:f1000000-0000-4000-8000-0000000000a8}', '[]', 'outbox_events_acl_tokens'],
+    array['{p:F1000000-0000-4000-8000-0000000000A8}', '[]', 'outbox_events_acl_tokens'],
+    array['{p:f1000000-0000-4000-8000-0000000000a8,NULL}', '[]', 'outbox_events_acl_tokens'],
+    array['{p:f1000000-0000-4000-8000-0000000000a8}', '[{"note": "free text here"}]', 'outbox_events_acl_more'],
+    array['{p:f1000000-0000-4000-8000-0000000000a8}', '["p:f1000000-0000-4000-8000-0000000000a8"]', 'outbox_events_acl_more'],
+    array['{p:f1000000-0000-4000-8000-0000000000a8}', '[["Mel Member said: I quit"]]', 'outbox_events_acl_more'],
+    array['{p:f1000000-0000-4000-8000-0000000000a8}', '[[null]]', 'outbox_events_acl_more'],
+    array['{p:f1000000-0000-4000-8000-0000000000a8}', '{"p": "f1000000-0000-4000-8000-0000000000a8"}', 'outbox_events_acl_more'],
+    array['{p:f1000000-0000-4000-8000-0000000000a8}', '"free text"', 'outbox_events_acl_more']
+  ] loop
+    perform pg_temp.expect_error(format($i$insert into public.outbox_events (org_id, type, entity_type, entity_id, actor_id, actor_kind, purpose, acl_tokens, acl_more, index_class, acl_epoch)
+      values ('f1000000-0000-4000-8000-000000000000', 'signin.started', 'person', 'f1000000-0000-4000-8000-0000000000a8',
+              'f1000000-0000-4000-8000-0000000000a8', 'human', 'accounts', %L, %L, 'normal', 1)$i$, bad[1], bad[2]),
+      '23514', '%' || bad[3] || '%');
+  end loop;
+end
+$$;
+-- A whole snapshot passes, an empty one (nobody) and one with further clauses of every token kind too.
+select pg_temp.expect_rows($$insert into public.outbox_events (org_id, type, entity_type, entity_id, actor_id, actor_kind, purpose, acl_tokens, acl_more, index_class, acl_epoch)
+  values ('f1000000-0000-4000-8000-000000000000', 'signin.started', 'person', 'f1000000-0000-4000-8000-0000000000a8',
+          'f1000000-0000-4000-8000-0000000000a8', 'human', 'accounts', '{}', '[]', 'normal', 1),
+         ('f1000000-0000-4000-8000-000000000000', 'signin.started', 'person', 'f1000000-0000-4000-8000-0000000000a8',
+          'f1000000-0000-4000-8000-0000000000a8', 'human', 'accounts',
+          '{o:f1000000-0000-4000-8000-000000000000,t:f1000000-0000-4000-8000-0000000000d1}',
+          '[["ta:f1000000-0000-4000-8000-0000000000d1", "m:f1000000-0000-4000-8000-0000000000d1"], ["e:f1000000-0000-4000-8000-0000000000d1", "p:f1000000-0000-4000-8000-0000000000a8"], []]',
+          'normal', 1)$$, 2);
 select pg_temp.expect_rows($$insert into public.outbox_events (org_id, type, entity_type, entity_id, actor_id, actor_kind, purpose, acl_tokens, acl_more, index_class, acl_epoch)
   values ('f1000000-0000-4000-8000-000000000000', 'signin.started', 'person', 'f1000000-0000-4000-8000-0000000000a8',
           'f1000000-0000-4000-8000-0000000000a8', 'human', 'accounts', '{p:f1000000-0000-4000-8000-0000000000a8}', '[]', 'normal', 1)$$, 1);
@@ -202,6 +238,16 @@ reset role;
 select set_config('app.org_id', pg_temp.id('1', '00')::text, true), set_config('app.user_id', '', true);
 set local role hearth_job_purge;
 select pg_temp.expect_error($$select public.purge_outbox(10)$$, '42501');
+reset role;
+-- Only Hearth itself cleans up (SQL-4): with a person (the DPO) or another org's Hearth as the
+-- transaction's principal, the purge job's role is refused (42501), so the audit row can't name them.
+select set_config('app.org_id', pg_temp.id('1', '00')::text, true), set_config('app.user_id', pg_temp.id('1', 'a5')::text, true);
+set local role hearth_job_purge;
+select pg_temp.expect_error($$select public.purge_outbox(10)$$, '42501', 'Only Hearth itself cleans up%');
+reset role;
+select set_config('app.user_id', pg_temp.id('2', 'a0')::text, true);
+set local role hearth_job_purge;
+select pg_temp.expect_error($$select public.purge_outbox(10)$$, '42501', 'Only Hearth itself cleans up%');
 reset role;
 select pg_temp.act_as_job('1', 'hearth_job_purge');
 select pg_temp.expect_error($$select public.purge_outbox(0)$$, '22023');

@@ -4,6 +4,7 @@
 // production's migrator, as the integration harness does, and drops it at the end. `npm run
 // test:integration` runs it, with the stack up (`docker compose up -d --wait`).
 import { randomBytes, randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { sql } from 'kysely'
 import { Client as PgClient, type Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -229,6 +230,51 @@ describe('C0.6 T18 item 4 /ready: each login is held to its role’s rule', () =
     } finally {
       await pool.end()
       await admin.query(`drop role ${login}`)
+    }
+  })
+
+  it('SQL-3: the worker’s check refuses a login that can take a predefined role, such as pg_write_all_data', async () => {
+    // pg_write_all_data has none of the powers the other clauses look for (superuser, BYPASSRLS,
+    // ownership), but writes every row an RLS policy lets through, in every table.
+    const login = `roles_it_predef_${randomBytes(3).toString('hex')}`
+    await admin.query(`create role ${login} login noinherit password '${PASSWORD}'`)
+    await admin.query(`grant pg_write_all_data to ${login} with inherit false, set true`)
+    const pool = createPool(url(login, PASSWORD), logger, { max: 1 })
+    try {
+      await expect(workerRoleCheck(pool)(signal)).rejects.toThrow(/hearth_worker/)
+    } finally {
+      await pool.end()
+      await admin.query(`drop role ${login}`)
+    }
+  })
+
+  it('SQL-3: 0007 refuses an existing hearth_worker that holds anything but the job roles, by SET', async () => {
+    // The migration's role block, run again over the roles it made: as they are, it passes; with a
+    // predefined role that has none of the powers a deny-list would look for, it refuses. Each run
+    // is rolled back, so the grant never leaves this transaction.
+    const migration = await readFile(
+      new URL('../../../../db/migrations/0007_queue_outbox_flags.sql', import.meta.url),
+      'utf8',
+    )
+    const block = /^do \$\$\n[\s\S]*?^\$\$;$/m.exec(migration)?.[0]
+    expect(block).toContain('hearth_worker already exists and is a member of')
+    const run = async (grant: string): Promise<string> => {
+      await admin.query('begin')
+      try {
+        if (grant !== '') await admin.query(grant)
+        await admin.query(block ?? '')
+        return 'passed'
+      } catch (error) {
+        return (error as Error).message
+      } finally {
+        await admin.query('rollback')
+      }
+    }
+    expect(await run('')).toBe('passed')
+    for (const role of ['pg_write_all_data', 'pg_read_all_data', 'pg_signal_backend']) {
+      expect(await run(`grant ${role} to hearth_worker with inherit false, set true`)).toBe(
+        `hearth_worker already exists and is a member of ${role}; it may only hold job roles, by SET`,
+      )
     }
   })
 

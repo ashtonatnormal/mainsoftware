@@ -7,7 +7,8 @@
 // The catalogue (packages/shared EVENTS) is checked here before any SQL: the type must be emitted,
 // the ids must pass its schema (ids only: uuids, codes, booleans and bounded numbers), the purpose
 // must be one it allows, and a content event must carry its ACL snapshot and nothing else may. The
-// database checks the rest: the type list, the ids shape (is_ids_only), the snapshot's shape, and
+// database checks the rest: the type list, the ids shape (is_ids_only, keys and values), the
+// snapshot's shape (whole or none, and only @hearth/access's tokens, as aclOf lays them out), and
 // the actor, which must be the principal the transaction acts as unless Hearth is acting (a
 // sign-in before a session exists names the person, as its audit row does; a job names whoever its
 // work is for).

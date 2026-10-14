@@ -94,6 +94,10 @@ select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key
 select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose, payload)
   values ('f1000000-0000-4000-8000-000000000000', 'test.queued', 'core.system', 'service_operation',
           '{"note": "Call Mel on +6591234567"}')$$, '23514', '%jobs_payload_ids_only%');
+-- Free text as a key is refused too (SQL-1).
+select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose, payload)
+  values ('f1000000-0000-4000-8000-000000000000', 'test.queued', 'core.system', 'service_operation',
+          '{"Call Mel on +6591234567": true}')$$, '23514', '%jobs_payload_ids_only%');
 select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose)
   values ('f1000000-0000-4000-8000-000000000000', 'nodot', 'core.system', 'service_operation')$$, '23514');
 
@@ -235,6 +239,16 @@ values (pg_temp.id('2', '00'), 'test.old', 'core.system', 'service_operation', '
         now() - interval '20 days', '{"name": "other_org"}');
 select set_config('app.user_id', '', true);
 select set_config('test.audit_max', (select coalesce(max(id), 0)::text from public.audit_events), true);
+-- Only Hearth itself cleans up (SQL-4): with a person (the DPO) or another org's Hearth as the
+-- transaction's principal, the purge job's role is refused (42501), so the audit row can't name them.
+select set_config('app.org_id', pg_temp.id('1', '00')::text, true), set_config('app.user_id', pg_temp.id('1', 'a5')::text, true);
+set local role hearth_job_purge;
+select pg_temp.expect_error($$select public.purge_jobs(10)$$, '42501', 'Only Hearth itself cleans up%');
+reset role;
+select set_config('app.user_id', pg_temp.id('2', 'a0')::text, true);
+set local role hearth_job_purge;
+select pg_temp.expect_error($$select public.purge_jobs(10)$$, '42501', 'Only Hearth itself cleans up%');
+reset role;
 select pg_temp.act_as_job('1', 'hearth_job_purge');
 select pg_temp.expect_error($$select public.purge_jobs(0)$$, '22023');
 select pg_temp.expect_error($$select public.purge_jobs(10001)$$, '22023');

@@ -19,7 +19,9 @@
 #     could bypass RLS: any role granted anything in the database (on a table, a column or a
 #     function), and any role that can use one of those by SET or INHERIT (hearth_worker, which
 #     takes a job role per transaction), must not be a superuser, have BYPASSRLS, own a relation
-#     or the database, or be a member of a role that does. Objects that belong to an extension and
+#     or the database, or be a member of a role that does. Also a schema other than public, or a
+#     rule (CREATE RULE) on a table or view, which the coverage checks (check-catalogues, the
+#     integration sweep) couldn't see. Objects that belong to an extension and
 #     the constructor functions Postgres makes for a range type are skipped. The migrator's own ledger (kysely_migration,
 #     kysely_migration_lock) has no org_id or row level security, so those two checks skip it by
 #     name; it must still be the owner's and granted to nobody.
@@ -231,6 +233,21 @@ with recursive rel as (
     and n.nspowner <> '$owner'::regrole
     and not exists (select 1 from pg_depend d
                     where d.classid = 'pg_namespace'::regclass and d.objid = n.oid and d.deptype = 'e')
+  union all
+  -- Every table and function lives in public, where check-catalogues and the integration sweep
+  -- look for writes: another schema's would escape both. Allow one when it is needed,
+  -- and widen those checks with it.
+  select 'Schema other than public (create tables and functions in public)', format('schema %I', n.nspname)
+  from pg_namespace n
+  where n.nspname not like 'pg\_%' and n.nspname not in ('information_schema', 'public')
+    and not exists (select 1 from pg_depend d
+                    where d.classid = 'pg_namespace'::regclass and d.objid = n.oid and d.deptype = 'e')
+  union all
+  -- A rule rewrites a write into others, run with the table owner's rights, which no coverage
+  -- check reads; only a view's own _RETURN rule may exist.
+  select 'Rule on a table or view (create rule): use a trigger, which the checks see', format('%s: %s', rel.name, r.rulename)
+  from pg_rewrite r join rel on rel.oid = r.ev_class
+  where not (r.rulename = '_RETURN' and rel.relkind in ('v', 'm'))
   union all
   select 'A runtime role could bypass RLS', r.rolname || ' is a superuser, has BYPASSRLS or owns something'
   from pg_roles r where r.oid in (select oid from runtime)

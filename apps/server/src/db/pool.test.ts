@@ -56,6 +56,12 @@ describe('C0.6 T18 the worker’s readiness: its login skips no row level securi
     expect(sent[0]?.text).toContain("a.rolname = 'hearth_app' and pg_has_role(r.oid, a.oid, 'member')")
   })
 
+  it('SQL-3: refuses a login that belongs to any of Postgres’s predefined roles (pg_write_all_data and the like)', async () => {
+    const sent: { text: string; values: unknown[] }[] = []
+    await workerRoleCheck(pool([{ bypasses_rls: false }], sent))(signal)
+    expect(sent[0]?.text).toContain("p.rolname like 'pg\\_%' and pg_has_role(r.oid, p.oid, 'member')")
+  })
+
   it('names each job role the login can no longer take', async () => {
     const all = JOB_ROLES.map(role => ({ role, can_set: true }))
     await expect(workerRolesCheck(pool(all))(signal)).resolves.toBeUndefined()

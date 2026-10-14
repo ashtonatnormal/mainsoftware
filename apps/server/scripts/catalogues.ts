@@ -1,7 +1,7 @@
 // What check-catalogues.ts compares, as pure functions over what it reads from the database, so
 // catalogues.test.ts can prove each check fails when it should (TECH-SPEC T16 item 7, T17 item 1,
 // T18). Each problem names the gap and how to close it.
-import { EVENTS, type EventType, type FlagSpec, isAiFlag } from '@hearth/shared'
+import { CONTENT_TABLES, EVENTS, type EventType, type FlagSpec, isAiFlag } from '@hearth/shared'
 import { type Coverage, grantKey } from '#src/outbox/coverage.ts'
 
 // A write a runtime role may make through a grant: a row operation by table, an update by column.
@@ -13,11 +13,14 @@ export interface Grant {
 }
 
 // A function a runtime transaction can reach: one a runtime role may execute, a SECURITY DEFINER
-// function, or a trigger function. `key` is '<name>(<argument types>)'.
+// function, or a trigger function. `key` is '<name>(<argument types>)'; `source` its body
+// (pg_proc.prosrc) and `executors` the runtime roles that may execute it, for bodyProblems.
 export interface Fn {
   key: string
   definer: boolean
   trigger: boolean
+  source?: string
+  executors?: readonly string[]
 }
 
 const grantText = (grant: Grant) =>
@@ -66,6 +69,54 @@ export function coverageProblems(
   return problems
 }
 
+// The tables a function's body writes, by operation: every `insert into`, `update` and `delete from`
+// a schema-qualified table of public, as every SECURITY DEFINER function must name them under
+// search_path = '' (and as every function here does). A write built in dynamic SQL (EXECUTE) isn't
+// seen.
+export function bodyWrites(source: string): Array<{ table: string; op: Grant['op'] }> {
+  const found = new Map<string, { table: string; op: Grant['op'] }>()
+  for (const match of source.matchAll(/\b(insert\s+into|update|delete\s+from)\s+public\.([a-z_][a-z0-9_]*)\b/gi)) {
+    const verb = (match[1] ?? '').toLowerCase()
+    const op = verb.startsWith('insert') ? 'INSERT' : verb.startsWith('delete') ? 'DELETE' : 'UPDATE'
+    const table = (match[2] ?? '').toLowerCase()
+    found.set(`${table}:${op}`, { table, op })
+  }
+  return [...found.values()]
+}
+
+// Every table a function's body writes is in its entry's `writes`, with the same operation (an
+// UPDATE by any column), unless every runtime role that may execute it holds that write itself, so
+// its grant's entry covers it (set_feature_flag()'s audit row). A trigger runs for whoever writes
+// its table, so only its `writes` count. Without this, a function could write a table its entry
+// doesn't list, and the sweep would credit the write to another function's entry.
+export function bodyProblems(
+  writes: Readonly<Record<string, Coverage>>,
+  functions: readonly Fn[],
+  grants: readonly Grant[],
+): string[] {
+  const problems: string[] = []
+  for (const fn of functions) {
+    const declared = writes[fn.key]?.writes
+    if (declared === undefined || fn.source === undefined) continue
+    for (const { table, op } of bodyWrites(fn.source)) {
+      const listed = declared.some(write =>
+        op === 'UPDATE' ? write.startsWith(`${table}.`) && write.endsWith(':UPDATE') : write === `${table}:${op}`,
+      )
+      if (listed) continue
+      const executors = fn.executors ?? []
+      const granted =
+        !fn.trigger &&
+        executors.length > 0 &&
+        executors.every(role => grants.some(grant => grant.role === role && grant.table === table && grant.op === op))
+      if (granted) continue
+      problems.push(
+        `public.${fn.key} runs ${op === 'INSERT' ? 'insert into' : op === 'DELETE' ? 'delete from' : 'update'} public.${table}, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add it to its writes`,
+      )
+    }
+  }
+  return problems
+}
+
 // Every table an entry requires an event for must say which column the event names, and the column
 // must exist.
 export function matchProblems(
@@ -95,24 +146,39 @@ export function matchProblems(
   return problems
 }
 
-// A content table (one an entry covers with an event that carries an ACL snapshot) may not have an
-// exemption: every content write appends its event with its snapshot (CLAUDE.md, Build order).
+// A content table may not have an exemption, by its grant or through a function that writes it:
+// every content write appends its event with its snapshot (CLAUDE.md, Build order). The content
+// tables are packages/shared CONTENT_TABLES, and any table an entry covers with an event that
+// carries an ACL snapshot.
 export function contentProblems(
   writes: Readonly<Record<string, Coverage>>,
   carriesSnapshot: (type: EventType) => boolean = type => (EVENTS[type].acl as string) === 'snapshot',
+  contentTables: readonly string[] = CONTENT_TABLES,
 ): string[] {
   const tableOf = (key: string): string | undefined => /^hearth_[a-z0-9_]+ ([a-z_]+)[.:]/.exec(key)?.[1]
-  const content = new Set<string>()
-  for (const [key, coverage] of Object.entries(writes)) {
+  const writtenBy = (key: string, coverage: Coverage): string[] => {
     const table = tableOf(key)
-    if (table !== undefined && 'events' in coverage && coverage.events.some(carriesSnapshot)) content.add(table)
+    if (table !== undefined) return [table]
+    return (coverage.writes ?? []).flatMap(write => /^([a-z_][a-z0-9_]*)[.:]/.exec(write)?.[1] ?? [])
   }
-  return Object.entries(writes)
-    .filter(([key, coverage]) => 'exempt' in coverage && content.has(tableOf(key) ?? ''))
-    .map(
-      ([key]) =>
-        `'${key}' is exempt, but ${tableOf(key)} holds content, whose every write appends its event with an ACL snapshot`,
-    )
+  const content = new Set<string>(contentTables)
+  for (const [key, coverage] of Object.entries(writes)) {
+    if ('events' in coverage && coverage.events.some(carriesSnapshot)) {
+      for (const table of writtenBy(key, coverage)) content.add(table)
+    }
+  }
+  const problems: string[] = []
+  for (const [key, coverage] of Object.entries(writes)) {
+    if (!('exempt' in coverage)) continue
+    for (const table of new Set(writtenBy(key, coverage))) {
+      if (content.has(table)) {
+        problems.push(
+          `'${key}' is exempt, but writes ${table}, which holds content, whose every write appends its event with an ACL snapshot`,
+        )
+      }
+    }
+  }
+  return problems
 }
 
 // 2. The catalogue's names equal the outbox's type check, both ways.
