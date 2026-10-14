@@ -121,6 +121,8 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
   afterAll(async ({}, suite) => {
     if (s === undefined) return
     try {
+      // No Node warning fired (pg's for a query sent to a client already running one included).
+      expect(s.warnings.map(warning => `${warning.name}: ${warning.message}`)).toEqual([])
       await expectEveryWriteCovered(s.superuser, 'outbox', { allPassed: everyTestPassed(suite) })
     } finally {
       await s.stop()
@@ -502,7 +504,9 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
     })
 
     it('T16 items 1, 3 and 4: three workers run one consumer while 8 writers commit 200 events, 10% rolled back: each committed event is delivered once, in order', async () => {
-      const people = await Promise.all(Array.from({ length: 40 }, () => s.person()))
+      // One after another: the harness sends every query through one client (R2TESTS-2).
+      const people: Awaited<ReturnType<typeof s.person>>[] = []
+      for (let i = 0; i < 40; i++) people.push(await s.person())
       const workers = await Promise.all([1, 2, 3].map(() => worker([projection('it_w6', 10)])))
       try {
         let rolledBack = 0
@@ -694,9 +698,8 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
           await held
         })
         await longAppended
-        const others = Array.from({ length: 3 }, () => s.person())
-        for (const other of await Promise.all(others)) {
-          await withOrg(s.db, { orgId: s.org.id, userId: admin.id }, pinSet(other))
+        for (let i = 0; i < 3; i++) {
+          await withOrg(s.db, { orgId: s.org.id, userId: admin.id }, pinSet(await s.person()))
         }
         const linesBefore = s.logs.length
         // 3 s held: nothing past the open transaction is delivered, and the lag line says so.

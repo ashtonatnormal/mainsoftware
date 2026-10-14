@@ -75,6 +75,10 @@ const posting = (name: string, feature: string): JobKind =>
       for (let n = 1; ; n++) {
         ctx.step('post')
         await ctx.commit(async trx => {
+          // No lock_timeout for this wait (transaction_timeout's 30 s still bounds it), so a change
+          // that takes longer than withOrg()'s 2 s can't turn the held post into a lock timeout,
+          // which the runner would retry, rather than a post the fence refuses (R2TESTS-1).
+          await sql`set local lock_timeout = 0`.execute(trx)
           await sql`select pg_advisory_xact_lock_shared(hashtextextended(${ctx.job.id}, 0))`.execute(trx)
           await sql`insert into it_posts (org_id, job_id, n, revision) values (${ctx.job.orgId}, ${ctx.job.id}, ${n},
             (select f.revision from feature_flags f where f.org_id = ${ctx.job.orgId} and f.key = ${feature}))`.execute(
@@ -196,6 +200,8 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
         expect(reply.cacheControl, `${reply.method} ${reply.url}`).toBe('no-store')
         expect(reply.error, `${reply.method} ${reply.url}`).not.toBe('internal')
       }
+      // No Node warning fired (pg's for a query sent to a client already running one included).
+      expect(s.warnings.map(warning => `${warning.name}: ${warning.message}`)).toEqual([])
       const all = everyTestPassed(suite)
       await expectEveryWriteCovered(s.superuser, 'flags', { allPassed: all })
       if (all) {
@@ -478,6 +484,12 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
       await s.query('select pg_advisory_unlock(hashtextextended($1, 0))', [job])
     }
   }
+  // The post held across the change went on and the fence refused it: had it failed some other way
+  // (a lock timeout, say), the runner would have logged a retry (R2TESTS-1).
+  const refusedNotRetried = (job: string) =>
+    expect(
+      s.logs.filter(line => line.job === job && (line.event === 'job_retry' || line.event === 'job_dead')),
+    ).toEqual([])
   const jobOf = async (id: string) =>
     (
       await s.query<{ state: string; reason: string | null; attempts: number }>(
@@ -511,10 +523,11 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
       )
       console.info(`turned off: the job ended ${Date.now() - started} ms after the request`)
       expect(Date.now() - started).toBeLessThan(10_000)
-      expect(await jobOf(job)).toMatchObject({ state: 'cancelled', reason: 'flag_off' })
+      expect(await jobOf(job)).toMatchObject({ state: 'cancelled', reason: 'flag_off', attempts: 1 })
       await sleep(2000)
       expect(await postedFrom(job, off)).toBe(0)
       expect(await posted(job)).toBe(atChange)
+      refusedNotRetried(job)
     } finally {
       expect((await set(adminClient, { key: 'it.optional', enabled: true })).status).toBe(200)
     }
@@ -542,6 +555,7 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
       expect(await jobOf(job)).toMatchObject({ state: 'queued', attempts: 0 })
       expect(await postedFrom(job, (reply.body as { revision: number }).revision)).toBe(0)
       expect(await posted(job)).toBe(atReply)
+      refusedNotRetried(job)
     } finally {
       expect((await set(adminClient, { key: 'it.essential', enabled: true })).status).toBe(200)
     }
@@ -580,10 +594,11 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
       )
       console.info(`narrowed: the job ended ${Date.now() - started} ms after the request`)
       expect(Date.now() - started).toBeLessThan(10_000)
-      expect(await jobOf(forA)).toMatchObject({ reason: 'not_in_cohort' })
+      expect(await jobOf(forA)).toMatchObject({ reason: 'not_in_cohort', attempts: 1 })
       await sleep(1000)
       expect(await postedFrom(forA, (narrowed.body as { revision: number }).revision)).toBe(0)
       expect(await posted(forA)).toBe(atReply)
+      refusedNotRetried(forA)
       // B's job carries on: it posts after the reply. (A post whose commit was in flight across the
       // change is refused by the fence and the job given back at once, uncounted, to run on.)
       await eventuallyAsync(

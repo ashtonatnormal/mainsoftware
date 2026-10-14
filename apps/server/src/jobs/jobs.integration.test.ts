@@ -177,6 +177,8 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     if (s === undefined) return
     try {
       for (const gate of gates.values()) gate.release.resolve()
+      // No Node warning fired (pg's for a query sent to a client already running one included).
+      expect(s.warnings.map(warning => `${warning.name}: ${warning.message}`)).toEqual([])
       await expectEveryWriteCovered(s.superuser, 'jobs', { allPassed: everyTestPassed(suite) })
       // No worker loop failed again and again (a statement Postgres refuses would, every tick), and
       // no failure carried the sentinel a handler threw.
