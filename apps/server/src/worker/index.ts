@@ -261,7 +261,9 @@ export function startWorker(options: WorkerOptions): Worker {
     const blocked = consumers.blocked()
     return [
       ...(late.length > 0 ? [`the worker's loops have not run lately: ${late.join(', ')}`] : []),
-      ...(unconfirmed.length > 0 ? [`the flags are unconfirmed for org${unconfirmed.length > 1 ? 's' : ''} ${unconfirmed.join(', ')}`] : []),
+      ...(unconfirmed.length > 0
+        ? [`the flags are unconfirmed for org${unconfirmed.length > 1 ? 's' : ''} ${unconfirmed.join(', ')}`]
+        : []),
       ...blocked.map(block => `the outbox consumer ${block.consumer} is blocked in org ${block.org}: ${block.reason}`),
     ]
   }

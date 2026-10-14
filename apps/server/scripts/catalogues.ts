@@ -304,8 +304,8 @@ export function bodyProblems(
         table === '?'
           ? `public.${fn.key} runs ${op === 'INSERT' ? 'insert into' : op === 'DELETE' ? 'delete from' : 'update'} a table of public whose name check-catalogues can't read: write it as a plain or quoted identifier`
           : column === '?'
-          ? `public.${fn.key} runs update public.${table}, but check-catalogues can't read which columns it sets: name them in a plain SET list`
-          : `public.${fn.key} runs ${verbOf(op, table, column)}, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add ${add} to its writes`,
+            ? `public.${fn.key} runs update public.${table}, but check-catalogues can't read which columns it sets: name them in a plain SET list`
+            : `public.${fn.key} runs ${verbOf(op, table, column)}, but its entry in apps/server/src/outbox/coverage.ts doesn't list that write: add ${add} to its writes`,
       )
     }
   }

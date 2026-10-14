@@ -766,9 +766,9 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
           () => 'ready',
           (error: Error) => error.message,
         )
-      expect(
-        await eventually(readiness, message => message.includes('blocked')),
-      ).toContain(`the outbox consumer it_projection is blocked in org ${s.org.id}: behind_floor`)
+      expect(await eventually(readiness, message => message.includes('blocked'))).toContain(
+        `the outbox consumer it_projection is blocked in org ${s.org.id}: behind_floor`,
+      )
       expect(w.worker.consumers.lastRound()).toBeDefined()
       await ConsumerRunner.reset(s.worker, spec, s.org.id, 'oldest')
       await eventually(readiness, message => message === 'ready')

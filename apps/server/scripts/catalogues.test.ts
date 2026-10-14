@@ -197,7 +197,12 @@ describe('C0.6 T16 item 7 check-catalogues: every way to write is covered', () =
     ])
     // A name after public. it can't read is the table '?', which no entry lists.
     expect(bodyWrites('insert into public.9x (a) values (1);')).toEqual([{ table: '?', op: 'INSERT' }])
-    const fn: Fn = { key: 'f()', definer: true, trigger: false, source: 'insert into public."AuditData" (a) values (1);' }
+    const fn: Fn = {
+      key: 'f()',
+      definer: true,
+      trigger: false,
+      source: 'insert into public."AuditData" (a) values (1);',
+    }
     expect(bodyProblems({ 'f()': { exempt: 'a check', writes: ['auditdata:INSERT'] } }, [fn], [], {})).toEqual([
       expect.stringContaining('runs insert into public.AuditData, but its entry'),
     ])
