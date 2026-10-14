@@ -7,17 +7,25 @@ import { type Statement, scriptedPool } from '#src/testing/pool.ts'
 import { CONTROL_POOL_SIZE, productionRegistries, startWorker, workPoolSize } from '#src/worker/index.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
+const OTHER_ORG = 'a0000000-0000-4000-8000-000000000002'
 const SYSTEM = 'c0000000-0000-4000-8000-000000000001'
 
-// A database with one org, its flags, and nothing to do.
-function database(options: { orgsFail?: boolean } = {}) {
+// A database with one org, its flags, and nothing to do. `state` changes what it answers: the
+// orgs it lists, whether the flags read fails, whether the consumers' checkpoints are below the floor.
+interface DatabaseState {
+  orgs: string[]
+  flagsFail: boolean
+  behind: boolean
+}
+function database(options: { orgsFail?: boolean } = {}, state: DatabaseState = defaultState()) {
   return scriptedPool((statement: Statement) => {
     const { text } = statement
     if (text.includes("from principals where org_id = $1 and kind = 'system'")) return [{ id: SYSTEM }]
     if (text.startsWith('select id from public.worker_org_ids()')) {
-      return options.orgsFail ? new Error('Connection terminated unexpectedly') : [{ id: ORG }]
+      return options.orgsFail ? new Error('Connection terminated unexpectedly') : state.orgs.map(id => ({ id }))
     }
     if (text.startsWith('select "key", "enabled"')) {
+      if (state.flagsFail) return new Error('Connection terminated unexpectedly')
       return [
         {
           key: 'core.system',
@@ -36,7 +44,7 @@ function database(options: { orgsFail?: boolean } = {}) {
       return [{ queued: 0, running: 0, dead: 0, interrupted: 0, oldest_queued: null }]
     if (text.startsWith('select pg_try_advisory_xact_lock')) return [{ locked: true }]
     if (text.startsWith('select last_tx, last_id from outbox_checkpoints')) return [{ last_tx: '1', last_id: '1' }]
-    if (text.startsWith('with f as')) return [{ floor_tx: null, floor_id: null, fell_behind: false, id: null }]
+    if (text.startsWith('with f as')) return [{ floor_tx: null, floor_id: null, fell_behind: state.behind, id: null }]
     if (text.startsWith('select greatest(')) return [{ future: false }]
     return []
   })
@@ -49,9 +57,11 @@ const registries = () =>
     logger: { warn: vi.fn(), error: vi.fn() },
   })
 
-function start(options: { orgsFail?: boolean } = {}) {
-  const control = database(options)
-  const work = database(options)
+const defaultState = (): DatabaseState => ({ orgs: [ORG], flagsFail: false, behind: false })
+
+function start(options: { orgsFail?: boolean } = {}, state: DatabaseState = defaultState()) {
+  const control = database(options, state)
+  const work = database(options, state)
   const log = captureLogger()
   const subscriptions = { add: vi.fn(async () => {}) }
   const worker = startWorker({
@@ -141,6 +151,61 @@ describe('C0.6 T18 the worker role', () => {
     const failures = log.events('worker_loop_failed').filter(line => line.loop === 'orgs')
     expect(failures.length).toBeGreaterThanOrEqual(4)
     expect(failures.map(line => line.level).slice(0, 3)).toEqual([40, 40, 50])
+    worker.halt()
+  })
+
+  it('Qodo-18 #1: is not ready while an outbox consumer is blocked in an org, naming it, the org and why, and is again once it moves', async () => {
+    const state = defaultState()
+    state.behind = true
+    const { worker, log } = start({}, state)
+    await vi.advanceTimersByTimeAsync(WORKER_POLICY.consumerPollMs * 4)
+    // The consumers' loop still runs (its rounds end without an error); readiness names the block.
+    expect(worker.consumers.lastRound()).toBeDefined()
+    await expect(worker.check(new AbortController().signal)).rejects.toThrow(
+      `the outbox consumer offboarding is blocked in org ${ORG}: behind_floor`,
+    )
+    expect(log.events('outbox_consumer_fell_behind')).toHaveLength(1)
+    // A reset or a rebuild: the next round reads, and the worker is ready.
+    state.behind = false
+    await vi.advanceTimersByTimeAsync(WORKER_POLICY.consumerPollMs * 2)
+    await worker.check(new AbortController().signal)
+    worker.halt()
+  })
+
+  it('Qodo-18 #2: is not ready while a listed org’s flags are unconfirmed, naming the org', async () => {
+    const state = defaultState()
+    const { worker } = start({}, state)
+    await vi.advanceTimersByTimeAsync(300)
+    await worker.check(new AbortController().signal)
+    state.flagsFail = true
+    // 8 s without a good read: unconfirmed.
+    await vi.advanceTimersByTimeAsync(9000)
+    expect(worker.flags.confirmed(ORG)).toBe(false)
+    await expect(worker.check(new AbortController().signal)).rejects.toThrow(`the flags are unconfirmed for org ${ORG}`)
+    state.flagsFail = false
+    await vi.advanceTimersByTimeAsync(3000)
+    await worker.check(new AbortController().signal)
+    worker.halt()
+  })
+
+  it('Qodo-18 #6: stops polling the flags of an org that leaves its org list', async () => {
+    const state = defaultState()
+    state.orgs = [ORG, OTHER_ORG]
+    const { worker, control } = start({}, state)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(worker.flags.confirmed(OTHER_ORG)).toBe(true)
+    state.orgs = [ORG]
+    await vi.advanceTimersByTimeAsync(WORKER_POLICY.orgsMs)
+    expect(worker.orgs()).toEqual([ORG])
+    expect(worker.flags.confirmed(OTHER_ORG)).toBe(false)
+    const reads = (org: string) =>
+      control.statements.filter(s => s.text.startsWith('select "key", "enabled"') && s.values.includes(org)).length
+    const before = reads(OTHER_ORG)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(reads(OTHER_ORG)).toBe(before)
+    expect(reads(ORG)).toBeGreaterThan(0)
+    // Ready, though the org it dropped is unconfirmed now.
+    await worker.check(new AbortController().signal)
     worker.halt()
   })
 

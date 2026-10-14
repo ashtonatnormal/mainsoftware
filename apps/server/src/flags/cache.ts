@@ -146,6 +146,19 @@ export class FlagCache {
     return entry.confirmed
   }
 
+  // Stops keeping an org's flags: its poll ends, a read in progress changes nothing when it ends,
+  // and the org reads as unconfirmed (a later track() starts again). The worker calls it when an org
+  // leaves its org list. The api and realtime never do: they serve one org (D1), so what they keep
+  // can't grow.
+  untrack(orgId: string): void {
+    const entry = this.#orgs.get(orgId)
+    if (entry === undefined) return
+    this.#orgs.delete(orgId)
+    clearTimeout(entry.timer)
+    entry.timer = undefined
+    for (const waiter of entry.waiters.splice(0)) waiter()
+  }
+
   // Reloads an org at once when the flags channel says it changed (channel.ts). A message for an
   // org this process doesn't keep is ignored. Resolves once subscribed.
   listen(subscriptions: Pick<Subscriptions, 'add'>, channel: string): Promise<void> {
@@ -255,14 +268,20 @@ export class FlagCache {
     entry.loading = true
     entry.again = false
     const waiters = entry.waiters.splice(0)
+    const kept = () => this.#orgs.get(orgId) === entry
     try {
       const rows = await this.#bounded(this.#read(orgId))
-      this.#confirm(orgId, entry, rows)
+      if (kept()) this.#confirm(orgId, entry, rows)
     } catch (error) {
-      this.#failed(orgId, entry, error)
+      if (kept()) this.#failed(orgId, entry, error)
     } finally {
       entry.loading = false
       for (const waiter of waiters) waiter()
+    }
+    // Untracked during the read: nothing more for this entry.
+    if (!kept()) {
+      for (const waiter of entry.waiters.splice(0)) waiter()
+      return
     }
     if (this.#stopped) {
       for (const waiter of entry.waiters.splice(0)) waiter()

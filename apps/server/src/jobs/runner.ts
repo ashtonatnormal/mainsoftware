@@ -12,14 +12,17 @@
 //               it (jobs/gate.ts), after reloading the org's flags if they say the feature is off,
 //               and its handler runs with an AbortSignal, a timer for the kind's timeoutMs and the
 //               lineage revisions it was admitted under, which every commit's fence compares.
-//   heartbeats  Every 10 s, one statement per org renews every running job's lease. A job whose
-//               lease wasn't renewed has lost it (lease_lost), unless its finishing commit is in
-//               flight, which then reports for itself, or has committed: nothing aborts a job after
-//               that (T15 item 3). A heartbeat that fails is tried again at the
-//               next tick: two failures in a row still leave 10 s of lease.
+//   heartbeats  Every 10 s, one statement per org, bounded to 10 s, renews every running job's
+//               lease. A job whose lease wasn't renewed has lost it (lease_lost), unless its
+//               finishing commit is in flight, which then reports for itself, or has committed:
+//               nothing aborts a job after that (T15 item 3). A heartbeat that fails is tried again
+//               at the next tick; once a job's lease hasn't been renewed for 20 s (the lease less
+//               one heartbeat), the watchdog aborts it (lease_lost) before the lease can run out and
+//               the sweep give it to another worker.
 //   watching    A flag change for an org re-evaluates its running jobs: no longer on for the job's
 //               person aborts it (flag_off, not_in_cohort); still on moves the revisions it fences
-//               with. Every second, a job whose org's flags have gone unconfirmed (8 s) is aborted.
+//               with. Every second, a job whose org's flags have gone unconfirmed (8 s) is aborted,
+//               and one whose lease may lapse (above).
 //   outcomes    Written by hearth_queue on the control pool, only while the job is still running
 //               under the lease this worker holds (no row: the sweep took it, or it finished). See
 //               TECH-SPEC T15 items 2 to 6: succeeded (job_finish, in the effect's transaction);
@@ -107,6 +110,10 @@ interface Running {
   review: boolean
   subject: FlagSubject | null
   controller: AbortController
+  // When its lease was last known to be renewed (monotonic): when the claim that gave it began,
+  // then when each heartbeat that renewed it began (its lease runs from the database's now(),
+  // which is later). The watchdog aborts it before the lease can run out.
+  renewedAt: number
   attempt: JobAttempt<object> | undefined
   // The outcome, once decided, and whether its write changed the job.
   outcome: Outcome | undefined
@@ -253,7 +260,9 @@ export class JobRunner {
     }
   }
 
-  // For the integration tests' zombie worker: stops (or restarts) renewing leases while jobs run.
+  // For the integration tests' zombie worker: stops (or restarts) renewing leases while jobs run,
+  // and checking them, as a process frozen past its lease would, so only the fences stop what it
+  // commits when it wakes.
   pauseHeartbeats(paused = true): void {
     this.#heartbeatsPaused = paused
   }
@@ -284,6 +293,7 @@ export class JobRunner {
 
   async #claim(orgId: string, limit: number): Promise<void> {
     const kinds = [...this.#kinds.keys()]
+    const started = this.#now()
     const claimed = await withOrg(this.#control, { orgId, system: true, as: 'hearth_queue' }, async trx => {
       const jobs = await claimJobs(trx, orgId, kinds, limit, this.#workerId, this.#policy.leaseMs)
       if (jobs.length === 0) return { jobs, runs: new Map<string, string>(), subjects: new Map<string, FlagSubject>() }
@@ -330,11 +340,18 @@ export class JobRunner {
           ? null
           : (claimed.subjects.get(job.subject_id) ?? { personId: job.subject_id, active: false, roles: [] })
       const review = job.schedule_run_id !== null && claimed.runs.get(job.schedule_run_id) === 'review'
-      this.#begin(orgId, job, kind, review, subject)
+      this.#begin(orgId, job, kind, review, subject, started)
     }
   }
 
-  #begin(orgId: string, row: ClaimedJob, kind: JobKind, review: boolean, subject: FlagSubject | null): void {
+  #begin(
+    orgId: string,
+    row: ClaimedJob,
+    kind: JobKind,
+    review: boolean,
+    subject: FlagSubject | null,
+    claimedAt: number,
+  ): void {
     const r: Running = {
       orgId,
       row,
@@ -342,6 +359,7 @@ export class JobRunner {
       review,
       subject,
       controller: new AbortController(),
+      renewedAt: claimedAt,
       attempt: undefined,
       outcome: undefined,
       decision: undefined,
@@ -692,7 +710,11 @@ export class JobRunner {
       for (const [orgId, jobs] of byOrg) {
         if (this.#halted) return
         try {
+          const started = this.#now()
           const renewed = await withOrg(this.#control, { orgId, system: true, as: 'hearth_queue' }, async trx => {
+            // Bounded well inside the lease, so a heartbeat Postgres can't answer ends rather than
+            // holding the loop while leases run out (the watchdog stops the jobs either way).
+            await sql`set local statement_timeout = ${sql.lit(`${this.#heartbeatTimeoutMs()}ms`)}`.execute(trx)
             const { rows } = await sql<{ token: string }>`
               update jobs j set lease_expires_at = now() + ${this.#policy.leaseMs}::float8 * interval '1 millisecond'
               from unnest(${jobs.map(r => r.row.id)}::uuid[], ${jobs.map(r => r.row.lease_token)}::uuid[]) as t (id, token)
@@ -704,9 +726,8 @@ export class JobRunner {
           for (const r of jobs) {
             // Each attempt by its own lease (a zombie and the attempt that replaced it share a job).
             // A finishing commit in flight reports for itself (it may have succeeded already).
-            if (!renewed.has(r.row.lease_token) && r.decision === undefined && r.attempt?.finishing !== true) {
-              this.#abort(r, 'lease_lost')
-            }
+            if (renewed.has(r.row.lease_token)) r.renewedAt = Math.max(r.renewedAt, started)
+            else if (r.decision === undefined && r.attempt?.finishing !== true) this.#abort(r, 'lease_lost')
           }
         } catch (error) {
           clean = false
@@ -717,12 +738,26 @@ export class JobRunner {
     if (clean) this.#lastBeat = this.#now()
   }
 
-  // Every watchdogMs: a job whose org's flags have gone unconfirmed stops (T15 item 11). A feature
-  // locked on stays on.
+  // A heartbeat statement's bound: a third of the lease, and never more than the heartbeat interval.
+  #heartbeatTimeoutMs(): number {
+    return Math.max(1, Math.floor(Math.min(this.#policy.heartbeatMs, this.#policy.leaseMs / 3)))
+  }
+
+  // Every watchdogMs (T15 item 2 and 11):
+  //   - a job whose lease hasn't been renewed for leaseMs less one heartbeat (20 s by default) may
+  //     lose it before the next heartbeat could renew it, after which the sweep can hand it to
+  //     another worker: it stops now (lease_lost), so two workers never run it at once, whatever
+  //     made the renewals fail or hang. A finishing commit in flight reports for itself, and one
+  //     that has committed is never aborted (JOBS-1);
+  //   - a job whose org's flags have gone unconfirmed stops. A feature locked on stays on.
   async #watchdog(): Promise<void> {
     while (!this.#halted) {
+      const lapsing = this.#policy.leaseMs - this.#policy.heartbeatMs
       for (const r of this.#running.values()) {
-        if (r.decision === undefined && this.#flags.verdict(r.orgId, r.kind.feature, r.subject) === 'unconfirmed') {
+        if (r.decision !== undefined) continue
+        if (!this.#heartbeatsPaused && this.#now() - r.renewedAt > lapsing && r.attempt?.finishing !== true) {
+          this.#abort(r, 'lease_lost')
+        } else if (this.#flags.verdict(r.orgId, r.kind.feature, r.subject) === 'unconfirmed') {
           this.#abort(r, 'unconfirmed')
         }
       }

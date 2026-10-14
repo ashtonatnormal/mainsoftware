@@ -108,6 +108,15 @@ export class BelowFloor extends Error {
   }
 }
 
+// A consumer that can't move in an org until a person acts: the clean-up deleted events it never
+// saw (behind_floor: rebuild it, then reset it), or the org's stored positions are ahead of the
+// cluster's transaction ids (future_rows: the restore runbook, then a restart, A3).
+export interface Blocked {
+  consumer: string
+  org: string
+  reason: 'behind_floor' | 'future_rows'
+}
+
 export interface ConsumerRunnerOptions {
   // The worker's work pool, as hearth_worker (a job role per transaction).
   db: Database
@@ -130,9 +139,9 @@ export class ConsumerRunner {
   readonly #now: () => number
   // Per org, the restore check's answer (run once, at the org's first round).
   readonly #futures = new Map<string, Promise<boolean>>()
-  // Per consumer and org: why it was last refused, whether it is behind, its failures in a row.
+  // Per consumer and org: why it was last refused, why it is blocked, its failures in a row.
   readonly #refused = new Map<string, string>()
-  readonly #behind = new Set<string>()
+  readonly #blocked = new Map<string, Blocked>()
   readonly #failures = new Map<string, number>()
   // Per consumer, when its last pass over every org finished without an error.
   readonly #lastPass = new Map<string, number>()
@@ -183,7 +192,9 @@ export class ConsumerRunner {
   }
 
   // When the last pass of every consumer over every org finished without an error (monotonic), or
-  // undefined if one hasn't yet: the worker's readiness. With no consumers, when it started.
+  // undefined if one hasn't yet: that the loops are running, for the worker's readiness. With no
+  // consumers, when it started. A blocked consumer's rounds end without an error, so readiness also
+  // asks blocked().
   lastRound(): number | undefined {
     if (this.#consumers.length === 0) return this.#startedAt
     let oldest: number | undefined
@@ -193,6 +204,12 @@ export class ConsumerRunner {
       oldest = oldest === undefined ? pass : Math.min(oldest, pass)
     }
     return oldest
+  }
+
+  // Each consumer and org whose last round found it blocked, until a later round reads or finds
+  // nothing to read: the worker is unready while any is (T18 item 9).
+  blocked(): Blocked[] {
+    return [...this.#blocked.values()]
   }
 
   // Moves a consumer's checkpoint, for replay and tests (T16 item 5): to the oldest kept event, to
@@ -212,6 +229,12 @@ export class ConsumerRunner {
   // One round of one consumer in one org. Throws what a round can't handle itself (a lost
   // connection, a handler's failure), after which the transaction has rolled back.
   async round(consumer: OutboxConsumer, orgId: string): Promise<RoundResult> {
+    const result = await this.#round(consumer, orgId)
+    this.#noteBlock(consumer, orgId, result)
+    return result
+  }
+
+  async #round(consumer: OutboxConsumer, orgId: string): Promise<RoundResult> {
     const key = `${consumer.name}:${orgId}`
     const refusal = this.#refusal(consumer, orgId)
     this.#noteRefusal(consumer, orgId, key, refusal)
@@ -236,17 +259,7 @@ export class ConsumerRunner {
           return 'full'
         }
         const batch = await readBatch(trx, orgId, from, size)
-        if (batch.fellBehind) {
-          if (!this.#behind.has(key)) {
-            this.#behind.add(key)
-            log.error(
-              { event: 'outbox_consumer_fell_behind' },
-              'the clean-up deleted events this consumer never handled: rebuild it',
-            )
-          }
-          return 'behind'
-        }
-        this.#behind.delete(key)
+        if (batch.fellBehind) return 'behind'
         const last = batch.rows.at(-1)
         if (last === undefined) return 'idle'
         const events = batch.rows.filter(
@@ -314,6 +327,33 @@ export class ConsumerRunner {
       const timer = setTimeout(wake, ms)
       this.#wakers.add(wake)
     })
+  }
+
+  // A round that found the consumer behind the floor or the org's positions from the future blocks
+  // it; one that read, or found nothing to read, frees it. The rest (refused, busy, moved, fenced)
+  // say nothing about either, so the block stands. Logged once each time it changes: the block at
+  // error level (outbox_future_rows, logged once per org by the restore check, says why too).
+  #noteBlock(consumer: OutboxConsumer, orgId: string, result: RoundResult): void {
+    const key = `${consumer.name}:${orgId}`
+    const line = { consumer: consumer.name, org: orgId }
+    if (result === 'behind' || result === 'future') {
+      const reason = result === 'behind' ? 'behind_floor' : 'future_rows'
+      if (this.#blocked.get(key)?.reason === reason) return
+      this.#blocked.set(key, { ...line, reason })
+      if (reason === 'behind_floor') {
+        this.#logger.error(
+          { event: 'outbox_consumer_fell_behind', ...line, reason },
+          'the clean-up deleted events this consumer never handled: rebuild it',
+        )
+      } else {
+        this.#logger.error(
+          { event: 'outbox_consumer_blocked', ...line, reason },
+          'this consumer is stopped until the restore runbook is run',
+        )
+      }
+    } else if ((result === 'full' || result === 'idle') && this.#blocked.delete(key)) {
+      this.#logger.info({ event: 'outbox_consumer_unblocked', ...line }, 'the consumer is moving again')
+    }
   }
 
   // Why the consumer may not run in this org now, or undefined.

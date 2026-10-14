@@ -379,6 +379,58 @@ describe('C0.6 T15 item 2 heartbeats', () => {
     runner.halt()
   })
 
+  it('Qodo-18 #4: a job whose renewals keep failing is aborted (lease_lost) before its lease could run out', async () => {
+    const { run } = blocking()
+    const { p, runner, log } = start(
+      { claims: [[claimed(1)]], renew: () => new Error('Connection terminated unexpectedly') },
+      { kinds: [run] },
+    )
+    await until(() => runner.active === 1)
+    const claimedAt = performance.now()
+    // Two heartbeats fail (at 10 s and 20 s): the job runs on while its lease could still be renewed.
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs - JOB_POLICY.heartbeatMs - 50)
+    expect(runner.active).toBe(1)
+    // Within a watchdog tick of the lease less one heartbeat, it stops, well before the lease ends.
+    await until(() => runner.active === 0, JOB_POLICY.watchdogMs + 100)
+    expect(performance.now() - claimedAt).toBeLessThan(JOB_POLICY.leaseMs - JOB_POLICY.heartbeatMs / 2)
+    expect(log.events('job_lease_lost').map(line => line.job)).toEqual([jobId(1)])
+    // Nothing written: the sweep has it once the lease runs out.
+    expect(updates(p)).toEqual([])
+    // Each heartbeat is bounded well inside the lease.
+    expect(p.texts()).toContain(`set local statement_timeout = '${JOB_POLICY.heartbeatMs}ms'`)
+    runner.halt()
+  })
+
+  it('Qodo-18 #4: a heartbeat that hangs leaves the watchdog to abort the job before its lease could run out', async () => {
+    const { run } = blocking()
+    const { runner, log } = start(
+      {
+        claims: [[claimed(1)]],
+        hold: statement =>
+          statement.text.startsWith('update jobs j set lease_expires_at') ? new Promise<void>(() => {}) : undefined,
+      },
+      { kinds: [run] },
+    )
+    await until(() => runner.active === 1)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs - JOB_POLICY.heartbeatMs + JOB_POLICY.watchdogMs + 10)
+    expect(runner.active).toBe(0)
+    expect(log.events('job_lease_lost').map(line => line.job)).toEqual([jobId(1)])
+    runner.halt()
+  })
+
+  it('Qodo-18 #4: a job whose renewals succeed is never aborted for its lease, however long it runs', async () => {
+    const { run, release } = blocking()
+    const { runner, log } = start({ claims: [[claimed(1)]] }, { kinds: [run] })
+    await until(() => runner.active === 1)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 10)
+    expect(runner.active).toBe(1)
+    expect(log.events('job_lease_lost')).toEqual([])
+    release(1)
+    await until(() => runner.active === 0)
+    expect(log.events('job_succeeded')).toHaveLength(1)
+    runner.halt()
+  })
+
   it('JOBS-1: never aborts a job once its finishing commit has committed, whatever a heartbeat, the watchdog or a flag change says', async () => {
     let release: () => void = () => {}
     const effect = new Promise<void>(resolve => {

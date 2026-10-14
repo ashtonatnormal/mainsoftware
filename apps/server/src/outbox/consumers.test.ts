@@ -209,15 +209,35 @@ describe('C0.6 T16 one round of an outbox consumer', () => {
   })
 
   it('stops, logging an error once, when the clean-up has deleted past its checkpoint', async () => {
-    const p = pool({ batch: noEvents(['950', '3'], true) })
+    const script: Script = { batch: noEvents(['950', '3'], true) }
+    const p = pool(script)
     const { spec, handled } = consumer()
     const { run, log } = runner(p, [spec])
+    expect(run.blocked()).toEqual([])
     expect(await run.round(spec, ORG)).toBe('behind')
     expect(await run.round(spec, ORG)).toBe('behind')
     expect(log.events('outbox_consumer_fell_behind')).toHaveLength(1)
-    expect(log.events('outbox_consumer_fell_behind')[0]).toMatchObject({ level: 50, consumer: 'it_projection' })
+    expect(log.events('outbox_consumer_fell_behind')[0]).toMatchObject({
+      level: 50,
+      consumer: 'it_projection',
+      org: ORG,
+      reason: 'behind_floor',
+    })
     expect(p.texts().some(text => text.startsWith('update outbox_checkpoints'))).toBe(false)
     expect(handled).toEqual([])
+    // Qodo-18 #1: blocked, for the worker's readiness, until a round reads again (after a reset or
+    // a rebuild); a refused round says nothing either way.
+    expect(run.blocked()).toEqual([{ consumer: 'it_projection', org: ORG, reason: 'behind_floor' }])
+    script.locked = false
+    expect(await run.round(spec, ORG)).toBe('busy')
+    expect(run.blocked()).toHaveLength(1)
+    script.locked = true
+    script.batch = noEvents(['950', '3'])
+    expect(await run.round(spec, ORG)).toBe('idle')
+    expect(run.blocked()).toEqual([])
+    expect(log.events('outbox_consumer_unblocked')).toEqual([
+      expect.objectContaining({ level: 30, consumer: 'it_projection', org: ORG }),
+    ])
   })
 
   it('passes over an event whose subject’s processing switch refuses the purpose, logging its id, and still moves past it', async () => {
@@ -290,6 +310,11 @@ describe('C0.6 T16 one round of an outbox consumer', () => {
     expect(p.texts()[0]).toBe('start transaction isolation level read committed read only')
     expect(log.events('outbox_future_rows')).toEqual([expect.objectContaining({ level: 50, org: ORG })])
     expect(handled).toEqual([])
+    // Qodo-18 #1: each of the org's consumers is blocked, logged once.
+    expect(run.blocked()).toEqual([{ consumer: 'it_projection', org: ORG, reason: 'future_rows' }])
+    expect(log.events('outbox_consumer_blocked')).toEqual([
+      expect.objectContaining({ level: 50, consumer: 'it_projection', org: ORG, reason: 'future_rows' }),
+    ])
   })
 })
 

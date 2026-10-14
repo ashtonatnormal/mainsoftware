@@ -14,8 +14,10 @@
 //              C0.13 turns them into CloudWatch metrics.
 //
 // The org list is read first; every other loop then runs its first round at once. Readiness
-// (/ready's `worker` check) asks that every loop has finished a round without an error within three
-// of its intervals (and never less than 5 s), and that the worker isn't stopping. stop() stops
+// (/ready's `worker` check, T18 item 9) asks that every loop has finished a round without an error
+// within three of its intervals (and never less than 5 s), that every listed org's flags are
+// confirmed, that no outbox consumer is blocked in an org (behind the floor, or positions from the
+// future), and that the worker isn't stopping; its error names what fails. stop() stops
 // claiming, firing and consuming, gives running jobs 3 s to finish, aborts the rest (shutdown) and
 // gives them back, all within a hard 5 s: whatever is still in flight then is left to lease expiry
 // (T15 item 12).
@@ -122,6 +124,7 @@ export function startWorker(options: WorkerOptions): Worker {
     as: 'hearth_queue',
     registry: flagRegistry,
     logger,
+    now,
     ...(options.flags?.pollMs === undefined ? {} : { pollMs: options.flags.pollMs }),
     ...(options.flags?.staleMs === undefined ? {} : { staleMs: options.flags.staleMs }),
   })
@@ -201,6 +204,9 @@ export function startWorker(options: WorkerOptions): Worker {
       try {
         const listed = await listOrgs(control)
         for (const org of listed) if (!orgList.includes(org)) void flags.track(org)
+        // An org that has left the list is no longer polled (its running jobs then read its flags as
+        // unconfirmed, and stop).
+        for (const org of orgList) if (!listed.includes(org)) flags.untrack(org)
         orgList = listed
         lastOrgs = now()
         failures.delete('orgs:')
@@ -246,10 +252,23 @@ export function startWorker(options: WorkerOptions): Worker {
         return last === undefined || now() - last > Math.max(3 * loop.intervalMs, READY_FLOOR_MS)
       })
       .map(loop => loop.name)
+  // Why the worker can't do its work now, beyond a loop that has stopped: an org whose flags it
+  // hasn't confirmed (it claims nothing there, T15 item 11), and a consumer blocked in an org (it
+  // can't move until a person acts, T16 items 6 and 18).
+  const problems = (): string[] => {
+    const late = lagging()
+    const unconfirmed = orgList.filter(org => !flags.confirmed(org))
+    const blocked = consumers.blocked()
+    return [
+      ...(late.length > 0 ? [`the worker's loops have not run lately: ${late.join(', ')}`] : []),
+      ...(unconfirmed.length > 0 ? [`the flags are unconfirmed for org${unconfirmed.length > 1 ? 's' : ''} ${unconfirmed.join(', ')}`] : []),
+      ...blocked.map(block => `the outbox consumer ${block.consumer} is blocked in org ${block.org}: ${block.reason}`),
+    ]
+  }
   const check: Check = async () => {
     if (stopping) throw new Error('the worker is stopping')
-    const late = lagging()
-    if (late.length > 0) throw new Error(`the worker's loops have not run lately: ${late.join(', ')}`)
+    const found = problems()
+    if (found.length > 0) throw new Error(found.join('; '))
   }
 
   // The org list first; each other loop then runs its first round at once (startLoops).
@@ -265,7 +284,7 @@ export function startWorker(options: WorkerOptions): Worker {
   )
   // worker_ready once every loop has run a round.
   const announce = setInterval(() => {
-    if (stopping || lagging().length > 0) return
+    if (stopping || problems().length > 0) return
     clearInterval(announce)
     logger.info({ event: 'worker_ready' }, 'the worker is ready')
   }, 100)

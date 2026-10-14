@@ -116,6 +116,62 @@ describe('C0.6 T17 items 6 and 7 the flags a process keeps', () => {
     expect(reads(db)).toBe(3)
   })
 
+  it('Qodo-18 #6: forgets an org it no longer keeps: no more polls, a read in progress changes nothing, and it reads as unconfirmed', async () => {
+    const db = database([row('it.optional')])
+    let release: () => void = () => {}
+    let holding = false
+    const held = scriptedPool(
+      (statement: Statement) => {
+        if (statement.text.includes("from principals where org_id = $1 and kind = 'system'")) return [{ id: SYSTEM }]
+        if (statement.text.startsWith('select "key"')) {
+          db.state.reads++
+          return db.state.rows
+        }
+        return []
+      },
+      async statement => {
+        if (statement.text.startsWith('select "key"') && holding) {
+          await new Promise<void>(resolve => {
+            release = resolve
+          })
+        }
+      },
+    )
+    const log = captureLogger('api')
+    const flags = new FlagCache({
+      db: held.db,
+      registry: REGISTRY,
+      logger: log.logger,
+      now: () => Date.now(),
+      random: () => 0.5,
+    })
+    await flags.track(ORG)
+    await flags.track(OTHER_ORG)
+    expect(flags.confirmed(ORG)).toBe(true)
+    flags.untrack(ORG)
+    expect(flags.confirmed(ORG)).toBe(false)
+    expect(flags.isOn(ORG, 'it.optional', null)).toBe(false)
+    const before = reads(db)
+    await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 5)
+    // Only the org still kept is polled.
+    expect(reads(db) - before).toBe(5)
+    // Untracked while a read is in progress: the read ends, and nothing is kept or polled after it.
+    holding = true
+    await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 1.1)
+    flags.untrack(OTHER_ORG)
+    holding = false
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(flags.confirmed(OTHER_ORG)).toBe(false)
+    const after = reads(db)
+    await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 5)
+    expect(reads(db)).toBe(after)
+    // Kept again, it is read at once.
+    await flags.track(ORG)
+    expect(flags.confirmed(ORG)).toBe(true)
+    flags.stop()
+  })
+
   it('reads as the org’s system principal, read only and bounded to 2 s, and as hearth_queue in the worker', async () => {
     const db = database([row('core.system', { locked: true })])
     const { flags } = cache(db, { as: 'hearth_queue' })
@@ -286,7 +342,13 @@ describe('C0.6 T17 items 6 and 7 the flags a process keeps', () => {
       },
     )
     const log = captureLogger('api')
-    const flags = new FlagCache({ db: held.db, registry: REGISTRY, logger: log.logger, now: () => Date.now() })
+    const flags = new FlagCache({
+      db: held.db,
+      registry: REGISTRY,
+      logger: log.logger,
+      now: () => Date.now(),
+      random: () => 0.5,
+    })
     void flags.track(ORG)
     await vi.advanceTimersByTimeAsync(0)
     const first = flags.reload(ORG)
