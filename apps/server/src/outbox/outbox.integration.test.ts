@@ -757,6 +757,25 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
       BelowFloor,
     )
 
+    // Qodo-18 #1: a worker running it is not ready, and says which consumer, org and why, until a
+    // reset moves it; its loops run on all the while.
+    const w = await s.startWorker({ consumers: [spec], productionConsumers: false })
+    try {
+      const readiness = () =>
+        w.worker.check(new AbortController().signal).then(
+          () => 'ready',
+          (error: Error) => error.message,
+        )
+      expect(
+        await eventually(readiness, message => message.includes('blocked')),
+      ).toContain(`the outbox consumer it_projection is blocked in org ${s.org.id}: behind_floor`)
+      expect(w.worker.consumers.lastRound()).toBeDefined()
+      await ConsumerRunner.reset(s.worker, spec, s.org.id, 'oldest')
+      await eventually(readiness, message => message === 'ready')
+    } finally {
+      await w.stop()
+    }
+
     // New events, then a new consumer starting at the oldest kept event: the floor.
     await s.signIn(await s.person())
     const fresh = consumer('it_second')
