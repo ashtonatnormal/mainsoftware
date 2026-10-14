@@ -1,0 +1,323 @@
+// The flags a process keeps (TECH-SPEC T17 items 6 and 7). Postgres holds every org's flags
+// (feature_flags, migration 0007); each process holds a copy of the orgs it serves, so it can
+// decide whether a feature is on for someone without a query. A change reaches every process within
+// 10 s (PRD-65, BUILD-PLAN 150) two ways:
+//   - the api publishes on the flags channel after the change commits (channel.ts), and each
+//     process reloads that org at once;
+//   - each process polls every org it keeps every 2 s (±10%, so processes drift apart), each read
+//     bounded to 2 s, so a lost message, or Valkey down, costs at most about 4.5 s.
+// A process that hasn't confirmed an org's flags for 8 s reads every flag not locked on as off
+// (fail closed), and the database's fences refuse any effect after a change whatever this copy
+// says (fence.ts; feature_fence, job_fence and job_finish compare revisions).
+//
+// The api keeps the org of every signed-in request, realtime the org of every socket, the worker
+// every org (as hearth_queue, T18). A caller that serves values to someone (C0.8's GET /api/flags)
+// waits for the org's first load (track()).
+import { performance } from 'node:perf_hooks'
+import { FLAGS, type FlagSpec, flagLineage } from '@hearth/shared'
+import { sql } from 'kysely'
+import type { Logger } from 'pino'
+import { type Database, withOrg } from '#src/db/database.ts'
+import type { JobRole } from '#src/db/roles.ts'
+import { failureFields } from '#src/db/sqlstate.ts'
+import { readFlagsMessage } from '#src/flags/channel.ts'
+import { evaluate, type FlagState, type FlagSubject } from '#src/flags/evaluate.ts'
+import type { Subscriptions } from '#src/pubsub.ts'
+
+// How often each org's flags are read again (±10%), how long one read may take, and how long a
+// process trusts what it last read.
+export const FLAG_POLL_MS = 2000
+export const FLAG_READ_TIMEOUT = '2s'
+export const FLAG_STALE_MS = 8000
+// A read that has failed this many times in a row is logged at error level (C0.13 alarms on it).
+const FAILURES_BEFORE_ERROR = 3
+
+export interface FlagCacheOptions {
+  db: Database
+  // The role its reads take: the worker's cache reads as hearth_queue; the api's and realtime's
+  // as their own login (hearth_app).
+  as?: JobRole
+  // The flags this process knows (FLAGS unless a test adds its own, A5): a row with no entry here
+  // is kept, logged once, and evaluates off.
+  registry?: Readonly<Record<string, FlagSpec>>
+  logger: Pick<Logger, 'info' | 'warn' | 'error'>
+  pollMs?: number
+  staleMs?: number
+  // A monotonic clock (performance.now) and the jitter's randomness, for tests.
+  now?: () => number
+  random?: () => number
+}
+
+interface OrgFlags {
+  // What the last successful read found, and when (monotonic).
+  states: Map<string, FlagState> | undefined
+  confirmedAt: number | undefined
+  // The read in progress; a reload asked for meanwhile runs once more after it (coalesced).
+  loading: boolean
+  again: boolean
+  // reload() callers, waiting for a read that started after they asked.
+  waiters: Array<() => void>
+  timer: NodeJS.Timeout | undefined
+  // Resolves at the first successful read (track()).
+  confirmed: Promise<void>
+  confirm: () => void
+  failures: number
+  // Whether flags_unconfirmed has been logged since the org was last confirmed.
+  unconfirmed: boolean
+}
+
+type Row = {
+  key: string
+  enabled: boolean
+  locked: boolean
+  audience: 'org' | 'cohort'
+  cohort_people: string[]
+  cohort_roles: string[]
+  // A bigint, which pg returns as a string.
+  revision: unknown
+}
+
+export class FlagCache {
+  readonly registry: Readonly<Record<string, FlagSpec>>
+  readonly #db: Database
+  readonly #as: JobRole | undefined
+  readonly #logger: Pick<Logger, 'info' | 'warn' | 'error'>
+  readonly #pollMs: number
+  readonly #staleMs: number
+  readonly #now: () => number
+  readonly #random: () => number
+  readonly #orgs = new Map<string, OrgFlags>()
+  readonly #listeners = new Set<(orgId: string, keys: readonly string[]) => void>()
+  // org:key of each unregistered row already logged.
+  readonly #unregistered = new Set<string>()
+  #stopped = false
+
+  constructor(options: FlagCacheOptions) {
+    this.#db = options.db
+    this.#as = options.as
+    this.registry = options.registry ?? FLAGS
+    this.#logger = options.logger
+    this.#pollMs = options.pollMs ?? FLAG_POLL_MS
+    this.#staleMs = options.staleMs ?? FLAG_STALE_MS
+    this.#now = options.now ?? (() => performance.now())
+    this.#random = options.random ?? Math.random
+  }
+
+  // Starts keeping an org's flags, reading them at once and then every poll. Resolves at the first
+  // successful read, for a caller that serves values to wait on; never rejects (it keeps trying).
+  track(orgId: string): Promise<void> {
+    let entry = this.#orgs.get(orgId)
+    if (entry === undefined) {
+      let confirm: () => void = () => {}
+      const confirmed = new Promise<void>(resolve => {
+        confirm = resolve
+      })
+      entry = {
+        states: undefined,
+        confirmedAt: undefined,
+        loading: false,
+        again: false,
+        waiters: [],
+        timer: undefined,
+        confirmed,
+        confirm,
+        failures: 0,
+        unconfirmed: false,
+      }
+      this.#orgs.set(orgId, entry)
+      if (!this.#stopped) void this.#load(orgId, entry)
+    }
+    return entry.confirmed
+  }
+
+  // Reloads an org at once when the flags channel says it changed (channel.ts). A message for an
+  // org this process doesn't keep is ignored. Resolves once subscribed.
+  listen(subscriptions: Pick<Subscriptions, 'add'>, channel: string): Promise<void> {
+    return subscriptions.add(channel, 'flags', text => {
+      const message = readFlagsMessage(text)
+      if (message === undefined) {
+        this.#logger.warn({ event: 'flags_message_unreadable' }, 'dropped a message on the flags channel')
+        return
+      }
+      if (this.#orgs.has(message.org)) void this.reload(message.org)
+    })
+  }
+
+  // Reads an org's flags again at once (after a push, or a fence's HF001), and resolves when a read
+  // that started after this call has finished, whether or not it worked. Starts keeping the org if
+  // it wasn't kept.
+  reload(orgId: string): Promise<void> {
+    const entry = this.#orgs.get(orgId)
+    if (entry === undefined) return this.track(orgId)
+    return new Promise(resolve => {
+      entry.waiters.push(resolve)
+      if (entry.loading) entry.again = true
+      else if (!this.#stopped) void this.#load(orgId, entry)
+      else resolve()
+    })
+  }
+
+  // Whether the feature is on for this person (or, with no subject, for the whole org): it and
+  // every flag above it enabled, with the subject in each one's cohort (evaluate.ts). Off for a key
+  // this process doesn't know. While the org's flags are unconfirmed (never read, or not read for
+  // 8 s), only a flag locked on, with everything above it locked on, counts as on.
+  isOn(orgId: string, key: string, subject: FlagSubject | null): boolean {
+    if (!Object.hasOwn(this.registry, key)) return false
+    const entry = this.#orgs.get(orgId)
+    if (entry?.states === undefined || !this.#fresh(entry)) return this.#lockedOn(key)
+    return evaluate(entry.states, key, subject, level => Object.hasOwn(this.registry, level)) === 'on'
+  }
+
+  // The revisions of the feature's flag and every flag above it that has a row, registered or not,
+  // from the top ('ai', 'ai.agents', …): exactly what the fences read and compare. Undefined when
+  // the org's flags have never been read or the feature has no row.
+  revisionsOf(orgId: string, key: string): readonly number[] | undefined {
+    const states = this.#orgs.get(orgId)?.states
+    if (states === undefined || !states.has(key)) return undefined
+    return flagLineage(key).flatMap(level => {
+      const state = states.get(level)
+      return state === undefined ? [] : [state.revision]
+    })
+  }
+
+  // When the org's flags were last read successfully (monotonic), or undefined.
+  confirmedAt(orgId: string): number | undefined {
+    return this.#orgs.get(orgId)?.confirmedAt
+  }
+
+  // Called with an org and the keys whose revision changed (added and removed rows included) after
+  // each read that found a change. Not called for an org's first read. Returns a function that
+  // stops it.
+  onChange(listener: (orgId: string, keys: readonly string[]) => void): () => void {
+    this.#listeners.add(listener)
+    return () => this.#listeners.delete(listener)
+  }
+
+  // Stops polling. A read in progress finishes but schedules nothing.
+  stop(): void {
+    this.#stopped = true
+    for (const entry of this.#orgs.values()) {
+      clearTimeout(entry.timer)
+      entry.timer = undefined
+      for (const waiter of entry.waiters.splice(0)) waiter()
+    }
+  }
+
+  #fresh(entry: OrgFlags): boolean {
+    return entry.confirmedAt !== undefined && this.#now() - entry.confirmedAt <= this.#staleMs
+  }
+
+  #lockedOn(key: string): boolean {
+    return flagLineage(key).every(level => {
+      const spec = Object.hasOwn(this.registry, level) ? this.registry[level] : undefined
+      // A level that isn't a flag ('core' above 'core.system') doesn't count.
+      if (spec === undefined) return level !== key
+      return spec.locked && spec.default
+    })
+  }
+
+  async #load(orgId: string, entry: OrgFlags): Promise<void> {
+    clearTimeout(entry.timer)
+    entry.timer = undefined
+    entry.loading = true
+    entry.again = false
+    const waiters = entry.waiters.splice(0)
+    try {
+      const rows = await this.#read(orgId)
+      this.#confirm(orgId, entry, rows)
+    } catch (error) {
+      this.#failed(orgId, entry, error)
+    } finally {
+      entry.loading = false
+      for (const waiter of waiters) waiter()
+    }
+    if (this.#stopped) {
+      for (const waiter of entry.waiters.splice(0)) waiter()
+      return
+    }
+    if (entry.again) {
+      void this.#load(orgId, entry)
+      return
+    }
+    const delay = this.#pollMs * (0.9 + 0.2 * this.#random())
+    entry.timer = setTimeout(() => void this.#load(orgId, entry), delay)
+    entry.timer.unref()
+  }
+
+  // One read of the org's flags, read only, each statement bounded, as the org's system principal
+  // (and the worker's hearth_queue).
+  #read(orgId: string): Promise<Row[]> {
+    const acting =
+      this.#as === undefined ? { orgId, system: true as const } : { orgId, system: true as const, as: this.#as }
+    return withOrg(
+      this.#db,
+      acting,
+      async trx => {
+        await sql`set local statement_timeout = ${sql.lit(FLAG_READ_TIMEOUT)}`.execute(trx)
+        return trx
+          .selectFrom('feature_flags')
+          .select(['key', 'enabled', 'locked', 'audience', 'cohort_people', 'cohort_roles', 'revision'])
+          .where('org_id', '=', orgId)
+          .execute()
+      },
+      { readOnly: true },
+    )
+  }
+
+  #confirm(orgId: string, entry: OrgFlags, rows: readonly Row[]): void {
+    const states = new Map<string, FlagState>()
+    for (const row of rows) {
+      states.set(row.key, {
+        key: row.key,
+        enabled: row.enabled,
+        locked: row.locked,
+        // Revisions stay far below 2^53.
+        revision: Number(row.revision),
+        audience: row.audience,
+        cohort: { people: row.cohort_people, roles: row.cohort_roles },
+      })
+      if (!Object.hasOwn(this.registry, row.key) && !this.#unregistered.has(`${orgId}:${row.key}`)) {
+        this.#unregistered.add(`${orgId}:${row.key}`)
+        this.#logger.warn(
+          { event: 'flag_unregistered', org: orgId, key: row.key },
+          'a flag this process does not know reads as off',
+        )
+      }
+    }
+    const previous = entry.states
+    entry.states = states
+    entry.confirmedAt = this.#now()
+    entry.failures = 0
+    if (entry.unconfirmed) {
+      entry.unconfirmed = false
+      this.#logger.info({ event: 'flags_confirmed', org: orgId }, 'the flags can be read again')
+    }
+    entry.confirm()
+    if (previous === undefined) return
+    const changed = [...new Set([...previous.keys(), ...states.keys()])].filter(
+      key => previous.get(key)?.revision !== states.get(key)?.revision,
+    )
+    if (changed.length === 0) return
+    for (const key of changed) {
+      this.#logger.info(
+        { event: 'flags_changed', org: orgId, key, revision: states.get(key)?.revision ?? null },
+        'a flag changed',
+      )
+    }
+    for (const listener of this.#listeners) listener(orgId, changed)
+  }
+
+  #failed(orgId: string, entry: OrgFlags, error: unknown): void {
+    entry.failures++
+    const line = { event: 'flags_poll_failed', org: orgId, failures: entry.failures, failure: failureFields(error) }
+    if (entry.failures >= FAILURES_BEFORE_ERROR) this.#logger.error(line, 'could not read the flags')
+    else this.#logger.warn(line, 'could not read the flags')
+    if (!this.#fresh(entry) && !entry.unconfirmed) {
+      entry.unconfirmed = true
+      this.#logger.warn(
+        { event: 'flags_unconfirmed', org: orgId },
+        'the flags are unconfirmed: only what is locked on counts as on',
+      )
+    }
+  }
+}

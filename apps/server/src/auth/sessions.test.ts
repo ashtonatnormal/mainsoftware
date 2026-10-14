@@ -4,7 +4,8 @@ import { sha256 } from '#src/auth/crypto.ts'
 import { AttemptStale, inSession, issueSession, stampReauth } from '#src/auth/sessions.ts'
 import { withOrg } from '#src/db/database.ts'
 import type { ReqInfo } from '#src/http.ts'
-import { pgError, type Statement, scriptedPool } from '#src/testing/pool.ts'
+import { staticFlags } from '#src/testing/flags.ts'
+import { appended, pgError, type Statement, scriptedPool } from '#src/testing/pool.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const PERSON = 'b0000000-0000-4000-8000-000000000001'
@@ -35,8 +36,8 @@ function issuing(change: (statement: Statement) => unknown[] | Error | undefined
   })
 }
 
-describe('C0.5 T5 issuing a session at the end of a sign-in', () => {
-  it('re-reads the number, then makes a device and a session the database stamps, and audits the sign-in', async () => {
+describe('C0.5 T5 C0.6 T16 issuing a session at the end of a sign-in', () => {
+  it('re-reads the number, then makes a device and a session the database stamps, appends signin.started and audits the sign-in', async () => {
     const { db, statements } = issuing()
     const issued = await withOrg(db, { orgId: ORG, userId: PERSON }, trx => issueSession(trx, input))
     expect(issued).toEqual({
@@ -53,9 +54,21 @@ describe('C0.5 T5 issuing a session at the end of a sign-in', () => {
       'select 1 from phone_numbers where org_id = $1 and id = $2 and person_id = $3 and removed_at is null for share',
       'insert into "devices" ("org_id", "user_id", "label") values ($1, $2, $3) returning "id"',
       'insert into sessions (org_id, user_id, device_id, token_hash, expires_at) values ($1, $2, $3, $4, now() + $5::interval) returning id',
+      expect.stringMatching(/^insert into outbox_events /),
       expect.stringMatching(/^insert into "audit_events"/),
     ])
-    const [number, device, session, audit] = work
+    const [number, device, session, , audit] = work
+    // Before a session exists the transaction acts as Hearth, so the event names the person as its
+    // actor, as the audit row does (T16 item 10).
+    expect(appended(statements)).toEqual([
+      {
+        type: 'signin.started',
+        entity: PERSON,
+        subjects: [PERSON],
+        ids: { device: DEVICE, session: SESSION, method: 'sms_pin' },
+        actor: PERSON,
+      },
+    ])
     expect(number?.values).toEqual([ORG, NUMBER, PERSON])
     expect(device?.values).toEqual([ORG, PERSON, 'iPhone · Safari'])
     // Only the token's hash is stored, and the session lasts 90 days.
@@ -99,7 +112,7 @@ describe('C0.5 T5 issuing a session at the end of a sign-in', () => {
   })
 })
 
-describe("C0.5 T5 a session's last use", () => {
+describe("C0.5 T5 a session's last use (and C0.6: the org's flags kept)", () => {
   it('is written after the response, device first, at most once a minute per session, never to ended rows', async () => {
     const { db, statements } = scriptedPool()
     const tasks: (() => Promise<void>)[] = []
@@ -110,12 +123,15 @@ describe("C0.5 T5 a session's last use", () => {
       log: { warn: vi.fn() } as unknown as ReqInfo['log'],
       after: task => tasks.push(task),
     }
-    const api = { db } as Api
+    const flags = staticFlags()
+    const api = { db, flags } as unknown as Api
     // A session id of its own, since the once-a-minute memory is per process.
     const session = { sessionId: 'b0000000-0000-4000-8000-0000000000e9', orgId: ORG, userId: PERSON, deviceId: DEVICE }
     expect(await inSession(api, info, session, async () => 'done')).toBe('done')
     expect(await inSession(api, info, session, async () => 'again')).toBe('again')
     expect(tasks).toHaveLength(2)
+    // C0.6: the process keeps the org's flags from its first signed-in request on.
+    expect(flags.track).toHaveBeenCalledWith(ORG)
     expect(statements.some(s => s.text.startsWith('update'))).toBe(false)
     for (const task of tasks) await task()
     const updates = statements.filter(s => s.text.startsWith('update'))

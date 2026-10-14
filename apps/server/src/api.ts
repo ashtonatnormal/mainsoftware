@@ -1,5 +1,5 @@
-// The api role's routes under /api (C0.5): sign-in, your own devices and passkeys, and the admin
-// actions on a person. Every response in the scope carries Cache-Control: no-store, errors
+// The api role's routes under /api (C0.5): sign-in, your own devices and passkeys, the admin
+// actions on a person, and from C0.6 changing a feature flag. Every response in the scope carries Cache-Control: no-store, errors
 // included. Every body is JSON of at most 16 KiB, parsed by a strict zod object (http.ts). Errors
 // become `{ error, message, ...extra }` (auth/errors.ts); anything unexpected is a 500 whose detail
 // goes only to the (redacted) log. Work a handler queues for after its response runs once that
@@ -17,8 +17,8 @@ import type { SmsProvider } from '#src/auth/sms/provider.ts'
 import { type ValkeyKeys, valkeyKeys } from '#src/auth/valkey-keys.ts'
 import type { Database } from '#src/db/database.ts'
 import { deviceRoutes } from '#src/devices/routes.ts'
+import type { FlagCache } from '#src/flags/cache.ts'
 import { AfterResponse, BODY_LIMIT } from '#src/http.ts'
-import type { OffboardingRegistry } from '#src/offboarding.ts'
 
 export interface ApiDeps {
   db: Database
@@ -27,7 +27,14 @@ export interface ApiDeps {
   // undefined: no code can be sent, so code requests answer 503 unavailable.
   sms: SmsProvider | undefined
   keyPrefix: string
-  offboarding: OffboardingRegistry
+  // The flags this process keeps (flags/cache.ts; T17): every signed-in request keeps its org's,
+  // and the flags route takes the keys it accepts and their purposes from the cache's registry,
+  // FLAGS in production (a test adds its own it.* flags, A5).
+  flags: Pick<FlagCache, 'registry' | 'track' | 'reload'>
+  // Whether a deactivation publishes the leaver's ended sessions on Valkey as soon as it commits,
+  // so their sockets close at once (true unless set false). The outbox carries the same news to
+  // the worker regardless (T16); a test turns this off to see that path alone (A6).
+  publishDeactivated?: boolean
   // The after-response queue. registerApi makes one if none is given; the integration harness
   // passes its own, to await its idle() after each request.
   afterResponse?: AfterResponse

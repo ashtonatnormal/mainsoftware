@@ -11,6 +11,10 @@
 // It connects as the stack's superuser through the PG* variables (default
 // postgres:postgres@127.0.0.1:5432) and refuses any host but this machine.
 //
+// From C0.6 every write a runtime role commits is recorded for the outbox's contract sweep
+// (testing/writes.ts), and each org also has the test flags (TEST_FLAGS: it.*), which every flag
+// cache in the run knows (A5).
+//
 // The org has nobody in it at the start: each test makes its own people, so a test reads no
 // other test's state, and `-t` on one test works. Requests go through Fastify's inject from
 // 127.0.0.1, the one trusted proxy, so each client's X-Forwarded-For sets request.ip. Sockets go
@@ -20,6 +24,7 @@
 import { randomBytes, randomInt, randomUUID } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import { Writable } from 'node:stream'
+import { FLAGS, type FlagSpec } from '@hearth/shared'
 import type { FastifyInstance } from 'fastify'
 import type { Redis } from 'ioredis'
 import { Client as PgClient } from 'pg'
@@ -33,12 +38,15 @@ import { type ValkeyKeys, valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { createDatabase, type Database } from '#src/db/database.ts'
 import { migrate } from '#src/db/migrations.ts'
 import { createPool } from '#src/db/pool.ts'
+import type { JobRole } from '#src/db/roles.ts'
+import { FlagCache } from '#src/flags/cache.ts'
 import { AfterResponse } from '#src/http.ts'
 import { createLogger } from '#src/logger.ts'
-import { OffboardingRegistry, socketsHandler } from '#src/offboarding.ts'
+import { Subscriptions } from '#src/pubsub.ts'
 import { registerRealtime } from '#src/realtime/index.ts'
 import type { SocketServer } from '#src/realtime/socket.ts'
 import { MemorySms } from '#src/testing/sms.ts'
+import { installWriteTracking } from '#src/testing/writes.ts'
 import { closeValkey, createSubscriber, createValkey } from '#src/valkey.ts'
 
 // The app's origin in every test. Passkeys are bound to its host name, hearth.test.
@@ -52,6 +60,36 @@ const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
 // The password scripts/db-local.sh gives hearth_app and hearth_worker on the local stack: not a
 // secret.
 const APP_PASSWORD = 'hearth-local'
+
+// The flags only tests have (A5): the harness inserts each org's rows at these defaults (it.optional
+// and it.essential on, it.ai off, none locked), and every flag cache in the run knows them, the
+// flags route included. it.ai names an AI purpose outside ai.*, which only a test registry can:
+// the purpose gate refuses to turn it on.
+const testFlag = (
+  description: string,
+  flagClass: FlagSpec['class'],
+  purposes: FlagSpec['purposes'],
+  on: boolean,
+): FlagSpec => ({ description, class: flagClass, default: on, locked: false, purposes, client: false, stage: 'C0.6' })
+export const TEST_FLAGS: Readonly<Record<string, FlagSpec>> = {
+  'it.optional': testFlag(
+    'A test feature whose work is dropped when it is off',
+    'optional',
+    ['service_operation'],
+    true,
+  ),
+  'it.essential': testFlag('A test feature whose work waits while it is off', 'essential', ['service_operation'], true),
+  'it.ai': testFlag(
+    'A test feature with an AI purpose, which the purpose gate refuses',
+    'optional',
+    ['org_brain'],
+    false,
+  ),
+}
+export const TEST_REGISTRY: Readonly<Record<string, FlagSpec>> = { ...FLAGS, ...TEST_FLAGS }
+const TEST_FLAG_ROWS = `values ${Object.entries(TEST_FLAGS)
+  .map(([key, spec]) => `('${key}', ${spec.default})`)
+  .join(', ')}`
 
 // The roles a test person may hold (a Team Admin would need a team, which no test here makes).
 export type PersonRole = 'owner' | 'admin' | 'ai_admin' | 'leadership' | 'dpo' | 'compliance_officer'
@@ -116,6 +154,8 @@ export interface Seen {
 
 export interface Stack {
   db: Database
+  // A pool logged in as hearth_worker, which takes a job role per transaction (T18).
+  worker: Database
   superuser: PgClient
   valkey: Redis
   prefix: string
@@ -132,6 +172,14 @@ export interface Stack {
   numbers: Set<string>
   api: FastifyInstance
   realtime: RealtimeApp
+  // The flags the api and realtime apps keep (T17), with the test registry.
+  apiFlags: FlagCache
+  realtimeFlags: FlagCache
+  // Another flag cache with the test registry, read as hearth_app, or as a job role on the
+  // worker's login (as the worker's reads hearth_queue), stopped when the stack stops; with
+  // `subscribe`, on a subscriber connection of its own listening on the flags channel, as every
+  // process's is.
+  flagCache(options?: { as?: JobRole; pollMs?: number; subscribe?: boolean }): FlagCache
   person(options?: {
     roles?: PersonRole[]
     left?: boolean
@@ -152,8 +200,9 @@ export interface Stack {
   query<Row>(text: string, values?: unknown[]): Promise<Row[]>
   settled(): Promise<void>
   openSocket(client: Client, options?: { origin?: string; url?: string; cookie?: string }): Promise<Opened>
-  // Another api app on the same database, with its own Valkey URL (an unreachable one, say).
-  startApi(options: { valkeyUrl: string }): Promise<FastifyInstance>
+  // Another api app on the same database, with its own Valkey URL (an unreachable one, say), and
+  // optionally without its after-commit publish of a deactivation's sessions (A6).
+  startApi(options: { valkeyUrl?: string; publishDeactivated?: boolean }): Promise<FastifyInstance>
   // Another realtime app: a shorter re-check, and optionally no revocation subscriber.
   startRealtime(options: { recheckMs: number; subscribe: boolean }): Promise<RealtimeApp>
   track(resource: { close(): Promise<unknown> }): void
@@ -265,6 +314,8 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     // password.
     await superuser.query(`alter role hearth_app login password '${APP_PASSWORD}'`)
     await superuser.query(`alter role hearth_worker login password '${APP_PASSWORD}'`)
+    // Every write a runtime role commits from here on, for the outbox's contract sweep.
+    await installWriteTracking(superuser)
 
     const query = async <Row>(text: string, values: unknown[] = []): Promise<Row[]> =>
       (await superuser.query(text, values)).rows as Row[]
@@ -276,6 +327,12 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       org.system,
       org.id,
     ])
+    const addTestFlags = (orgId: string) =>
+      query(
+        `insert into feature_flags (org_id, key, enabled, locked) select $1, f.key, f.enabled, false from (${TEST_FLAG_ROWS}) f (key, enabled)`,
+        [orgId],
+      )
+    await addTestFlags(org.id)
     let second: { id: string; system: string } | undefined
 
     const logs: Record<string, unknown>[] = []
@@ -285,6 +342,11 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     const pool = createPool(url(c, database, 'hearth_app', APP_PASSWORD), logger)
     closers.push(() => pool.end())
     const db = createDatabase(pool)
+    const workerPool = createPool(url(c, database, 'hearth_worker', APP_PASSWORD), logger, {
+      applicationName: 'hearth-worker-it',
+    })
+    closers.push(() => workerPool.end())
+    const worker = createDatabase(workerPool)
 
     const valkeyUrl = process.env.VALKEY_URL ?? 'redis://127.0.0.1:6379'
     const valkey = createValkey(valkeyUrl, logger)
@@ -321,41 +383,80 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     // Each api app's after-response queue, so a client can wait for its work.
     const queues = new Map<FastifyInstance, AfterResponse>()
 
-    async function startApiOn(apiValkey: Redis, apiLogger: Logger): Promise<FastifyInstance> {
+    // A flag cache with the test registry, stopped when the stack stops.
+    function flagCache(o: { as?: JobRole; pollMs?: number; logger?: Logger } = {}): FlagCache {
+      const cache = new FlagCache({
+        db: o.as === undefined ? db : worker,
+        ...(o.as === undefined ? {} : { as: o.as }),
+        ...(o.pollMs === undefined ? {} : { pollMs: o.pollMs }),
+        registry: TEST_REGISTRY,
+        logger: o.logger ?? logger,
+      })
+      closers.push(async () => cache.stop())
+      return cache
+    }
+
+    // A process's pub/sub channels on a subscriber connection of its own, with its flags listening.
+    function subscribed(from: Redis, cache: FlagCache, subscriberLogger: Logger): Subscriptions {
+      const subscriptions = new Subscriptions(createSubscriber(from, subscriberLogger), subscriberLogger)
+      closers.push(() => subscriptions.close())
+      void cache.listen(subscriptions, names.flags)
+      return subscriptions
+    }
+
+    async function startApiOn(
+      apiValkey: Redis,
+      apiLogger: Logger,
+      o: { publishDeactivated?: boolean } = {},
+    ): Promise<{ app: FastifyInstance; flags: FlagCache }> {
       const afterResponse = new AfterResponse()
-      const offboarding = new OffboardingRegistry(apiLogger)
-      offboarding.register(socketsHandler({ db, valkey: apiValkey, keyPrefix: prefix, logger: apiLogger }))
+      const flags = flagCache({ logger: apiLogger })
+      subscribed(apiValkey, flags, apiLogger)
       const app = buildApp({
         appOrigin: APP_ORIGIN,
         logger: apiLogger,
         checks: {},
         trustProxy: ['127.0.0.1'],
-        api: { db, valkey: apiValkey, keys, sms, keyPrefix: prefix, offboarding, afterResponse },
+        api: {
+          db,
+          valkey: apiValkey,
+          keys,
+          sms,
+          keyPrefix: prefix,
+          flags,
+          afterResponse,
+          ...(o.publishDeactivated === undefined ? {} : { publishDeactivated: o.publishDeactivated }),
+        },
       })
       closers.push(() => app.close())
       await app.ready()
       queues.set(app, afterResponse)
-      return app
+      return { app, flags }
     }
 
-    async function startRealtimeApp(recheckMs: number, subscribe: boolean): Promise<RealtimeApp> {
+    async function startRealtimeApp(
+      recheckMs: number,
+      subscribe: boolean,
+    ): Promise<RealtimeApp & { flags: FlagCache }> {
       const app = buildApp({ appOrigin: APP_ORIGIN, logger: realtimeLogger, checks: {} })
-      const subscriber = subscribe ? createSubscriber(valkey, realtimeLogger) : undefined
+      const flags = flagCache({ logger: realtimeLogger })
+      const subscriptions = subscribe ? subscribed(valkey, flags, realtimeLogger) : undefined
       const server = registerRealtime(app, {
         appOrigin: APP_ORIGIN,
         logger: realtimeLogger,
         db,
         keyPrefix: prefix,
         recheckMs,
-        ...(subscriber === undefined ? {} : { subscriber }),
+        flags,
+        ...(subscriptions === undefined ? {} : { subscriptions }),
       })
       closers.push(() => app.close())
       await app.listen({ host: '127.0.0.1', port: 0 })
       const { port } = app.server.address() as AddressInfo
-      return { app, server, url: `ws://127.0.0.1:${port}/ws` }
+      return { app, server, url: `ws://127.0.0.1:${port}/ws`, flags }
     }
 
-    const api = await startApiOn(valkey, logger)
+    const { app: api, flags: apiFlags } = await startApiOn(valkey, logger)
     const realtime = await startRealtimeApp(options.recheckMs ?? SOCKET_RECHECK_MS, true)
     // The realtime app subscribes in the background; a revocation published before it has would
     // be caught only by the re-check.
@@ -531,6 +632,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
             second.system,
             second.id,
           ])
+          await addTestFlags(second.id)
         }
         inOrg = second
       }
@@ -635,6 +737,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
 
     return {
       db,
+      worker,
       superuser,
       valkey,
       prefix,
@@ -650,6 +753,13 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       numbers,
       api,
       realtime,
+      apiFlags,
+      realtimeFlags: realtime.flags,
+      flagCache: (o = {}) => {
+        const cache = flagCache(o)
+        if (o.subscribe === true) subscribed(valkey, cache, logger)
+        return cache
+      },
       person,
       number,
       newPin,
@@ -660,10 +770,15 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       query,
       settled,
       openSocket,
-      startApi: async ({ valkeyUrl }) => {
-        const other = createValkey(valkeyUrl, logger)
-        closers.push(() => closeValkey(other))
-        return startApiOn(other, logger)
+      startApi: async ({ valkeyUrl, publishDeactivated }) => {
+        let apiValkey = valkey
+        if (valkeyUrl !== undefined) {
+          const other = createValkey(valkeyUrl, logger)
+          closers.push(() => closeValkey(other))
+          apiValkey = other
+        }
+        const o = publishDeactivated === undefined ? {} : { publishDeactivated }
+        return (await startApiOn(apiValkey, logger, o)).app
       },
       startRealtime: ({ recheckMs, subscribe }) => startRealtimeApp(recheckMs, subscribe),
       track,

@@ -77,8 +77,10 @@ jobs:
       - run: docker compose up -d --wait
       - run: npm run db:reset
       # Sign-in, devices and socket revocation against the stack (BUILD-PLAN C0.5's "Done when"),
-      # listed case by case. Each run builds a throwaway database and its own Valkey key prefix,
-      # so it can run again.
+      # and from C0.6 the outbox's events beside every write (each suite sweeps every committed
+      # write for its event), changing flags and their reach to every process, listed case by
+      # case. Each run builds a throwaway database and its own Valkey key prefix, so it can run
+      # again.
       - run: npm run test:integration
       - run: scripts/check-server.sh
       - run: docker build -f apps/server/Dockerfile -t hearth-server .
@@ -150,6 +152,11 @@ jobs:
       # resetting their PIN during a sign-in, a number removed during a sign-in, and an admin
       # acting while being deactivated), in two connections to a throwaway database.
       - run: node apps/server/scripts/check-concurrency.ts
+      # The catalogues in code match the database (C0.6): every write grant of every runtime role,
+      # every function one can run and every SECURITY DEFINER and trigger function is covered by
+      # an outbox event or a reasoned exemption (apps/server/src/outbox/coverage.ts), and the
+      # event catalogue, the flag registry and the worker's job roles equal 0007's lists.
+      - run: node apps/server/scripts/check-catalogues.ts
       # The SQL access filter (sqlReadableBy, @hearth/access/sql) selects exactly what the
       # in-memory rule allows, for every person, both assistants and the system principal in the
       # fixture org, on Postgres 17, and still does after membership changes with no row rewritten;

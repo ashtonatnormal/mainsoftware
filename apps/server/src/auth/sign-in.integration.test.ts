@@ -11,13 +11,16 @@
 //
 // afterAll sweeps the whole run: no log line or audit row holds a number, code, PIN, session token
 // or attempt id; every /api reply was no-store and held no token or attempt id; no Node warning
-// fired. When every test ran and passed, it also checks that every error code (but try_again and
-// internal) was answered and every audit action written at least once.
+// fired; and every write a runtime role committed is exempt or had its outbox event naming it (C0.6,
+// T16 item 7; testing/writes.ts). When every test ran and passed, it also checks that every error
+// code (but try_again, internal and the flags route's, which flags.integration.test.ts sees) was
+// answered, every audit action written, and every event type this suite owns appended, at least once.
 import { type AddressInfo, connect } from 'node:net'
 import type {
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
 } from '@simplewebauthn/server'
+import { sql } from 'kysely'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { AuditAction } from '#src/auth/audit.ts'
 import { ATTEMPT_COOKIE, SESSION_COOKIE } from '#src/auth/cookies.ts'
@@ -25,8 +28,11 @@ import { keyName, tag } from '#src/auth/crypto.ts'
 import { MESSAGES } from '#src/auth/errors.ts'
 import { limitSubject } from '#src/auth/limiter.ts'
 import { LIMITS } from '#src/auth/policy.ts'
+import { withOrg } from '#src/db/database.ts'
+import { FLAG_ERRORS } from '#src/flags/set.ts'
 import { createAuthenticator } from '#src/testing/authenticator.ts'
 import { APP_ORIGIN, type Client, type Closed, type Person, type Stack, startStack } from '#src/testing/stack.ts'
+import { expectEveryWriteCovered, sweepWrites } from '#src/testing/writes.ts'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ISSUED_PIN_HASH = /^\$argon2id\$v=19\$m=19456,t=2,p=1\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$/
@@ -91,6 +97,40 @@ async function auditOf(person: Person): Promise<AuditRow[]> {
     [person.orgId, person.id],
   )
 }
+
+interface EventRow {
+  type: string
+  actor_id: string
+  actor_kind: string
+  entity_id: string
+  subject_ids: string[]
+  purpose: string
+  ids: Record<string, unknown>
+}
+
+// The outbox events about a person, in the order consumers read them (C0.6, T16).
+async function eventsOf(person: Person): Promise<EventRow[]> {
+  return s.query<EventRow>(
+    `select type, actor_id, actor_kind, entity_id, subject_ids, purpose, ids from outbox_events
+     where org_id = $1 and (entity_id = $2 or $2 = any(subject_ids)) order by tx_id, id`,
+    [person.orgId, person.id],
+  )
+}
+
+// An event about one person, as the sign-in, device and admin routes append them.
+const about = (person: Person, type: string, actor: Person, ids: Record<string, unknown> = {}) => ({
+  type,
+  actor_id: actor.id,
+  actor_kind: 'human',
+  entity_id: person.id,
+  subject_ids: [person.id],
+  purpose: 'accounts',
+  ids,
+})
+
+// An event's ids with its lists sorted, to compare with ids read in another order.
+const sortedIds = (ids: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(ids).map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value]))
 
 async function userOf(person: Person): Promise<UserRow | undefined> {
   const [row] = await s.query<UserRow>(
@@ -285,13 +325,15 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       // No Node warning fired (the experimental Web Crypto ones included).
       expect(s.warnings.map(warning => `${warning.name}: ${warning.message}`)).toEqual([])
 
-      // When every test ran and passed, every code and every audit action was seen.
+      // C0.6: every write a runtime role committed is covered by its outbox event, or exempt.
       const all = suite.tasks.every(task => task.type !== 'test' || task.result?.state === 'pass')
+      await expectEveryWriteCovered(s.superuser, 'sign-in', { allPassed: all && suite.tasks.length > 0 })
+
+      // When every test ran and passed, every code and every audit action was seen.
       if (all && suite.tasks.length > 0) {
         const answered = new Set(s.replies.map(reply => reply.error))
-        const missing = Object.keys(MESSAGES).filter(
-          code => code !== 'try_again' && code !== 'internal' && !answered.has(code),
-        )
+        const elsewhere = new Set<string>(['try_again', 'internal', ...FLAG_ERRORS])
+        const missing = Object.keys(MESSAGES).filter(code => !elsewhere.has(code) && !answered.has(code))
         expect(missing).toEqual([])
         const written = new Set(
           (await s.query<{ action: string }>('select distinct action from audit_events')).map(r => r.action),
@@ -403,6 +445,12 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       details: { method: 'sms_new_pin' },
     })
     expect(rows[2]).toMatchObject({ actor_id: p.id, device_id: deviceId })
+    // C0.6 T16: the outbox events beside the writes. Before a session exists the transaction acts
+    // as Hearth, so they name the person as their actor, as the audit rows do.
+    expect(await eventsOf(p)).toEqual([
+      about(p, 'signin.started', p, { device: deviceId, session: sessionId, method: 'sms_new_pin' }),
+      about(p, 'account.pin_set', p),
+    ])
 
     // pin_already_set: two browsers reach set_pin; the second to set a PIN is refused.
     const a = s.client()
@@ -418,6 +466,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const late = await b.post('/api/auth/pin/set', { pin: s.newPin() })
     expect(late.status).toBe(409)
     expect(late.error).toBe('pin_already_set')
+    // The refused one rolled back with everything it wrote, events included (T16).
+    expect((await eventsOf(q)).map(event => event.type)).toEqual(['signin.started', 'account.pin_set'])
 
     // Bad input, never echoed.
     const bad = s.client()
@@ -688,6 +738,15 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     })
     expect(reset.status).toBe(200)
     expect(reset.body).toEqual({ status: 'pin_reset', sessionsEnded: 1 })
+    // C0.6 T16: the reset and the session it ended, the admin acting.
+    const [mFirstSession] = await s.query<{ id: string }>(
+      "select id from sessions where user_id = $1 and revoke_reason = 'pin_reset'",
+      [m.id],
+    )
+    expect((await eventsOf(m)).filter(event => event.actor_id === admin.id)).toEqual([
+      about(m, 'account.pin_reset', admin),
+      about(m, 'signin.ended', admin, { sessions: [mFirstSession?.id], devices: [], reason: 'pin_reset' }),
+    ])
     const signedOut = await mFirst.get('/api/devices')
     expect([signedOut.status, signedOut.error]).toEqual([401, 'signed_out'])
     expect(signedOut.setCookies).toEqual([`${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`])
@@ -862,6 +921,16 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(removed.status).toBe(200)
     expect(removed.body).toEqual({ status: 'removed' })
     expect((await auditOf(p)).map(row => row.action)).toContain('auth.passkey_removed')
+    // C0.6 T16: the passkey's events, the session's person acting; the passkey's sign-in.
+    const events = await eventsOf(p)
+    expect(events.filter(event => event.type.startsWith('account.passkey'))).toEqual([
+      about(p, 'account.passkey_added', p, { passkey: passkeyId }),
+      about(p, 'account.passkey_removed', p, { passkey: passkeyId }),
+    ])
+    expect(events.filter(event => event.type === 'signin.started').map(event => event.ids.method)).toEqual([
+      'sms_new_pin',
+      'sms_passkey',
+    ])
 
     // Someone with no passkey is told so at step-up.
     const { client: wc } = await atStepUp(w)
@@ -1052,11 +1121,28 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(rows.filter(row => row.action === 'person.deactivate')).toEqual([
       expect.objectContaining({ actor_id: admin.id, details: { sessionsEnded: 2 } }),
     ])
+    // C0.6 T16: one business event, three events beside it, the admin acting: the worker's
+    // offboarding consumer reads person.deactivated; signin.ended names everything that ended.
+    const sessionIds = (
+      await s.query<{ id: string }>('select id from sessions where user_id = $1 order by id', [d.id])
+    ).map(row => row.id)
+    const deviceIds = (
+      await s.query<{ id: string }>('select id from devices where user_id = $1 order by id', [d.id])
+    ).map(row => row.id)
+    const deactivation = (await eventsOf(d)).filter(event =>
+      ['person.deactivated', 'signin.ended', 'acl.changed'].includes(event.type),
+    )
+    expect(deactivation.map(event => ({ ...event, ids: sortedIds(event.ids) }))).toEqual([
+      about(d, 'person.deactivated', admin),
+      about(d, 'signin.ended', admin, { sessions: sessionIds, devices: deviceIds, reason: 'deactivated' }),
+      about(d, 'acl.changed', admin, { change: 'keys', reason: 'deactivated' }),
+    ])
 
     // Asking again ends nothing and writes nothing.
     const twice = await adminC.post('/api/admin/people/deactivate', { person: d.id })
     expect(twice.body).toEqual({ status: 'deactivated', sessionsEnded: 0 })
     expect((await auditOf(d)).filter(row => row.action === 'person.deactivate')).toHaveLength(1)
+    expect((await eventsOf(d)).filter(event => event.type === 'person.deactivated')).toHaveLength(1)
 
     // CLAUDE.md: a cross-origin upgrade is refused, even with a live session cookie.
     const crossOrigin = await s.openSocket(adminC, { origin: 'https://evil.example' })
@@ -1149,6 +1235,26 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       [bDevice],
       [cDevice],
     ])
+    // C0.6 T16: each sign-out appended signin.ended naming what it ended, M acting.
+    const sessionOn = async (device: string) =>
+      (await s.query<{ id: string }>('select id from sessions where device_id = $1', [device]))[0]?.id
+    expect((await eventsOf(m)).filter(event => event.type === 'signin.ended')).toEqual([
+      about(m, 'signin.ended', m, {
+        sessions: [await sessionOn(bDevice)],
+        devices: [bDevice],
+        reason: 'device_sign_out',
+      }),
+      about(m, 'signin.ended', m, {
+        sessions: [await sessionOn(cDevice)],
+        devices: [cDevice],
+        reason: 'device_sign_out',
+      }),
+      about(m, 'signin.ended', m, {
+        sessions: [await sessionOn(aDevice)],
+        devices: [aDevice],
+        reason: 'device_sign_out',
+      }),
+    ])
 
     // A session unused for 31 days has ended, and so has one past its 90 days though used today
     // (T14: a device lists only while it holds a live session); the other device still lists.
@@ -1188,6 +1294,20 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(s.realtime.server.counts().closedRevoked).toBe(pushedBefore + 1)
     expect((await auditOf(n)).filter(row => row.action === 'person.sign_out_devices')).toEqual([
       expect.objectContaining({ actor_id: admin.id }),
+    ])
+    // The admin's sign-out ended N's three devices and the session on each (idle or past its 90
+    // days, a session is still revoked when its device signs out), the admin acting.
+    const nIds = async (table: 'sessions' | 'devices') =>
+      (await s.query<{ id: string }>(`select id from ${table} where user_id = $1 order by id`, [n.id])).map(
+        row => row.id,
+      )
+    const byAdmin = (await eventsOf(n)).filter(event => event.type === 'signin.ended')
+    expect(byAdmin.map(event => ({ ...event, ids: sortedIds(event.ids) }))).toEqual([
+      about(n, 'signin.ended', admin, {
+        sessions: await nIds('sessions'),
+        devices: await nIds('devices'),
+        reason: 'device_sign_out',
+      }),
     ])
   })
 
@@ -1287,6 +1407,40 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const set = await yc.post('/api/auth/pin/set', { pin: s.newPin() })
     expect([set.status, set.error]).toEqual([401, 'attempt_expired'])
     expect(await s.query('select id from sessions where user_id = $1', [y.id])).toEqual([])
+  })
+
+  it('C0.6 T16 item 7: the outbox sweep names a committed write with no event, and sees no rolled-back one', async () => {
+    const x = await s.person()
+    const rename = (name: string) =>
+      withOrg(s.db, { orgId: x.orgId, userId: x.id }, trx =>
+        sql`update people set full_name = ${name} where org_id = ${x.orgId} and id = ${x.id}`.execute(trx),
+      )
+    // A write hearth_app may make, with no event beside it: the sweep must name it.
+    await rename('Renamed without an event')
+    const [write] = await s.query<{ xid: string; role: string }>(
+      "select xid::text as xid, role from it_writes where table_name = 'people' and 'full_name' = any(columns) and row_ref = $1",
+      [x.id],
+    )
+    expect(write?.role).toBe('hearth_app')
+    const sweep = await sweepWrites(s.superuser)
+    expect(sweep.problems).toContainEqual(
+      expect.stringMatching(
+        new RegExp(
+          `^transaction ${write?.xid} wrote people\\.full_name \\(UPDATE\\) of ${x.id} as hearth_app but appended none of person\\.updated, acl\\.changed naming it`,
+        ),
+      ),
+    )
+    // A write that rolls back leaves no record, so it can't fail the sweep.
+    await expect(
+      withOrg(s.db, { orgId: x.orgId, userId: x.id }, async trx => {
+        await sql`update people set full_name = 'Rolled back' where org_id = ${x.orgId} and id = ${x.id}`.execute(trx)
+        throw new Error('rolled back')
+      }),
+    ).rejects.toThrow('rolled back')
+    expect(await s.query("select 1 from it_writes where row_ref = $1 and role = 'hearth_app'", [x.id])).toHaveLength(1)
+    // Taken out again, so the suite's own sweep judges only what the routes wrote.
+    await s.query('delete from it_writes where xid = $1::xid8', [write?.xid])
+    expect((await sweepWrites(s.superuser)).problems.filter(problem => problem.includes(x.id))).toEqual([])
   })
 
   it('PRD-53 T14: every limit is wired to the live Valkey', async () => {

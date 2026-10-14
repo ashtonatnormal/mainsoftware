@@ -16,8 +16,10 @@ import { writeAudit } from '#src/auth/audit.ts'
 import { clearedCookie } from '#src/auth/cookies.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { inSession, type SessionIds } from '#src/auth/sessions.ts'
-import { endDevices, endedSessions, hasLiveSession } from '#src/devices/routes.ts'
+import type { InOrg } from '#src/db/database.ts'
+import { endDevices, hasLiveSession } from '#src/devices/routes.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
+import { appendOutbox } from '#src/outbox/append.ts'
 import { publishRevoked } from '#src/revocation.ts'
 
 const audit = (session: SessionIds, info: ReqInfo, target: string) =>
@@ -42,9 +44,28 @@ function asIfActive(world: World, personId: string): World {
 
 // --- POST /api/admin/people/deactivate ------------------------------------------------------
 
+// The sessions and devices a deactivation ended in this transaction (0006's people_end_sessions:
+// revoked or signed out at now(), the transaction's start time, the same for every statement in it).
+async function endedByDeactivation(
+  trx: InOrg,
+  orgId: string,
+  personId: string,
+): Promise<{ sessions: string[]; devices: string[] }> {
+  const sessions = await sql<{ id: string }>`select id from sessions
+    where org_id = ${orgId} and user_id = ${personId} and revoke_reason = 'deactivated' and revoked_at = now()`.execute(
+    trx,
+  )
+  const devices = await sql<{ id: string }>`select id from devices
+    where org_id = ${orgId} and user_id = ${personId} and signed_out_at = now()`.execute(trx)
+  return { sessions: sessions.rows.map(row => row.id), devices: devices.rows.map(row => row.id) }
+}
+
 // Deactivating someone signs them out everywhere in the same transaction (0006's
-// people_end_sessions); after it commits, the offboarding handlers run (one, in C0.5, closes their
-// sockets). Asking again for someone already deactivated answers 200 with sessionsEnded 0 and
+// people_end_sessions), which appends person.deactivated, signin.ended and acl.changed (their keys
+// changed) to the outbox (C0.6, T16 items 8 and 14): the worker's offboarding consumer reads
+// person.deactivated to run every offboarding handler as a retried job (T16 item 9). After the
+// commit the api still publishes the sessions it ended, so the leaver's sockets close at once, as
+// before C0.6. Asking again for someone already deactivated answers 200 with sessionsEnded 0 and
 // writes nothing, if the actor could have deactivated them.
 export async function deactivate(
   api: Api,
@@ -53,15 +74,17 @@ export async function deactivate(
   info: ReqInfo,
 ): Promise<Answer> {
   const me = session.userId
+  const { orgId } = session
   const target = body.person
   const request: Request = { action: 'person.deactivate', person: target }
-  const outcome = await inSession(api, info, session, async trx => {
+  const ended = await inSession(api, info, session, async trx => {
+    const nothing = { sessions: [], devices: [] }
     const { world, verdict, fresh } = await consider(trx, session, request)
     if (verdict !== 'allowed') {
       // can() refuses an action on someone who has already left, so ask it as though they hadn't.
       if (verdict === 'refused' && world.person(target)?.deactivatedAt != null) {
         const again = decide(asIfActive(world, target), me, request, fresh)
-        if (again === 'allowed') return { sessionsEnded: 0, first: false }
+        if (again === 'allowed') return nothing
         throw refusalFor(again, 'forbidden')
       }
       throw refusalFor(verdict, 'forbidden')
@@ -69,30 +92,37 @@ export async function deactivate(
     const updated = await trx
       .updateTable('people')
       .set({ deactivated_at: sql<Date>`now()`, deactivated_by: me })
-      .where('org_id', '=', session.orgId)
+      .where('org_id', '=', orgId)
       .where('id', '=', target)
       .where('deactivated_at', 'is', null)
       .returning('id')
       .execute()
     // Another admin deactivated them a moment ago: this update waited for theirs.
-    if (updated.length === 0) return { sessionsEnded: 0, first: false }
-    const { rows } = await sql<{ n: string }>`select count(*) as n from sessions
-      where org_id = ${session.orgId} and user_id = ${target} and revoke_reason = 'deactivated' and revoked_at = now()`.execute(
-      trx,
-    )
-    const sessionsEnded = Number(rows[0]?.n ?? 0)
-    await writeAudit(trx, { ...audit(session, info, target), action: 'person.deactivate', details: { sessionsEnded } })
-    return { sessionsEnded, first: true }
+    if (updated.length === 0) return nothing
+    const ended = await endedByDeactivation(trx, orgId, target)
+    const event = { orgId, entity: { type: 'person', id: target }, subjects: [target], purpose: 'accounts' } as const
+    await appendOutbox(trx, { ...event, type: 'person.deactivated', ids: {} })
+    if (ended.sessions.length > 0 || ended.devices.length > 0) {
+      await appendOutbox(trx, { ...event, type: 'signin.ended', ids: { ...ended, reason: 'deactivated' } })
+    }
+    await appendOutbox(trx, { ...event, type: 'acl.changed', ids: { change: 'keys', reason: 'deactivated' } })
+    await writeAudit(trx, {
+      ...audit(session, info, target),
+      action: 'person.deactivate',
+      details: { sessionsEnded: ended.sessions.length },
+    })
+    return ended
   })
-  if (outcome.first) await api.offboarding.run({ orgId: session.orgId, personId: target, actorId: me })
-  return { body: { status: 'deactivated', sessionsEnded: outcome.sessionsEnded } }
+  if (api.publishDeactivated !== false) await publishRevoked(api.valkey, api.keyPrefix, ended.sessions, info.log)
+  return { body: { status: 'deactivated', sessionsEnded: ended.sessions.length } }
 }
 
 // --- POST /api/admin/people/reset-pin -------------------------------------------------------
 
 // ACC-06: after an identity check in person or on a video call, an admin clears someone's PIN and
 // its lock. Their sessions end, so their next sign-in sets a new PIN after the SMS code. Their
-// passkeys stay.
+// passkeys stay. The transaction appends account.pin_reset, and signin.ended for the sessions it
+// ended (C0.6, T16).
 export async function resetPin(
   api: Api,
   body: { person: string; identityCheck: 'in_person' | 'video_call'; note?: string | undefined },
@@ -118,6 +148,15 @@ export async function resetPin(
       where org_id = ${orgId} and user_id = ${target} and revoked_at is null
       returning id`.execute(trx)
     const ids = rows.map(row => row.id)
+    const event = { orgId, entity: { type: 'person', id: target }, subjects: [target], purpose: 'accounts' } as const
+    await appendOutbox(trx, { ...event, type: 'account.pin_reset', ids: {} })
+    if (ids.length > 0) {
+      await appendOutbox(trx, {
+        ...event,
+        type: 'signin.ended',
+        ids: { sessions: ids, devices: [], reason: 'pin_reset' },
+      })
+    }
     await writeAudit(trx, {
       ...audit(session, info, target),
       action: 'person.reset_pin',
@@ -142,23 +181,24 @@ export async function signOutDevices(
 ): Promise<Answer> {
   const target = body.person
   const self = target === session.userId
-  const { ended, revoked } = await inSession(api, info, session, async trx => {
+  const ended = await inSession(api, info, session, async trx => {
     // Their row is taken once can() allows it, and can() decides again, as for a PIN reset; your
     // own, taken as the actor's.
     await authorise(trx, session, { action: 'person.sign_out_devices', person: target }, 'forbidden', {
       person: self ? 'no_key_update' : 'share',
       ...(self ? {} : { target }),
     })
+    // It appends signin.ended for what it ended.
     const ended = await endDevices(trx, session, target)
     await writeAudit(trx, {
       ...audit(session, info, target),
       action: 'person.sign_out_devices',
-      details: { devices: ended },
+      details: { devices: ended.devices },
     })
-    return { ended, revoked: await endedSessions(trx, session.orgId, ended) }
+    return ended
   })
-  await publishRevoked(api.valkey, api.keyPrefix, revoked, info.log)
-  return { body: { signedOut: ended.length }, cookies: self ? [clearedCookie('session')] : [] }
+  await publishRevoked(api.valkey, api.keyPrefix, ended.sessions, info.log)
+  return { body: { signedOut: ended.devices.length }, cookies: self ? [clearedCookie('session')] : [] }
 }
 
 // --- GET /api/admin/people/:person/devices --------------------------------------------------

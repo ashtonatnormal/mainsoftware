@@ -1,13 +1,13 @@
-import { EventEmitter } from 'node:events'
 import type { AddressInfo } from 'node:net'
-import type { Redis } from 'ioredis'
 import { pino } from 'pino'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { buildApp } from '#src/app.ts'
 import { sha256 } from '#src/auth/crypto.ts'
-import { keepSubscribed, liveSessions, registerRealtime, SUBSCRIBE_RETRY_MS } from '#src/realtime/index.ts'
+import { Subscriptions } from '#src/pubsub.ts'
+import { liveSessions, registerRealtime } from '#src/realtime/index.ts'
 import { pgError, type Statement, scriptedPool } from '#src/testing/pool.ts'
+import { fakeSubscriber } from '#src/testing/subscriber.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const OTHER_ORG = 'a0000000-0000-4000-8000-000000000002'
@@ -83,88 +83,8 @@ describe('C0.5 T5 ACC-05 the realtime re-check: which sessions are still live', 
   })
 })
 
-// The methods the realtime role uses on its revocation connection.
-function fakeSubscriber(options: { failures?: number } = {}) {
-  const events = new EventEmitter()
-  let failures = options.failures ?? 0
-  const subscribe = vi.fn(async (_channel: string) => {
-    if (failures > 0) {
-      failures--
-      throw new Error('Connection is closed.')
-    }
-    return 1
-  })
-  const client = {
-    status: 'ready',
-    on: (event: string, listener: (...args: string[]) => void) => {
-      events.on(event, listener)
-      return client
-    },
-    subscribe,
-    quit: vi.fn(async () => 'OK'),
-    disconnect: vi.fn(),
-  }
-  return { client, events, subscribe, asRedis: client as unknown as Redis }
-}
-
-const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() })
-
-describe('C0.5 T5 listening for ended sessions', () => {
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('keeps trying to subscribe while Valkey is down, logging the failure once, until it works', async () => {
-    vi.useFakeTimers()
-    const { asRedis, subscribe } = fakeSubscriber({ failures: 3 })
-    const log = logger()
-    keepSubscribed(asRedis, 'it:unit:', () => {}, log)
-    await vi.advanceTimersByTimeAsync(SUBSCRIBE_RETRY_MS * 5)
-    expect(subscribe).toHaveBeenCalledTimes(4)
-    expect(subscribe.mock.calls.every(([channel]) => channel === 'it:unit:revoked')).toBe(true)
-    expect(log.warn).toHaveBeenCalledTimes(1)
-    expect(log.info).toHaveBeenCalledWith({ event: 'revocations_subscribed' }, expect.any(String))
-  })
-
-  it('subscribes again on each new connection after a reconnect, and keeps trying if that fails', async () => {
-    vi.useFakeTimers()
-    const { asRedis, events, subscribe } = fakeSubscriber()
-    const log = logger()
-    keepSubscribed(asRedis, 'it:unit:', () => {}, log)
-    // The first connection's 'ready' finds the first subscribe still pending: no second one.
-    events.emit('ready')
-    await vi.advanceTimersByTimeAsync(0)
-    expect(subscribe).toHaveBeenCalledTimes(1)
-
-    // A reconnect: Valkey has forgotten the subscription, and the new subscribe fails once.
-    subscribe.mockRejectedValueOnce(new Error('Command timed out'))
-    events.emit('ready')
-    await vi.advanceTimersByTimeAsync(0)
-    expect(subscribe).toHaveBeenCalledTimes(2)
-    // A 'ready' while the retry waits sends nothing more.
-    events.emit('ready')
-    await vi.advanceTimersByTimeAsync(SUBSCRIBE_RETRY_MS)
-    expect(subscribe).toHaveBeenCalledTimes(3)
-    expect(subscribe.mock.calls.every(([channel]) => channel === 'it:unit:revoked')).toBe(true)
-    expect(log.info).toHaveBeenCalledTimes(2)
-    await vi.advanceTimersByTimeAsync(SUBSCRIBE_RETRY_MS * 3)
-    expect(subscribe).toHaveBeenCalledTimes(3)
-  })
-
-  it('stops trying once stopped', async () => {
-    vi.useFakeTimers()
-    const { asRedis, subscribe } = fakeSubscriber({ failures: 100 })
-    const stop = keepSubscribed(asRedis, 'it:unit:', () => {}, logger())
-    await vi.advanceTimersByTimeAsync(SUBSCRIBE_RETRY_MS * 2)
-    const calls = subscribe.mock.calls.length
-    stop()
-    await vi.advanceTimersByTimeAsync(SUBSCRIBE_RETRY_MS * 5)
-    expect(subscribe).toHaveBeenCalledTimes(calls)
-  })
-})
-
 describe('C0.5 T5 ACC-05 the realtime role, wired', () => {
-  it('opens a socket for a live session, closes it when the api says the session ended, and closes its connection on stop', async () => {
+  it('opens a socket for a live session, keeps its org’s flags, and closes it when the api says the session ended', async () => {
     const pool = scriptedPool(statement =>
       statement.text.includes('public.session_by_token') && sha256(TOKEN).equals(statement.values[0] as Buffer)
         ? [
@@ -178,12 +98,15 @@ describe('C0.5 T5 ACC-05 the realtime role, wired', () => {
         : [],
     )
     const sub = fakeSubscriber()
+    const subscriptions = new Subscriptions(sub.asRedis, pino({ level: 'silent' }))
+    const flags = { track: vi.fn(async (_orgId: string) => {}) }
     const app = buildApp({ appOrigin: APP_ORIGIN, logger: pino({ level: 'silent' }), checks: {} })
     const server = registerRealtime(app, {
       appOrigin: APP_ORIGIN,
       logger: pino({ level: 'silent' }),
       db: pool.db,
-      subscriber: sub.asRedis,
+      subscriptions,
+      flags,
       keyPrefix: 'it:unit:',
     })
     await app.listen({ host: '127.0.0.1', port: 0 })
@@ -200,6 +123,8 @@ describe('C0.5 T5 ACC-05 the realtime role, wired', () => {
       })
       expect(pool.statements.find(s => s.text.includes('public.session_by_token'))?.values[1]).toBe('30 days')
       expect(sub.subscribe).toHaveBeenCalledWith('it:unit:revoked')
+      // C0.6: the socket's org's flags are kept from its first upgrade on.
+      expect(flags.track).toHaveBeenCalledWith(ORG)
       // What publishRevoked sends, as the subscriber delivers it.
       sub.events.emit(
         'message',
@@ -210,8 +135,8 @@ describe('C0.5 T5 ACC-05 the realtime role, wired', () => {
       expect(server.counts().closedRevoked).toBe(1)
     } finally {
       await app.close()
+      await subscriptions.close()
     }
-    expect(sub.client.quit).toHaveBeenCalled()
   })
 
   it('only an app built with the realtime role listens for upgrades; elsewhere Node treats one as a request', async () => {

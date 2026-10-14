@@ -12,7 +12,8 @@
 // than a transaction (a query builder or execute() on anything but the transaction, trx; any call
 // on a Database named db but opening a transaction; and query() or connect() on a pg pool or
 // client named pool, pg, postgres or client). It goes by names, not types, so a Database handle
-// named trx would pass. Test-only files are skipped.
+// named trx would pass. Test-only files are skipped, and the outbox's coverage table may name the
+// lookups as data (it makes no query).
 import { describe, expect, it } from 'vitest'
 import { withoutComments } from './imports'
 import { readRepoFile, repoFiles } from './repo-files'
@@ -24,6 +25,10 @@ const PRE_ORG = 'apps/server/src/db/pre-org.ts'
 const MIGRATIONS = 'apps/server/src/db/migrations.ts'
 // The readiness checks, which read only the system catalogues.
 const POOL = 'apps/server/src/db/pool.ts'
+// The outbox's coverage table (C0.6, T16 item 7) names every function a runtime transaction can
+// reach, the sign-in lookups and worker_org_ids() among them, as data: it calls none, and every
+// other rule here still applies to it.
+const COVERAGE = 'apps/server/src/outbox/coverage.ts'
 
 // Kysely's own ways to hold a connection or open a transaction.
 const OPENS = /\.(?:startTransaction|transaction|connection)\s*\(/
@@ -284,11 +289,31 @@ describe('db entry guard: transactions only through withOrg(), the pre-org looku
   })
 
   it('calls the pre-org functions only from pre-org.ts', () => {
-    expect(sources.filter(({ code }) => entryProblems(code).preOrg).map(source => source.path)).toEqual([PRE_ORG])
+    expect(
+      sources.filter(({ path, code }) => path !== COVERAGE && entryProblems(code).preOrg).map(source => source.path),
+    ).toEqual([PRE_ORG])
   })
 
   it('C0.6 T18: calls worker_org_ids() only from database.ts (listOrgs)', () => {
-    expect(sources.filter(({ code }) => entryProblems(code).listsOrgs).map(source => source.path)).toEqual([DATABASE])
+    expect(
+      sources.filter(({ path, code }) => path !== COVERAGE && entryProblems(code).listsOrgs).map(source => source.path),
+    ).toEqual([DATABASE])
+  })
+
+  it('C0.6: lets only the coverage table name the lookups, and the table makes no query at all', () => {
+    const coverage = sources.find(source => source.path === COVERAGE)
+    expect(coverage).toBeDefined()
+    expect(entryProblems(coverage?.code ?? '')).toEqual({
+      opens: false,
+      begins: false,
+      preOrg: true,
+      listsOrgs: true,
+      setsRole: false,
+      setsApp: false,
+      wholeConnection: false,
+      queriesPool: false,
+    })
+    expect(coverage?.code).not.toMatch(/\bsql\s*`|\.execute\s*\(|from '#src\/db\//)
   })
 
   it('C0.6 T18: takes a role only in database.ts (withOrg()’s as and listOrgs)', () => {

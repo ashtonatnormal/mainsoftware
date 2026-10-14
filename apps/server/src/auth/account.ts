@@ -1,7 +1,9 @@
 // Signed-in self-service (ACC-02, §9.4, T14): re-authenticating with the PIN or a
 // passkey, adding and removing a passkey, and signing out. Every transaction runs as the
 // session's person (inSession) and starts by re-reading the acting session FOR SHARE (person,
-// device, session), so a session that ended a moment ago is refused with 401 signed_out.
+// device, session), so a session that ended a moment ago is refused with 401 signed_out. Adding
+// or removing a passkey and signing out append their outbox events beside the change (C0.6, T16);
+// a re-authentication writes only stamps and counters, which are exempt (outbox/coverage.ts).
 //
 // Re-authentication stamps the session; admin actions and passkey changes need a stamp from the
 // last 5 minutes. It counts against a per-session window that, unlike sign-in's, lets requests
@@ -36,8 +38,9 @@ import {
   windowOf,
 } from '#src/auth/sign-in.ts'
 import type { InOrg } from '#src/db/database.ts'
-import { endDevices, endedSessions } from '#src/devices/routes.ts'
+import { endDevices } from '#src/devices/routes.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
+import { appendOutbox } from '#src/outbox/append.ts'
 import { publishRevoked } from '#src/revocation.ts'
 
 const reauthenticated: Answer = { body: { status: 'reauthenticated', validForSeconds: REAUTH.windowSeconds } }
@@ -217,6 +220,14 @@ export async function registerVerify(
       throw error
     }
     if (row === undefined) throw new Error('the new passkey was not returned')
+    await appendOutbox(trx, {
+      orgId: session.orgId,
+      type: 'account.passkey_added',
+      entity: { type: 'person', id: session.userId },
+      subjects: [session.userId],
+      purpose: 'accounts',
+      ids: { passkey: row.id },
+    })
     await writeAudit(trx, {
       ...audit(session, info),
       action: 'auth.passkey_added',
@@ -257,6 +268,14 @@ export async function removePasskey(
       .returning('id')
       .execute()
     if (removed.length === 0) throw new ApiError(404, 'not_found')
+    await appendOutbox(trx, {
+      orgId: session.orgId,
+      type: 'account.passkey_removed',
+      entity: { type: 'person', id: session.userId },
+      subjects: [session.userId],
+      purpose: 'accounts',
+      ids: { passkey: body.passkey },
+    })
     await writeAudit(trx, {
       ...audit(session, info),
       action: 'auth.passkey_removed',
@@ -277,10 +296,11 @@ export async function signOut(api: Api, session: SessionIds | undefined, info: R
   try {
     revoked = await inSession(api, info, session, async trx => {
       await authorise(trx, session, { action: 'devices.sign_out_own' }, 'not_found')
-      // Its trigger ends the device's session with the reason device_sign_out (0003).
+      // Its trigger ends the device's session with the reason device_sign_out (0003), and
+      // endDevices appends signin.ended for it.
       const ended = await endDevices(trx, session, session.userId, { only: session.deviceId })
-      if (ended.length > 0) await writeAudit(trx, { ...audit(session, info), action: 'auth.sign_out' })
-      return endedSessions(trx, session.orgId, ended)
+      if (ended.devices.length > 0) await writeAudit(trx, { ...audit(session, info), action: 'auth.sign_out' })
+      return ended.sessions
     })
   } catch (error) {
     if (error instanceof ApiError && error.code === 'signed_out') return done

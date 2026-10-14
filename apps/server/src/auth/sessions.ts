@@ -15,6 +15,7 @@ import { SESSION } from '#src/auth/policy.ts'
 import { type Database, type InOrg, withOrg } from '#src/db/database.ts'
 import { type SessionIds, sessionByToken } from '#src/db/pre-org.ts'
 import type { ReqInfo } from '#src/http.ts'
+import { appendOutbox } from '#src/outbox/append.ts'
 
 export type { SessionIds }
 
@@ -43,7 +44,8 @@ export function signedOut(): ApiError {
   return new ApiError(401, 'signed_out', {}, ['session'])
 }
 
-// Work for a signed-in request: withOrg() acting as the session's person. The session's last-use
+// Work for a signed-in request: withOrg() acting as the session's person. The process keeps the
+// org's flags from its first signed-in request on (C0.6, flags/cache.ts). The session's last-use
 // time is written after the response (touch).
 export async function inSession<T>(
   api: Api,
@@ -51,6 +53,8 @@ export async function inSession<T>(
   session: SessionIds,
   work: (trx: InOrg) => Promise<T>,
 ): Promise<T> {
+  // It never rejects: the cache keeps trying by itself.
+  void api.flags.track(session.orgId)
   const result = await withOrg(api.db, { orgId: session.orgId, userId: session.userId }, work)
   info.after(() => touch(api.db, session, info))
   return result
@@ -128,10 +132,12 @@ export interface IssuedSession {
 }
 
 // Makes the device and session a finished sign-in earns, in the caller's transaction, which has
-// already read the person FOR SHARE (sign-in.ts), and audits auth.sign_in. The number the code
-// went to is read again FOR SHARE, so a number removed since the code was sent can't finish a
-// sign-in (ACC-03, T14). The session starts re-authenticated: the sign-in just proved the PIN or a
-// passkey (0006's default stamps it at the start).
+// already read the person FOR SHARE (sign-in.ts), appends signin.started to the outbox (C0.6, T16)
+// and audits auth.sign_in. The number the code went to is read again FOR SHARE, so a number removed
+// since the code was sent can't finish a sign-in (ACC-03, T14). The session starts re-authenticated:
+// the sign-in just proved the PIN or a passkey (0006's default stamps it at the start). The caller
+// acts as the org's system principal (no session exists yet), so the event names the person as its
+// actor, as the audit row does.
 export async function issueSession(
   trx: InOrg,
   input: {
@@ -168,6 +174,15 @@ export async function issueSession(
     if (isTriggerRefusal(error)) throw new AttemptStale()
     throw error
   }
+  await appendOutbox(trx, {
+    orgId,
+    type: 'signin.started',
+    entity: { type: 'person', id: personId },
+    actor: { id: personId, kind: 'human' },
+    subjects: [personId],
+    purpose: 'accounts',
+    ids: { device: deviceId, session: sessionId, method: input.method },
+  })
   await writeAudit(trx, {
     orgId,
     actorId: personId,

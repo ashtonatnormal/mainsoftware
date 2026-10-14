@@ -18,7 +18,7 @@ import {
 import type { SmsProvider } from '#src/auth/sms/provider.ts'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { AfterResponse, type ReqInfo } from '#src/http.ts'
-import { OffboardingRegistry } from '#src/offboarding.ts'
+import { staticFlags } from '#src/testing/flags.ts'
 import { type Statement, scriptedPool, systemPrincipal } from '#src/testing/pool.ts'
 import { MemorySms } from '#src/testing/sms.ts'
 
@@ -85,7 +85,7 @@ function context(valkey: Redis, pool = scriptedPool(), sms?: SmsProvider) {
     keys: deriveKeys('unit-test-unit-test-unit-test-unit-test'),
     sms,
     keyPrefix: PREFIX,
-    offboarding: new OffboardingRegistry({ info: vi.fn(), error: vi.fn() }),
+    flags: staticFlags(),
     afterResponse: new AfterResponse(),
     appOrigin: 'https://hearth.example.com',
     names,

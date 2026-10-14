@@ -1,7 +1,8 @@
 // Your own devices (ACC-04, T14 item 7): the list of browsers and phones you're signed in on,
 // with your passkeys, and signing one out, or all but this one. Signing a device out ends its
-// sessions in the same transaction (0003's devices_end_sessions), and after the commit the
-// realtime role is told to close their sockets (revocation.ts). Your own list shows exact times;
+// sessions in the same transaction (0003's devices_end_sessions), which appends signin.ended to the
+// outbox (C0.6, T16), and after the commit the realtime role is told to close their sockets
+// (revocation.ts). Your own list shows exact times;
 // an admin's view of it shows dates only (admin/people.ts).
 import type { FastifyInstance } from 'fastify'
 import { sql } from 'kysely'
@@ -15,18 +16,21 @@ import { SESSION } from '#src/auth/policy.ts'
 import { inSession, requireSession, type SessionIds } from '#src/auth/sessions.ts'
 import type { InOrg } from '#src/db/database.ts'
 import { type Answer, parse, type ReqInfo, requestInfo, send, Uuid } from '#src/http.ts'
+import { appendOutbox } from '#src/outbox/append.ts'
 import { publishRevoked } from '#src/revocation.ts'
 
 // Signs out the person's devices that are still signed in: one (only), all but one (except), or
-// all of them, as the acting session's person. Returns the devices this statement ended; the
-// trigger ends their sessions with the reason device_sign_out. The caller has locked the person's
-// row first when it ends more than one device (the lock order, 0006).
+// all of them, as the acting session's person, and returns the devices this statement ended and the
+// sessions their trigger ended with them (0003's devices_end_sessions, reason device_sign_out).
+// When it ended any, it appends signin.ended to the outbox in the same transaction (T16), so every
+// caller (signing out, your devices, an admin's) emits it. The caller has locked the person's row
+// first when it ends more than one device (the lock order, 0006).
 export async function endDevices(
   trx: InOrg,
   actor: SessionIds,
   personId: string,
   filter: { only?: string; except?: string } = {},
-): Promise<string[]> {
+): Promise<{ devices: string[]; sessions: string[] }> {
   let query = trx
     .updateTable('devices')
     .set({ signed_out_at: sql<Date>`now()`, signed_out_by: actor.userId })
@@ -35,18 +39,23 @@ export async function endDevices(
     .where('signed_out_at', 'is', null)
   if (filter.only !== undefined) query = query.where('id', '=', filter.only)
   if (filter.except !== undefined) query = query.where('id', '<>', filter.except)
-  const rows = await query.returning('id').execute()
-  return rows.map(row => row.id)
-}
-
-// The sessions this transaction ended by signing those devices out. now() is the transaction's
-// start time, the same for every statement in it, so this finds exactly what it ended.
-export async function endedSessions(trx: InOrg, orgId: string, deviceIds: readonly string[]): Promise<string[]> {
-  if (deviceIds.length === 0) return []
+  const devices = (await query.returning('id').execute()).map(row => row.id)
+  if (devices.length === 0) return { devices, sessions: [] }
+  // now() is the transaction's start time, the same for every statement in it, so this finds
+  // exactly the sessions the trigger just ended.
   const { rows } = await sql<{ id: string }>`select id from sessions
-    where org_id = ${orgId} and device_id = any(${[...deviceIds]}::uuid[])
+    where org_id = ${actor.orgId} and device_id = any(${devices}::uuid[])
       and revoke_reason = 'device_sign_out' and revoked_at = now()`.execute(trx)
-  return rows.map(row => row.id)
+  const sessions = rows.map(row => row.id)
+  await appendOutbox(trx, {
+    orgId: actor.orgId,
+    type: 'signin.ended',
+    entity: { type: 'person', id: personId },
+    subjects: [personId],
+    purpose: 'accounts',
+    ids: { sessions, devices, reason: 'device_sign_out' },
+  })
+  return { devices, sessions }
 }
 
 // A device counts as signed in while it has a live session: open, unexpired and used within the
@@ -107,20 +116,20 @@ export async function signOutOwn(
   info: ReqInfo,
 ): Promise<Answer> {
   const named = 'device' in body ? body.device : undefined
-  const { ended, revoked } = await inSession(api, info, session, async trx => {
-    let ended: string[]
+  const ended = await inSession(api, info, session, async trx => {
+    let ended: { devices: string[]; sessions: string[] }
     if (named !== undefined) {
       // Someone else's device, or one already signed out, is 404: nothing shows that it exists.
       await authorise(trx, session, { action: 'devices.sign_out_own', device: named }, 'not_found')
       ended = await endDevices(trx, session, session.userId, { only: named })
-      if (ended.length === 0) throw new ApiError(404, 'not_found')
+      if (ended.devices.length === 0) throw new ApiError(404, 'not_found')
     } else {
       // All your others: your person row FOR NO KEY UPDATE first, so a sign-in in progress on
       // another device finishes and is then signed out too.
       await authorise(trx, session, { action: 'devices.sign_out_own' }, 'not_found', { person: 'no_key_update' })
       ended = await endDevices(trx, session, session.userId, { except: session.deviceId })
     }
-    if (ended.length > 0) {
+    if (ended.devices.length > 0) {
       await writeAudit(trx, {
         orgId: session.orgId,
         actorId: session.userId,
@@ -130,14 +139,14 @@ export async function signOutOwn(
         deviceId: session.deviceId,
         ip: info.ip,
         requestId: info.requestId,
-        details: { devices: ended },
+        details: { devices: ended.devices },
       })
     }
-    return { ended, revoked: await endedSessions(trx, session.orgId, ended) }
+    return ended
   })
-  await publishRevoked(api.valkey, api.keyPrefix, revoked, info.log)
+  await publishRevoked(api.valkey, api.keyPrefix, ended.sessions, info.log)
   const current = named === session.deviceId
-  return { body: { signedOut: ended.length, current }, cookies: current ? [clearedCookie('session')] : [] }
+  return { body: { signedOut: ended.devices.length, current }, cookies: current ? [clearedCookie('session')] : [] }
 }
 
 export function deviceRoutes(api: Api) {

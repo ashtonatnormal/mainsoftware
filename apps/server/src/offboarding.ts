@@ -3,8 +3,10 @@
 // (0006, people_end_sessions); everything else a leaver's departure touches registers a handler
 // here, so the admin service needn't know them all. C0.5 has one, which closes the leaver's live
 // sockets; later steps add theirs (A2 the index, A4 their agents and assistant, C2.2 their rooms,
-// C4.1 and C4.3 their Drive items). This registry runs in the api process; C0.6 makes the run
-// durable through the outbox, with retries.
+// C4.1 and C4.3 their Drive items). From C0.6 the api no longer runs the registry after the commit:
+// the deactivation appends person.deactivated to the outbox in its own transaction, and publishes
+// the sessions it ended itself, so sockets close as fast as before; the worker's offboarding
+// consumer reads the event and runs these handlers durably, with retries (TECH-SPEC T16).
 import type { Redis } from 'ioredis'
 import type { Logger } from 'pino'
 import { type Database, withOrg } from '#src/db/database.ts'

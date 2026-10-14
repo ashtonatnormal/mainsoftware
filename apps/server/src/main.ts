@@ -1,21 +1,22 @@
 // The server's entry point: `node src/main.ts`, with ROLE choosing api, realtime or worker (T2).
 // All three roles come from one image and serve /health and /ready. The api role adds the
-// sign-in, device and admin routes under /api, with its SMS provider and the offboarding handlers
-// (C0.5); the realtime role adds the WebSocket on /ws, which closes a session's sockets when the
-// api says it has ended (C0.5; C0.7's gateway grows from it); the worker adds nothing yet, its
-// jobs come as they're needed. Each role serves only its own routes (scripts/check-server.sh).
+// sign-in, device and admin routes under /api, with its SMS provider (C0.5), and the flags route
+// (C0.6); the realtime role adds the WebSocket on /ws, which closes a session's sockets when the
+// api says it has ended (C0.5; C0.7's gateway grows from it). Both keep the flags of the orgs they
+// serve, polled and told of changes on Valkey (C0.6, T17). The worker connects as hearth_worker;
+// its loops come with C0.6's queue. Each role serves only its own routes (scripts/check-server.sh).
 import { setTimeout as delay } from 'node:timers/promises'
-import type { Redis } from 'ioredis'
 import type { ApiDeps } from '#src/api.ts'
 import { buildApp } from '#src/app.ts'
 import { deriveKeys } from '#src/auth/crypto.ts'
 import { createLogSmsProvider } from '#src/auth/sms/log.ts'
-import { valkeyPrefix } from '#src/auth/valkey-keys.ts'
+import { valkeyKeys, valkeyPrefix } from '#src/auth/valkey-keys.ts'
 import { ConfigError, loadConfig } from '#src/config.ts'
 import { createDatabase } from '#src/db/database.ts'
 import { appRoleCheck, createPool, workerRoleCheck, workerRolesCheck } from '#src/db/pool.ts'
+import { FlagCache } from '#src/flags/cache.ts'
 import { createLogger } from '#src/logger.ts'
-import { OffboardingRegistry, socketsHandler } from '#src/offboarding.ts'
+import { Subscriptions } from '#src/pubsub.ts'
 import type { RealtimeDeps } from '#src/realtime/index.ts'
 import { createS3, storageCheck } from '#src/storage/s3.ts'
 import { closeValkey, createSubscriber, createValkey, valkeyCheck } from '#src/valkey.ts'
@@ -61,13 +62,19 @@ const s3 = createS3(config.s3)
 
 let api: ApiDeps | undefined
 let realtime: RealtimeDeps | undefined
-// The realtime role's second Valkey connection, for the revocation channel.
-let subscriber: Redis | undefined
-if (config.role === 'api') {
+// The api's and realtime's pub/sub channels, on a second Valkey connection of their own, and the
+// flags they keep (T17): read as hearth_app, polled every 2 s and reloaded at once when the flags
+// channel says an org changed.
+let subscriptions: Subscriptions | undefined
+let flags: FlagCache | undefined
+if (config.role === 'api' || config.role === 'realtime') {
+  subscriptions = new Subscriptions(createSubscriber(valkey, logger), logger)
+  flags = new FlagCache({ db, logger })
+  void flags.listen(subscriptions, valkeyKeys(keyPrefix).flags)
+}
+if (config.role === 'api' && flags !== undefined) {
   // loadConfig refuses the api role without AUTH_SECRET, so this holds.
   if (config.auth === undefined) throw new Error('the api role has no sign-in settings')
-  const offboarding = new OffboardingRegistry(logger)
-  offboarding.register(socketsHandler({ db, valkey, keyPrefix, logger }))
   api = {
     db,
     valkey,
@@ -78,11 +85,10 @@ if (config.role === 'api') {
         ? createLogSmsProvider({ deployEnv: config.deployEnv, appOrigin: config.appOrigin })
         : undefined,
     keyPrefix,
-    offboarding,
+    flags,
   }
-} else if (config.role === 'realtime') {
-  subscriber = createSubscriber(valkey, logger)
-  realtime = { db, subscriber, keyPrefix }
+} else if (config.role === 'realtime' && flags !== undefined) {
+  realtime = { db, subscriptions, flags, keyPrefix }
 }
 
 const app = buildApp({
@@ -119,13 +125,14 @@ async function stop(signal: NodeJS.Signals): Promise<void> {
   await listening.catch(() => {})
   // Stop taking requests and let those in flight finish, then close the connections they used.
   // The api waits (at most 5 s) for work queued after its responses; the realtime role closes its
-  // sockets with 1001 and its revocation connection first, so this returns promptly.
+  // sockets with 1001 first, so this returns promptly.
   await app.close()
+  flags?.stop()
   await Promise.race([
     Promise.allSettled([
       pool.end(),
       closeValkey(valkey),
-      ...(subscriber === undefined ? [] : [closeValkey(subscriber)]),
+      ...(subscriptions === undefined ? [] : [subscriptions.close()]),
     ]),
     delay(CLOSE_TIMEOUT_MS, undefined, { ref: false }),
   ])

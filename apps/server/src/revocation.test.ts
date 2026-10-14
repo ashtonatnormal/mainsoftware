@@ -1,7 +1,7 @@
-import { EventEmitter } from 'node:events'
-import type { Redis } from 'ioredis'
 import { describe, expect, it, vi } from 'vitest'
-import { publishRevoked, REVOKED_CHUNK, RevokedMessage, subscribeRevoked } from '#src/revocation.ts'
+import { Subscriptions } from '#src/pubsub.ts'
+import { listenRevoked, publishRevoked, REVOKED_CHUNK, RevokedMessage } from '#src/revocation.ts'
+import { fakeSubscriber } from '#src/testing/subscriber.ts'
 
 const id = (n: number) => `d0000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
 const logger = () => ({ warn: vi.fn(), error: vi.fn() })
@@ -32,37 +32,26 @@ describe('C0.5 T5 publishing ended sessions to the realtime role', () => {
   })
 })
 
-describe('C0.5 T5 subscribing to ended sessions', () => {
-  function subscriber() {
-    // The two methods subscribeRevoked uses: an emitter's on(), and a subscribe that records.
-    const events = new EventEmitter()
-    const channels: string[] = []
-    const client = {
-      on: (event: string, listener: (...args: string[]) => void) => {
-        events.on(event, listener)
-      },
-      subscribe: async (channel: string) => {
-        channels.push(channel)
-        return 1
-      },
-    } as unknown as Pick<Redis, 'on' | 'subscribe'>
-    return Object.assign(client, { events, channels })
-  }
-
+describe('C0.5 T5 listening for ended sessions', () => {
   it('subscribes to the channel and hands on the ids of a well-formed message', async () => {
-    const sub = subscriber()
+    const sub = fakeSubscriber()
     const seen: [string[], number][] = []
-    await subscribeRevoked(sub, 'it:unit:', (ids, at) => seen.push([ids, at]), logger())
-    expect(sub.channels).toEqual(['it:unit:revoked'])
+    await listenRevoked(
+      new Subscriptions(sub.asRedis, { info: vi.fn(), warn: vi.fn() }),
+      'it:unit:',
+      (ids, at) => seen.push([ids, at]),
+      logger(),
+    )
+    expect(sub.subscribe.mock.calls.map(([channel]) => channel)).toEqual(['it:unit:revoked'])
     sub.events.emit('message', 'it:unit:revoked', JSON.stringify({ v: 1, at: 1234, sessions: [id(1), id(2)] }))
     expect(seen).toEqual([[[id(1), id(2)], 1234]])
   })
 
   it("ignores another channel's messages, and logs and drops one that isn't ours", async () => {
-    const sub = subscriber()
+    const sub = fakeSubscriber()
     const log = logger()
     const onRevoked = vi.fn()
-    await subscribeRevoked(sub, 'it:unit:', onRevoked, log)
+    await listenRevoked(new Subscriptions(sub.asRedis, { info: vi.fn(), warn: vi.fn() }), 'it:unit:', onRevoked, log)
     sub.events.emit('message', 'h:prod:revoked', JSON.stringify({ v: 1, at: 1, sessions: [id(1)] }))
     for (const bad of [
       'not json',
