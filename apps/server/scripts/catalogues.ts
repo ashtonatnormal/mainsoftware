@@ -183,8 +183,9 @@ const tableName = (raw: string | undefined): string => (raw === undefined ? '?' 
 
 // The writes a function's body makes: every `insert into`, `update` (by each column its SET list
 // names) and `delete from` a table of public, with or without ONLY, an upsert's `on conflict ... do
-// update set` as an UPDATE of its columns, and `merge into` as an INSERT, a DELETE and an UPDATE of
-// the columns its `then update set` names. Every SECURITY DEFINER function must schema-qualify its
+// update set` as an UPDATE of its columns, and `merge into` as what its own action clauses do: an
+// INSERT for `then insert`, a DELETE for `then delete` and an UPDATE of the columns each `then update
+// set` names (`then do nothing` writes nothing). Every SECURITY DEFINER function must schema-qualify its
 // tables under search_path = '' (and every function here does). Dynamic SQL (EXECUTE) and BEGIN
 // ATOMIC bodies can't be read this way, and bodyProblems refuses them.
 export function bodyWrites(source: string): Array<{ table: string; op: Grant['op']; column?: string }> {
@@ -221,9 +222,11 @@ export function bodyWrites(source: string): Array<{ table: string; op: Grant['op
   }
   for (const match of text.matchAll(new RegExp(String.raw`\bmerge\s+into\s+(?:only\s+)?${TABLE}`, 'gu'))) {
     const table = tableName(match[1])
-    found.push({ at: match.index, table, op: 'INSERT' }, { at: match.index, table, op: 'DELETE' })
+    // Only this statement's own action clauses (DO NOTHING writes nothing).
     const end = text.indexOf(';', match.index)
     const statement = text.slice(match.index, end < 0 ? text.length : end)
+    if (/\bthen\s+insert\b/.test(statement)) found.push({ at: match.index, table, op: 'INSERT' })
+    if (/\bthen\s+delete\b/.test(statement)) found.push({ at: match.index, table, op: 'DELETE' })
     for (const clause of statement.matchAll(/\bthen\s+update\s+set\b/g)) {
       for (const column of setColumns(text, match.index + clause.index + clause[0].length)) {
         found.push({ at: match.index, table, op: 'UPDATE', column })

@@ -6,14 +6,15 @@
 //               every flag above it are enabled in Postgres (so a stale cache never starts one),
 //               oldest first, FOR UPDATE SKIP LOCKED, each given a fresh lease token; their schedule
 //               runs become running; the people they are for are read (still at the org, current
-//               roles) for the flags' cohorts.
+//               roles) for the flags' cohorts. A claim that took over 5 s renews its jobs' leases
+//               before they start, and a job that renewal doesn't renew never runs.
 //   attempts    A claimed job whose feature or purpose isn't its kind's is never run (job_mismatch),
 //               nor one whose payload its kind refuses (payload_invalid). Otherwise the gate admits
 //               it (jobs/gate.ts), after reloading the org's flags if they say the feature is off,
 //               and its handler runs with an AbortSignal, a timer for the kind's timeoutMs and the
 //               lineage revisions it was admitted under, which every commit's fence compares.
 //   heartbeats  Every 10 s from the start of the last, one statement per org, bounded to 10 s,
-//               renews every running job's lease. A job whose lease wasn't renewed has lost it
+//               every org's at once, renews every running job's lease. A job whose lease wasn't renewed has lost it
 //               (lease_lost), unless its finishing commit is in flight, which then reports for
 //               itself, or has committed: nothing aborts a job after that (T15 item 3). A heartbeat
 //               that fails is tried again 1 s later (a tenth of the interval), not a whole interval;
@@ -111,8 +112,9 @@ interface Running {
   review: boolean
   subject: FlagSubject | null
   controller: AbortController
-  // When the statement that last renewed its lease began (monotonic): the claim that gave it, then
-  // each heartbeat that renewed it, recorded once that heartbeat succeeds. The database set the
+  // When the statement that last renewed its lease began (monotonic): the claim that gave it (or,
+  // after a slow claim, the renewal before it started), then each heartbeat that renewed it,
+  // recorded once that heartbeat succeeds. The database set the
   // lease from its now(), which is no earlier, so the lease lasts at least until renewedAt plus
   // leaseMs. The watchdog aborts it a margin before that.
   renewedAt: number
@@ -332,7 +334,25 @@ export class JobRunner {
       }
       return { jobs, runs, subjects }
     })
+    // The claim set each lease from its transaction's now(), no earlier than `started`. A claim
+    // that took longer than the heartbeats' slack would leave its jobs too little lease before the
+    // first heartbeat could renew it, so their leases are renewed first, each job starting from that
+    // renewal; one the renewal doesn't renew (the sweep took it) or can't (it failed) never runs, and
+    // its lease is left to run out (T15 item 2).
+    let renewedAt = started
+    let renewed: ReadonlySet<string> | undefined
+    if (claimed.jobs.length > 0 && this.#now() - started > this.#claimSlackMs()) {
+      renewedAt = this.#now()
+      renewed = await this.#renew(orgId, claimed.jobs)
+    }
     for (const job of claimed.jobs) {
+      if (renewed !== undefined && !renewed.has(job.lease_token)) {
+        this.#logger.warn(
+          { event: 'job_lease_lost', job: job.id, kind: job.kind, org: orgId, attempt: job.attempts },
+          'a job lost its lease; the lease sweep has it',
+        )
+        continue
+      }
       const kind = this.#kinds.get(job.kind)
       // The claim names only the kinds this worker knows.
       if (kind === undefined) continue
@@ -342,7 +362,7 @@ export class JobRunner {
           ? null
           : (claimed.subjects.get(job.subject_id) ?? { personId: job.subject_id, active: false, roles: [] })
       const review = job.schedule_run_id !== null && claimed.runs.get(job.schedule_run_id) === 'review'
-      this.#begin(orgId, job, kind, review, subject, started)
+      this.#begin(orgId, job, kind, review, subject, renewedAt)
     }
   }
 
@@ -705,8 +725,9 @@ export class JobRunner {
     }
   }
 
-  // One statement per org renews every running job of this worker's there (T15 item 2). Answers
-  // whether every org's statement succeeded.
+  // One statement per org renews every running job of this worker's there (T15 item 2), each org's
+  // in its own transaction and all at once, so one slow org doesn't hold back another's renewals.
+  // Answers whether every org's statement succeeded.
   async #beat(): Promise<boolean> {
     let clean = true
     if (!this.#heartbeatsPaused) {
@@ -715,21 +736,14 @@ export class JobRunner {
         if (r.decision !== undefined) continue
         byOrg.set(r.orgId, [...(byOrg.get(r.orgId) ?? []), r])
       }
-      for (const [orgId, jobs] of byOrg) {
-        if (this.#halted) return clean
+      const beats = [...byOrg].map(async ([orgId, jobs]) => {
+        if (this.#halted) return
         try {
           const started = this.#now()
-          const renewed = await withOrg(this.#control, { orgId, system: true, as: 'hearth_queue' }, async trx => {
-            // Bounded well inside the lease, so a heartbeat Postgres can't answer ends rather than
-            // holding the loop while leases run out (the watchdog stops the jobs either way).
-            await sql`set local statement_timeout = ${sql.lit(`${this.#heartbeatTimeoutMs()}ms`)}`.execute(trx)
-            const { rows } = await sql<{ token: string }>`
-              update jobs j set lease_expires_at = now() + ${this.#policy.leaseMs}::float8 * interval '1 millisecond'
-              from unnest(${jobs.map(r => r.row.id)}::uuid[], ${jobs.map(r => r.row.lease_token)}::uuid[]) as t (id, token)
-              where j.org_id = ${orgId} and j.id = t.id and j.lease_token = t.token and j.state = 'running'
-              returning j.lease_token as token`.execute(trx)
-            return new Set(rows.map(row => row.token))
-          })
+          const renewed = await this.#renew(
+            orgId,
+            jobs.map(r => r.row),
+          )
           this.#failures.delete(`heartbeats:${orgId}`)
           for (const r of jobs) {
             // Each attempt by its own lease (a zombie and the attempt that replaced it share a job).
@@ -741,10 +755,28 @@ export class JobRunner {
           clean = false
           this.#loopFailed('heartbeats', orgId, error)
         }
-      }
+      })
+      await Promise.all(beats)
     }
     if (clean) this.#lastBeat = this.#now()
     return clean
+  }
+
+  // Renews these jobs' leases in the org, each matched by its own lease token, in one statement as
+  // hearth_queue; answers the tokens it renewed. Callers note the time before calling: the lease
+  // runs from the transaction's now(), which is no earlier.
+  async #renew(orgId: string, jobs: readonly ClaimedJob[]): Promise<Set<string>> {
+    return withOrg(this.#control, { orgId, system: true, as: 'hearth_queue' }, async trx => {
+      // Bounded well inside the lease, so a heartbeat Postgres can't answer ends rather than
+      // holding the loop while leases run out (the watchdog stops the jobs either way).
+      await sql`set local statement_timeout = ${sql.lit(`${this.#heartbeatTimeoutMs()}ms`)}`.execute(trx)
+      const { rows } = await sql<{ token: string }>`
+        update jobs j set lease_expires_at = now() + ${this.#policy.leaseMs}::float8 * interval '1 millisecond'
+        from unnest(${jobs.map(job => job.id)}::uuid[], ${jobs.map(job => job.lease_token)}::uuid[]) as t (id, token)
+        where j.org_id = ${orgId} and j.id = t.id and j.lease_token = t.token and j.state = 'running'
+        returning j.lease_token as token`.execute(trx)
+      return new Set(rows.map(row => row.token))
+    })
   }
 
   // How long before a lease runs out the watchdog stops its job: half a heartbeat (5 s by default),
@@ -752,6 +784,14 @@ export class JobRunner {
   // seconds, could requeue the job.
   #marginMs(): number {
     return this.#policy.heartbeatMs / 2
+  }
+
+  // How long a claim may take and still leave its jobs' first heartbeat time to renew their leases
+  // before the watchdog would stop them: the lease less the margin, a heartbeat interval and a
+  // heartbeat's bound (5 s by default). A slower claim renews its jobs' leases before they start.
+  #claimSlackMs(): number {
+    const { heartbeatMs, leaseMs } = this.#policy
+    return Math.max(0, leaseMs - this.#marginMs() - heartbeatMs - this.#heartbeatTimeoutMs())
   }
 
   // A heartbeat statement's bound: a third of the lease, never more than the heartbeat interval,

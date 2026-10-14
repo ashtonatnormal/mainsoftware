@@ -186,8 +186,6 @@ describe('C0.6 T16 item 7 check-catalogues: every way to write is covered', () =
       { table: 'People', op: 'UPDATE', column: 'Title' },
       { table: 'People', op: 'UPDATE', column: 'plain' },
       { table: 'People', op: 'UPDATE', column: 'Tags' },
-      { table: 'Café', op: 'INSERT' },
-      { table: 'Café', op: 'DELETE' },
       { table: 'Café', op: 'UPDATE', column: 'Prix' },
       { table: 'people', op: 'UPDATE', column: 'Full"Name' },
     ])
@@ -211,6 +209,33 @@ describe('C0.6 T16 item 7 check-catalogues: every way to write is covered', () =
     expect(bodyProblems({ 'f()': { exempt: 'a check', writes: [] } }, [unreadable], [], {})).toEqual([
       expect.stringContaining("runs delete from a table of public whose name check-catalogues can't read"),
     ])
+  })
+
+  it('Qodo-18 round 3 #4: reads a MERGE by its own action clauses: an update-only one is only its UPDATE', () => {
+    const source = `merge into public.jobs j using src s on j.id = s.id
+        when matched then update set state = 'cancelled'
+        when not matched then do nothing;
+      insert into public.audit_events (org_id) values (o);`
+    expect(bodyWrites(source)).toEqual([
+      { table: 'jobs', op: 'UPDATE', column: 'state' },
+      { table: 'audit_events', op: 'INSERT' },
+    ])
+    const fn: Fn = { key: 'f()', definer: true, trigger: false, source }
+    expect(
+      bodyProblems(
+        { 'f()': { exempt: 'a check', writes: ['jobs.state:UPDATE', 'audit_events:INSERT'] } },
+        [fn],
+        [],
+        {},
+      ),
+    ).toEqual([])
+    // A MERGE that only deletes, or only inserts, is that alone.
+    expect(bodyWrites('merge into public.jobs j using s on true when matched then delete;')).toEqual([
+      { table: 'jobs', op: 'DELETE' },
+    ])
+    expect(
+      bodyWrites('merge into public.jobs j using s on false when not matched then insert (id) values (s.id);'),
+    ).toEqual([{ table: 'jobs', op: 'INSERT' }])
   })
 
   it('R2DB-3: reads MERGE INTO as an INSERT, a DELETE and an UPDATE of the columns it sets', () => {

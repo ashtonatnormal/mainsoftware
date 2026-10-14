@@ -8,7 +8,10 @@
 //     message, or Valkey down, costs at most about 5 s. Each read's statements are bounded to 2 s by
 //     Postgres, and the process stops waiting for the whole read after 2.5 s whatever happens (a
 //     connection whose peer went silent never hears Postgres's timeout), counts it as failed and
-//     polls again; a read it stopped waiting for can't change anything when it ends.
+//     polls again; a read it stopped waiting for can't change anything when it ends. Such a read
+//     keeps its pool connection until the pool's query_timeout ends it (31 s), so at most 3 reads
+//     are in flight at once across the cache: the poll of an org past that waits until one ends
+//     (the org may go unconfirmed meanwhile, the safe direction), and most of the pool stays free.
 // A process that hasn't confirmed an org's flags for 8 s reads every flag not locked on as off
 // (fail closed), and the database's fences refuse any effect after a change whatever this copy
 // says (fence.ts; feature_fence, job_fence and job_finish compare revisions).
@@ -34,6 +37,10 @@ export const FLAG_POLL_MS = 2000
 export const FLAG_READ_TIMEOUT = '2s'
 export const FLAG_READ_WAIT_MS = 2500
 export const FLAG_STALE_MS = 8000
+// How many reads may be in flight at once, those the process stopped waiting for included: few
+// enough that most of the pool they share stays free (the worker's control pool has 8 connections,
+// the api's and realtime's 10), however long silent connections hold them.
+export const FLAG_READS_IN_FLIGHT = 3
 
 // What verdict() says about a feature for someone.
 export type FlagVerdict = 'on' | 'off' | 'not_in_cohort' | 'unconfirmed'
@@ -106,6 +113,12 @@ export class FlagCache {
   readonly #listeners = new Set<(orgId: string, keys: readonly string[]) => void>()
   // org:key of each unregistered row already logged.
   readonly #unregistered = new Set<string>()
+  // Reads started and not yet settled (a read the cache stopped waiting for counts until it ends),
+  // and the polls deferred while FLAG_READS_IN_FLIGHT are, in the order they were due.
+  #inFlight = 0
+  readonly #deferred = new Map<string, OrgFlags>()
+  // Whether flags_reads_limited has been logged since the deferred polls last all ran.
+  #limited = false
   #stopped = false
 
   constructor(options: FlagCacheOptions) {
@@ -154,6 +167,7 @@ export class FlagCache {
     const entry = this.#orgs.get(orgId)
     if (entry === undefined) return
     this.#orgs.delete(orgId)
+    this.#deferred.delete(orgId)
     clearTimeout(entry.timer)
     entry.timer = undefined
     for (const waiter of entry.waiters.splice(0)) waiter()
@@ -244,6 +258,7 @@ export class FlagCache {
   // Stops polling. A read in progress finishes but schedules nothing.
   stop(): void {
     this.#stopped = true
+    this.#deferred.clear()
     for (const entry of this.#orgs.values()) {
       clearTimeout(entry.timer)
       entry.timer = undefined
@@ -267,12 +282,24 @@ export class FlagCache {
   async #load(orgId: string, entry: OrgFlags): Promise<void> {
     clearTimeout(entry.timer)
     entry.timer = undefined
+    if (this.#inFlight >= FLAG_READS_IN_FLIGHT) {
+      this.#defer(orgId, entry)
+      return
+    }
     entry.loading = true
     entry.again = false
     const waiters = entry.waiters.splice(0)
     const kept = () => this.#orgs.get(orgId) === entry
+    this.#inFlight++
+    const read = this.#read(orgId)
+    // Counted until the read itself settles, not the wait for it.
+    const settled = () => {
+      this.#inFlight--
+      this.#runDeferred()
+    }
+    read.then(settled, settled)
     try {
-      const rows = await this.#bounded(this.#read(orgId))
+      const rows = await this.#bounded(read)
       if (kept()) this.#confirm(orgId, entry, rows)
     } catch (error) {
       if (kept()) this.#failed(orgId, entry, error)
@@ -298,12 +325,39 @@ export class FlagCache {
     entry.timer.unref()
   }
 
+  // Too many reads are in flight: the org's poll waits until one settles. Whoever waits on a reload
+  // is let go at once, as after a failed read; the org goes unconfirmed if this lasts.
+  #defer(orgId: string, entry: OrgFlags): void {
+    for (const waiter of entry.waiters.splice(0)) waiter()
+    if (this.#stopped) return
+    this.#deferred.set(orgId, entry)
+    if (!this.#limited) {
+      this.#limited = true
+      this.#logger.warn(
+        { event: 'flags_reads_limited', inFlight: this.#inFlight },
+        'too many flag reads are in flight: further polls wait until one ends',
+      )
+    }
+  }
+
+  // Runs the deferred polls, oldest first, while reads are free.
+  #runDeferred(): void {
+    for (const [orgId, entry] of this.#deferred) {
+      if (this.#inFlight >= FLAG_READS_IN_FLIGHT) return
+      this.#deferred.delete(orgId)
+      if (this.#stopped || this.#orgs.get(orgId) !== entry || entry.loading) continue
+      void this.#load(orgId, entry)
+    }
+    this.#limited = false
+  }
+
   // The read, or a FlagReadTimeout once it has taken FLAG_READ_WAIT_MS. Postgres's statement_timeout
   // and transaction_timeout don't help when the connection's peer has gone silent (a failover, a
   // dropped network path): their error never arrives. The race settles without the read, and a read
   // that ends later changes nothing (Promise.race keeps the first outcome and handles the rest). Its
   // connection is freed by the pool's query_timeout: once a statement has gone unanswered for 31 s,
-  // the client ends itself and the pool drops it (BoundedClient, pool.ts).
+  // the client ends itself and the pool drops it (BoundedClient, pool.ts). Until then it counts
+  // towards FLAG_READS_IN_FLIGHT.
   async #bounded<T>(read: Promise<T>): Promise<T> {
     let timer: NodeJS.Timeout | undefined
     const timeout = new Promise<never>((_, reject) => {

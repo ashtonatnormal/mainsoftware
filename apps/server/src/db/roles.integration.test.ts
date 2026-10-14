@@ -4,9 +4,12 @@
 // production's migrator, as the integration harness does, and drops it at the end. `npm run
 // test:integration` runs it, with the stack up (`docker compose up -d --wait`).
 import { randomBytes, randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { sql } from 'kysely'
-import { Client as PgClient, type Pool } from 'pg'
+import { type ClientConfig, Client as PgClient, type Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createDatabase, type Database, listOrgs, withOrg } from '#src/db/database.ts'
 import { migrate } from '#src/db/migrations.ts'
@@ -31,6 +34,17 @@ function url(user: string, password: string): string {
   return result.toString()
 }
 
+// A client of this file's own, listening for 'error' from the start: a forced drop that ends its
+// connection from the server's side is then never an unhandled error, which would fail the whole
+// run. The pools come from createPool(), whose clients and pool listen already, and the migrator's
+// pool listens too (migrations.ts). Each listener keeps what it heard, for the test below.
+const heard: Error[] = []
+function pgClient(config: ClientConfig): PgClient {
+  const client = new PgClient(config)
+  client.on('error', error => heard.push(error))
+  return client
+}
+
 const logger = createLogger({ logLevel: 'silent', role: 'worker' })
 const orgs = [randomUUID(), randomUUID()]
 let admin: PgClient
@@ -44,7 +58,7 @@ let created = false
 beforeAll(async () => {
   if (!LOCAL_HOSTS.has(host))
     throw new Error(`Refusing to use Postgres on ${host}: this test runs on the local stack only.`)
-  const server = new PgClient({ ...superuser, database: 'postgres' })
+  const server = pgClient({ ...superuser, database: 'postgres' })
   await server.connect()
   try {
     await server.query('set client_min_messages = warning')
@@ -59,7 +73,7 @@ beforeAll(async () => {
   }
   const { error } = await migrate({ databaseUrl: url(superuser.user, superuser.password), role: 'hearth_owner' })
   if (error) throw error
-  admin = new PgClient({ ...superuser, database })
+  admin = pgClient({ ...superuser, database })
   await admin.connect()
   await admin.query(`alter role hearth_app login password '${PASSWORD}'`)
   await admin.query(`alter role hearth_worker login password '${PASSWORD}'`)
@@ -83,7 +97,8 @@ beforeAll(async () => {
 // close, not once they have; drop … with (force) would then end a closing connection from the
 // server's side, and its client, whose pool has gone and with it the 'error' listener, throws an
 // unhandled error that fails the whole run. Waiting for the server to see every session gone first
-// leaves nothing for force to end; it stays only for a session that never goes.
+// leaves nothing for force to end; it stays only for a session that never goes, and then every
+// client here listens for the error it brings (pgClient(), createPool(), the migrator's pool).
 async function dropWhenIdle(server: PgClient, name: string): Promise<void> {
   for (let waited = 0; waited < 10_000; waited += 50) {
     const { rows } = await server.query<{ n: number }>(
@@ -99,7 +114,7 @@ async function dropWhenIdle(server: PgClient, name: string): Promise<void> {
 afterAll(async () => {
   await Promise.allSettled([appPool?.end(), workerPool?.end(), ownerPool?.end(), admin?.end()])
   if (created) {
-    const server = new PgClient({ ...superuser, database: 'postgres' })
+    const server = pgClient({ ...superuser, database: 'postgres' })
     await server.connect()
     try {
       await dropWhenIdle(server, database)
@@ -327,12 +342,64 @@ describe('C0.6 T18 item 4 /ready: each login is held to its role’s rule', () =
     ).toBe('hearth_worker already exists and is a member of hearth_future; it may only hold job roles, by SET')
   })
 
+  it('Round 3: a forced drop that ends this file’s connections, the migrator’s included, is never an unhandled error', async () => {
+    const doomed = `roles_it_drop_${randomBytes(4).toString('hex')}`
+    const server = pgClient({ ...superuser, database: 'postgres' })
+    await server.connect()
+    const target = new URL(url(superuser.user, superuser.password))
+    target.pathname = `/${doomed}`
+    let client: PgClient | undefined
+    let pool: Pool | undefined
+    try {
+      await server.query(`create database ${doomed} owner hearth_owner template template0`)
+      // The migrator's connection, ended by the server mid-migration: the migration fails with it,
+      // and nothing is left unhandled.
+      const dir = await mkdtemp(join(tmpdir(), 'hearth-roles-it-'))
+      try {
+        await writeFile(join(dir, '0001_sleep.sql'), 'select pg_sleep(30);\n')
+        const migrating = migrate({
+          databaseUrl: target.toString(),
+          role: 'hearth_owner',
+          dir: pathToFileURL(`${dir}/`),
+        })
+        let ended = false
+        for (let waited = 0; !ended && waited < 5000; waited += 50) {
+          await new Promise(resolve => setTimeout(resolve, 50))
+          const { rows } = await server.query<{ ended: boolean }>(
+            "select pg_terminate_backend(pid) as ended from pg_stat_activity where datname = $1 and query like 'select pg_sleep%'",
+            [doomed],
+          )
+          ended = rows.some(row => row.ended)
+        }
+        expect(ended).toBe(true)
+        expect((await migrating).error).toBeDefined()
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+      client = pgClient({ ...superuser, database: doomed })
+      await client.connect()
+      pool = createPool(target.toString(), logger, { max: 1 })
+      await pool.query('select 1')
+      const before = heard.length
+      await server.query(`drop database ${doomed} with (force)`)
+      // The idle client hears the server end its connection; its listener takes it.
+      for (let waited = 0; heard.length === before && waited < 5000; waited += 50) {
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+      expect(heard.slice(before).map(error => (error as { code?: string }).code)).toContain('57P01')
+    } finally {
+      await Promise.allSettled([client?.end(), pool?.end()])
+      await server.query(`drop database if exists ${doomed} with (force)`)
+      await server.end()
+    }
+  })
+
   it('R2DB-1: a fresh database migrates on a server whose hearth_worker already holds a later job role', async () => {
     // The real failure: once a later migration has added a job role, every later build on the same
     // server applies 0007 again over the hearth_worker it finds.
     const role = `hearth_job_x_${randomBytes(3).toString('hex')}`
     const fresh = `roles_it_fresh_${randomBytes(4).toString('hex')}`
-    const server = new PgClient({ ...superuser, database: 'postgres' })
+    const server = pgClient({ ...superuser, database: 'postgres' })
     await server.connect()
     try {
       await server.query(`create role ${role} nologin`)

@@ -18,6 +18,8 @@ interface DatabaseState {
   behind: boolean
   // Behind in this org only.
   behindIn?: string
+  // The consumers' rounds fail in this org.
+  failIn?: string
 }
 function database(options: { orgsFail?: boolean } = {}, state: DatabaseState = defaultState()) {
   return scriptedPool((statement: Statement) => {
@@ -47,6 +49,9 @@ function database(options: { orgsFail?: boolean } = {}, state: DatabaseState = d
     if (text.startsWith('select pg_try_advisory_xact_lock')) return [{ locked: true }]
     if (text.startsWith('select last_tx, last_id from outbox_checkpoints')) return [{ last_tx: '1', last_id: '1' }]
     if (text.startsWith('with f as')) {
+      if (state.failIn !== undefined && statement.values.includes(state.failIn)) {
+        return new Error('Connection terminated unexpectedly')
+      }
       const behind = state.behind || (state.behindIn !== undefined && statement.values.includes(state.behindIn))
       return [{ floor_tx: null, floor_id: null, fell_behind: behind, id: null }]
     }
@@ -214,7 +219,7 @@ describe('C0.6 T18 the worker role', () => {
     worker.halt()
   })
 
-  it('forgets a blocked consumer’s org once the org leaves its org list, and is ready again', async () => {
+  it('forgets a blocked consumer’s org once the org leaves its org list, is ready again, and doesn’t report the old block if the org comes back', async () => {
     const state = defaultState()
     state.orgs = [ORG, OTHER_ORG]
     state.behindIn = OTHER_ORG
@@ -228,6 +233,15 @@ describe('C0.6 T18 the worker role', () => {
     expect(worker.orgs()).toEqual([ORG])
     expect(worker.consumers.blocked()).toEqual([])
     await worker.check(new AbortController().signal)
+    // Round 3: it comes back, and its rounds fail, so none decides whether it is blocked: the block
+    // it had before it left is forgotten, not reported again.
+    delete state.behindIn
+    state.failIn = OTHER_ORG
+    state.orgs = [ORG, OTHER_ORG]
+    await vi.advanceTimersByTimeAsync(WORKER_POLICY.orgsMs)
+    expect(worker.orgs()).toEqual([ORG, OTHER_ORG])
+    await vi.advanceTimersByTimeAsync(WORKER_POLICY.consumerPollMs * 4)
+    expect(worker.consumers.blocked()).toEqual([])
     worker.halt()
   })
 

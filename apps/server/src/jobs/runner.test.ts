@@ -15,6 +15,7 @@ import { pgError, type Statement, scriptedPool } from '#src/testing/pool.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const OTHER_ORG = 'a0000000-0000-4000-8000-000000000002'
+const THIRD_ORG = 'a0000000-0000-4000-8000-000000000003'
 const SYSTEM = 'c0000000-0000-4000-8000-000000000001'
 const PERSON = 'b0000000-0000-4000-8000-000000000001'
 const OTHER = 'b0000000-0000-4000-8000-000000000002'
@@ -513,6 +514,131 @@ describe('C0.6 T15 item 2 heartbeats', () => {
     expect(runner.active).toBe(1)
     expect(log.events('job_lease_lost')).toEqual([])
     release(1)
+    await until(() => runner.active === 0)
+    expect(log.events('job_succeeded')).toHaveLength(1)
+    runner.halt()
+  })
+
+  const isRenewal = (statement: Statement) => statement.text.startsWith('update jobs j set lease_expires_at')
+  const renewals = (p: ReturnType<typeof pool>) => p.statements.filter(isRenewal)
+
+  it('Qodo-18 round 3 #1: a claim that takes over 20 s renews its job’s lease before the job starts, so it isn’t aborted while renewals succeed', async () => {
+    const { run, release } = blocking()
+    let claims = 0
+    // The first claim's transaction takes 20.5 s: its lease, from that transaction's now(), has
+    // under 10 s left, and the heartbeat at 20 s has begun without the job.
+    const { p, runner, log } = start(
+      {
+        claims: [[claimed(1)]],
+        hold: statement =>
+          statement.text.startsWith('with next as') && ++claims === 1
+            ? new Promise<void>(resolve => setTimeout(resolve, 20_500))
+            : undefined,
+      },
+      { kinds: [run] },
+    )
+    await until(() => runner.active === 1, 25_000)
+    // Renewed once before it started, by the claim.
+    expect(renewals(p)).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 3)
+    expect(runner.active).toBe(1)
+    expect(log.events('job_lease_lost')).toEqual([])
+    release(1)
+    await until(() => runner.active === 0)
+    expect(log.events('job_succeeded')).toHaveLength(1)
+    runner.halt()
+  })
+
+  it('Qodo-18 round 3 #1: a slow claim whose renewal fails, or finds the lease gone, never starts the handler', async () => {
+    for (const renew of [() => new Error('Connection terminated unexpectedly'), () => []]) {
+      const ran = vi.fn(async () => {})
+      let claims = 0
+      const { p, runner, log } = start(
+        {
+          claims: [[claimed(1)]],
+          renew,
+          hold: statement =>
+            statement.text.startsWith('with next as') && ++claims === 1
+              ? new Promise<void>(resolve => setTimeout(resolve, 20_500))
+              : undefined,
+        },
+        { kinds: [kind(ran)] },
+      )
+      await vi.advanceTimersByTimeAsync(20_500 + JOB_POLICY.leaseMs)
+      expect(renewals(p).length).toBeGreaterThanOrEqual(1)
+      expect(ran).not.toHaveBeenCalled()
+      expect(runner.active).toBe(0)
+      // Nothing written: the lease runs out and the sweep has the job.
+      expect(updates(p)).toEqual([])
+      const failed = renew() instanceof Error
+      expect(log.events('worker_loop_failed').map(line => line.loop)).toEqual(failed ? ['claims'] : [])
+      expect(log.events('job_lease_lost').map(line => line.job)).toEqual(failed ? [] : [jobId(1)])
+      runner.halt()
+    }
+  })
+
+  it('Qodo-18 round 3 #2: renews each org’s leases at once, so three orgs whose renewals take 9 s each lose no job', async () => {
+    const { run } = blocking()
+    const { p, runner, log } = start(
+      {
+        claims: [[claimed(1)], [claimed(2)], [claimed(3)]],
+        hold: statement => (isRenewal(statement) ? new Promise<void>(resolve => setTimeout(resolve, 9000)) : undefined),
+      },
+      { kinds: [run], orgs: [ORG, OTHER_ORG, THIRD_ORG] },
+    )
+    await until(() => runner.active === 3)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 5)
+    expect(runner.active).toBe(3)
+    expect(log.events('job_lease_lost')).toEqual([])
+    // Each org's renewal is its own statement and transaction.
+    const orgs = renewals(p).map(s => s.values.at(-1))
+    expect(new Set(orgs)).toEqual(new Set([ORG, OTHER_ORG, THIRD_ORG]))
+    runner.halt()
+  })
+
+  it('Qodo-18 round 3 #3a: a renewal counts from when its statement began, not when it ended', async () => {
+    const { run } = blocking()
+    let beats = 0
+    // The first heartbeat (at 10 s) renews, but takes 9.9 s; every later one fails. Its lease runs
+    // from 10 s (the transaction's now()), so to 40 s, and the watchdog must stop the job by 35 s
+    // and a tick, not 25 s after the heartbeat ended (past the lease's end).
+    const { runner, log } = start(
+      {
+        claims: [[claimed(1)]],
+        hold: statement =>
+          isRenewal(statement) && ++beats === 1 ? new Promise<void>(resolve => setTimeout(resolve, 9900)) : undefined,
+        renew: ids => (beats === 1 ? ids : new Error('Connection terminated unexpectedly')),
+      },
+      { kinds: [run] },
+    )
+    await until(() => runner.active === 1)
+    const claimedAt = performance.now()
+    const renewalBegan = claimedAt + JOB_POLICY.heartbeatMs
+    const margin = JOB_POLICY.heartbeatMs / 2
+    await until(() => runner.active === 0, JOB_POLICY.leaseMs * 2)
+    expect(log.events('job_lease_lost').map(line => line.job)).toEqual([jobId(1)])
+    expect(performance.now()).toBeGreaterThan(renewalBegan + JOB_POLICY.leaseMs - margin)
+    expect(performance.now()).toBeLessThan(renewalBegan + JOB_POLICY.leaseMs - margin / 2)
+    runner.halt()
+  })
+
+  it('Qodo-18 round 3 #3b: the watchdog leaves a job whose finishing commit is in flight to report for itself', async () => {
+    let release: () => void = () => {}
+    const held = new Promise<void>(resolve => {
+      release = resolve
+    })
+    const finishing = kind(async ctx => {
+      await ctx.commit(async () => held, { finish: true })
+    })
+    // Every heartbeat fails, so only the watchdog could abort it.
+    const { runner, log } = start(
+      { claims: [[claimed(1)]], renew: () => new Error('Connection terminated unexpectedly') },
+      { kinds: [finishing] },
+    )
+    await until(() => runner.active === 1)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 2)
+    expect(log.events('job_lease_lost')).toEqual([])
+    release()
     await until(() => runner.active === 0)
     expect(log.events('job_succeeded')).toHaveLength(1)
     runner.halt()

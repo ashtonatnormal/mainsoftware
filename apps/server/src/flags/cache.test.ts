@@ -1,6 +1,6 @@
 import { FLAGS } from '@hearth/shared'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { FLAG_POLL_MS, FLAG_READ_WAIT_MS, FLAG_STALE_MS, FlagCache } from '#src/flags/cache.ts'
+import { FLAG_POLL_MS, FLAG_READ_WAIT_MS, FLAG_READS_IN_FLIGHT, FLAG_STALE_MS, FlagCache } from '#src/flags/cache.ts'
 import { Subscriptions } from '#src/pubsub.ts'
 import { captureLogger } from '#src/testing/logs.ts'
 import { type Statement, scriptedPool } from '#src/testing/pool.ts'
@@ -8,6 +8,7 @@ import { fakeSubscriber } from '#src/testing/subscriber.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const OTHER_ORG = 'a0000000-0000-4000-8000-000000000002'
+const THIRD_ORG = 'a0000000-0000-4000-8000-000000000003'
 const SYSTEM = 'c0000000-0000-4000-8000-000000000001'
 const PERSON = 'b0000000-0000-4000-8000-000000000001'
 
@@ -380,6 +381,88 @@ describe('C0.6 T17 items 6 and 7 the flags a process keeps', () => {
     expect(db.state.reads).toBe(2)
     flags.stop()
   })
+  // A database whose reads hang (a silent connection) while `silent` is set, until released.
+  function silentDatabase() {
+    const state = { silent: true, started: [] as string[], releases: [] as Array<() => void> }
+    const p = scriptedPool(
+      (statement: Statement) => {
+        if (statement.text.includes("from principals where org_id = $1 and kind = 'system'")) return [{ id: SYSTEM }]
+        if (statement.text.startsWith('select "key"')) return [row('it.optional')]
+        return []
+      },
+      async statement => {
+        if (!statement.text.startsWith('select "key"')) return
+        state.started.push(String(statement.values[0]))
+        if (state.silent) await new Promise<void>(resolve => state.releases.push(resolve))
+      },
+    )
+    const log = captureLogger('api')
+    const flags = new FlagCache({
+      db: p.db,
+      registry: REGISTRY,
+      logger: log.logger,
+      now: () => Date.now(),
+      random: () => 0.5,
+    })
+    const release = () => {
+      state.silent = false
+      for (const resolve of state.releases.splice(0)) resolve()
+    }
+    return { state, flags, log, release }
+  }
+
+  it('CodeRabbit-18: keeps at most 3 reads in flight, however long silent connections hold them, and runs the deferred polls once one ends', async () => {
+    const { state, flags, log, release } = silentDatabase()
+    void flags.track(ORG)
+    void flags.track(OTHER_ORG)
+    void flags.track(THIRD_ORG)
+    await vi.advanceTimersByTimeAsync(60_000)
+    // Without the limit each org would start a read every 4.5 s (the wait, then a poll).
+    expect(state.started).toHaveLength(FLAG_READS_IN_FLIGHT)
+    expect(log.events('flags_reads_limited')).toHaveLength(1)
+    expect(flags.confirmed(ORG) || flags.confirmed(OTHER_ORG) || flags.confirmed(THIRD_ORG)).toBe(false)
+    // A deferred org that is untracked meanwhile isn't read again.
+    flags.untrack(THIRD_ORG)
+    const before = state.started.length
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(flags.confirmed(ORG)).toBe(true)
+    expect(flags.confirmed(OTHER_ORG)).toBe(true)
+    expect(state.started.slice(before)).not.toContain(THIRD_ORG)
+    await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 5)
+    expect(state.started.slice(before)).not.toContain(THIRD_ORG)
+    expect(flags.confirmed(THIRD_ORG)).toBe(false)
+    flags.stop()
+  })
+
+  it('CodeRabbit-18: still retries at once beside a read it stopped waiting for, and starts no deferred poll after stop()', async () => {
+    const { state, flags, release } = silentDatabase()
+    void flags.track(ORG)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(state.started).toEqual([ORG])
+    // The stuck read counts as failed after 2.5 s, and a reload then reads again at once.
+    await vi.advanceTimersByTimeAsync(FLAG_READ_WAIT_MS)
+    void flags.reload(ORG)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(state.started).toEqual([ORG, ORG])
+    void flags.track(OTHER_ORG)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(state.started).toHaveLength(FLAG_READS_IN_FLIGHT)
+    // A reload of a deferred org resolves at once, as after a failed read.
+    await vi.advanceTimersByTimeAsync(FLAG_READ_WAIT_MS + FLAG_POLL_MS * 1.1)
+    let reloaded = false
+    void flags.reload(OTHER_ORG).then(() => {
+      reloaded = true
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(reloaded).toBe(true)
+    const before = state.started.length
+    flags.stop()
+    release()
+    await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 5)
+    expect(state.started).toHaveLength(before)
+  })
+
   it('FLAGS-1: stops waiting for a read that never ends, counts it as failed, polls again, and drops its late result', async () => {
     // A connection whose peer went silent: the first read's select never answers until released.
     const db = database([row('it.optional')])
