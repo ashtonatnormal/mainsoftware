@@ -73,7 +73,7 @@ export function coverageProblems(
 
 // A function's body with its comments gone and every string literal (quoted, E'', dollar-quoted)
 // emptied, in lower case, so a write named in a comment or a message isn't read as one. Quoted
-// identifiers stay, quotes and all.
+// identifiers stay as written, quotes and case and all ("AuditData" is not auditdata).
 export function stripSql(source: string): string {
   let out = ''
   let i = 0
@@ -124,12 +124,18 @@ export function stripSql(source: string): string {
       i += 1
       out += source.slice(start, i)
     } else {
-      out += c
+      out += c?.toLowerCase()
       i += 1
     }
   }
-  return out.toLowerCase()
+  return out
 }
+
+// An identifier: quoted (any characters, "" for a quote, its case kept) or not (folded to lower
+// case, as Postgres does, which stripSql has done). IDENT captures it; ident() gives its name.
+const IDENT = String.raw`("(?:[^"]|"")+"|[\p{L}_][\p{L}\p{N}_$]*)`
+const IDENT_ANY = String.raw`(?:"(?:[^"]|"")+"|[\p{L}_][\p{L}\p{N}_$]*)`
+const ident = (raw: string): string => (raw.startsWith('"') ? raw.slice(1, -1).replaceAll('""', '"') : raw)
 
 // The columns a SET list names, read from just after `set`: each item, at the start and after
 // each comma outside brackets, is `column = ...` or `(a, b) = ...`, and the list ends at the first
@@ -138,7 +144,8 @@ export function stripSql(source: string): string {
 // check fails rather than miss a column.
 function setColumns(text: string, from: number): string[] {
   const columns: string[] = []
-  const ITEM = /^\s*(?:"?([a-z_][a-z0-9_]*)"?\s*(?:\[[^\]]*\]\s*)?|\(([^()]*)\)\s*)=(?!=)/
+  const ITEM = new RegExp(String.raw`^\s*(?:${IDENT}\s*(?:\[[^\]]*\]\s*)?|\(([^()]*)\)\s*)=(?!=)`, 'u')
+  const NAME = new RegExp(String.raw`^\s*${IDENT}\s*$`, 'u')
   let depth = 0
   let item = true
   let i = from
@@ -148,8 +155,11 @@ function setColumns(text: string, from: number): string[] {
       if (match === null) break
       columns.push(
         ...(match[1] !== undefined
-          ? [match[1]]
-          : (match[2] ?? '').split(',').map(name => /^\s*"?([a-z_][a-z0-9_]*)"?\s*$/.exec(name)?.[1] ?? '?')),
+          ? [ident(match[1])]
+          : (match[2] ?? '').split(',').map(name => {
+              const raw = NAME.exec(name)?.[1]
+              return raw === undefined ? '?' : ident(raw)
+            })),
       )
       i += match[0].length
       item = false
@@ -165,8 +175,11 @@ function setColumns(text: string, from: number): string[] {
   return columns.length > 0 ? columns : ['?']
 }
 
-// A schema-qualified table of public, quoted or not.
-const TABLE = String.raw`"?public"?\s*\.\s*"?([a-z_][a-z0-9_]*)"?`
+// A schema-qualified table of public, quoted or not. A name after `public.` it can't read
+// captures nothing, and is reported as the table '?', which no entry lists, so the check fails
+// rather than miss the write.
+const TABLE = String.raw`(?:public|"public")\s*\.\s*${IDENT}?`
+const tableOf = (raw: string | undefined): string => (raw === undefined ? '?' : ident(raw))
 
 // The writes a function's body makes: every `insert into`, `update` (by each column its SET list
 // names) and `delete from` a table of public, with or without ONLY, an upsert's `on conflict ... do
