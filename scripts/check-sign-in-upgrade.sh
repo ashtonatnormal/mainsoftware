@@ -8,7 +8,7 @@
 # (written as hearth_owner) and someone who left with a session still open, applies 0006 with
 # production's migrator in a time zone with daylight saving, and checks that:
 # - every session, device and account is still there;
-# - the leaver's sessions and devices ended as of when they left;
+# - the leaver's sessions and devices ended as of when they left, or when made if later;
 # - a session not revoked and meant to last more than 90 days now ends 90 days after it began,
 #   and no other session's times or ending moved;
 # - the rule named by the argument stays NOT VALID, since a revoked session breaks it and keeps its
@@ -64,17 +64,20 @@ p01=b0000000-0000-4000-8000-000000000001 p02=b0000000-0000-4000-8000-00000000000
 p03=b0000000-0000-4000-8000-000000000003 p04=b0000000-0000-4000-8000-000000000004
 d1=f1000000-0000-4000-8000-000000000001 d2=f1000000-0000-4000-8000-000000000002
 d3=f1000000-0000-4000-8000-000000000003 d4=f1000000-0000-4000-8000-000000000004
+d5=f1000000-0000-4000-8000-000000000005
 
 # The seed's org, people, accounts and numbers, then devices and sessions 0003 allowed, written as
-# hearth_owner (who owns the tables) in one transaction each. Person 04 then leaves with a session
-# and a device still open, which nothing ended before 0006.
+# hearth_owner (who owns the tables) in one transaction each. Person 04 leaves 2 days before t0
+# with a session and a device still open, which nothing ended before 0006, and gets another of
+# each a day later, which nothing refused before 0006.
 sql -d "$db" --single-transaction -c 'set local role hearth_owner' -f db/seed/tembusu.sql
 sql -d "$db" --single-transaction -c 'set local role hearth_owner' -c "
 insert into public.devices (id, org_id, user_id, label, created_at, last_seen_at) values
   ('$d1', '$org', '$p01', 'iPhone · Safari', '2025-09-01 00:00:00+00', '$t0'),
   ('$d2', '$org', '$p02', 'Pixel · Chrome', '2025-09-01 00:00:00+00', '$t0'),
   ('$d3', '$org', '$p03', 'Mac · Firefox', '2025-09-01 00:00:00+00', '$t0'),
-  ('$d4', '$org', '$p04', 'iPad · Safari', '2025-09-01 00:00:00+00', '$t0');
+  ('$d4', '$org', '$p04', 'iPad · Safari', '2025-09-01 00:00:00+00', '$t0'),
+  ('$d5', '$org', '$p04', 'Laptop · Edge', '$t0'::timestamptz - interval '1 day', '$t0');
 insert into public.sessions
   (id, org_id, user_id, device_id, token_hash, created_at, last_seen_at, expires_at, revoked_at, revoked_by, revoke_reason)
 select ('f2000000-0000-4000-8000-0000000000' || s.n)::uuid, '$org', s.person::uuid, s.device::uuid,
@@ -98,8 +101,9 @@ from (values
   ('08', null, '$p02', '$d2', '$t0'::timestamptz - interval '3 days', interval '240 hours', '$t0'::timestamptz - interval '1 day', '$p02', 'sign_out'),
   -- Never revoked, 180 days, ended on its own long ago: still capped, as it must take an update.
   ('09', null, '$p03', '$d3', '2025-10-01 12:00:00+00'::timestamptz, interval '180 days', null, null, null),
-  -- The leaver's, still open.
-  ('10', null, '$p04', '$d4', '$t0'::timestamptz - interval '20 days', interval '2160 hours', null, null, null)
+  -- The leaver's, still open: one from before they left, one from after.
+  ('10', null, '$p04', '$d4', '$t0'::timestamptz - interval '20 days', interval '2160 hours', null, null, null),
+  ('11', null, '$p04', '$d5', '$t0'::timestamptz - interval '1 day', interval '240 hours', null, null, null)
 ) as s (n, only_for, person, device, started, lasts, revoked, revoked_by, reason)
 where s.only_for is null or s.only_for = '$kept';
 update public.people set deactivated_at = '$t0'::timestamptz - interval '2 days', deactivated_by = '$p01'
@@ -143,12 +147,14 @@ begin
     ('07', null, t0 - interval '2 days', t0 - interval '2 days' + interval '720 hours', null, null, null),
     ('08', null, t0 - interval '3 days', t0 - interval '3 days' + interval '240 hours', t0 - interval '1 day', '$p02', 'sign_out'),
     ('09', null, timestamptz '2025-10-01 12:00:00+00', timestamptz '2025-10-01 12:00:00+00' + interval '2160 hours', null, null, null),
-    ('10', null, t0 - interval '20 days', t0 - interval '20 days' + interval '2160 hours', t0 - interval '2 days', '$p01', 'deactivated')
+    ('10', null, t0 - interval '20 days', t0 - interval '20 days' + interval '2160 hours', t0 - interval '2 days', '$p01', 'deactivated'),
+    -- Made after they left, so it ends when it began, not before.
+    ('11', null, t0 - interval '1 day', t0 - interval '1 day' + interval '240 hours', t0 - interval '1 day', '$p01', 'deactivated')
   ) as x (n, only_for, started, ends, revoked, revoked_by, reason)
   where x.only_for is null or x.only_for = kept;
   expected := (select count(*) from expected_sessions);
-  if (select count(*) from public.sessions) <> expected or (select count(*) from public.devices) <> 4 then
-    raise exception 'sessions or devices were lost or added: % sessions (not %), % devices (not 4)',
+  if (select count(*) from public.sessions) <> expected or (select count(*) from public.devices) <> 5 then
+    raise exception 'sessions or devices were lost or added: % sessions (not %), % devices (not 5)',
       (select count(*) from public.sessions), expected, (select count(*) from public.devices);
   end if;
   for s in
@@ -176,10 +182,13 @@ begin
   if (select expires_at from public.sessions where id = 'f2000000-0000-4000-8000-000000000003') > now() then
     raise exception 'session 03 is still live after its 90 days';
   end if;
-  -- The leaver's device was signed out when they left; the others are still signed in.
+  -- The leaver's devices were signed out when they left, or when made if later; the others are
+  -- still signed in.
   if exists (select 1 from public.devices
              where id = '$d4' and (signed_out_at, signed_out_by) is distinct from (t0 - interval '2 days', '$p01'::uuid))
-     or exists (select 1 from public.devices where id <> '$d4' and signed_out_at is not null) then
+     or exists (select 1 from public.devices
+                where id = '$d5' and (signed_out_at, signed_out_by) is distinct from (t0 - interval '1 day', '$p01'::uuid))
+     or exists (select 1 from public.devices where id not in ('$d4', '$d5') and signed_out_at is not null) then
     raise exception 'devices were not signed out as the leaver''s should be, and only theirs';
   end if;
 

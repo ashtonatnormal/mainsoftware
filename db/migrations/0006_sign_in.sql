@@ -78,7 +78,8 @@ grant update (pin_hash, pin_key_id, pin_set_at, pin_reset_at, pin_reset_by, pin_
 -- scripts/check-sign-in-upgrade.sh applies it to rows 0005 allows). The table is locked first, so
 -- no session is written in between.
 -- - Someone who left has their open sessions ended and their devices signed out, as of when they
---   left, as people_end_sessions below does from now on.
+--   left (or when one was made, if that was later: nothing refused one then), as
+--   people_end_sessions below does from now on.
 -- - A revoked session keeps its times and reason, since how it ended is history (keep_history
 --   refuses a change of reason).
 -- - One not revoked, expired or not, must still take an update (a sign-out or PIN reset revokes it
@@ -91,11 +92,11 @@ grant update (pin_hash, pin_key_id, pin_set_at, pin_reset_at, pin_reset_by, pin_
 -- adds phone_changed) adds it NOT VALID and validates it the same way.
 lock table public.sessions in access exclusive mode;
 update public.sessions s
-set revoked_at = p.deactivated_at, revoked_by = p.deactivated_by, revoke_reason = 'deactivated'
+set revoked_at = greatest(p.deactivated_at, s.created_at), revoked_by = p.deactivated_by, revoke_reason = 'deactivated'
 from public.people p
 where p.org_id = s.org_id and p.id = s.user_id and p.deactivated_at is not null and s.revoked_at is null;
 update public.devices d
-set signed_out_at = p.deactivated_at, signed_out_by = p.deactivated_by
+set signed_out_at = greatest(p.deactivated_at, d.created_at), signed_out_by = p.deactivated_by
 from public.people p
 where p.org_id = d.org_id and p.id = d.user_id and p.deactivated_at is not null and d.signed_out_at is null;
 update public.sessions set expires_at = created_at + interval '2160 hours'
