@@ -1,6 +1,6 @@
 // The server's configuration, read once from the environment and validated with zod. Every
 // variable is documented in the root .env.example. Error messages name the variable and the
-// problem, never its value: DATABASE_URL and AUTH_SECRET are secrets.
+// problem, never its value: DATABASE_URL, WORKER_DATABASE_URL and AUTH_SECRET are secrets.
 import { isIP } from 'node:net'
 import { z } from 'zod'
 
@@ -63,13 +63,26 @@ function percentEncoded(value: string): boolean {
   }
 }
 
+const postgresUrl = z.url({ protocol: /^postgres(ql)?$/, error: 'must be a postgres:// URL' })
+
+// Each role reads only its own database login (TECH-SPEC T18 item 6): the api and realtime roles
+// DATABASE_URL (hearth_app), the worker WORKER_DATABASE_URL (hearth_worker), so in AWS no task
+// holds another service's credential (C0.11). Locally one .env.example serves all three, and each
+// role ignores the other's variables.
+const serving = z.object({ DATABASE_URL: postgresUrl })
+const working = z.object({
+  WORKER_DATABASE_URL: postgresUrl,
+  // How many jobs one worker process runs at once; its work pool has this many connections plus one
+  // per outbox consumer (T18 item 8).
+  WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
+})
+
 const schema = z.object({
   ROLE: z.enum(ROLES).default('api'),
   HOST: z.string().min(1).default('127.0.0.1'),
   PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   APP_ORIGIN: origin,
-  DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/, error: 'must be a postgres:// URL' }),
   // redis:// locally, rediss:// (TLS) for ElastiCache. ioredis reads only these two schemes, and
   // it decodes the user name and password itself, throwing at start on a bare % in either.
   VALKEY_URL: z
@@ -99,6 +112,8 @@ export interface Config {
   port: number
   logLevel: z.infer<typeof schema>['LOG_LEVEL']
   appOrigin: string
+  // The database login this role connects with: DATABASE_URL for api and realtime,
+  // WORKER_DATABASE_URL for the worker.
   databaseUrl: string
   valkeyUrl: string
   s3: {
@@ -113,6 +128,8 @@ export interface Config {
   trustProxy: string[] | false
   // The api role's sign-in settings; undefined for realtime and worker, which never read the secret.
   auth: { secret: string; smsProvider: 'log' | undefined } | undefined
+  // The worker role's settings; undefined for api and realtime.
+  worker: { concurrency: number } | undefined
 }
 
 export class ConfigError extends Error {
@@ -149,11 +166,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       }
     })
     .safeParse(present)
-  if (!parsed.success) {
-    const problems = parsed.error.issues.map(issue => `  ${issue.path.join('.')}: ${issue.message}`)
+  // A ROLE that isn't valid is reported above, and its login checked as the api's would be.
+  const isWorker = present.ROLE === 'worker'
+  const login = isWorker ? working.safeParse(present) : serving.safeParse(present)
+  if (!parsed.success || !login.success) {
+    const issues = [...(parsed.error?.issues ?? []), ...(login.error?.issues ?? [])]
+    const problems = issues.map(issue => `  ${issue.path.join('.')}: ${issue.message}`)
     throw new ConfigError(`Invalid configuration (see .env.example):\n${problems.join('\n')}`)
   }
   const e = parsed.data
+  const connection = login.data
   const proxies = proxyList(e.TRUST_PROXY)
   return {
     role: e.ROLE,
@@ -161,7 +183,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: e.PORT,
     logLevel: e.LOG_LEVEL,
     appOrigin: e.APP_ORIGIN,
-    databaseUrl: e.DATABASE_URL,
+    databaseUrl: 'WORKER_DATABASE_URL' in connection ? connection.WORKER_DATABASE_URL : connection.DATABASE_URL,
     valkeyUrl: e.VALKEY_URL,
     s3: {
       bucket: e.S3_BUCKET,
@@ -179,5 +201,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       e.ROLE === 'api' && e.AUTH_SECRET !== undefined
         ? { secret: e.AUTH_SECRET, smsProvider: e.SMS_PROVIDER }
         : undefined,
+    worker: 'WORKER_CONCURRENCY' in connection ? { concurrency: connection.WORKER_CONCURRENCY } : undefined,
   }
 }

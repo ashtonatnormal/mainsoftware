@@ -1,13 +1,14 @@
-// The only queries outside withOrg(): the two lookups sign-in makes before it knows the org
-// (CLAUDE.md, Database; 0006). Each runs in a transaction of its own, READ COMMITTED and
-// read-write, because the functions read FOR SHARE, and short, so their row locks never outlive
-// the lookup. It waits at most 2 s for a lock. It doesn't wait for its commit to be flushed: it
-// writes nothing but row locks, and losing those in a crash costs nothing, while a flush would
-// add a WAL wait (and on RDS Multi-AZ a standby round trip) to every signed-in request. Nothing
-// here sets app.org_id or app.user_id, and nothing else goes through it
-// (scripts/guards/db-entry.test.ts).
+// The only queries outside withOrg() besides the worker's org list: the two lookups sign-in makes
+// before it knows the org (CLAUDE.md, Database; 0006). Each runs in a transaction of its own, READ
+// COMMITTED and read-write, because the functions read FOR SHARE, and short, so their row locks
+// never outlive the lookup. It waits at most 2 s for a lock, and lasts at most 30 s, as every
+// transaction the server opens does (database.ts: a FOR SHARE read takes an xid, which holds the
+// outbox's consumers back). It doesn't wait for its commit to be flushed: it writes nothing but row
+// locks, and losing those in a crash costs nothing, while a flush would add a WAL wait (and on RDS
+// Multi-AZ a standby round trip) to every signed-in request. Nothing here sets app.org_id or
+// app.user_id, and nothing else goes through it (scripts/guards/db-entry.test.ts).
 import { type RawBuilder, sql } from 'kysely'
-import { type Database, LOCK_TIMEOUT } from '#src/db/database.ts'
+import { type Database, LOCK_TIMEOUT, TRANSACTION_TIMEOUT } from '#src/db/database.ts'
 
 export interface SessionIds {
   sessionId: string
@@ -27,7 +28,7 @@ function lookup<Row>(db: Database, query: RawBuilder<Row>): Promise<Row[]> {
     .transaction()
     .setIsolationLevel('read committed')
     .execute(async trx => {
-      await sql`select set_config('lock_timeout', ${sql.lit(LOCK_TIMEOUT)}, true), set_config('synchronous_commit', 'off', true)`.execute(
+      await sql`select set_config('lock_timeout', ${sql.lit(LOCK_TIMEOUT)}, true), set_config('synchronous_commit', 'off', true), set_config('transaction_timeout', ${sql.lit(TRANSACTION_TIMEOUT)}, true)`.execute(
         trx,
       )
       return (await query.execute(trx)).rows

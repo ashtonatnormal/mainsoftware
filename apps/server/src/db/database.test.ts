@@ -1,7 +1,7 @@
 import { sql } from 'kysely'
 import type { Pool } from 'pg'
 import { describe, expect, it } from 'vitest'
-import { createDatabase, NoSystemPrincipal, withOrg } from '#src/db/database.ts'
+import { createDatabase, listOrgs, NoSystemPrincipal, withOrg } from '#src/db/database.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const USER = 'b0000000-0000-4000-8000-000000000001'
@@ -33,7 +33,7 @@ describe('C0.3 withOrg (CLAUDE.md, Database: the one helper that sets the org an
     expect(result).toBe('done')
     expect(log).toEqual([
       'start transaction isolation level read committed',
-      `select set_config('app.org_id', $1, true), set_config('app.user_id', $2, true), set_config('lock_timeout', '2s', true) ${JSON.stringify([ORG, USER])}`,
+      `select set_config('app.org_id', $1, true), set_config('app.user_id', $2, true), set_config('lock_timeout', '2s', true), set_config('transaction_timeout', '30s', true) ${JSON.stringify([ORG, USER])}`,
       'select 1',
       'commit',
       '(released)',
@@ -47,7 +47,7 @@ describe('C0.3 withOrg (CLAUDE.md, Database: the one helper that sets the org an
     })
     expect(log).toEqual([
       'start transaction isolation level read committed',
-      `select set_config('app.org_id', $1, true), set_config('lock_timeout', '2s', true) ${JSON.stringify([ORG])}`,
+      `select set_config('app.org_id', $1, true), set_config('lock_timeout', '2s', true), set_config('transaction_timeout', '30s', true) ${JSON.stringify([ORG])}`,
       `select id from principals where org_id = $1 and kind = 'system' and system_key = 'hearth' ${JSON.stringify([ORG])}`,
       `select set_config('app.user_id', $1, true) ${JSON.stringify([SYSTEM])}`,
       'select 1',
@@ -93,5 +93,89 @@ describe('C0.3 withOrg (CLAUDE.md, Database: the one helper that sets the org an
       await expect(withOrg(db, acting, async () => 'never')).rejects.toThrow(/not a lower-case UUID/)
     }
     expect(log).toEqual([])
+  })
+})
+
+describe('C0.6 T18 withOrg as a job role, read only, and bounded (TECH-SPEC T16 item 2, T18 items 1 and 7)', () => {
+  const principal = (text: string) => (text.includes('from principals') ? [{ id: SYSTEM }] : [])
+
+  it('takes the job role in its first statement, before the principal lookup, so everything runs under it', async () => {
+    const { db, log } = recordingPool(principal)
+    await withOrg(db, { orgId: ORG, system: true, as: 'hearth_job_purge' }, async trx => {
+      await sql`select 1`.execute(trx)
+    })
+    expect(log).toEqual([
+      'start transaction isolation level read committed',
+      `select set_config('role', $1, true), set_config('app.org_id', $2, true), set_config('lock_timeout', '2s', true), set_config('transaction_timeout', '30s', true) ${JSON.stringify(['hearth_job_purge', ORG])}`,
+      `select id from principals where org_id = $1 and kind = 'system' and system_key = 'hearth' ${JSON.stringify([ORG])}`,
+      `select set_config('app.user_id', $1, true) ${JSON.stringify([SYSTEM])}`,
+      'select 1',
+      'commit',
+      '(released)',
+    ])
+  })
+
+  it('refuses a role that is not a job role before taking a connection', async () => {
+    const { db, log } = recordingPool(principal)
+    for (const as of ['hearth_owner', 'hearth_app', 'postgres', "hearth_queue', true); --"]) {
+      await expect(
+        withOrg(db, { orgId: ORG, system: true, as: as as 'hearth_queue' }, async () => 'never'),
+      ).rejects.toThrow(/not a job role/)
+    }
+    expect(log).toEqual([])
+  })
+
+  it('opens a read-only transaction, which alone may last up to 5 minutes', async () => {
+    const { db, log } = recordingPool(principal)
+    await withOrg(db, { orgId: ORG, system: true, as: 'hearth_queue' }, async () => {}, {
+      readOnly: true,
+      transactionTimeout: '5min',
+    })
+    expect(log.slice(0, 2)).toEqual([
+      'start transaction isolation level read committed read only',
+      `select set_config('role', $1, true), set_config('app.org_id', $2, true), set_config('lock_timeout', '2s', true), set_config('transaction_timeout', '5min', true) ${JSON.stringify(['hearth_queue', ORG])}`,
+    ])
+    const person = recordingPool()
+    await withOrg(person.db, { orgId: ORG, userId: USER }, async () => {}, { readOnly: true })
+    expect(person.log[0]).toBe('start transaction isolation level read committed read only')
+    expect(person.log[1]).toContain("set_config('transaction_timeout', '30s', true)")
+  })
+
+  it('refuses a longer timeout for work that can write, one over 5 minutes, and one it cannot read', async () => {
+    const { db, log } = recordingPool(principal)
+    const refused: [Parameters<typeof withOrg>[3], RegExp][] = [
+      [{ transactionTimeout: '31s' }, /only a read-only transaction/],
+      [{ transactionTimeout: '1min', readOnly: false }, /only a read-only transaction/],
+      [{ transactionTimeout: '301s', readOnly: true }, /at most 5 minutes/],
+      [{ transactionTimeout: '6min', readOnly: true }, /at most 5 minutes/],
+      [{ transactionTimeout: '0s' }, /must be written/],
+      [{ transactionTimeout: '30 s' }, /must be written/],
+      [{ transactionTimeout: "1s', false); --" }, /must be written/],
+      [{ transactionTimeout: '30h', readOnly: true }, /must be written/],
+    ]
+    for (const [options, error] of refused) {
+      await expect(
+        withOrg(db, { orgId: ORG, userId: USER }, async () => 'never', options),
+        JSON.stringify(options),
+      ).rejects.toThrow(error)
+    }
+    expect(log).toEqual([])
+    // A shorter one is fine for any work.
+    await withOrg(db, { orgId: ORG, userId: USER }, async () => {}, { transactionTimeout: '500ms' })
+    expect(log[1]).toContain("set_config('transaction_timeout', '500ms', true)")
+  })
+
+  it("lists every org's id as hearth_queue, in a short read-only transaction of its own", async () => {
+    const OTHER = 'a0000000-0000-4000-8000-000000000002'
+    const { db, log } = recordingPool(text => (text.includes('worker_org_ids') ? [{ id: ORG }, { id: OTHER }] : []))
+    expect(await listOrgs(db)).toEqual([ORG, OTHER])
+    expect(log).toEqual([
+      'start transaction isolation level read committed read only',
+      "select set_config('role', 'hearth_queue', true), set_config('transaction_timeout', '30s', true)",
+      'select id from public.worker_org_ids() as id',
+      'commit',
+      '(released)',
+    ])
+    expect(log.join('\n')).not.toContain('app.')
   })
 })

@@ -1081,6 +1081,38 @@ const SECTIONS: readonly Section[] = [
     ],
   },
   {
+    ids: 'T17 BUILD-PLAN C0.6 D41',
+    title: 'flag.set (an Owner or Admin, never an AI flag; whether a flag is locked is the database’s to say)',
+    rows: [
+      {
+        name: 'an Owner or Admin changes a core flag; nobody else, a departed DPO, a former Admin or an agent included',
+        request: { action: 'flag.set', key: 'core.example' },
+        allowed: ADMINS,
+      },
+      {
+        name: 'an Owner or Admin changes a flag several levels down',
+        request: { action: 'flag.set', key: 'core.example.wave_2' },
+        allowed: ADMINS,
+      },
+      {
+        name: 'A0 ADM-10: nobody turns AI on or off before A0, the Owner and DPO included',
+        request: { action: 'flag.set', key: 'ai' },
+        allowed: NOBODY,
+      },
+      { name: 'A0: nor any one AI feature', request: { action: 'flag.set', key: 'ai.ask' }, allowed: NOBODY },
+      {
+        name: 'A0 ADM-10: nor one agent',
+        request: { action: 'flag.set', key: 'ai.agents.it_helpdesk' },
+        allowed: NOBODY,
+      },
+      {
+        name: 'a key that only starts with the letters ai is no AI flag',
+        request: { action: 'flag.set', key: 'aisle.signs' },
+        allowed: ADMINS,
+      },
+    ],
+  },
+  {
     ids: 'ADM-03 ROOM-01 CHAT-01 FILE-01 D16',
     title: 'create (no re-authentication needed; only a person creates)',
     rows: [
@@ -1212,6 +1244,7 @@ const ADMIN_ACTION_IDS: Record<AdminRequest['action'], string> = {
   'public_creation.set': 'ADM-03',
   'channel.transfer_ownership': 'ADM-03',
   'privileged_console.open': 'ADM-12 PDPA-13',
+  'flag.set': 'T17 ADM-10',
 }
 const ADMIN_ACTIONS = Object.keys(ADMIN_ACTION_IDS) as AdminRequest['action'][]
 const isAdminRow = (row: Row) => (ADMIN_ACTIONS as string[]).includes(row.request.action)

@@ -13,7 +13,7 @@ import { createLogSmsProvider } from '#src/auth/sms/log.ts'
 import { valkeyPrefix } from '#src/auth/valkey-keys.ts'
 import { ConfigError, loadConfig } from '#src/config.ts'
 import { createDatabase } from '#src/db/database.ts'
-import { createPool, postgresCheck } from '#src/db/pool.ts'
+import { appRoleCheck, createPool, workerRoleCheck, workerRolesCheck } from '#src/db/pool.ts'
 import { createLogger } from '#src/logger.ts'
 import { OffboardingRegistry, socketsHandler } from '#src/offboarding.ts'
 import type { RealtimeDeps } from '#src/realtime/index.ts'
@@ -47,7 +47,12 @@ process.on('unhandledRejection', error => {
   process.exit(1)
 })
 
-const pool = createPool(config.databaseUrl, logger)
+// The api and realtime roles connect as hearth_app (DATABASE_URL), the worker as hearth_worker
+// (WORKER_DATABASE_URL), which takes a job role per transaction (TECH-SPEC T18). Each pool names
+// itself in pg_stat_activity; the worker's second pool (work) comes with its loops.
+const pool = createPool(config.databaseUrl, logger, {
+  applicationName: config.role === 'worker' ? 'hearth-worker-control' : `hearth-${config.role}`,
+})
 const db = createDatabase(pool)
 const valkey = createValkey(config.valkeyUrl, logger)
 // h:<DEPLOY_ENV>:, so environments that ever share a Valkey never see each other's keys.
@@ -84,7 +89,12 @@ const app = buildApp({
   appOrigin: config.appOrigin,
   logger,
   checks: {
-    postgres: postgresCheck(pool),
+    // Each login is held to its role's rule: hearth_app skips no row level security and can't act
+    // as a job role; hearth_worker can become nothing that skips it, and can still take every job
+    // role.
+    ...(config.role === 'worker'
+      ? { postgres: workerRoleCheck(pool), worker_roles: workerRolesCheck(pool) }
+      : { postgres: appRoleCheck(pool) }),
     valkey: valkeyCheck(valkey),
     storage: storageCheck(s3, config.s3.bucket),
   },
