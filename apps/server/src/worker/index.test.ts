@@ -16,6 +16,8 @@ interface DatabaseState {
   orgs: string[]
   flagsFail: boolean
   behind: boolean
+  // Behind in this org only.
+  behindIn?: string
 }
 function database(options: { orgsFail?: boolean } = {}, state: DatabaseState = defaultState()) {
   return scriptedPool((statement: Statement) => {
@@ -44,7 +46,10 @@ function database(options: { orgsFail?: boolean } = {}, state: DatabaseState = d
       return [{ queued: 0, running: 0, dead: 0, interrupted: 0, oldest_queued: null }]
     if (text.startsWith('select pg_try_advisory_xact_lock')) return [{ locked: true }]
     if (text.startsWith('select last_tx, last_id from outbox_checkpoints')) return [{ last_tx: '1', last_id: '1' }]
-    if (text.startsWith('with f as')) return [{ floor_tx: null, floor_id: null, fell_behind: state.behind, id: null }]
+    if (text.startsWith('with f as')) {
+      const behind = state.behind || (state.behindIn !== undefined && statement.values.includes(state.behindIn))
+      return [{ floor_tx: null, floor_id: null, fell_behind: behind, id: null }]
+    }
     if (text.startsWith('select greatest(')) return [{ future: false }]
     return []
   })
@@ -205,6 +210,23 @@ describe('C0.6 T18 the worker role', () => {
     expect(reads(OTHER_ORG)).toBe(before)
     expect(reads(ORG)).toBeGreaterThan(0)
     // Ready, though the org it dropped is unconfirmed now.
+    await worker.check(new AbortController().signal)
+    worker.halt()
+  })
+
+  it('forgets a blocked consumer’s org once the org leaves its org list, and is ready again', async () => {
+    const state = defaultState()
+    state.orgs = [ORG, OTHER_ORG]
+    state.behindIn = OTHER_ORG
+    const { worker } = start({}, state)
+    await vi.advanceTimersByTimeAsync(WORKER_POLICY.consumerPollMs * 4)
+    await expect(worker.check(new AbortController().signal)).rejects.toThrow(
+      `the outbox consumer offboarding is blocked in org ${OTHER_ORG}: behind_floor`,
+    )
+    state.orgs = [ORG]
+    await vi.advanceTimersByTimeAsync(WORKER_POLICY.orgsMs)
+    expect(worker.orgs()).toEqual([ORG])
+    expect(worker.consumers.blocked()).toEqual([])
     await worker.check(new AbortController().signal)
     worker.halt()
   })

@@ -172,6 +172,23 @@ describe('C0.6 T17 items 6 and 7 the flags a process keeps', () => {
     flags.stop()
   })
 
+  it('leaves an org it doesn’t keep alone on reload(), so a job still running there can’t keep it again', async () => {
+    const db = database([row('it.optional')])
+    const { flags } = cache(db)
+    await flags.track(ORG)
+    flags.untrack(ORG)
+    const before = reads(db)
+    // A job's fence refusal (HF001) or a gate's second look, after the worker untracked the org.
+    await flags.reload(ORG)
+    await flags.reload(OTHER_ORG)
+    expect(reads(db)).toBe(before)
+    expect(flags.confirmed(ORG)).toBe(false)
+    expect(flags.confirmed(OTHER_ORG)).toBe(false)
+    await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 5)
+    expect(reads(db)).toBe(before)
+    flags.stop()
+  })
+
   it('reads as the org’s system principal, read only and bounded to 2 s, and as hearth_queue in the worker', async () => {
     const db = database([row('core.system', { locked: true })])
     const { flags } = cache(db, { as: 'hearth_queue' })

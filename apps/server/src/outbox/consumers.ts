@@ -147,6 +147,8 @@ export class ConsumerRunner {
   readonly #lastPass = new Map<string, number>()
   readonly #loops: Promise<void>[] = []
   readonly #wakers = new Set<() => void>()
+  // The orgs the loops serve, once started.
+  #orgs: (() => readonly string[]) | undefined
   #startedAt: number | undefined
   #stopping = false
 
@@ -172,6 +174,7 @@ export class ConsumerRunner {
   start(orgs: () => readonly string[]): void {
     if (this.#startedAt !== undefined) throw new Error('the consumers have started already')
     this.#startedAt = this.#now()
+    this.#orgs = orgs
     for (const consumer of this.#consumers) this.#loops.push(this.#loop(consumer, orgs))
   }
 
@@ -207,9 +210,21 @@ export class ConsumerRunner {
   }
 
   // Each consumer and org whose last round found it blocked, until a later round reads or finds
-  // nothing to read: the worker is unready while any is (T18 item 9).
+  // nothing to read: the worker is unready while any is (T18 item 9). Only orgs the loops still
+  // serve count, so a round that ended after its org left the list can't block readiness.
   blocked(): Blocked[] {
-    return [...this.#blocked.values()]
+    const listed = this.#orgs?.()
+    return [...this.#blocked.values()].filter(block => listed === undefined || listed.includes(block.org))
+  }
+
+  // Forgets what the consumers keep about an org that has left the worker's list (its blocks,
+  // refusals, failures and restore check), so it no longer counts against readiness; if it comes
+  // back, its rounds start afresh.
+  forget(orgId: string): void {
+    for (const kept of [this.#blocked, this.#refused, this.#failures]) {
+      for (const key of kept.keys()) if (key.endsWith(`:${orgId}`)) kept.delete(key)
+    }
+    this.#futures.delete(orgId)
   }
 
   // Moves a consumer's checkpoint, for replay and tests (T16 item 5): to the oldest kept event, to

@@ -9,6 +9,7 @@ const ORG = 'a0000000-0000-4000-8000-000000000001'
 const SYSTEM = 'c0000000-0000-4000-8000-000000000001'
 const PERSON = 'b0000000-0000-4000-8000-000000000001'
 const OTHER = 'b0000000-0000-4000-8000-000000000002'
+const OTHER_ORG = 'a0000000-0000-4000-8000-000000000002'
 
 // An event row as the floor-and-batch statement returns it.
 function eventRow(id: number, type: string, subjects: string[] = [PERSON], floor?: [string, string]) {
@@ -392,6 +393,26 @@ describe('C0.6 T16 the consumers’ loop', () => {
     const after = p.texts().length
     await vi.advanceTimersByTimeAsync(5000)
     expect(p.texts().length).toBe(after)
+  })
+
+  it('counts a block only in an org it still serves, and forgets an org that has left the list', async () => {
+    const p = pool({ batch: noEvents(['950', '3'], true) })
+    const { spec } = consumer()
+    const { run } = runner(p, [spec])
+    let orgs = [ORG, OTHER_ORG]
+    expect(await run.round(spec, ORG)).toBe('behind')
+    expect(await run.round(spec, OTHER_ORG)).toBe('behind')
+    expect(run.blocked()).toHaveLength(2)
+    run.start(() => orgs)
+    // A round that ends after its org left the list (the worker forgot it first) can't block.
+    orgs = [ORG]
+    expect(run.blocked()).toEqual([{ consumer: 'it_projection', org: ORG, reason: 'behind_floor' }])
+    run.forget(OTHER_ORG)
+    orgs = [ORG, OTHER_ORG]
+    expect(run.blocked()).toEqual([{ consumer: 'it_projection', org: ORG, reason: 'behind_floor' }])
+    run.forget(ORG)
+    expect(run.blocked()).toEqual([])
+    await run.stop(performance.now() + 1000)
   })
 
   it('refuses two consumers with one name', () => {

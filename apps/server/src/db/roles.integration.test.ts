@@ -78,13 +78,34 @@ beforeAll(async () => {
   worker = createDatabase(workerPool)
 })
 
+// Drops a throwaway database once no other session is connected to it. A pool's end() (the
+// migrator's, through Kysely's destroy(), and this file's) resolves once its clients are told to
+// close, not once they have; drop … with (force) would then end a closing connection from the
+// server's side, and its client, whose pool has gone and with it the 'error' listener, throws an
+// unhandled error that fails the whole run. Waiting for the server to see every session gone first
+// leaves nothing for force to end; it stays only for a session that never goes.
+async function dropWhenIdle(server: PgClient, name: string): Promise<void> {
+  for (let waited = 0; waited < 10_000; waited += 50) {
+    const { rows } = await server.query<{ n: number }>(
+      'select count(*)::int as n from pg_stat_activity where datname = $1 and pid <> pg_backend_pid()',
+      [name],
+    )
+    if (rows[0]?.n === 0) break
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  await server.query(`drop database if exists ${name} with (force)`)
+}
+
 afterAll(async () => {
   await Promise.allSettled([appPool?.end(), workerPool?.end(), ownerPool?.end(), admin?.end()])
   if (created) {
     const server = new PgClient({ ...superuser, database: 'postgres' })
     await server.connect()
-    await server.query(`drop database if exists ${database} with (force)`)
-    await server.end()
+    try {
+      await dropWhenIdle(server, database)
+    } finally {
+      await server.end()
+    }
   }
 })
 
@@ -322,7 +343,7 @@ describe('C0.6 T18 item 4 /ready: each login is held to its role’s rule', () =
       const { error } = await migrate({ databaseUrl: target.toString(), role: 'hearth_owner' })
       expect(error).toBeUndefined()
     } finally {
-      await server.query(`drop database if exists ${fresh} with (force)`)
+      await dropWhenIdle(server, fresh)
       await server.query(`drop role if exists ${role}`)
       await server.end()
     }

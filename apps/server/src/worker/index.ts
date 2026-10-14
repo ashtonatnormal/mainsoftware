@@ -205,8 +205,12 @@ export function startWorker(options: WorkerOptions): Worker {
         const listed = await listOrgs(control)
         for (const org of listed) if (!orgList.includes(org)) void flags.track(org)
         // An org that has left the list is no longer polled (its running jobs then read its flags as
-        // unconfirmed, and stop).
-        for (const org of orgList) if (!listed.includes(org)) flags.untrack(org)
+        // unconfirmed, and stop), and its consumers' blocks no longer count against readiness.
+        for (const org of orgList) {
+          if (listed.includes(org)) continue
+          flags.untrack(org)
+          consumers.forget(org)
+        }
         orgList = listed
         lastOrgs = now()
         failures.delete('orgs:')

@@ -173,11 +173,13 @@ export class FlagCache {
   }
 
   // Reads an org's flags again at once (after a push, or a fence's HF001), and resolves when a read
-  // that started after this call has finished, whether or not it worked. Starts keeping the org if
-  // it wasn't kept.
+  // that started after this call has finished, whether or not it worked. An org this process
+  // doesn't keep is left alone (it resolves at once and the org stays unconfirmed): only track()
+  // starts keeping one, so a job or consumer still running in an org the worker has untracked
+  // can't keep it again.
   reload(orgId: string): Promise<void> {
     const entry = this.#orgs.get(orgId)
-    if (entry === undefined) return this.track(orgId)
+    if (entry === undefined) return Promise.resolve()
     return new Promise(resolve => {
       entry.waiters.push(resolve)
       if (entry.loading) entry.again = true

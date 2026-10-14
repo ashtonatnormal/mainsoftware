@@ -23,6 +23,12 @@ describe('C0.6 T15 the queue’s numbers', () => {
     expect(WORKER_POLICY).toMatchObject({ consumerPollMs: 500, metricsMs: 30_000, orgsMs: 60_000, stopMs: 5000 })
     // Two heartbeats can fail and the lease still holds; the drain and give-back fit the 5 s stop.
     expect(JOB_POLICY.leaseMs).toBeGreaterThan(2 * JOB_POLICY.heartbeatMs)
+    // The watchdog's margin (half a heartbeat) spans several of its ticks, and a heartbeat begun on
+    // time, bounded by its statement timeout, ends before the watchdog would stop the job.
+    const margin = JOB_POLICY.heartbeatMs / 2
+    expect(margin).toBeGreaterThanOrEqual(2 * JOB_POLICY.watchdogMs)
+    const bound = Math.min(JOB_POLICY.heartbeatMs, JOB_POLICY.leaseMs / 3)
+    expect(JOB_POLICY.heartbeatMs + bound).toBeLessThan(JOB_POLICY.leaseMs - margin)
     expect(JOB_POLICY.drainMs + JOB_POLICY.giveBackMs).toBeLessThan(WORKER_POLICY.stopMs)
   })
 

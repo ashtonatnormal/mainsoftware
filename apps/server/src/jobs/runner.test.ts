@@ -387,17 +387,102 @@ describe('C0.6 T15 item 2 heartbeats', () => {
     )
     await until(() => runner.active === 1)
     const claimedAt = performance.now()
-    // Two heartbeats fail (at 10 s and 20 s): the job runs on while its lease could still be renewed.
-    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs - JOB_POLICY.heartbeatMs - 50)
+    // The heartbeats fail from 10 s on, each tried again a second later: the job runs on while a
+    // retry could still renew its lease.
+    const margin = JOB_POLICY.heartbeatMs / 2
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs - margin - 50)
     expect(runner.active).toBe(1)
-    // Within a watchdog tick of the lease less one heartbeat, it stops, well before the lease ends.
+    const tries = p.statements.filter(s => s.text.startsWith('update jobs j set lease_expires_at')).length
+    expect(tries).toBeGreaterThanOrEqual(10)
+    // Within a watchdog tick of the lease less the margin since the claim (its last renewal), it
+    // stops, well before the lease ends.
     await until(() => runner.active === 0, JOB_POLICY.watchdogMs + 100)
-    expect(performance.now() - claimedAt).toBeLessThan(JOB_POLICY.leaseMs - JOB_POLICY.heartbeatMs / 2)
+    expect(performance.now() - claimedAt).toBeLessThan(JOB_POLICY.leaseMs - margin / 2)
     expect(log.events('job_lease_lost').map(line => line.job)).toEqual([jobId(1)])
     // Nothing written: the sweep has it once the lease runs out.
     expect(updates(p)).toEqual([])
     // Each heartbeat is bounded well inside the lease.
     expect(p.texts()).toContain(`set local statement_timeout = '${JOB_POLICY.heartbeatMs}ms'`)
+    runner.halt()
+  })
+
+  it('a job whose heartbeats all succeed but take 6 s each is never aborted for its lease', async () => {
+    const { run, release } = blocking()
+    const slow = (statement: Statement) =>
+      statement.text.startsWith('update jobs j set lease_expires_at')
+        ? new Promise<void>(resolve => setTimeout(resolve, 6000))
+        : undefined
+    const { p, runner, log } = start({ claims: [[claimed(1)]], hold: slow }, { kinds: [run] })
+    await until(() => runner.active === 1)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 5)
+    expect(runner.active).toBe(1)
+    expect(log.events('job_lease_lost')).toEqual([])
+    // They run 10 s apart, start to start, however long each takes.
+    const beats = p.statements.filter(s => s.text.startsWith('update jobs j set lease_expires_at')).length
+    expect(beats).toBeGreaterThanOrEqual(14)
+    release(1)
+    await until(() => runner.active === 0)
+    expect(log.events('job_succeeded')).toHaveLength(1)
+    runner.halt()
+  })
+
+  it('tries a failed heartbeat again within a second, so one failure that took 1.5 s costs no job', async () => {
+    const { run, release } = blocking()
+    let beats = 0
+    const { p, runner, log } = start(
+      {
+        claims: [[claimed(1)]],
+        // The second heartbeat fails, after 1.5 s; every other succeeds at once.
+        hold: statement =>
+          statement.text.startsWith('update jobs j set lease_expires_at') && ++beats === 2
+            ? new Promise<void>(resolve => setTimeout(resolve, 1500))
+            : undefined,
+        renew: ids => (beats === 2 ? new Error('Connection terminated unexpectedly') : ids),
+      },
+      { kinds: [run] },
+    )
+    await until(() => runner.active === 1)
+    // Heartbeats at 10 s (renewed) and 20 s (failed at 21.5 s).
+    await vi.advanceTimersByTimeAsync(2 * JOB_POLICY.heartbeatMs + 1500 + 10)
+    expect(log.events('worker_loop_failed').map(line => line.loop)).toEqual(['heartbeats'])
+    // Tried again a tenth of a heartbeat later, not a whole one.
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.heartbeatMs / 10)
+    expect(beats).toBe(3)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 3)
+    expect(runner.active).toBe(1)
+    expect(log.events('job_lease_lost')).toEqual([])
+    expect(p.statements.some(s => s.text.startsWith('update jobs set'))).toBe(false)
+    release(1)
+    await until(() => runner.active === 0)
+    runner.halt()
+  })
+
+  it('a heartbeat that fails at its 10 s bound, then a prompt retry that renews, costs no job', async () => {
+    const { run, release } = blocking()
+    let beats = 0
+    // Its statement timeout and a little for the transaction around it.
+    const timeout = JOB_POLICY.heartbeatMs + 200
+    const { runner, log } = start(
+      {
+        claims: [[claimed(1)]],
+        // The first heartbeat (at 10 s) runs to its statement timeout and fails just after 20 s from
+        // the claim that last set the lease; every other succeeds at once.
+        hold: statement =>
+          statement.text.startsWith('update jobs j set lease_expires_at') && ++beats === 1
+            ? new Promise<void>(resolve => setTimeout(resolve, timeout))
+            : undefined,
+        renew: ids => (beats === 1 ? pgError('57014') : ids),
+      },
+      { kinds: [run] },
+    )
+    await until(() => runner.active === 1)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.heartbeatMs + timeout + JOB_POLICY.heartbeatMs / 10 + 10)
+    expect(beats).toBe(2)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs * 3)
+    expect(runner.active).toBe(1)
+    expect(log.events('job_lease_lost')).toEqual([])
+    release(1)
+    await until(() => runner.active === 0)
     runner.halt()
   })
 
@@ -412,7 +497,9 @@ describe('C0.6 T15 item 2 heartbeats', () => {
       { kinds: [run] },
     )
     await until(() => runner.active === 1)
-    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs - JOB_POLICY.heartbeatMs + JOB_POLICY.watchdogMs + 10)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.leaseMs - JOB_POLICY.heartbeatMs / 2 - 50)
+    expect(runner.active).toBe(1)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.watchdogMs + 60)
     expect(runner.active).toBe(0)
     expect(log.events('job_lease_lost').map(line => line.job)).toEqual([jobId(1)])
     runner.halt()
