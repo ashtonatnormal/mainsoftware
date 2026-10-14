@@ -284,7 +284,7 @@ export function startWorker(options: WorkerOptions): Worker {
     },
     'the worker started',
   )
-  // worker_ready once every loop has run a round.
+  // worker_ready once every loop has run a round and readiness finds nothing else wrong.
   const announce = setInterval(() => {
     if (stopping || problems().length > 0) return
     clearInterval(announce)
