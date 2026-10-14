@@ -30,6 +30,14 @@ describe('C0.5 T5 publishing ended sessions to the realtime role', () => {
     await expect(publishRevoked(valkey, 'it:unit:', [id(1)], log)).resolves.toBeUndefined()
     expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ event: 'revocation_publish_failed', sessions: 1 }))
   })
+
+  it('OUTBOX-2: with rethrow, logs a failed publish and then throws it, for a retried job', async () => {
+    const log = logger()
+    const failure = new Error('Connection is closed.')
+    const valkey = { publish: vi.fn().mockRejectedValue(failure) }
+    await expect(publishRevoked(valkey, 'it:unit:', [id(1)], log, { rethrow: true })).rejects.toBe(failure)
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ event: 'revocation_publish_failed', sessions: 1 }))
+  })
 })
 
 describe('C0.5 T5 listening for ended sessions', () => {

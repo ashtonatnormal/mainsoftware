@@ -299,8 +299,10 @@ describe('C0.6 T16 item 5 resetting a consumer (replay)', () => {
     const { spec } = consumer()
     await ConsumerRunner.reset(p.db, spec, ORG, 'oldest')
     const texts = roundTexts(p)
-    expect(texts[0]).toBe('select pg_advisory_xact_lock(hashtextextended($1, 0))')
-    expect(texts[1]).toMatch(/^insert into outbox_checkpoints as c .* on conflict \(org_id, consumer\) do update set/)
+    // OUTBOX-1: as long as a round's transaction may hold the lock, not withOrg()'s 2 s.
+    expect(texts[0]).toBe("set local lock_timeout = '30s'")
+    expect(texts[1]).toBe('select pg_advisory_xact_lock(hashtextextended($1, 0))')
+    expect(texts[2]).toMatch(/^insert into outbox_checkpoints as c .* on conflict \(org_id, consumer\) do update set/)
     expect(p.statements.find(s => s.text.startsWith("select set_config('role'"))?.values[0]).toBe(
       'hearth_job_offboarding',
     )

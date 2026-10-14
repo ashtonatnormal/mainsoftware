@@ -16,11 +16,25 @@ export interface PoolOptions {
   applicationName?: string
 }
 
+// How long the client waits for any one statement: a little more than the 30 s transaction_timeout,
+// which Postgres enforces first whenever it can still answer. This bound is for when it can't: a
+// connection whose peer has gone silent (a failover, a dropped network path) never hears Postgres's
+// error, and without it the call would wait until TCP gives up, about 15 minutes. It bounds each
+// statement, so read-only work that raises its transaction past 30 s (database.ts) still runs as
+// statements of at most 31 s each.
+export const QUERY_TIMEOUT_MS = 31_000
+// TCP keepalive probes start after a connection has been quiet this long, so the OS notices a
+// silent peer of an idle connection and the pool drops it.
+export const KEEPALIVE_DELAY_MS = 10_000
+
 export function createPool(databaseUrl: string, logger: Logger, options: PoolOptions = {}): Pool {
   // A new connection that can't be made in 2 s fails rather than queueing behind /ready.
   const pool = new Pool({
     connectionString: databaseUrl,
     connectionTimeoutMillis: 2000,
+    query_timeout: QUERY_TIMEOUT_MS,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: KEEPALIVE_DELAY_MS,
     max: options.max ?? 10,
     ...(options.applicationName === undefined ? {} : { application_name: options.applicationName }),
   })

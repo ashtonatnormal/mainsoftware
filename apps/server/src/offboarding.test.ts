@@ -230,4 +230,18 @@ describe('C0.5 T5 ACC-05 the sockets handler', () => {
     )
     expect(valkey.publish).not.toHaveBeenCalled()
   })
+
+  it('OUTBOX-2: fails when the publish fails, so the job is tried again rather than finishing', async () => {
+    const { ctx } = jobContext(s => (s.text.includes('from "sessions"') ? SESSIONS.map(id => ({ id })) : []))
+    const log = logger()
+    const failure = new Error('Connection is closed.')
+    const valkey = { publish: vi.fn().mockRejectedValue(failure) }
+    await expect(
+      socketsHandler({ valkey, keyPrefix: 'it:unit:', logger: log }).run(
+        { orgId: ORG, personId: PERSON, actorId: ADMIN },
+        ctx,
+      ),
+    ).rejects.toBe(failure)
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ event: 'revocation_publish_failed' }))
+  })
 })

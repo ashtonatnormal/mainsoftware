@@ -87,6 +87,10 @@ describe('C0.6 T18 item 8 pools', () => {
         max: 3,
         application_name: 'hearth-worker-work',
         connectionTimeoutMillis: 2000,
+        // FLAGS-1: a statement on a connection whose peer went silent gives up on the client.
+        query_timeout: 31_000,
+        keepAlive: true,
+        keepAliveInitialDelayMillis: 10_000,
       })
       expect(plain.options.max).toBe(10)
       expect(plain.options).not.toHaveProperty('application_name')

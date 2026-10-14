@@ -159,11 +159,13 @@ export function socketsHandler(deps: {
           .where('revoke_reason', '=', 'deactivated')
           .execute(),
       )
+      // A failed publish fails the job, which is tried again (T16 item 9).
       await publishRevoked(
         deps.valkey,
         deps.keyPrefix,
         rows.map(row => row.id),
         deps.logger,
+        { rethrow: true },
       )
     },
   }

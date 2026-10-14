@@ -4,7 +4,7 @@ import { z } from 'zod'
 import type { FlagVerdict } from '#src/flags/cache.ts'
 import { defineJob, type JobKind } from '#src/jobs/kinds.ts'
 import { SCHEDULER_POLICY } from '#src/jobs/policy.ts'
-import { cancelsWhenOff, type RetiredSchedule, type ScheduleDef, Scheduler } from '#src/jobs/scheduler.ts'
+import { cancelsWhenOff, canonical, type RetiredSchedule, type ScheduleDef, Scheduler } from '#src/jobs/scheduler.ts'
 import { captureLogger } from '#src/testing/logs.ts'
 import { type Statement, scriptedPool } from '#src/testing/pool.ts'
 
@@ -149,6 +149,40 @@ describe('C0.6 T15 item 20 reconcile: insert and retire, never change a key', ()
     expect(log.events('schedule_differs').map(line => line.schedule)).toEqual(['it.daily'])
     expect(p.texts().some(t => t.startsWith('update schedules set cron'))).toBe(false)
   })
+
+  it('JOBS-4: compares payloads whatever order their keys are in, as Postgres reorders a jsonb object’s keys', async () => {
+    const payload = { team: 'x', kind: 'y', nested: { zz: 1, a: [{ b: 2, a: 1 }] } }
+    const { scheduler, log } = setup(
+      {
+        existing: [
+          // As pg returns the row: jsonb's order, shortest key first.
+          {
+            key: 'it.daily',
+            kind: 'it.daily',
+            cron: '17 3 * * *',
+            on_interrupt: 'rerun',
+            payload: { kind: 'y', team: 'x', nested: { a: [{ a: 1, b: 2 }], zz: 1 } },
+          },
+          {
+            key: 'it.other',
+            kind: 'it.daily',
+            cron: '17 3 * * *',
+            on_interrupt: 'rerun',
+            payload: { kind: 'y', team: 'z', nested: { a: [{ a: 1, b: 2 }], zz: 1 } },
+          },
+        ],
+      },
+      {
+        schedules: [
+          { key: 'it.daily', kind: 'it.daily', cron: '17 3 * * *', onInterrupt: 'rerun', payload },
+          { key: 'it.other', kind: 'it.daily', cron: '17 3 * * *', onInterrupt: 'rerun', payload },
+        ],
+      },
+    )
+    await scheduler.tick(ORG)
+    expect(log.events('schedule_differs').map(line => line.schedule)).toEqual(['it.other'])
+    expect(canonical({ b: 1, a: [3, { d: null, c: 'x' }] })).toBe('{"a":[3,{"c":"x","d":null}],"b":1}')
+  })
 })
 
 describe('C0.6 T15 item 13 firing: one run per occurrence, from the database’s clock', () => {
@@ -157,7 +191,7 @@ describe('C0.6 T15 item 13 firing: one run per occurrence, from the database’s
     await scheduler.tick(ORG)
     const select = find(p, 'select id, key, kind, cron, on_interrupt, payload, next_run_at, now() as now')[0]
     expect(select?.text).toContain('for no key update skip locked')
-    expect(select?.values).toEqual([ORG, ['it.daily', 'it.optional_work', 'it.review'], 20])
+    expect(select?.values).toEqual([ORG, ['it.daily', 'it.optional_work', 'it.review'], [], 20])
     const run = find(p, 'insert into schedule_runs')[0]
     expect(run?.values.slice(1)).toEqual([
       ORG,
@@ -233,6 +267,35 @@ describe('C0.6 T15 item 13 firing: one run per occurrence, from the database’s
     await unconfirmed.scheduler.tick(ORG)
     expect(find(unconfirmed.p, 'insert into schedule_runs')).toEqual([])
     expect(find(unconfirmed.p, 'update schedules set next_run_at')).toEqual([])
+  })
+})
+
+describe('JOBS-2 a due schedule that can’t fire never holds up the others', () => {
+  it('passes over a row whose payload its kind refuses, or whose cron never matches, logs it once and fires the rest', async () => {
+    const BAD_PAYLOAD = 'f0000000-0000-4000-8000-000000000002'
+    const NEVER = 'f0000000-0000-4000-8000-000000000003'
+    const { p, scheduler, log } = setup({
+      due: [
+        due({ id: BAD_PAYLOAD, key: 'it.bad', payload: { extra: 1 } }),
+        // 30 February: cron reads it, but it never comes.
+        due({ id: NEVER, key: 'it.never', cron: '0 0 30 2 *' }),
+        due({ key: 'it.purge', kind: 'it.optional_work' }),
+      ],
+    })
+    expect(await scheduler.tick(ORG)).toBe(true)
+    expect(find(p, 'insert into schedule_runs').map(s => s.values[2])).toEqual([SCHEDULE])
+    expect(find(p, 'insert into jobs').map(s => s.values[2])).toEqual(['it.optional_work'])
+    expect(find(p, 'update schedules set next_run_at').map(s => s.values[2])).toEqual([SCHEDULE])
+    expect(log.events('schedule_unreadable')).toEqual([
+      expect.objectContaining({ level: 50, schedule: 'it.bad' }),
+      expect.objectContaining({ level: 50, schedule: 'it.never' }),
+    ])
+    expect(JSON.stringify(log.events('schedule_unreadable'))).not.toContain('extra')
+    expect(log.events('worker_loop_failed')).toEqual([])
+    // From then on they take no place in the batch, and aren't logged again.
+    await scheduler.tick(ORG)
+    expect(find(p, 'select id, key, kind, cron')[1]?.values[2]).toEqual([BAD_PAYLOAD, NEVER])
+    expect(log.events('schedule_unreadable')).toHaveLength(2)
   })
 })
 

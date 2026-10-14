@@ -336,6 +336,42 @@ describe('C0.6 T15 item 2 heartbeats', () => {
     expect(log.events('job_succeeded')).toHaveLength(1)
     runner.halt()
   })
+
+  it('JOBS-1: never aborts a job once its finishing commit has committed, whatever a heartbeat, the watchdog or a flag change says', async () => {
+    let release: () => void = () => {}
+    const effect = new Promise<void>(resolve => {
+      release = resolve
+    })
+    let aborted: unknown
+    let effectRan = false
+    const after = kind(async ctx => {
+      await ctx.commit(async () => undefined, { finish: true })
+      // The effect after the finish (T15 item 3), cut short only if the signal aborts.
+      ctx.signal.addEventListener('abort', () => {
+        aborted = ctx.signal.reason
+      })
+      await effect
+      effectRan = !ctx.signal.aborted
+    })
+    const flags = fakeFlags()
+    // The job's row is succeeded now, so no heartbeat renews it.
+    const { p, runner, log } = start({ claims: [[claimed(1)]], renew: () => [] }, { kinds: [after], flags })
+    await until(() => p.statements.some(s => s.text.startsWith('select public.job_finish')))
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.heartbeatMs)
+    flags.state.verdict = 'unconfirmed'
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.watchdogMs + 10)
+    flags.state.verdict = 'off'
+    flags.change(ORG, ['it.optional'])
+    await vi.advanceTimersByTimeAsync(0)
+    release()
+    await until(() => runner.active === 0)
+    expect(aborted).toBeUndefined()
+    expect(effectRan).toBe(true)
+    expect(log.events('job_lease_lost')).toEqual([])
+    expect(log.events('job_succeeded')).toHaveLength(1)
+    expect(updates(p)).toEqual([])
+    runner.halt()
+  })
 })
 
 describe('C0.6 T15 items 2 to 6, 9 and 12: the outcome of each attempt', () => {

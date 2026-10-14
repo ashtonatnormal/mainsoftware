@@ -12,7 +12,8 @@
 //              firing it, one adds the run and the other adds nothing, and queues no job), then its
 //              job, keyed by the run, and the next occurrence. Occurrences missed while no worker
 //              ran are counted and logged (schedule_missed), not run. A review schedule whose
-//              feature is off gets its run skipped (flag_off) and no job.
+//              feature is off gets its run skipped (flag_off) and no job. A row that can't fire is
+//              logged once (schedule_unreadable) and passed over.
 //   sweep      Running jobs whose lease ran out (a crashed or stalled worker), FOR NO KEY UPDATE SKIP
 //              LOCKED, so one a finishing transaction holds is passed by and looked at next tick:
 //              back to the queue after a back-off, the attempt counted, or dead with none left; a
@@ -57,6 +58,17 @@ export interface SchedulerOptions {
 const MISSED_CAP = 1000
 // A loop step that has failed this many times in a row logs at error level.
 const FAILURES_BEFORE_ERROR = 3
+
+// A JSON value as text with every object's keys sorted, so two payloads compare equal whatever
+// order their keys came in: Postgres keeps a jsonb object's keys in its own order (shortest first),
+// not the registry's.
+export function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner !== null && typeof inner === 'object' && !Array.isArray(inner)
+      ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : inner,
+  )
+}
 
 // Whether a kind's queued work is dropped while its feature is off (T15 item 9).
 export function cancelsWhenOff(kind: JobKind, flags: Pick<FlagCache, 'registry'>): boolean {
@@ -220,7 +232,7 @@ export class Scheduler {
             row.kind === schedule.kind &&
             row.cron === schedule.cron &&
             row.on_interrupt === schedule.onInterrupt &&
-            JSON.stringify(row.payload) === JSON.stringify(schedule.payload ?? {})
+            canonical(row.payload) === canonical(schedule.payload ?? {})
           if (!same) {
             this.#differs.add(row.key)
             this.#logger.warn(
@@ -250,6 +262,7 @@ export class Scheduler {
       const { rows } = await sql<DueRow>`
         select id, key, kind, cron, on_interrupt, payload, next_run_at, now() as now from schedules
         where org_id = ${orgId} and retired_at is null and next_run_at <= now() and kind = any(${known}::text[])
+          and id <> all(${[...this.#unreadable]}::uuid[])
         order by next_run_at
         for no key update skip locked
         limit ${this.#policy.fireBatch}`.execute(trx)
@@ -260,27 +273,24 @@ export class Scheduler {
   async #fireOne(trx: InOrg, orgId: string, due: DueRow): Promise<void> {
     const kind = this.#kinds.get(due.kind)
     if (kind === undefined) return
-    let cron: Cron
-    try {
-      cron = parseCron(due.cron)
-    } catch {
-      // The row's shape passed the table's check, but cron can't read it: nothing can fire it.
+    const when = this.#occurrences(kind, due)
+    if (when === undefined) {
+      // The row's shape passed the table's checks, but nothing can fire it: cron can't read it or
+      // finds no occurrence, or its kind's schema refuses its payload (a key changed in place, or a
+      // version rolled back to one whose schema is stricter). It is logged once, never with its
+      // payload, and passed over from then on, so it neither rolls back the org's other firings nor
+      // takes a place in the batch; a process that starts after it is fixed fires it again.
       if (!this.#unreadable.has(due.id)) {
         this.#unreadable.add(due.id)
         this.#logger.error({ event: 'schedule_unreadable', org: orgId, schedule: due.key }, 'a schedule cannot fire')
       }
       return
     }
+    const { scheduledFor, missed, next } = when
     const review = due.on_interrupt === 'review'
     // A review run whose feature is off is skipped; one whose flags aren't confirmed waits a tick.
     const verdict = review ? this.#flags.verdict(orgId, kind.feature, null) : 'on'
     if (verdict === 'unconfirmed') return
-    // The latest occurrence at or before now, from the database's clock; not before the time the
-    // row says was due (which an occurrence normally is).
-    const latest = previousAtOrBefore(cron, due.now)
-    const scheduledFor = latest > due.next_run_at ? latest : due.next_run_at
-    let missed = 0
-    for (let at = due.next_run_at; at < scheduledFor && missed < MISSED_CAP; at = nextAfter(cron, at)) missed++
     const runId = randomUUID()
     const skipped = verdict !== 'on'
     const { rows } = await sql<{ id: string }>`
@@ -299,7 +309,7 @@ export class Scheduler {
         { scheduleRunId: runId, maxAttempts: review ? 1 : kind.maxAttempts },
       )
     }
-    await sql`update schedules set next_run_at = ${nextAfter(cron, due.now)}, last_fired_at = now()
+    await sql`update schedules set next_run_at = ${next}, last_fired_at = now()
       where org_id = ${orgId} and id = ${due.id}`.execute(trx)
     const line = { org: orgId, schedule: due.key, scheduledFor: scheduledFor.toISOString() }
     if (!fired) return
@@ -313,6 +323,25 @@ export class Scheduler {
         { event: 'schedule_missed', ...line, missed, atLeast: missed >= MISSED_CAP },
         'occurrences were missed while no worker ran',
       )
+    }
+  }
+
+  // When a due row fires and what it skipped, or undefined when it can't fire: its cron unreadable
+  // or with no occurrence, or its payload refused by its kind's schema (which enqueue() would throw
+  // on, rolling the whole batch back).
+  #occurrences(kind: JobKind, due: DueRow): { scheduledFor: Date; missed: number; next: Date } | undefined {
+    try {
+      if (!kind.payload.safeParse(due.payload).success) return undefined
+      const cron: Cron = parseCron(due.cron)
+      // The latest occurrence at or before now, from the database's clock; not before the time the
+      // row says was due (which an occurrence normally is).
+      const latest = previousAtOrBefore(cron, due.now)
+      const scheduledFor = latest > due.next_run_at ? latest : due.next_run_at
+      let missed = 0
+      for (let at = due.next_run_at; at < scheduledFor && missed < MISSED_CAP; at = nextAfter(cron, at)) missed++
+      return { scheduledFor, missed, next: nextAfter(cron, due.now) }
+    } catch {
+      return undefined
     }
   }
 

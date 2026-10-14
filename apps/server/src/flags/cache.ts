@@ -4,8 +4,11 @@
 // 10 s (PRD-65, BUILD-PLAN 150) two ways:
 //   - the api publishes on the flags channel after the change commits (channel.ts), and each
 //     process reloads that org at once;
-//   - each process polls every org it keeps every 2 s (±10%, so processes drift apart), each read
-//     bounded to 2 s, so a lost message, or Valkey down, costs at most about 4.5 s.
+//   - each process polls every org it keeps every 2 s (±10%, so processes drift apart), so a lost
+//     message, or Valkey down, costs at most about 5 s. Each read's statements are bounded to 2 s by
+//     Postgres, and the process stops waiting for the whole read after 2.5 s whatever happens (a
+//     connection whose peer went silent never hears Postgres's timeout), counts it as failed and
+//     polls again; a read it stopped waiting for can't change anything when it ends.
 // A process that hasn't confirmed an org's flags for 8 s reads every flag not locked on as off
 // (fail closed), and the database's fences refuse any effect after a change whatever this copy
 // says (fence.ts; feature_fence, job_fence and job_finish compare revisions).
@@ -24,10 +27,12 @@ import { readFlagsMessage } from '#src/flags/channel.ts'
 import { evaluate, type FlagState, type FlagSubject, lineageEnabled } from '#src/flags/evaluate.ts'
 import type { Subscriptions } from '#src/pubsub.ts'
 
-// How often each org's flags are read again (±10%), how long one read may take, and how long a
-// process trusts what it last read.
+// How often each org's flags are read again (±10%), how long each of a read's statements may take
+// (Postgres's bound), how long the process waits for a whole read (its own), and how long a process
+// trusts what it last read.
 export const FLAG_POLL_MS = 2000
 export const FLAG_READ_TIMEOUT = '2s'
+export const FLAG_READ_WAIT_MS = 2500
 export const FLAG_STALE_MS = 8000
 
 // What verdict() says about a feature for someone.
@@ -78,6 +83,14 @@ type Row = {
   cohort_roles: string[]
   // A bigint, which pg returns as a string.
   revision: unknown
+}
+
+// A read of the flags that didn't end within FLAG_READ_WAIT_MS.
+export class FlagReadTimeout extends Error {
+  override name = 'FlagReadTimeout'
+  constructor() {
+    super(`the flags read took longer than ${FLAG_READ_WAIT_MS} ms`)
+  }
 }
 
 export class FlagCache {
@@ -243,7 +256,7 @@ export class FlagCache {
     entry.again = false
     const waiters = entry.waiters.splice(0)
     try {
-      const rows = await this.#read(orgId)
+      const rows = await this.#bounded(this.#read(orgId))
       this.#confirm(orgId, entry, rows)
     } catch (error) {
       this.#failed(orgId, entry, error)
@@ -262,6 +275,24 @@ export class FlagCache {
     const delay = this.#pollMs * (0.9 + 0.2 * this.#random())
     entry.timer = setTimeout(() => void this.#load(orgId, entry), delay)
     entry.timer.unref()
+  }
+
+  // The read, or a FlagReadTimeout once it has taken FLAG_READ_WAIT_MS. Postgres's statement_timeout
+  // and transaction_timeout don't help when the connection's peer has gone silent (a failover, a
+  // dropped network path): their error never arrives. The race settles without the read, and a read
+  // that ends later changes nothing (Promise.race keeps the first outcome and handles the rest). The
+  // pool's own bounds (keepAlive, query_timeout; pool.ts) later free its connection.
+  async #bounded<T>(read: Promise<T>): Promise<T> {
+    let timer: NodeJS.Timeout | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new FlagReadTimeout()), FLAG_READ_WAIT_MS)
+      timer.unref()
+    })
+    try {
+      return await Promise.race([read, timeout])
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   // One read of the org's flags, read only, each statement bounded, as the org's system principal

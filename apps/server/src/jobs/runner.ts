@@ -14,7 +14,8 @@
 //               lineage revisions it was admitted under, which every commit's fence compares.
 //   heartbeats  Every 10 s, one statement per org renews every running job's lease. A job whose
 //               lease wasn't renewed has lost it (lease_lost), unless its finishing commit is in
-//               flight, which then reports for itself. A heartbeat that fails is tried again at the
+//               flight, which then reports for itself, or has committed: nothing aborts a job after
+//               that (T15 item 3). A heartbeat that fails is tried again at the
 //               next tick: two failures in a row still leave 10 s of lease.
 //   watching    A flag change for an org re-evaluates its running jobs: no longer on for the job's
 //               person aborts it (flag_off, not_in_cohort); still on moves the revisions it fences
@@ -449,8 +450,12 @@ export class JobRunner {
     }
   }
 
-  // Aborts the job for this reason and decides its outcome, once; returns the abort.
+  // Aborts the job for this reason and decides its outcome, once; returns the abort. A job whose
+  // finishing commit has committed has succeeded, so nothing aborts it after that: not a heartbeat
+  // that renews no row (lease_lost, which it isn't), the watchdog, a flag change, its timeout or a
+  // shutdown. What it does after that commit runs once at most (T15 item 3).
   #abort(r: Running, reason: AbortReason): JobAborted {
+    if (r.attempt?.finished === true) return new JobAborted(reason)
     if (!r.controller.signal.aborted) {
       r.controller.abort(new JobAborted(reason))
       void this.#decide(r, this.#outcomeFor(r, reason))

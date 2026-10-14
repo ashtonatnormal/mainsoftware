@@ -17,7 +17,7 @@ import { C06_GATE } from '#src/jobs/gate.ts'
 import { appendOutbox } from '#src/outbox/append.ts'
 import { BelowFloor, ConsumerRunner, type OutboxConsumer, type RoundResult } from '#src/outbox/consumers.ts'
 import { readOutboxLag, readQueueDepth } from '#src/outbox/lag.ts'
-import type { OutboxRow } from '#src/outbox/positions.ts'
+import { lockConsumer, type OutboxRow } from '#src/outbox/positions.ts'
 import { installJobTables } from '#src/testing/jobs.ts'
 import { captureLogger } from '#src/testing/logs.ts'
 import type { Person, Stack } from '#src/testing/stack.ts'
@@ -188,6 +188,27 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
     const after = await checkpoint('it_projection')
     expect(after).toMatchObject({ last_tx: before?.last_tx, last_id: before?.last_id })
     expect(Number(after?.processed)).toBeGreaterThanOrEqual(Number(before?.processed) + events.length)
+  })
+
+  it('OUTBOX-1 T16 item 5: a reset waits for a round that holds the consumer’s lock longer than 2 s', async () => {
+    const spec = consumer('it_reset_wait')
+    let held: () => void = () => {}
+    const holding = new Promise<void>(resolve => {
+      held = resolve
+    })
+    // A round's lock, held for 3 s.
+    const round = withOrg(s.worker, { orgId: s.org.id, system: true, as: spec.role }, async trx => {
+      await lockConsumer(trx, spec.name, s.org.id)
+      held()
+      await sleep(3000)
+    })
+    await holding
+    const started = Date.now()
+    await ConsumerRunner.reset(s.worker, spec, s.org.id, 'now')
+    expect(Date.now() - started).toBeGreaterThanOrEqual(2500)
+    await round
+    expect(await checkpoint('it_reset_wait')).toBeDefined()
+    await s.query("delete from outbox_checkpoints where consumer = 'it_reset_wait'")
   })
 
   it('T16 items 1 and 2: an event committed behind a transaction still running waits for it, and none is skipped', async () => {

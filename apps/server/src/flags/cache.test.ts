@@ -1,6 +1,6 @@
 import { FLAGS } from '@hearth/shared'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { FLAG_POLL_MS, FLAG_STALE_MS, FlagCache } from '#src/flags/cache.ts'
+import { FLAG_POLL_MS, FLAG_READ_WAIT_MS, FLAG_STALE_MS, FlagCache } from '#src/flags/cache.ts'
 import { Subscriptions } from '#src/pubsub.ts'
 import { captureLogger } from '#src/testing/logs.ts'
 import { type Statement, scriptedPool } from '#src/testing/pool.ts'
@@ -299,6 +299,69 @@ describe('C0.6 T17 items 6 and 7 the flags a process keeps', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(done).toBe(true)
     expect(db.state.reads).toBe(2)
+    flags.stop()
+  })
+  it('FLAGS-1: stops waiting for a read that never ends, counts it as failed, polls again, and drops its late result', async () => {
+    // A connection whose peer went silent: the first read's select never answers until released.
+    const db = database([row('it.optional')])
+    let release: () => void = () => {}
+    let held = true
+    const silent = scriptedPool(
+      (statement: Statement) => {
+        if (statement.text.includes("from principals where org_id = $1 and kind = 'system'")) return [{ id: SYSTEM }]
+        if (statement.text.startsWith('select "key"')) {
+          db.state.reads++
+          return db.state.rows
+        }
+        return []
+      },
+      async statement => {
+        if (statement.text.startsWith('select "key"') && held) {
+          held = false
+          await new Promise<void>(resolve => {
+            release = resolve
+          })
+        }
+      },
+    )
+    const log = captureLogger('api')
+    const flags = new FlagCache({
+      db: silent.db,
+      registry: REGISTRY,
+      logger: log.logger,
+      now: () => Date.now(),
+      random: () => 0.5,
+    })
+    void flags.track(ORG)
+    await vi.advanceTimersByTimeAsync(0)
+    let reloaded = false
+    void flags.reload(ORG).then(() => {
+      reloaded = true
+    })
+    await vi.advanceTimersByTimeAsync(FLAG_READ_WAIT_MS - 1)
+    expect(log.events('flags_poll_failed')).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    // The stuck read counts as a failed poll, and the reload asked for during it runs at once.
+    expect(log.events('flags_poll_failed')).toEqual([
+      expect.objectContaining({
+        org: ORG,
+        failures: 1,
+        failure: expect.objectContaining({ error: 'FlagReadTimeout' }),
+      }),
+    ])
+    expect(log.events('flags_unconfirmed')).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(reloaded).toBe(true)
+    expect(db.state.reads).toBe(1)
+    expect(flags.isOn(ORG, 'it.optional', null)).toBe(true)
+    // The stuck read ends at last with rows older than what has been read since: dropped.
+    db.state.rows = [row('it.optional', { enabled: false, revision: '2' })]
+    await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 1.1)
+    expect(flags.isOn(ORG, 'it.optional', null)).toBe(false)
+    db.state.rows = [row('it.optional')]
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(flags.isOn(ORG, 'it.optional', null)).toBe(false)
     flags.stop()
   })
 })

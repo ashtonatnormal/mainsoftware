@@ -27,8 +27,9 @@
 // logical restore or a Blue/Green upgrade can cause.
 import { performance } from 'node:perf_hooks'
 import type { EventType, ProviderKey, PurposeKey } from '@hearth/shared'
+import { sql } from 'kysely'
 import type { Logger } from 'pino'
-import { type Database, type InOrg, withOrg } from '#src/db/database.ts'
+import { type Database, type InOrg, TRANSACTION_TIMEOUT, withOrg } from '#src/db/database.ts'
 import type { JobRole } from '#src/db/roles.ts'
 import { failureFields } from '#src/db/sqlstate.ts'
 import type { FlagCache } from '#src/flags/cache.ts'
@@ -198,8 +199,11 @@ export class ConsumerRunner {
   // now, or to a position, never below the floor (BelowFloor). It runs as the consumer's own role
   // and takes the same lock as a round, waiting for one in progress, so the round can't then
   // overwrite it; a round that read the checkpoint before the reset finds it moved and rolls back.
+  // A round may hold the lock for as long as its transaction lasts (30 s), longer than withOrg()'s
+  // 2 s lock_timeout, so the reset waits as long as that.
   static async reset(db: Database, consumer: OutboxConsumer, orgId: string, to: Start | Position): Promise<void> {
     await withOrg(db, { orgId, system: true, as: consumer.role }, async trx => {
+      await sql`set local lock_timeout = ${sql.lit(TRANSACTION_TIMEOUT)}`.execute(trx)
       await lockConsumer(trx, consumer.name, orgId)
       if (!(await setCheckpoint(trx, orgId, consumer.name, consumer.role, to))) throw new BelowFloor()
     })

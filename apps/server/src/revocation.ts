@@ -4,7 +4,7 @@
 // effort: a lost message is caught by the realtime role's re-check of every open socket (every
 // 15 s, and with Postgres down too: realtime/socket.ts closes what it can't confirm within T5's
 // 60 s), so a failure here is logged and swallowed, never turned into an error for the person who
-// signed out. The message holds session ids only, never a token. From C0.6 the same commit also
+// signed out (the offboarding job's publish, below, is the exception). The message holds session ids only, never a token. From C0.6 the same commit also
 // appends signin.ended to the outbox (T16), which its consumers read without missing any.
 import type { Redis } from 'ioredis'
 import type { Logger } from 'pino'
@@ -25,11 +25,16 @@ export type RevokedMessage = z.infer<typeof RevokedMessage>
 
 type LogTo = Pick<Logger, 'warn' | 'error'>
 
+// With rethrow, a failed publish is logged and then thrown, for a caller that is a retried job
+// (the offboarding sockets handler, offboarding.ts), so the job tries again with back-off and goes
+// dead in the end, rather than finishing as though the message went out. The api's publish after
+// its commit stays best effort.
 export async function publishRevoked(
   valkey: Pick<Redis, 'publish'>,
   keyPrefix: string,
   sessionIds: readonly string[],
   logger: LogTo,
+  options: { rethrow?: boolean } = {},
 ): Promise<void> {
   if (sessionIds.length === 0) return
   const channel = valkeyKeys(keyPrefix).revoked
@@ -40,6 +45,7 @@ export async function publishRevoked(
     } catch (error) {
       // The sessions have ended in Postgres already; the realtime re-check closes their sockets.
       logger.warn({ err: error, event: 'revocation_publish_failed', sessions: message.sessions.length })
+      if (options.rethrow === true) throw error
     }
   }
 }
