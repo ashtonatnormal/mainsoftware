@@ -215,15 +215,21 @@ describe('C0.6 T16 item 7 check-catalogues: every way to write is covered', () =
     const source = `merge into public.jobs j using src s on j.id = s.id
         when matched then update set state = 'cancelled'
         when not matched then do nothing;
-      insert into public.audit_events (org_id) values (o);`
+      if found then insert into public.audit_events (org_id) values (o);
+      else delete from public.outbox_events where false;
+      end if;
+      if not found then delete from public.outbox_events where false; end if;`
+    // The statements after the MERGE's ';' are their own: their THEN INSERT and THEN DELETE
+    // write audit_events and outbox_events, never jobs.
     expect(bodyWrites(source)).toEqual([
       { table: 'jobs', op: 'UPDATE', column: 'state' },
       { table: 'audit_events', op: 'INSERT' },
+      { table: 'outbox_events', op: 'DELETE' },
     ])
     const fn: Fn = { key: 'f()', definer: true, trigger: false, source }
     expect(
       bodyProblems(
-        { 'f()': { exempt: 'a check', writes: ['jobs.state:UPDATE', 'audit_events:INSERT'] } },
+        { 'f()': { exempt: 'a check', writes: ['jobs.state:UPDATE', 'audit_events:INSERT', 'outbox_events:DELETE'] } },
         [fn],
         [],
         {},
