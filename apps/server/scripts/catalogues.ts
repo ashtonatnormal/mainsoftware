@@ -191,26 +191,26 @@ export function bodyWrites(source: string): Array<{ table: string; op: Grant['op
   const text = stripSql(source)
   const found: Array<{ at: number; table: string; op: Grant['op']; column?: string }> = []
   const inserts: Array<{ at: number; table: string }> = []
-  for (const match of text.matchAll(new RegExp(String.raw`\binsert\s+into\s+${TABLE}`, 'g'))) {
-    const table = match[1] ?? ''
+  for (const match of text.matchAll(new RegExp(String.raw`\binsert\s+into\s+${TABLE}`, 'gu'))) {
+    const table = tableOf(match[1])
     inserts.push({ at: match.index, table })
     found.push({ at: match.index, table, op: 'INSERT' })
   }
-  for (const match of text.matchAll(new RegExp(String.raw`\bdelete\s+from\s+(?:only\s+)?${TABLE}`, 'g'))) {
-    found.push({ at: match.index, table: match[1] ?? '', op: 'DELETE' })
+  for (const match of text.matchAll(new RegExp(String.raw`\bdelete\s+from\s+(?:only\s+)?${TABLE}`, 'gu'))) {
+    found.push({ at: match.index, table: tableOf(match[1]), op: 'DELETE' })
   }
   const update = new RegExp(
-    String.raw`\bupdate\s+(?:only\s+)?${TABLE}(?:\s*\*)?(?:\s+(?:as\s+)?(?!set\b)"?[a-z_][a-z0-9_]*"?)?\s+set\b`,
-    'g',
+    String.raw`\bupdate\s+(?:only\s+)?${TABLE}(?:\s*\*)?(?:\s+(?:as\s+)?(?!set\b)${IDENT_ANY})?\s+set\b`,
+    'gu',
   )
   for (const match of text.matchAll(update)) {
     for (const column of setColumns(text, match.index + match[0].length)) {
-      found.push({ at: match.index, table: match[1] ?? '', op: 'UPDATE', column })
+      found.push({ at: match.index, table: tableOf(match[1]), op: 'UPDATE', column })
     }
   }
-  for (const match of text.matchAll(new RegExp(String.raw`\bupdate\s+(?:only\s+)?${TABLE}`, 'g'))) {
+  for (const match of text.matchAll(new RegExp(String.raw`\bupdate\s+(?:only\s+)?${TABLE}`, 'gu'))) {
     if (!found.some(write => write.at === match.index)) {
-      found.push({ at: match.index, table: match[1] ?? '', op: 'UPDATE', column: '?' })
+      found.push({ at: match.index, table: tableOf(match[1]), op: 'UPDATE', column: '?' })
     }
   }
   for (const match of text.matchAll(/\bon\s+conflict\b[^;]*?\bdo\s+update\s+set\b/g)) {
@@ -219,8 +219,8 @@ export function bodyWrites(source: string): Array<{ table: string; op: Grant['op
       found.push({ at: match.index, table: insert?.table ?? '?', op: 'UPDATE', column })
     }
   }
-  for (const match of text.matchAll(new RegExp(String.raw`\bmerge\s+into\s+(?:only\s+)?${TABLE}`, 'g'))) {
-    const table = match[1] ?? ''
+  for (const match of text.matchAll(new RegExp(String.raw`\bmerge\s+into\s+(?:only\s+)?${TABLE}`, 'gu'))) {
+    const table = tableOf(match[1])
     found.push({ at: match.index, table, op: 'INSERT' }, { at: match.index, table, op: 'DELETE' })
     const end = text.indexOf(';', match.index)
     const statement = text.slice(match.index, end < 0 ? text.length : end)
