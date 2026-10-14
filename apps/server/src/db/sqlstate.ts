@@ -7,7 +7,7 @@
 //          (feature_fence, job_fence, job_finish). The caller reloads the flags and decides again.
 //   HF002  a job's lease has gone to another worker or the sweeper (job_fence, job_finish).
 //   HF003  set_feature_flag(): the flag is locked; only a migration changes it.
-//   HF004  set_feature_flag(): the cohort names someone who isn't a person of this org (A8).
+//   HF004  set_feature_flag(): the change adds someone who isn't a person still at this org (A8).
 import { z } from 'zod'
 
 export const FEATURE_OFF = 'HF001'
@@ -31,6 +31,9 @@ export function sqlstateOf(error: unknown): string | undefined {
 // time (55P03), a transaction that ran out of time (25P04, though Postgres ends the connection
 // then, so it arrives as a lost connection), the server shutting down (57P01, 57P02, 57P03), a
 // connection failure (class 08) and a lost connection, which pg reports with no SQLSTATE at all.
+// A lost connection can hide a COMMIT that took effect, so whatever retries on one must be safe to
+// run twice: a job's outcome writes are guarded by its lease and state, and the api's 409 try_again
+// answers a request the client then repeats, which finds the change already made.
 const RETRYABLE = new Set(['40001', '40P01', '55P03', '25P04', '57P01', '57P02', '57P03'])
 const NETWORK = new Set(['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH'])
 // pg's messages for a connection that ended or never came: the only signal it gives.

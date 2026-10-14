@@ -845,20 +845,20 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
     async watcher => {
       await refused(
         setFlag('k01', false),
-        finishJob('11', '21', [1], 'effect:01'),
+        finishJob('11', '21', [1], 'effect:e01'),
         'That feature is switched off (k01).',
       )(watcher)
-      expect((await effects(watcher, 'effect:01')) === 0, 'the effect committed after the flag was switched off')
+      expect((await effects(watcher, 'effect:e01')) === 0, 'the effect committed after the flag was switched off')
       expect((await jobState(watcher, '11')) === 'running', 'the job finished after its flag was switched off')
     },
   ],
   [
     'T17 PRD-65: a flag change waits for a job finishing under it, and the effect commits first',
     async watcher => {
-      const { waited, error } = await race(watcher, finishJob('12', '22', [1], 'effect:02'), setFlag('k02', false))
+      const { waited, error } = await race(watcher, finishJob('12', '22', [1], 'effect:e02'), setFlag('k02', false))
       expect(waited, 'the flag change did not wait for the job holding its flag')
       expect(error === undefined, `the flag change failed: ${error}`)
-      expect((await effects(watcher, 'effect:02')) === 1, 'the effect did not commit')
+      expect((await effects(watcher, 'effect:e02')) === 1, 'the effect did not commit')
       expect((await jobState(watcher, '12')) === 'succeeded', 'the job did not finish')
       const revision = await scalar(watcher, "select revision::text as v from public.feature_flags where key = 'k02'")
       expect(revision === '2', `the flag change did not commit after it (revision ${revision})`)
@@ -903,10 +903,10 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
       // name only people still here).
       await refused(
         setFlag('k04', true, { people: ['b4'] }),
-        finishJob('14', '24', [1], 'effect:04'),
+        finishJob('14', '24', [1], 'effect:e04'),
         "That feature's flags have changed since this work checked them.",
       )(watcher)
-      expect((await effects(watcher, 'effect:04')) === 0, 'the effect committed after its person left the cohort')
+      expect((await effects(watcher, 'effect:e04')) === 0, 'the effect committed after its person left the cohort')
     },
   ],
   [
@@ -915,17 +915,17 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
       const enqueue: Step = {
         as: 'offboarding',
         sql: `insert into public.jobs (org_id, kind, feature_key, purpose, idempotency_key)
-              values ('${ORG}', 'test.effect', 'k05', 'accounts', 'effect:05')`,
+              values ('${ORG}', 'test.effect', 'k05', 'accounts', 'effect:e05')`,
       }
       const error = await alongside(enqueue, setFlag('k05', false))
       expect(error === undefined, `the flag change waited for, or failed beside, the enqueue: ${error}`)
-      expect((await effects(watcher, 'effect:05')) === 1, 'the job was not queued')
+      expect((await effects(watcher, 'effect:e05')) === 1, 'the job was not queued')
     },
   ],
   [
     'T15: the lease sweep passes a job its finishing transaction holds, and sweeps the rest',
     async watcher => {
-      const error = await alongside(finishJob('16', '26', [1], 'effect:06'), sweep(['16', '18'], ['18']))
+      const error = await alongside(finishJob('16', '26', [1], 'effect:e06'), sweep(['16', '18'], ['18']))
       expect(error === undefined, `the sweep waited for the finishing job, or took it: ${error}`)
       expect((await jobState(watcher, '16')) === 'succeeded', 'the job the sweep passed by did not finish')
       expect((await jobState(watcher, '18')) === 'queued', 'the sweep did not requeue the job whose lease ran out')
@@ -936,10 +936,10 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
     async watcher => {
       await refused(
         sweep(['17'], ['17']),
-        finishJob('17', '27', [1], 'effect:06b'),
+        finishJob('17', '27', [1], 'effect:e06b'),
         "That job is no longer this worker's to finish.",
       )(watcher)
-      expect((await effects(watcher, 'effect:06b')) === 0, 'the swept job committed its effect')
+      expect((await effects(watcher, 'effect:e06b')) === 0, 'the swept job committed its effect')
       expect((await jobState(watcher, '17')) === 'queued', 'the swept job is not queued')
     },
   ],
@@ -973,21 +973,21 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
     async watcher => {
       await refused(
         giveBack('1c', '2c', 1),
-        finishJob('1c', '2c', [1], 'effect:08'),
+        finishJob('1c', '2c', [1], 'effect:e08'),
         "That job is no longer this worker's to finish.",
       )(watcher)
-      expect((await effects(watcher, 'effect:08')) === 0, 'the job given back committed its effect')
+      expect((await effects(watcher, 'effect:e08')) === 0, 'the job given back committed its effect')
       expect((await jobState(watcher, '1c')) === 'queued', 'the job given back is not queued')
     },
   ],
   [
     'T15: a give-back after the job finished changes nothing',
     async watcher => {
-      const { waited, error } = await race(watcher, finishJob('1d', '2d', [1], 'effect:08b'), giveBack('1d', '2d', 0))
+      const { waited, error } = await race(watcher, finishJob('1d', '2d', [1], 'effect:e08b'), giveBack('1d', '2d', 0))
       expect(waited, 'the give-back did not wait for the finishing job')
       expect(error === undefined, `the give-back failed: ${error}`)
       expect((await jobState(watcher, '1d')) === 'succeeded', 'the finished job was given back')
-      expect((await effects(watcher, 'effect:08b')) === 1, 'the effect did not commit')
+      expect((await effects(watcher, 'effect:e08b')) === 1, 'the effect did not commit')
     },
   ],
   [
@@ -1228,7 +1228,7 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
     refused(
       deactivate('b6'),
       setFlag('k16', true, { people: ['b6'] }),
-      'A cohort can only name people who are still at this organisation.',
+      'A cohort can only add people who are still at this organisation.',
     ),
   ],
   [
@@ -1249,6 +1249,22 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
       },
       setFlag('k16', false, { user: id('c8') }),
       'Only an Owner or Admin can change a feature flag.',
+    ),
+  ],
+  [
+    // The people a change adds are judged against the cohort read before the flag's row is locked, so
+    // a change committed in between makes it try again (40001, the route's 409 try_again).
+    'T17: a cohort judged against a cohort that changed meanwhile is tried again',
+    refused(
+      {
+        as: 'app',
+        user: OWNER,
+        // b5 is still here; the no-op update holds its row, so the change below waits for this one.
+        sql: `update public.people set deactivated_at = null where id = '${id('b5')}' and deactivated_at is null;
+              select public.set_feature_flag('k16', true, 'cohort', array['${id('b9')}']::uuid[], '{}', 'race', null, null)`,
+      },
+      setFlag('k16', true, { people: ['b5'] }),
+      'This flag changed at the same moment. Try again.',
     ),
   ],
 ]

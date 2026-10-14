@@ -21,9 +21,11 @@ export interface PoolOptions {
 // How long the client waits for any one statement: a little more than the 30 s transaction_timeout,
 // which Postgres enforces first whenever it can still answer. This bound is for when it can't: a
 // connection whose peer has gone silent (a failover, a dropped network path) never hears Postgres's
-// error, and without it the call would wait until TCP gives up, about 15 minutes. The statement's
-// caller then sees 'Query read timeout', and the client ends itself and closes its socket
-// (BoundedClient below), so the pool opens a fresh connection for the next transaction. That
+// error, and without it the call would wait until TCP gives up, about 15 minutes. The client then
+// ends itself and closes its socket (BoundedClient below), so the pool opens a fresh connection for
+// the next transaction. A statement on its own fails with 'Query read timeout'; inside a
+// transaction the caller sees the ROLLBACK's error instead ('Client was closed and is not
+// queryable'), which sqlstate.ts counts as a lost connection. That
 // doesn't stop the statement on the server, which runs on until its transaction's own timeout ends
 // it (database.ts), or until Postgres finds the socket gone. So read-only work that raises its
 // transaction past 30 s must keep each statement under 31 s, or the client gives up on it.

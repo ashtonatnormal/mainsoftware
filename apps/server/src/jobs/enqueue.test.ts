@@ -53,9 +53,14 @@ const kind = defineJob({
 })
 const org = randomUUID()
 
-describe('T15 item 7 R2E2E-1: an idempotency key is ids and codes joined by colons', () => {
+describe('T15 item 7 R2E2E-1: an idempotency key is codes and uuids joined by colons', () => {
   it('accepts the keys the scheduler and the offboarding consumer make', async () => {
-    for (const key of [`run:${randomUUID()}`, `${randomUUID()}:sockets`, 'effect:06b', 'a.b_c-d']) {
+    for (const key of [
+      `run:${randomUUID()}`,
+      `${randomUUID()}:sockets`,
+      'effect:e06b',
+      `${randomUUID()}:sockets:again`,
+    ]) {
       expect(IDEMPOTENCY_KEY.test(key), key).toBe(true)
       const { trx, sent } = recording()
       await enqueue(trx, org, kind, { payload: {}, idempotencyKey: key })
@@ -74,6 +79,11 @@ describe('T15 item 7 R2E2E-1: an idempotency key is ids and codes joined by colo
       '',
       'a'.repeat(201),
       'person@example.com',
+      // Each part is a code or a uuid: not a slug, a number or a dotted name.
+      'priya-nair-resigned',
+      'run:6591234567',
+      'a.b_c-d',
+      'effect:06b',
     ]) {
       const { trx, sent } = recording()
       await expect(enqueue(trx, org, kind, { payload: {}, idempotencyKey: key }), key).rejects.toThrow(EnqueueRefused)

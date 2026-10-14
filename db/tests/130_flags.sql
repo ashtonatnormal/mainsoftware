@@ -151,7 +151,7 @@ select pg_temp.expect_error($$select pg_temp.set_flag('t.locked', false, 'org', 
 select pg_temp.expect_error($$select pg_temp.set_flag('no.such_flag', true, 'org', '{}', '{}')$$, '22023');
 select pg_temp.expect_error($$select pg_temp.set_flag(null, true, 'org', '{}', '{}')$$, '22023');
 select pg_temp.expect_error($$select pg_temp.set_flag('t', true, 'cohort', '{f2000000-0000-4000-8000-0000000000a8}', '{}')$$, 'HF004',
-                            'A cohort can only name people who are still at this organisation.');
+                            'A cohort can only add people who are still at this organisation.');
 -- R2E2E-2: nor anyone who has left (a9, deactivated), alone or beside someone still here.
 select pg_temp.expect_error($$select pg_temp.set_flag('t', true, 'cohort', '{f1000000-0000-4000-8000-0000000000a9}', '{}')$$, 'HF004');
 select pg_temp.expect_error($$select pg_temp.set_flag('t', true, 'cohort', '{f1000000-0000-4000-8000-0000000000a8,f1000000-0000-4000-8000-0000000000a9}', '{}')$$, 'HF004');
@@ -242,4 +242,22 @@ reset role;
 select pg_temp.act_as_job('1', 'hearth_job_offboarding');
 select pg_temp.expect_error($$select public.feature_fence('t', '{7}')$$, 'HF001', '%switched off (t)%');
 select pg_temp.expect_error($$select public.feature_fence('t.child', '{7,1}')$$, 'HF001', '%switched off (t)%');
+reset role;
+
+-- 10. Someone a cohort already names who then leaves never blocks the flag: it can still be switched
+-- off, resent or narrowed with them in it (they match nothing: evaluate.ts), and only a person the
+-- change adds must still be at the org (HF004).
+select pg_temp.act_as('1', 'a1');
+select pg_temp.check(pg_temp.set_flag('t', true, 'cohort', array[pg_temp.id('1', 'a6')], '{}') = 8,
+                     'naming a6 did not make revision 8');
+reset role;
+update public.people set deactivated_at = now(), deactivated_by = pg_temp.id('1', 'a1') where id = pg_temp.id('1', 'a6');
+select pg_temp.act_as('1', 'a1');
+select pg_temp.check(pg_temp.set_flag('t', false, 'cohort', array[pg_temp.id('1', 'a6')], '{}') = 9,
+                     'a leaver already in the cohort stopped the flag being switched off');
+select pg_temp.check(pg_temp.set_flag('t', false, 'cohort', array[pg_temp.id('1', 'a6'), pg_temp.id('1', 'a8')], '{}') = 10,
+                     'a leaver already in the cohort stopped someone still here being added');
+select pg_temp.expect_error($$select pg_temp.set_flag('t', false, 'cohort', '{f1000000-0000-4000-8000-0000000000a6,f1000000-0000-4000-8000-0000000000a8,f1000000-0000-4000-8000-0000000000a9}', '{}')$$,
+                            'HF004', 'A cohort can only add people who are still at this organisation.');
+select pg_temp.check(pg_temp.set_flag('t', false, 'org', '{}', '{}') = 11, 'dropping the cohort did not make revision 11');
 reset role;

@@ -462,7 +462,7 @@ create trigger schedule_runs_keep_history before update of reviewed_at, reviewed
 -- delay (a retry), queued at once and uncounted (give_backs counts those, so a job that can never
 -- finish ends), dead (no attempts left, or a failure that won't go away), or cancelled (its
 -- optional feature was switched off). reason is a code: why it was retried, cancelled or died. A
--- key makes adding the same job twice add it once; it is made of ids and codes joined by ':'
+-- key makes adding the same job twice add it once; it is made of codes and uuids joined by ':'
 -- (run:<uuid>, <uuid>:sockets), so it can't carry someone's details either.
 create table public.jobs (
   id uuid primary key default gen_random_uuid(),
@@ -473,7 +473,7 @@ create table public.jobs (
   subject_id uuid,
   payload jsonb not null default '{}' constraint jobs_payload_ids_only check (public.is_ids_only(payload)),
   idempotency_key text check (length(idempotency_key) between 1 and 200
-                               and idempotency_key ~ '^[a-z0-9_.-]+(:[a-z0-9_.-]+)*$'),
+                               and idempotency_key ~ '^([a-z][a-z0-9_]{0,62}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(:([a-z][a-z0-9_]{0,62}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))*$'),
   state text not null default 'queued' check (state in ('queued', 'running', 'succeeded', 'dead', 'cancelled')),
   attempts integer not null default 0 check (attempts >= 0),
   max_attempts integer not null default 5 check (max_attempts between 1 and 100),
@@ -641,8 +641,10 @@ revoke execute on function public.job_finish(uuid, uuid, bigint[]) from public;
 -- migration changes a lock. The flag's row is then taken FOR NO KEY UPDATE, which waits for the
 -- fences that hold it FOR SHARE but not for the jobs being queued for it (their foreign keys hold
 -- it FOR KEY SHARE), so a busy feature can still be switched off. A cohort names people of this
--- org who are still at it, and org-wide roles. It is kept sorted and without repeats, so the same cohort sent in
--- another order changes nothing. Returns the new revision (the same one when nothing changed, and
+-- org and org-wide roles; a person it adds must still be at the org, while one it already named who
+-- has since left stays named and matches nothing (the server's evaluate.ts), so a leaver never stops
+-- a flag being switched off or narrowed. It is kept sorted and without repeats, so the same cohort
+-- sent in another order changes nothing. Returns the new revision (the same one when nothing changed, and
 -- then nothing is written). Writes the audit event (ADM-06), naming who joined and left the
 -- cohort; the server appends the outbox event (flag.changed) in the same transaction and, after
 -- the commit, tells every process on Valkey. The messages can be shown as they are. Hearth's own
@@ -664,6 +666,8 @@ declare
   actor uuid := nullif(pg_catalog.current_setting('app.user_id', true), '')::uuid;
   flag public.feature_flags%rowtype;
   new_revision bigint;
+  added uuid[];
+  named_before uuid[];
 begin
   if org is null or actor is null then
     raise exception 'No org or user is set for this transaction' using errcode = 'insufficient_privilege';
@@ -687,15 +691,23 @@ begin
   end if;
   people := array(select distinct x from pg_catalog.unnest(coalesce(people, '{}')) x order by x);
   roles := array(select distinct x from pg_catalog.unnest(coalesce(roles, '{}')) x order by x);
-  -- Each person named must be of this org and still at it, read FOR SHARE (people before the flag's
-  -- row, in the lock order), so a deactivation in progress makes this wait and then refuse.
+  -- Each person the change adds must be of this org and still at it, read FOR SHARE (people before
+  -- the flag's row, in the lock order), so a deactivation in progress makes this wait and then
+  -- refuse. People the cohort already names are left as they are, whether or not they have left.
+  added := array(select x from pg_catalog.unnest(people) x where not (x = any (flag.cohort_people)));
   if (select pg_catalog.count(*) from (
         select 1 from public.people p
-        where p.org_id = org and p.id = any (people) and p.deactivated_at is null
-        for share) named) <> pg_catalog.cardinality(people) then
-    raise exception 'A cohort can only name people who are still at this organisation.' using errcode = 'HF004';
+        where p.org_id = org and p.id = any (added) and p.deactivated_at is null
+        for share) named) <> pg_catalog.cardinality(added) then
+    raise exception 'A cohort can only add people who are still at this organisation.' using errcode = 'HF004';
   end if;
+  named_before := flag.cohort_people;
   select * into flag from public.feature_flags f where f.org_id = org and f.id = flag.id for no key update;
+  -- The people added were judged against the cohort read before the lock; if another change moved it
+  -- meanwhile, the caller tries again (40001 answers 409 try_again).
+  if flag.cohort_people is distinct from named_before then
+    raise exception 'This flag changed at the same moment. Try again.' using errcode = 'serialization_failure';
+  end if;
   if flag.enabled = to_enabled and flag.audience = to_audience and flag.cohort_people = people
      and flag.cohort_roles = roles then
     return flag.revision;

@@ -90,6 +90,13 @@ select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key
 select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose, idempotency_key)
   values ('f1000000-0000-4000-8000-000000000000', 'test.other', 'core.system', 'service_operation',
           'reminder:Buy milk')$$, '23514', '%jobs_idempotency_key_check%');
+-- Each part is a code or a uuid, so neither a slug of someone's details nor a phone number passes.
+select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose, idempotency_key)
+  values ('f1000000-0000-4000-8000-000000000000', 'test.other', 'core.system', 'service_operation',
+          'priya-nair-resigned')$$, '23514', '%jobs_idempotency_key_check%');
+select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose, idempotency_key)
+  values ('f1000000-0000-4000-8000-000000000000', 'test.other', 'core.system', 'service_operation',
+          'run:6591234567')$$, '23514', '%jobs_idempotency_key_check%');
 
 -- 3. A job names a feature that has a flag in its org (23503), a person of its org (23503), and a
 -- payload of ids only (23514).
