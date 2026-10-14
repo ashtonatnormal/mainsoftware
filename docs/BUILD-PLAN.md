@@ -476,13 +476,13 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 | Step | What | Needs first | PRD rows |
 |---|---|---|---|
 | **A2.1** Embeddings store | Embeddings provider cleared (PRD-75); pgvector enabled; vector rows mirror the search ACL columns, partitioned by ACL container, on their own KMS key and in the retention cascade. | A0.2, C6.9, INF-BRAIN |  |
-| **A2.2** Org Brain indexer (consumer #2) | Bootstrap from enumerators and extractor anchors, then tail the outbox; restricted sessions indexed for participants only (D49) and privileged items never indexed; DM content only for participants' assistants; edits and deletes within 5 minutes; files, sheet rows, comments and slides; processing restrictions and the leaver decision honoured; throttled back-fill. | A2.1, C1.7, C4.2, C5.8 | BRAIN-01, BRAIN-03, BRAIN-04, BRAIN-09, BRAIN-10 (P1), CHAT-05, FILE-06, SHEET-44, SHEET-45, SLIDE-34, REC-07, PDPA-09 |
+| **A2.2** Org Brain indexer (consumer #2) | Bootstrap from enumerators and extractor anchors, then tail the outbox; restricted sessions indexed for participants only (D49) and privileged items never indexed; DM content only for participants' assistants and Rule 10 privileged assistants; edits and deletes within 5 minutes; files, sheet rows, comments and slides; processing restrictions and the leaver decision honoured; throttled back-fill. | A2.1, C1.7, C4.2, C5.8 | BRAIN-01, BRAIN-03, BRAIN-04, BRAIN-09, BRAIN-10 (P1), CHAT-05, FILE-06, SHEET-44, SHEET-45, SLIDE-34, REC-07, PDPA-09 |
 | **A2.3** Retrieval layer | retrieve(asker, audience, agent?, query) from the access-core functions with live re-check (Rules 1-8); provenance through the C0 registry; ai.retrieval per item; the search entry point becomes retrieval (B.4); AI-cache revocation handlers; sheet rules (SHEET-37). | A2.2, C0.4, C0.3, INF-RETRIEVAL | BRAIN-02, BRAIN-08, SRCH-04, SHEET-37, ACC-05, PDPA-06 |
 | **A2.4** Leak and Rule 6/7 gates | Every access-rules todo implemented; Rule 6 (60 s) and Rule 7 (5 minutes) proven on the C6 harness; this is the zero-leak gate for A3-A5. | A2.3, C6.3 |  |
 
 **Done when:**
 - [ ] The indexer bootstraps and tails; vectors share the search ACL columns and pre-filter.
-- [ ] Restricted sessions indexed for participants only and kept out of shared answers, agents, summaries and insights; privileged items never indexed; DM content only for participants' assistants.
+- [ ] Restricted sessions indexed for participants only and kept out of shared answers, agents, summaries and insights; privileged items never indexed; DM content only for participants' assistants and Rule 10 privileged assistants.
 - [ ] Every access-rule todo green; revocation 60 s, deletion 5 minutes, freshness 2 minutes; ai.retrieval logged per item.
 
 **Not in this stage:** No AI answers, assistant or agents.
@@ -527,7 +527,7 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 | **A4.2** AI Today, digest and nudges | AI actionable providers, ranker and Draft in the Today registry; the AI digest in 'Since you were last here'; private nudges with frequency and quiet-hour controls in the reserved categories. | A4.1, C1.9, C0.14 | PA-04, PA-05, PA-09, NOTIF-02, NOTIF-04 |
 | **A4.3** Drafts and prep briefs | Drafts into the server-side composer drafts with provenance; prep briefs in the event page's 'Last time' slot. | A4.1, C1.2, C3.3 | PA-06, PA-08, CAL-08 |
 | **A4.4** Memory | Memory the person can view, edit, delete and switch off; deleted at offboarding. | A4.1, C0.5 | PA-10, ACC-05 |
-| **A4.5** Case assist (P1) | Rule 10: AI help in the Compliance and DPO consoles, scoped to one open case; every item read logged to the case; no memory between cases, no Org Brain writes, output kept in the case record. | A4.1, C6.1, C1.11 | ADM-15 |
+| **A4.5** Privileged assistants (P1) | Rule 10: the DPO's and Compliance Officers' assistants retrieve across all content, DMs and restricted sessions included, through the retrieval layer with a role-based grant; each item beyond the holder's own access logged as a privileged read; access ends within 60 s of the role being removed; register and notice updated first. | A4.1, A2.3, C6.1 | ADM-15 |
 
 **Done when:**
 - [ ] The assistant never acts (tested on every tool path) and re-checks access each turn.
@@ -687,7 +687,7 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 | Search rows with container ACLs, anchors, enumerators, type registry | C1.7 | A1 transcripts; A2 vectors and retrieval entry |
 | Search bar with hidden Ask slot | C1.7 | A3 Ask; A4 conversational Ask |
 | Today actionable registry and 'Since you were last here' | C1.9 | A4 AI actionables and digest |
-| Sealed Rule 9 service | C1.11 | A2 privileged access never indexed; A4 Rule 10 case assist (ADM-15) |
+| Sealed Rule 9 service | C1.11 | A2 privileged access never indexed; A4 Rule 10 privileged assistants (ADM-15) |
 | Deterministic sensitive-data detector | C1.14 | A1 transcript spans; A4 memory warning |
 | Task origin field and task.overdue | C2.1 | A3 action-item metric; A5 triggers |
 | LiveKit provider.send rows | C2.2 | A1 OpenAI sends; A2 PDPA-06 rows |
@@ -1360,7 +1360,7 @@ All 305 requirement rows in `docs/PRD.md`, each placed in the earliest stage tha
 | PA-09 | P0 | ai | Proactive private nudges with frequency and quiet-hour controls | PA-04, PA-06, NOTIF-01, NOTIF-03, INF-NOTIFY |  |
 | PA-10 | P0 | ai | Personal memory: view, edit, delete, turn off | PA-01, PDPA-15, INF-KMS, INF-AUDIT |  |
 | PA-12 | P1 | ai | Share an assistant answer into a channel, regenerated for audience | PA-07, BRAIN-08, INF-RETRIEVAL, CHAT-05 |  |
-| ADM-15 | P1 | ai | Case assist in the Compliance and DPO consoles (Rule 10) | ADM-12, PDPA-05, ADM-06, INF-MODEL |  |
+| ADM-15 | P1 | ai | Privileged assistants for DPO and Compliance Officers (Rule 10) | ADM-12, PDPA-05, ADM-06, INF-MODEL |  |
 
 ### A5 rows — Specialist agents and Agent Studio
 
