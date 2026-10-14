@@ -16,20 +16,17 @@
 //   - it_events, a copy of each outbox event's position and what it names, made by a trigger on
 //     the outbox, so a run whose clean-up deletes events can still be swept.
 // A write that rolls back takes its record with it, so only committed writes are checked. The
-// harness's own writes run as the superuser, which isn't a runtime role, and are skipped; its age()
-// switches every trigger off (session_replication_role = replica).
+// harness's own writes run as the superuser the sweep reads with, and are skipped; its age()
+// switches every trigger off (session_replication_role = replica). A write by any other role that
+// isn't a runtime role (the worker's login without a job role, say) is a problem, so a role added
+// later can't go unchecked.
 import type { EmittedEventType } from '@hearth/shared'
 import type { Client as PgClient } from 'pg'
+import { JOB_ROLES } from '#src/db/roles.ts'
 import { coverageOf, EMITTED_BY, MATCH, type WriteOp } from '#src/outbox/coverage.ts'
 
 // The roles a runtime transaction acts as: hearth_app's login, and the worker's job roles.
-export const RUNTIME_ROLES = [
-  'hearth_app',
-  'hearth_queue',
-  'hearth_job_offboarding',
-  'hearth_job_partitions',
-  'hearth_job_purge',
-] as const
+export const RUNTIME_ROLES: readonly string[] = ['hearth_app', ...JOB_ROLES]
 
 export async function installWriteTracking(superuser: Pick<PgClient, 'query'>): Promise<void> {
   await superuser.query(`
@@ -126,8 +123,7 @@ type EventRow = { tx_id: string; type: string; entity_id: string; subject_ids: s
 export async function sweepWrites(superuser: Pick<PgClient, 'query'>): Promise<Sweep> {
   const writes = (
     await superuser.query<WriteRow>(
-      'select w.xid::text as xid, w.table_name, w.op, w.columns, w.role, w.row_ref from it_writes w where w.role = any($1) order by w.xid, w.table_name',
-      [RUNTIME_ROLES],
+      'select w.xid::text as xid, w.table_name, w.op, w.columns, w.role, w.row_ref from it_writes w where w.role <> session_user order by w.xid, w.table_name',
     )
   ).rows
   const events = (
@@ -138,6 +134,12 @@ export async function sweepWrites(superuser: Pick<PgClient, 'query'>): Promise<S
   const problems: string[] = []
   let checked = 0
   for (const write of writes) {
+    if (!RUNTIME_ROLES.includes(write.role)) {
+      problems.push(
+        `transaction ${write.xid} wrote ${write.table_name} (${write.op}) as ${write.role}, which isn't a runtime role (testing/writes.ts RUNTIME_ROLES)`,
+      )
+      continue
+    }
     const parts = write.op === 'UPDATE' ? (write.columns ?? []).map(column => ({ column })) : [{ column: undefined }]
     for (const { column } of parts) {
       const what = `${write.table_name}${column === undefined ? '' : `.${column}`} (${write.op}) of ${write.row_ref ?? '?'} as ${write.role}`

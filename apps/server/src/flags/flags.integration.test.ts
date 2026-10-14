@@ -9,7 +9,10 @@
 // `npm run test:integration` runs it with the stack up (`docker compose up -d --wait`).
 //
 // Every bound is a number far above what is expected (10 s against milliseconds by Valkey, or about
-// 2 s by the poll), and each case prints what it measured. Waits poll every 20 ms up to a deadline.
+// 2 s by the poll; 1 s for copies that poll only every 60 s, so the Valkey path itself is proved), and
+// each case prints what it measured. Waits poll every 20 ms up to a deadline. The cancellation cases
+// hold one of the job's posts open across the change, so "no post after it" is measured from the
+// flag's commit, not the reply (acrossChange()).
 // The test flags (it.optional, it.essential, it.ai) are the harness's (testing/stack.ts), which
 // the route takes through its injectable registry (A5); the production flags are all locked.
 //
@@ -49,7 +52,10 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 // A job that posts every 50 ms through ctx.commit() until it is stopped (T15 item 9, T17 item 8); run again
 // after it was given back (a give-back doesn't count the attempt), it finishes after 3 more posts.
 // Its gate is checked at every post, and every commit ends with the fence, so no post can commit
-// after its flag changed.
+// after its flag changed. Each post records its flag's revision as its own transaction read it
+// (READ COMMITTED: as of the insert), after waiting on the job's advisory lock, which a test holds
+// to keep a post open across a change (acrossChange()): a post that commits after the change has
+// read the new revision.
 const posting = (name: string, feature: string): JobKind =>
   defineJob({
     kind: name,
@@ -69,7 +75,9 @@ const posting = (name: string, feature: string): JobKind =>
       for (let n = 1; ; n++) {
         ctx.step('post')
         await ctx.commit(async trx => {
-          await sql`insert into it_posts (org_id, job_id, n) values (${ctx.job.orgId}, ${ctx.job.id}, ${n})`.execute(
+          await sql`select pg_advisory_xact_lock_shared(hashtextextended(${ctx.job.id}, 0))`.execute(trx)
+          await sql`insert into it_posts (org_id, job_id, n, revision) values (${ctx.job.orgId}, ${ctx.job.id}, ${n},
+            (select f.revision from feature_flags f where f.org_id = ${ctx.job.orgId} and f.key = ${feature}))`.execute(
             trx,
           )
         })
@@ -200,26 +208,53 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
   })
 
   it('C0.6 Done: an Admin turns a flag off through the route, and every process has it within 10 s (by Valkey)', async () => {
-    const before = Number((await flagRow('it.optional'))?.revision)
-    for (const [, cache] of caches()) expect(cache.isOn(s.org.id, 'it.optional', null)).toBe(true)
-    const started = Date.now()
-    const reply = await set(adminClient, { key: 'it.optional', enabled: false })
-    expect(reply.status).toBe(200)
-    expect(reply.body).toEqual({ key: 'it.optional', enabled: false, revision: before + 1 })
-    const answeredAt = Date.now() - started
-    const times: Record<string, number> = {}
-    for (const [name, cache] of caches()) {
-      times[name] = await within(10_000, () => cache.revisionsOf(s.org.id, 'it.optional')?.at(-1) === before + 1)
-      expect(cache.isOn(s.org.id, 'it.optional', null), name).toBe(false)
+    // Copies that poll only every 60 s, so only the flags channel can bring them the change within
+    // 1 s: two subscribed as the harness subscribes the api's and realtime's (main.ts's own wiring
+    // is scripts/check-server.sh's), and a worker instance on its own wiring (worker/index.ts).
+    const slow = { pollMs: 60_000 }
+    const subscribers = async () =>
+      Number(((await s.valkey.call('PUBSUB', 'NUMSUB', s.names.flags)) as [string, number])[1])
+    const already = await subscribers()
+    const slowWorker = await s.startWorker({ flags: slow, productionConsumers: false })
+    const listening: [string, FlagCache][] = [
+      ['api (60 s poll)', s.flagCache({ ...slow, subscribe: true })],
+      ['realtime (60 s poll)', s.flagCache({ ...slow, subscribe: true })],
+      ['worker (60 s poll)', slowWorker.worker.flags],
+    ]
+    try {
+      await slowWorker.ready()
+      for (const [, cache] of listening.slice(0, 2)) await cache.track(s.org.id)
+      await eventuallyAsync(subscribers, n => n >= already + 3)
+      await within(5000, () => listening.every(([, cache]) => cache.confirmedAt(s.org.id) !== undefined))
+
+      const before = Number((await flagRow('it.optional'))?.revision)
+      for (const [, cache] of [...caches(), ...listening]) expect(cache.isOn(s.org.id, 'it.optional', null)).toBe(true)
+      const started = Date.now()
+      const reply = await set(adminClient, { key: 'it.optional', enabled: false })
+      expect(reply.status).toBe(200)
+      expect(reply.body).toEqual({ key: 'it.optional', enabled: false, revision: before + 1 })
+      const answeredAt = Date.now() - started
+      const times: Record<string, number> = {}
+      for (const [name, cache] of listening) {
+        times[name] = await within(1000, () => cache.revisionsOf(s.org.id, 'it.optional')?.at(-1) === before + 1)
+        expect(cache.isOn(s.org.id, 'it.optional', null), name).toBe(false)
+      }
+      for (const [name, cache] of caches()) {
+        times[name] = await within(10_000, () => cache.revisionsOf(s.org.id, 'it.optional')?.at(-1) === before + 1)
+        expect(cache.isOn(s.org.id, 'it.optional', null), name).toBe(false)
+      }
+      console.info(`flag change: answered in ${answeredAt} ms; reached ${JSON.stringify(times)} ms after the reply`)
+      expect(Math.max(...Object.values(times))).toBeLessThan(10_000)
+      // Every process logged it (each copy reads the same row).
+      expect(
+        s.logs.filter(
+          line => line.event === 'flags_changed' && line.key === 'it.optional' && line.revision === before + 1,
+        ).length,
+      ).toBeGreaterThanOrEqual(3)
+    } finally {
+      await slowWorker.stop()
+      for (const [, cache] of listening.slice(0, 2)) cache.stop()
     }
-    console.info(`flag change: answered in ${answeredAt} ms; reached ${JSON.stringify(times)} ms after the reply`)
-    expect(Math.max(...Object.values(times))).toBeLessThan(10_000)
-    // Every process logged it (each copy reads the same row).
-    expect(
-      s.logs.filter(
-        line => line.event === 'flags_changed' && line.key === 'it.optional' && line.revision === before + 1,
-      ).length,
-    ).toBeGreaterThanOrEqual(3)
   })
 
   it('C0.6 Done: with the api’s publish lost, every process still has the change within 10 s, by the poll alone', async () => {
@@ -411,6 +446,36 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
   })
   const posted = async (job: string) =>
     (await s.query<{ n: number }>('select count(*)::int as n from it_posts where job_id = $1', [job]))[0]?.n ?? 0
+  // The job's posts that read its flag at this revision or later: committed after the change.
+  const postedFrom = async (job: string, revision: number) =>
+    (
+      await s.query<{ n: number }>('select count(*)::int as n from it_posts where job_id = $1 and revision >= $2', [
+        job,
+        revision,
+      ])
+    )[0]?.n ?? 0
+  // Makes a change while one of the job's posts is open: holds the job's advisory lock, waits until a
+  // post is waiting on it (its insert not yet made), makes the change, then lets the post go on. The
+  // post then reads the new revision, so only the fence (job_fence) keeps it from committing; the
+  // flag's commit, not the reply, is what "after the change" is measured from (PRD-65).
+  async function acrossChange<T>(job: string, change: () => Promise<T>): Promise<T> {
+    await s.query('select pg_advisory_lock(hashtextextended($1, 0))', [job])
+    try {
+      await eventuallyAsync(
+        async () =>
+          (
+            await s.query<{ n: number }>(
+              `select count(*)::int as n from pg_locks l join pg_database d on d.oid = l.database
+               where l.locktype = 'advisory' and not l.granted and d.datname = current_database()`,
+            )
+          )[0]?.n ?? 0,
+        n => n >= 1,
+      )
+      return await change()
+    } finally {
+      await s.query('select pg_advisory_unlock(hashtextextended($1, 0))', [job])
+    }
+  }
   const jobOf = async (id: string) =>
     (
       await s.query<{ state: string; reason: string | null; attempts: number }>(
@@ -423,17 +488,20 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
       enqueue(trx, s.org.id, kind, { payload: {}, ...(subjectId === undefined ? {} : { subjectId }) }),
     )
 
-  it('T15 item 9 T17 item 8: an optional feature turned off through the route cancels its running job within 10 s; no post commits after the reply', async () => {
+  it('T15 item 9 T17 item 8: an optional feature turned off through the route cancels its running job within 10 s; no post commits after the change', async () => {
     const job = await queue(postsOptional)
-    await within(10_000, () => true)
     await eventuallyAsync(
       () => posted(job),
       n => n >= 3,
     )
     const started = Date.now()
-    const reply = await set(adminClient, { key: 'it.optional', enabled: false })
+    let atChange = 0
+    const reply = await acrossChange(job, async () => {
+      atChange = await posted(job)
+      return set(adminClient, { key: 'it.optional', enabled: false })
+    })
     expect(reply.status).toBe(200)
-    const atReply = await posted(job)
+    const off = (reply.body as { revision: number }).revision
     try {
       await eventuallyAsync(
         () => jobOf(job),
@@ -442,9 +510,9 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
       console.info(`turned off: the job ended ${Date.now() - started} ms after the request`)
       expect(Date.now() - started).toBeLessThan(10_000)
       expect(await jobOf(job)).toMatchObject({ state: 'cancelled', reason: 'flag_off' })
-      expect(await posted(job)).toBe(atReply)
       await sleep(2000)
-      expect(await posted(job)).toBe(atReply)
+      expect(await postedFrom(job, off)).toBe(0)
+      expect(await posted(job)).toBe(atChange)
     } finally {
       expect((await set(adminClient, { key: 'it.optional', enabled: true })).status).toBe(200)
     }
@@ -456,8 +524,12 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
       () => posted(job),
       n => n >= 3,
     )
-    expect((await set(adminClient, { key: 'it.essential', enabled: false })).status).toBe(200)
-    const atReply = await posted(job)
+    let atReply = 0
+    const reply = await acrossChange(job, async () => {
+      atReply = await posted(job)
+      return set(adminClient, { key: 'it.essential', enabled: false })
+    })
+    expect(reply.status).toBe(200)
     try {
       const back = await eventuallyAsync(
         () => jobOf(job),
@@ -466,6 +538,7 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
       expect(back).toMatchObject({ reason: 'flag_off', attempts: 0 })
       await sleep(1500)
       expect(await jobOf(job)).toMatchObject({ state: 'queued', attempts: 0 })
+      expect(await postedFrom(job, (reply.body as { revision: number }).revision)).toBe(0)
       expect(await posted(job)).toBe(atReply)
     } finally {
       expect((await set(adminClient, { key: 'it.essential', enabled: true })).status).toBe(200)
@@ -492,9 +565,12 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
         n => n >= 3,
       )
       const started = Date.now()
-      const narrowed = await set(adminClient, { key: 'it.optional', enabled: true, audience: 'cohort', people: [b.id] })
+      let atReply = 0
+      const narrowed = await acrossChange(forA, async () => {
+        atReply = await posted(forA)
+        return set(adminClient, { key: 'it.optional', enabled: true, audience: 'cohort', people: [b.id] })
+      })
       expect(narrowed.status).toBe(200)
-      const atReply = await posted(forA)
       const bAtReply = await posted(forB)
       await eventuallyAsync(
         () => jobOf(forA),
@@ -504,6 +580,7 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
       expect(Date.now() - started).toBeLessThan(10_000)
       expect(await jobOf(forA)).toMatchObject({ reason: 'not_in_cohort' })
       await sleep(1000)
+      expect(await postedFrom(forA, (narrowed.body as { revision: number }).revision)).toBe(0)
       expect(await posted(forA)).toBe(atReply)
       // B's job carries on: it posts after the reply. (A post whose commit was in flight across the
       // change is refused by the fence and the job given back at once, uncounted, to run on.)

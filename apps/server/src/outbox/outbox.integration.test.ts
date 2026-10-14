@@ -85,7 +85,7 @@ const eventsInOrder = () =>
   )
 const deliveries = (name: string) =>
   s.query<{ event_id: string; type: string }>(
-    'select d.event_id::text as event_id, d.type from it_deliveries d where d.consumer = $1 order by d.round_xid, d.event_id',
+    'select d.event_id::text as event_id, d.type from it_deliveries d where d.consumer = $1 order by d.seq',
     [name],
   )
 const checkpoint = async (name: string) =>
@@ -552,7 +552,7 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
         const order = await s.query<{ tx_id: string; id: string; known: boolean }>(
           `select e.tx_id::text, d.event_id::text as id, e.id is not null as known from it_deliveries d
            left join outbox_events e on e.id = d.event_id
-           where d.consumer = 'it_w6' order by d.round_xid, e.tx_id, e.id`,
+           where d.consumer = 'it_w6' order by d.seq`,
         )
         expect(order.every(row => row.known)).toBe(true)
         for (let n = 1; n < order.length; n++) {

@@ -4,8 +4,10 @@
 // consumer run as, so no test role is created on the shared server; grants are per database, so
 // nothing reaches another run's. None deduplicates where a duplicate must show:
 //   it_job_effects   one row per committed effect of a job (no unique constraint)
-//   it_posts         one row per post an it.posts job committed
-//   it_deliveries    every event a consumer round committed, with the round's transaction id
+//   it_posts         one row per post an it.posts job committed, with its flag's revision as the
+//                    post's own transaction read it
+//   it_deliveries    every event a consumer round committed, with the round's transaction id and
+//                    a sequence in the order each was handled (so an in-order check needn't sort)
 //   it_effects       a deduplicated one-off effect per (consumer, event), standing in for a push
 //   it_projection    a convergent projection of each person: left, live sessions, passkeys
 // and it_fail_next, whose actions make the next audit row with that action fail, so a test can make
@@ -20,10 +22,11 @@ export async function installJobTables(s: Pick<Stack, 'query'>): Promise<void> {
     create table if not exists it_job_effects (
       org_id uuid not null, job_id uuid not null, n integer not null, at timestamptz not null default clock_timestamp());
     create table if not exists it_posts (
-      org_id uuid not null, job_id uuid not null, n integer not null, at timestamptz not null default clock_timestamp());
+      org_id uuid not null, job_id uuid not null, n integer not null, revision bigint not null,
+      at timestamptz not null default clock_timestamp());
     create table if not exists it_deliveries (
       org_id uuid not null, consumer text not null, event_id bigint not null, type text not null,
-      round_xid xid8 not null default pg_current_xact_id());
+      round_xid xid8 not null default pg_current_xact_id(), seq bigint generated always as identity);
     create table if not exists it_effects (
       org_id uuid not null, consumer text not null, event_id bigint not null, type text not null,
       unique (consumer, event_id));
@@ -48,6 +51,8 @@ export async function installJobTables(s: Pick<Stack, 'query'>): Promise<void> {
     await s.query(`create policy org_isolation on ${table} ${POLICY}`)
     await s.query(`grant select, insert, update, delete on ${table} to hearth_job_offboarding`)
   }
+  // What a post records: its flag's revision.
+  await s.query('grant select (org_id, key, revision) on feature_flags to hearth_job_offboarding')
   // What the projection re-reads: whether someone has left, their live sessions, their passkeys.
   await s.query('grant select (revoked_at, expires_at) on sessions to hearth_job_offboarding')
   await s.query('grant select (id, org_id, user_id, removed_at) on passkeys to hearth_job_offboarding')
