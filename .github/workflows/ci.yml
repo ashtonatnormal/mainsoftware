@@ -135,8 +135,8 @@ jobs:
         run: scripts/check-migration-order.sh "$BASE"
       # Builds a scratch database from every file in db/migrations/ with the migrator production
       # uses, in one transaction, from a session that can only act as hearth_owner, then checks it
-      # against CLAUDE.md's Database rules (org_id, RLS, views, grants, functions, ownership,
-      # hearth_app's attributes).
+      # against CLAUDE.md's Database rules (org_id, RLS, views, grants, functions, ownership, and
+      # that no runtime role, hearth_app, the worker's login or a job role among them, can skip RLS).
       - run: scripts/check-migrations.sh
       # The migrator itself, against throwaway databases: it refuses a migration that commits or
       # leaves another role in place, rolls a failed batch back, fails fast on a role it can't
@@ -153,7 +153,9 @@ jobs:
       # a device signed out while a session starts; from C0.5, a session, device or passkey for
       # someone leaving, a session lookup during a deactivation, ending someone's sessions or
       # resetting their PIN during a sign-in, a number removed during a sign-in, and an admin
-      # acting while being deactivated), in two connections to a throwaway database.
+      # acting while being deactivated; from C0.6, the queue's fences, leases, claims, schedulers
+      # and consumer rounds against flag changes and each other, and the outbox's horizon), in two
+      # connections to a throwaway database.
       - run: node apps/server/scripts/check-concurrency.ts
       # The catalogues in code match the database (C0.6): every write grant of every runtime role,
       # every function one can run and every SECURITY DEFINER and trigger function is covered by
