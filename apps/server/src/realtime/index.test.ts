@@ -73,7 +73,7 @@ describe('C0.5 T5 ACC-05 the realtime re-check: which sessions are still live', 
     )
   })
 
-  it('throws any other failure, so the re-check keeps the sockets', async () => {
+  it('throws any other failure, so the re-check counts as failed and closes only what it can no longer confirm in time (socket.ts)', async () => {
     const pool = scriptedPool(statement => {
       if (isPrincipalRead(statement)) return [{ id: SYSTEM }]
       if (isRecheck(statement)) return pgError('57P01')

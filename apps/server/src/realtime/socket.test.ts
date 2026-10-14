@@ -7,10 +7,15 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { WebSocket } from 'ws'
 import { buildApp } from '#src/app.ts'
 import { sha256 } from '#src/auth/crypto.ts'
-import { SOCKET_RECHECK_MS } from '#src/auth/policy.ts'
+import { SOCKET_RECHECK_MS, SOCKET_REVOKE_MS } from '#src/auth/policy.ts'
 import type { SessionIds } from '#src/db/pre-org.ts'
 import { createLogger } from '#src/logger.ts'
-import { attachSocketServer, MAX_FRAME_BYTES, type SocketServerOptions } from '#src/realtime/socket.ts'
+import {
+  attachSocketServer,
+  MAX_FRAME_BYTES,
+  RECHECK_TIMEOUT_MS,
+  type SocketServerOptions,
+} from '#src/realtime/socket.ts'
 
 const APP_ORIGIN = 'https://hearth.example.com'
 const USER_CONTENT_ORIGIN = 'https://content.hearth.example.net'
@@ -326,6 +331,43 @@ describe('C0.5 T5 ACC-05 closing a session’s sockets', () => {
       await until(() => server.counts().open === 0)
       expect(server.counts()).toMatchObject({ closedUnchecked: 1, closedRecheck: 0, closedRevoked: 0 })
       expect(logs).toContainEqual(expect.objectContaining({ event: 'ws_closed', cause: 'unchecked', sockets: 1 }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('T5 ACC-05 T14: at the production timings one failed re-check closes nothing, even one that hangs to its deadline, and failures in a row close within 60 s', async () => {
+    // Every timer and the clock are fake, so a re-check can hang for its full 10 s deadline.
+    vi.useFakeTimers({
+      toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date', 'performance'],
+    })
+    try {
+      let answer: 'live' | 'hang' | 'fail' = 'live'
+      const stillLive = vi.fn<SocketServerOptions['stillLive']>(async sessions => {
+        if (answer === 'hang') return new Promise<Set<string>>(() => {})
+        if (answer === 'fail') throw new Error('connection refused')
+        return new Set(sessions.map(session => session.sessionId))
+      })
+      // No timing overrides: SOCKET_RECHECK_MS, RECHECK_TIMEOUT_MS and SOCKET_REVOKE_MS.
+      const { url, server } = await start({ stillLive })
+      const { ws, closed } = await opened(url)
+      // The first re-check confirms the session.
+      await vi.advanceTimersByTimeAsync(SOCKET_RECHECK_MS)
+      const confirmed = SOCKET_RECHECK_MS
+      expect(stillLive).toHaveBeenCalledTimes(1)
+      // The next hangs until its deadline, the latest a failure can come: nothing closes.
+      answer = 'hang'
+      await vi.advanceTimersByTimeAsync(SOCKET_RECHECK_MS + RECHECK_TIMEOUT_MS)
+      expect(stillLive).toHaveBeenCalledTimes(2)
+      expect(ws.readyState).toBe(WebSocket.OPEN)
+      expect(server.counts()).toMatchObject({ closedUnchecked: 0 })
+      // With every re-check failing from then on, it closes no later than 60 s after the
+      // confirmation.
+      answer = 'fail'
+      const now = confirmed + SOCKET_RECHECK_MS + RECHECK_TIMEOUT_MS
+      await vi.advanceTimersByTimeAsync(confirmed + SOCKET_REVOKE_MS - now)
+      expect(await closed).toEqual({ code: 1013, reason: 'try again later' })
+      expect(server.counts()).toMatchObject({ closedUnchecked: 1 })
     } finally {
       vi.useRealTimers()
     }
