@@ -655,6 +655,11 @@ export const RULE_9: readonly RuleCase[] = [
   ai(
     'R9-18',
     'A2.3, A2.4',
-    'Rule 9 B.4: retrieval implements Rules 1 to 8 and never returns content only privileged access can reach',
+    'Rule 9 B.4: retrieval implements Rules 1 to 8 and never returns content only privileged access can reach, the Rule 10 grant aside',
+  ),
+  ai(
+    'R9-19',
+    'A2.3, A4.5',
+    'Rule 10 ADM-15 D48: only a DPO or Compliance Officer’s own assistant, answering privately, gets privileged-only items; each is logged as a privileged read, and the grant ends within 60 s of the role’s removal',
   ),
 ]

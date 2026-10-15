@@ -17,7 +17,7 @@ Hearth is an internal work suite (chat, drop-in voice rooms, meetings, calendar,
 - Recording is never hidden (Principle 6): every room and call UI shows the recording indicator.
 - The personal assistant suggests and drafts; it never sends, edits, creates or deletes for a user (D16).
 - Content is data, not instructions (Rule 8).
-- Privileged access (Rule 9) happens only in the DPO and Compliance consoles, against a logged case with a stated reason. The only AI that may read privileged content is the personal assistant of a DPO or Compliance Officer (Rule 10, ADM-15, D48), with every item beyond the holder's own access logged as a privileged read. No other AI feature ever reads it.
+- People's privileged reads (Rule 9) happen only in the DPO and Compliance consoles, against a logged case with a stated reason. The only other privileged path, and the only AI that may read privileged content, is the personal assistant of a DPO or Compliance Officer (Rule 10, ADM-15, D48), with every item beyond the holder's own access logged as a privileged read. No other AI feature ever reads it.
 
 ## Git
 - Never commit directly to `main`. Create a feature branch.
