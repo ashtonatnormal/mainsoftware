@@ -497,7 +497,7 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 
 | Step | What | Needs first | PRD rows |
 |---|---|---|---|
-| **A3.1** Meeting notes | Notes for substantive sessions (D27) from transcripts and slides, by system:hearth with the AI marker, in the existing session card or meeting chat, and delivered to each participating org member (never guests) as a notification and a Today card (REC-24); regenerated as versions that keep human edits; an incomplete-transcript marker; notes retention class. | A1.1, A2.4, C2.8, C3.3 | REC-11, REC-12, REC-13, REC-24, AMB-02, ADM-07 |
+| **A3.1** Meeting notes | Notes for substantive sessions (D27) from transcripts and slides, by system:hearth with the AI marker, in the existing session card or meeting chat, or for a DM or group-DM call in the conversation if every member took part and otherwise on the participant-only session page (REC-13), and delivered to each participating org member (never guests) as a notification and a Today card (REC-24); regenerated as versions that keep human edits; an incomplete-transcript marker; notes retention class. | A1.1, A2.4, C2.8, C3.3 | REC-11, REC-12, REC-13, REC-24, AMB-02, ADM-07 |
 | **A3.2** Action items to inbox | REC-14 action items through the C3.5 producer with Rule 5 visibility; the inbox unhidden; the action-items-closed metric with a notice update. | A3.1, C3.5 | REC-14, TASK-06, ADM-14 |
 | **A3.3** Ask | Ask in the SRCH-01 bar with citations; Ask this meeting (P1); who knows about X (P1); AI conversation retention and collector (PDPA-15); phone acceptance for Ask. | A2.4, A0.4, C1.7 | SRCH-01, SRCH-03, SRCH-05, REC-17, PDPA-15, NFR-02 |
 | **A3.4** Catch-up and summaries | Catch me up from read cursors (AMB-01); per-scope summaries, entities and the decision log (P1). | A2.4, A0.4 | AMB-01, BRAIN-05, BRAIN-06, BRAIN-07 |
@@ -507,7 +507,7 @@ Nothing in this part starts until the core is done. A0 turns on the ability to c
 | **A3.8** AI quick replies | AI quick replies in the composer chip slot behind ai.quick_replies. | A0.4, C1.2 | CHAT-08 |
 
 **Done when:**
-- [ ] Notes in session cards and meeting chats, and delivered to each participating org member (not guests) as a notification and a Today card, within 5 minutes; PRD-60 quality on 50+ sessions; restricted notes stay on the session page.
+- [ ] Notes in session cards and meeting chats, or in the REC-13 DM or group-DM destination, and delivered to each participating org member (not guests) as a notification and a Today card, within 5 minutes; PRD-60 quality on 50+ sessions; restricted notes stay on the session page.
 - [ ] Action items in the inbox with provenance; restricted origins owner-only.
 - [ ] Every AI output shows marker and sources; Ask passes the leak and phone suites; sheet figures come from the engine.
 
