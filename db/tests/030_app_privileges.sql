@@ -2,8 +2,11 @@
 -- it can use on every table, column, sequence and function outside Postgres's own schemas,
 -- however it got it (a grant to it, to PUBLIC, or through a role), so any new grant must be added
 -- here on purpose. Anything not listed (UPDATE or DELETE on audit_events, SELECT on
--- data_access_events, choosing a log entry's time, any grant on a partition) fails. Nothing may be
--- granted to PUBLIC at all, and hearth_app can create no schema object or temporary table.
+-- data_access_events, choosing a log entry's time, any grant on a partition; no DELETE on
+-- passkeys; no UPDATE of a passkey's key or credential id; no write of a session's start,
+-- last-seen or re-authentication time, or of when a PIN last failed, that the database doesn't
+-- stamp) fails. Nothing may be granted to PUBLIC at all, and hearth_app can create no schema
+-- object or temporary table.
 \ir fixtures/two_orgs.sql
 
 do $$
@@ -20,7 +23,11 @@ declare
     'people.full_name: UPDATE', 'people.manager_id: UPDATE',
     'phone_numbers: INSERT', 'phone_numbers: SELECT',
     'phone_numbers.removed_at: UPDATE', 'phone_numbers.removed_by: UPDATE',
-    'users: INSERT', 'users: SELECT',
+    -- A new account names only the person and org; the PIN columns are each updated for a reason
+    -- (0006). Nothing writes when a PIN last failed: the database stamps it.
+    'users: SELECT', 'users.id: INSERT', 'users.org_id: INSERT',
+    'users.pin_failures: UPDATE', 'users.pin_hash: UPDATE', 'users.pin_key_id: UPDATE',
+    'users.pin_reset_at: UPDATE', 'users.pin_reset_by: UPDATE', 'users.pin_set_at: UPDATE',
     'team_memberships: INSERT', 'team_memberships: SELECT',
     'team_memberships.removed_at: UPDATE', 'team_memberships.removed_by: UPDATE',
     'role_assignments: SELECT',
@@ -30,8 +37,18 @@ declare
     'working_hours: DELETE', 'working_hours: INSERT', 'working_hours: SELECT',
     'devices: INSERT', 'devices: SELECT',
     'devices.label: UPDATE', 'devices.last_seen_at: UPDATE', 'devices.signed_out_at: UPDATE', 'devices.signed_out_by: UPDATE',
-    'sessions: INSERT', 'sessions: SELECT',
-    'sessions.last_seen_at: UPDATE', 'sessions.revoke_reason: UPDATE', 'sessions.revoked_at: UPDATE', 'sessions.revoked_by: UPDATE',
+    -- A new session never names its start, last-seen or re-authentication time (0006).
+    'sessions: SELECT',
+    'sessions.device_id: INSERT', 'sessions.expires_at: INSERT', 'sessions.id: INSERT',
+    'sessions.org_id: INSERT', 'sessions.token_hash: INSERT', 'sessions.user_id: INSERT',
+    'sessions.last_seen_at: UPDATE', 'sessions.reauthenticated_at: UPDATE', 'sessions.revoke_reason: UPDATE',
+    'sessions.revoked_at: UPDATE', 'sessions.revoked_by: UPDATE',
+    -- Passkeys: read, add (never choosing the id or when it was added), record a use, remove softly.
+    'passkeys: SELECT',
+    'passkeys.backed_up: INSERT', 'passkeys.counter: INSERT', 'passkeys.created_device_id: INSERT',
+    'passkeys.credential_id: INSERT', 'passkeys.org_id: INSERT', 'passkeys.public_key: INSERT',
+    'passkeys.transports: INSERT', 'passkeys.user_id: INSERT',
+    'passkeys.counter: UPDATE', 'passkeys.last_used_at: UPDATE', 'passkeys.removed_at: UPDATE', 'passkeys.removed_by: UPDATE',
     'notice_versions: INSERT', 'notice_versions: SELECT',
     'audit_log_readers: SELECT',
     'notice_acknowledgments: SELECT',
@@ -51,6 +68,9 @@ declare
     'data_access_events.subject_id: INSERT', 'data_access_events.type: INSERT', 'data_access_events.via: INSERT',
     -- Functions.
     'function is_iana_time_zone(text): EXECUTE',
+    -- The two sign-in lookups that run before the org is known (0006).
+    'function person_by_phone(text): EXECUTE',
+    'function session_by_token(bytea,interval): EXECUTE',
     'function read_audit_events(timestamp with time zone,timestamp with time zone,bigint,integer): EXECUTE'
   ];
   actual text[];

@@ -1,0 +1,30 @@
+import type { Id } from './model.ts'
+import type { RequestContext, SelfRequest } from './requests.ts'
+import type { World } from './world.ts'
+
+// What anyone active may do about their own devices and passkeys (ACC-02, ACC-04, T14). Signing
+// out and listing devices need no re-authentication, so a lost phone can always be signed out.
+// A device or passkey the request names must be the person's own and not already ended; one the
+// snapshot doesn't hold is refused like someone else's, so the answer never shows what exists.
+export function selfCan(world: World, me: Id, request: SelfRequest, context: RequestContext): boolean {
+  if (!world.isActivePerson(me)) return false
+  switch (request.action) {
+    case 'devices.list_own':
+      return true
+    case 'devices.sign_out_own': {
+      if (request.device === undefined) return true
+      const device = world.device(request.device)
+      return device !== undefined && device.userId === me && device.signedOutAt === null
+    }
+    case 'passkeys.add_own':
+      return context.reauthenticated === true
+    case 'passkeys.remove_own': {
+      const passkey = world.passkey(request.passkey)
+      return (
+        context.reauthenticated === true && passkey !== undefined && passkey.userId === me && passkey.removedAt === null
+      )
+    }
+    default:
+      return false
+  }
+}

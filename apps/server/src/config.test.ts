@@ -1,11 +1,28 @@
+import { readFileSync } from 'node:fs'
+import { parseEnv } from 'node:util'
 import { describe, expect, it } from 'vitest'
-import { ConfigError, loadConfig } from '#src/config.ts'
+import { ConfigError, isLoopbackOrigin, LOCAL_AUTH_SECRET, loadConfig } from '#src/config.ts'
+
+// A low-entropy test value: secret scanners read test files too.
+const SECRET = 'test-secret-test-secret-test-secret'
 
 const env = {
   APP_ORIGIN: 'http://localhost:5173',
   DATABASE_URL: 'postgres://hearth:a-db-password@127.0.0.1:5432/hearth',
   VALKEY_URL: 'redis://127.0.0.1:6379',
   S3_BUCKET: 'hearth-local',
+  DEPLOY_ENV: 'local',
+  AUTH_SECRET: SECRET,
+}
+
+function problems(load: () => unknown): string {
+  try {
+    load()
+  } catch (error) {
+    expect(error).toBeInstanceOf(ConfigError)
+    return (error as Error).message
+  }
+  throw new Error('expected the configuration to be refused')
 }
 
 describe('C0.2 config', () => {
@@ -25,6 +42,9 @@ describe('C0.2 config', () => {
         forcePathStyle: false,
         credentials: undefined,
       },
+      deployEnv: 'local',
+      trustProxy: false,
+      auth: { secret: SECRET, smsProvider: undefined },
     })
   })
 
@@ -86,7 +106,7 @@ describe('C0.2 config', () => {
         return (error as Error).message
       }
     })()
-    for (const name of ['ROLE', 'PORT', 'APP_ORIGIN', 'DATABASE_URL', 'VALKEY_URL', 'S3_BUCKET']) {
+    for (const name of ['ROLE', 'PORT', 'APP_ORIGIN', 'DATABASE_URL', 'VALKEY_URL', 'S3_BUCKET', 'DEPLOY_ENV']) {
       expect(message).toContain(`${name}:`)
     }
   })
@@ -105,5 +125,109 @@ describe('C0.2 config', () => {
   it('refuses an app origin with a path, and a database URL of another scheme', () => {
     expect(() => loadConfig({ ...env, APP_ORIGIN: 'https://hearth.example.com/app' })).toThrow(/APP_ORIGIN/)
     expect(() => loadConfig({ ...env, DATABASE_URL: 'mysql://x@y/z' })).toThrow(/DATABASE_URL/)
+  })
+})
+
+describe('C0.5 T14 sign-in settings', () => {
+  it('needs DEPLOY_ENV, with no default', () => {
+    const { DEPLOY_ENV: _, ...rest } = env
+    expect(problems(() => loadConfig(rest))).toMatch(/DEPLOY_ENV:/)
+    expect(problems(() => loadConfig({ ...env, DEPLOY_ENV: 'staging' }))).toMatch(/DEPLOY_ENV:/)
+  })
+
+  it('needs AUTH_SECRET for the api role only, and gives the other roles no sign-in settings', () => {
+    const { AUTH_SECRET: _, ...rest } = env
+    expect(problems(() => loadConfig(rest))).toMatch(/AUTH_SECRET: required for the api role/)
+    expect(problems(() => loadConfig({ ...rest, ROLE: 'api' }))).toMatch(/AUTH_SECRET:/)
+    for (const role of ['realtime', 'worker']) {
+      expect(loadConfig({ ...rest, ROLE: role }).auth).toBeUndefined()
+      expect(loadConfig({ ...env, ROLE: role }).auth).toBeUndefined()
+    }
+  })
+
+  it('refuses a secret shorter than 32 characters', () => {
+    expect(problems(() => loadConfig({ ...env, AUTH_SECRET: 'x'.repeat(31) }))).toMatch(
+      /AUTH_SECRET: must be at least 32 characters/,
+    )
+    expect(loadConfig({ ...env, AUTH_SECRET: 'x'.repeat(32) }).auth?.secret).toHaveLength(32)
+  })
+
+  it("takes the local stack's public secret only on this machine (DEPLOY_ENV local or test, localhost origin)", () => {
+    const local = { ...env, AUTH_SECRET: LOCAL_AUTH_SECRET }
+    for (const deployEnv of ['local', 'test']) {
+      for (const appOrigin of ['http://localhost:5173', 'https://127.0.0.1:5173', 'http://[::1]:5173']) {
+        expect(loadConfig({ ...local, DEPLOY_ENV: deployEnv, APP_ORIGIN: appOrigin }).auth?.secret).toBe(
+          LOCAL_AUTH_SECRET,
+        )
+      }
+    }
+    for (const deployEnv of ['nonprod', 'prod']) {
+      expect(problems(() => loadConfig({ ...local, DEPLOY_ENV: deployEnv }))).toMatch(/AUTH_SECRET: the local stack/)
+    }
+    expect(problems(() => loadConfig({ ...local, APP_ORIGIN: 'https://hearth.example' }))).toMatch(
+      /AUTH_SECRET: the local stack/,
+    )
+    // Refused for every role, since no deployment may hold a public secret.
+    expect(problems(() => loadConfig({ ...local, ROLE: 'realtime', DEPLOY_ENV: 'prod' }))).toMatch(/AUTH_SECRET:/)
+  })
+
+  it('runs the log SMS provider only with DEPLOY_ENV local and a localhost origin', () => {
+    expect(loadConfig({ ...env, SMS_PROVIDER: 'log' }).auth).toEqual({ secret: SECRET, smsProvider: 'log' })
+    for (const deployEnv of ['test', 'nonprod', 'prod']) {
+      expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'log', DEPLOY_ENV: deployEnv }))).toMatch(
+        /SMS_PROVIDER: log prints sign-in codes/,
+      )
+    }
+    expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'log', APP_ORIGIN: 'https://hearth.example' }))).toMatch(
+      /SMS_PROVIDER:/,
+    )
+    expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'aws' }))).toMatch(/SMS_PROVIDER:/)
+  })
+
+  it('reads TRUST_PROXY as a list of addresses and CIDR ranges, never a hop count', () => {
+    expect(loadConfig({ ...env, TRUST_PROXY: '10.0.0.0/16, 2600:9000::/28' }).trustProxy).toEqual([
+      '10.0.0.0/16',
+      '2600:9000::/28',
+    ])
+    expect(loadConfig({ ...env, TRUST_PROXY: '127.0.0.1' }).trustProxy).toEqual(['127.0.0.1'])
+    expect(loadConfig({ ...env, TRUST_PROXY: ' , ' }).trustProxy).toBe(false)
+    for (const value of ['10.0.0.0/33', 'x', '1', '2600:9000::/129', '10.0.0.0/8/8', '10.0.0.0/', '10.0.0.0/-1']) {
+      expect(problems(() => loadConfig({ ...env, TRUST_PROXY: value }))).toMatch(
+        /TRUST_PROXY: each entry must be an IP address or CIDR range/,
+      )
+    }
+  })
+
+  it('never echoes a sign-in setting in its error', () => {
+    const message = problems(() =>
+      loadConfig({ ...env, DEPLOY_ENV: 'prod', AUTH_SECRET: LOCAL_AUTH_SECRET, TRUST_PROXY: '10.9.8.7/99' }),
+    )
+    expect(message).not.toContain(LOCAL_AUTH_SECRET)
+    expect(message).not.toContain('10.9.8.7')
+    expect(problems(() => loadConfig({ ...env, AUTH_SECRET: 'short-secret-value' }))).not.toContain(
+      'short-secret-value',
+    )
+  })
+
+  it('knows a loopback origin from any other', () => {
+    expect(isLoopbackOrigin('http://localhost:5173')).toBe(true)
+    expect(isLoopbackOrigin('https://localhost')).toBe(true)
+    expect(isLoopbackOrigin('http://127.0.0.1:3000')).toBe(true)
+    expect(isLoopbackOrigin('http://[::1]:5173')).toBe(true)
+    for (const origin of ['https://hearth.example', 'http://localhost.example', 'not a url']) {
+      expect(isLoopbackOrigin(origin)).toBe(false)
+    }
+  })
+
+  it('loads .env.example for every role, and only the api role reads its secret (T14)', () => {
+    const example = parseEnv(readFileSync(new URL('../../../.env.example', import.meta.url), 'utf8'))
+    expect(example.AUTH_SECRET).toBe(LOCAL_AUTH_SECRET)
+    expect(loadConfig({ ...example, ROLE: 'api' }).auth).toEqual({ secret: LOCAL_AUTH_SECRET, smsProvider: 'log' })
+    for (const role of ['realtime', 'worker']) {
+      const config = loadConfig({ ...example, ROLE: role })
+      expect(config.auth).toBeUndefined()
+      expect(config.deployEnv).toBe('local')
+      expect(config.trustProxy).toBe(false)
+    }
   })
 })
