@@ -429,8 +429,19 @@ export class JobRunner {
       .catch(error => this.#loopFailed('attempts', orgId, error))
       .finally(() => {
         this.#running.delete(row.lease_token)
+        this.#idle(orgId)
         this.#claims.wake()
       })
+  }
+
+  // An org with no running job left has no heartbeat: its Beat goes (unless a renewal is in flight,
+  // which the heartbeat loop drops once it ends) and so does its failure count, before the claim
+  // loop can start the org's next job, so that job counts its failures from the first (Qodo-18,
+  // CodeRabbit-18). A renewal still in flight that then fails counts as its first.
+  #idle(orgId: string): void {
+    for (const r of this.#running.values()) if (r.orgId === orgId && r.decision === undefined) return
+    if (this.#beats.get(orgId)?.inFlight === false) this.#beats.delete(orgId)
+    this.#failures.delete(`heartbeats:${orgId}`)
   }
 
   // --- One attempt ---------------------------------------------------------------------------

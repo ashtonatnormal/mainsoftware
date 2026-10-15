@@ -830,6 +830,26 @@ describe('C0.6 T15 item 2 heartbeats', () => {
     runner.halt()
   })
 
+  it('CodeRabbit-18: a job claimed the moment its org’s last one ends still counts its heartbeat failures from the first', async () => {
+    const { run, release } = blocking()
+    const script: Script = {
+      claims: [[claimed(1)], [claimed(3)]],
+      renew: () => new Error('Connection terminated unexpectedly'),
+    }
+    const { runner, log } = start(script, { kinds: [run], concurrency: 1 })
+    await until(() => runner.active === 1)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.heartbeatMs + JOB_POLICY.heartbeatMs / 10)
+    expect(log.events('worker_loop_failed').map(line => line.failures)).toEqual([1, 2])
+    // Job 1's end wakes the claim loop, which takes job 3 before the heartbeat loop runs again.
+    release(1)
+    await until(() => log.events('job_succeeded').length === 1 && runner.active === 1)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.heartbeatMs)
+    const failed = log.events('worker_loop_failed')
+    expect(failed.map(line => line.failures)).toEqual([1, 2, 1])
+    expect(failed.at(-1)).toMatchObject({ level: 40 })
+    runner.halt()
+  })
+
   it('Qodo-18 round 5 #2: halt() and stop() leave no timer behind, the heartbeat loop’s included', async () => {
     for (const end of ['halt', 'stop'] as const) {
       const { run } = blocking()
