@@ -35,6 +35,13 @@
 #     format_staged). If an exchange fails anyway, formatting stays off until
 #     autopush.noswap in the git directory is deleted, so the files it left
 #     as they were are committed as they are, not formatted again every run.
+#     An old file whose bytes changed while it was swapped and can't go back
+#     (or that a stopped run never checked) is kept in autopush.kept.* in the
+#     git directory, and every checkpoint's message names it until it is
+#     deleted (SPARE_PL, spares). Formatting
+#     needs perl's Digest::SHA (a separate perl-Digest-SHA package on Fedora
+#     and RHEL); without it, files are committed as they are, and the message
+#     says why.
 #     Secrets are looked for both before and after formatting
 #     (Biome can move a value onto a line of its own, out of reach of a
 #     one-line pattern)
@@ -62,6 +69,7 @@
 #
 # Opt out for a session: HEARTH_AUTOPUSH=0 claude
 set -uo pipefail
+note='' committed='' fmt_note=''  # say() reads these: none comes from the environment
 user_lc=${LC_ALL-}  # git hooks still run in the caller's locale (commit, push)
 export LC_ALL=C  # byte-wise regexes: invalid UTF-8 in a name or file can't dodge them
 # Git sees the objects a push sends (not git-replace stand-ins), and pathspecs
@@ -223,6 +231,9 @@ sub exchange { my ($x, $y) = ("$_[0]", "$_[1]"); syscall($xchg, -100, $x, -100, 
 my %mnt;
 sub mount_ok { my $d = $_[0] =~ m{^(.*)/} ? $1 : '.';
   $mnt{$d} //= !exchange("$dir/none", "$d/.autopush.none") && $!{ENOENT} ? 1 : 0 }
+# SWAP_PL reads a file's bytes back as a blob ID (Digest::SHA, in Perl's core
+# but split out by some distributions).
+eval { require Digest::SHA; 1 } or do { print "0 0 0 nosha\n"; exit 0 };
 { my $ok = 0;
   if ($xchg && open(my $x, '>', "$dir/xa") && open(my $y, '>', "$dir/xb")) {
     my @a = lstat "$dir/xa"; $ok = @a && exchange("$dir/xa", "$dir/xb") && ((lstat "$dir/xb")[1] // -1) == $a[1] }
@@ -385,23 +396,44 @@ PERL
 # last check before the exchange, or its ctime from just after it (a write or
 # chmod meanwhile, by whoever opened it before the swap: an editor or Node
 # writing in place), it goes back over Biome's version, so the user's change
-# wins; only such a change landing after that is lost. The bytes are compared,
-# not just the size and mtime, because a same-size write within one tick of a
-# coarse clock (whole seconds on ext3, two on FAT) leaves both as they were. A
-# file that has changed is left as it is; the next checkpoint commits it.
+# wins; only such a change landing after that is lost. The bytes are compared
+# (as a blob id, so no git command is needed then), not just the size and
+# mtime, because a same-size write within one tick of a coarse clock (whole
+# seconds on ext3, two on FAT) leaves both as they were. A file that has
+# changed is left as it is; the next checkpoint commits it. An old file that
+# changed but can't go back (the path no longer holds Biome's version) stays
+# in $dir for the hook to keep (spares). This run's time limit (ALRM), TERM,
+# INT and HUP all stop it the same way: no more swaps, then every file already
+# swapped is checked as above before it exits (quit), and they wait while a
+# file is between names. Once checking has begun, none of them stops it, so a
+# read that hangs (a hung network or FUSE file system) holds it, and the run's
+# lock, until it returns, as it would hold git. SIGKILL, or a signal it doesn't
+# handle, can leave an old file unchecked in $dir, which the hook then doesn't
+# delete (fmt_swap): it keeps any old file whose bytes are neither what was
+# staged nor Biome's version (spares), as soon as this ends or, if the hook was
+# stopped too, in the next run. A change of mode alone is then lost.
 # Paths are checked by name (Perl has no openat), so a folder swapped for a
 # symlink in the microseconds between a check and the open or exchange would
 # be followed; whoever can do that can write the file anyway.
 IFS= read -r -d '' SWAP_PL <<'PERL' || :
 use strict; use warnings; use POSIX (); use Fcntl qw(:DEFAULT :mode); use IO::Handle; use Config;
-use IPC::Open2 qw(open2); use Time::HiRes qw(time stat lstat sleep);
+use IPC::Open2 qw(open2); use Time::HiRes qw(time stat lstat sleep); use Digest::SHA ();
 my ($dir, $budget, $commit, $off) = @ARGV;
 my $end = time + $budget;
-$SIG{ALRM} = sub { POSIX::_exit(124) }; alarm($budget + 5); $SIG{PIPE} = 'IGNORE';
+my (@pending, $swapped, $stop, $fresh, $quitting); my $me = $$;
+# The run's lock (fd 9) stays held until this ends, even if the hook is killed
+# first, so no next run clears $dir under it; git's children don't get it.
+our $LOCK; if (open($LOCK, '>>&=', 9)) { fcntl($LOCK, F_SETFD, FD_CLOEXEC) }
+my %code = (ALRM => 124, TERM => 143, INT => 130, HUP => 129);
+my $held = POSIX::SigSet->new(POSIX::SIGALRM(), POSIX::SIGTERM(), POSIX::SIGINT(), POSIX::SIGHUP());
+sub hold { $quitting or POSIX::sigprocmask($_[0] ? POSIX::SIG_BLOCK() : POSIX::SIG_UNBLOCK(), $held) }
+# (A child between fork and exec just exits.)
+sub quit { POSIX::_exit($code{$_[0]} // 1) unless $$ == $me;
+  POSIX::sigprocmask(POSIX::SIG_BLOCK(), $held); $quitting = 1; alarm 0;
+  unlink $fresh if defined $fresh; settle(); POSIX::_exit($code{$_[0]} // 1) }
+$SIG{$_} = \&quit for keys %code;
+alarm($budget + 5); $SIG{PIPE} = 'IGNORE';
 exit 0 unless ($commit // '') =~ /^[0-9a-f]{40}(?:[0-9a-f]{24})?\z/ && defined $off;
-# TERM, INT and HUP wait while a file is between names.
-my $held = POSIX::SigSet->new(POSIX::SIGTERM(), POSIX::SIGINT(), POSIX::SIGHUP());
-sub hold { POSIX::sigprocmask($_[0] ? POSIX::SIG_BLOCK() : POSIX::SIG_UNBLOCK(), $held) }
 my $xchg = $^O eq 'linux' && $Config{ptrsize} == 8
   ? ($Config{archname} =~ /^x86_64-linux/ ? 316 : $Config{archname} =~ /^aarch64-linux/ ? 276 : 0) : 0;
 exit 0 unless $xchg;
@@ -433,7 +465,9 @@ sub bytes { my ($fh, $n) = @_; defined sysseek($fh, 0, 0) or return; my $c = '';
   while (length $c <= $n) { my $r = sysread($fh, $c, 65536, length $c); return unless defined $r; last unless $r }
   $c }
 sub same { my ($x, $y, @i) = @_; for (@i) { return 0 unless $x->[$_] == $y->[$_] } 1 }
-my (@pending, $swapped, $stop);
+# Whether the bytes C are the blob ID (SHA-1, or SHA-256 in such a repository).
+sub is_blob { my ($c, $id) = @_; my $b = 'blob ' . length($c) . "\0" . $c;
+  (length $id == 64 ? Digest::SHA::sha256_hex($b) : Digest::SHA::sha1_hex($b)) eq $id }
 # Exchange: whatever held the path comes out under $tmp; if that isn't the old
 # file, a save replaced it just before, and it goes straight back.
 sub xswap { my ($p, $fh, $sha, $s1, $tmp, $t) = @_;
@@ -456,25 +490,29 @@ sub swap { my ($p, $sha, $old, $new, $n) = @_;
   my $disk = bytes($fh, length $old);
   my @s1 = stat $fh;
   return 0 unless defined $disk && $disk eq $old && @s1 && same(\@s0, \@s1, 0, 1, 2, 3, 4, 5, 7, 9, 10);
-  my $tmp = "$dir/new.$n";
+  # Until it is exchanged, $tmp holds only Biome's version: a quit removes it.
+  my $tmp = "$dir/new.$n"; $fresh = $tmp;
   sysopen(my $t, $tmp, O_WRONLY | O_CREAT | O_EXCL, 0600) or return 0;
   my $ok = (syswrite($t, $new) // -1) == length $new && $t->sync;
   $ok = close($t) && $ok && chmod($s1[2] & 07777, $tmp);
   my @t = lstat $tmp;
   unless ($ok && @t) { unlink $tmp; return 0 }
-  hold(1); my $r = xswap($p, $fh, $sha, \@s1, $tmp, \@t); hold(0); $r }
+  hold(1); $fresh = undef; my $r = xswap($p, $fh, $sha, \@s1, $tmp, \@t); hold(0); $r }
 # Once every file is swapped, and 20 ms more: an old file changed meanwhile
-# goes back over Biome's version (if the path still holds it).
+# goes back over Biome's version (if the path still holds it). Each leaves
+# @pending only once it is checked; an old file that changed and didn't go
+# back stays in $dir.
 sub settle { return unless @pending; sleep 0.02;
-  for (@pending) { my ($p, $fh, $sha, $s1, $o, $spare, $t) = @$_; hold(1);
-    my $old = blob($sha); my @s3 = stat $fh; my $now = bytes($fh, length($old // ''));
-    my @s4 = stat $fh;
-    unless (defined $old && defined $now && $now eq $old && @s3 && @s4 && same(\@s3, $s1, 2, 4, 5, 7, 9) &&
-            same(\@s3, $o, 10) && same(\@s4, \@s3, 2, 4, 5, 7, 9, 10)) {
+  while (@pending) { hold(1); my ($p, $fh, $sha, $s1, $o, $spare, $t) = @{ shift @pending };
+    my @s3 = stat $fh; my $now = bytes($fh, $s1->[7]); my @s4 = stat $fh;
+    my $done = defined $now && is_blob($now, $sha) && @s3 && @s4 && same(\@s3, $s1, 2, 4, 5, 7, 9) &&
+      same(\@s3, $o, 10) && same(\@s4, \@s3, 2, 4, 5, 7, 9, 10);
+    unless ($done) {
       my @now = lstat $p;
       if (@now && same(\@now, $t, 0, 1, 7, 9) && exchange($spare, $p)) {
-        my @x = lstat $spare; exchange($spare, $p) unless @x && same(\@x, $t, 0, 1); $swapped-- } }
-    unlink $spare; hold(0); close $fh } }
+        my @x = lstat $spare;
+        if (@x && same(\@x, $t, 0, 1)) { $done = 1; $swapped-- } else { exchange($spare, $p) } } }
+    unlink $spare if $done; hold(0); close $fh } }
 my $n = 0; $swapped = 0;
 for (@recs) { last if time >= $end; my ($o, $w, $p) = @$_; $n++;
   next unless ($want{$p} // '') eq $w;
@@ -520,12 +558,13 @@ scratch() {
 # untracked cache) still installs NEW, and anything staged meanwhile stops it.
 # NEW keeps its own mtime: git wrote it after re-checking every entry staged in
 # the same second as BASE, and nothing from the newer index is taken into it,
-# so no refresh can make a same-second edit look clean. TERM, INT and HUP wait
-# until it is done, so only SIGKILL can leave the lock, while it compares.
+# so no refresh can make a same-second edit look clean. Every signal but
+# SIGKILL (and SIGSTOP) waits until it is done, so only SIGKILL can leave the
+# lock, while it compares.
 IFS= read -r -d '' INSTALL_PL <<'PERL' || :
 use strict; use warnings; use POSIX (); use Fcntl; use Time::HiRes qw(time sleep);
 my ($index, $base, $new, $head) = @ARGV;
-my $held = POSIX::SigSet->new(POSIX::SIGTERM(), POSIX::SIGINT(), POSIX::SIGHUP());
+my $held = POSIX::SigSet->new; $held->fillset;
 POSIX::sigprocmask(POSIX::SIG_BLOCK(), $held) or exit 1;
 my $mask = 0x8000 | 0x3000 | 1 << 29 | 1 << 30;  # assume-unchanged, stage, intent-to-add, skip-worktree
 sub out { my $pid = open(my $h, '-|') // return;
@@ -563,7 +602,7 @@ PERL
 # fails a checkpoint.
 format_staged() {
   local biome=$top/node_modules/.bin/biome cfg=$top/biome.json t0=$SECONDS why= res tree2= rc
-  local re='^[0-9]+ [0-9]+ [0-9]+ (cap|time|broken|noswap|xdev|-)$' off=$gitdir/autopush.noswap
+  local re='^[0-9]+ [0-9]+ [0-9]+ (cap|time|broken|noswap|xdev|nosha|-)$' off=$gitdir/autopush.noswap
   { [ -e "$cfg" ] || [ -L "$cfg" ]; } || cfg=$top/biome.jsonc  # Biome's own order
   # (Checked here and read by Biome a moment later: whoever could swap the file
   # in between could edit it anyway.)
@@ -592,6 +631,7 @@ format_staged() {
         broken) why='Biome failed on every file (check biome.json)' ;;
         noswap) why="files here can't be swapped into place atomically (renameat2 RENAME_EXCHANGE: Linux on x86_64 or arm64, on a file system that has it), so the files on disk couldn't take Biome's version" ;;
         xdev) why="the work tree is on another mount than $gitdir, so the files on disk couldn't take Biome's version" ;;
+        nosha) why="perl has no Digest::SHA module, which checks the old copy of a file after Biome's version replaces it" ;;
       esac
       if [ "$1" -gt 0 ]; then
         rc=1
@@ -622,13 +662,67 @@ format_staged() {
   [ -n "$why" ] && fmt_note="${fmt_note-} - not formatted: $why"
   fmt_secs=$((SECONDS - t0 + 1))  # whole seconds, rounded up
 }
+# SPARE_PL DIR GITDIR: the old files a swap left in the scratch folder DIR
+# (new.N, for the Nth file in its manifest). One that holds what was staged or
+# Biome's version is removed; any other (it changed while it was swapped, and
+# couldn't go back, or SWAP_PL was killed before it checked it) is moved to a
+# new autopush.kept.* folder in GITDIR as N.<its name>, with a list of the
+# paths they came from (paths.txt), and the folder and paths are printed.
+# Exits 1 if any was left in DIR.
+IFS= read -r -d '' SPARE_PL <<'PERL' || :
+use strict; use warnings; use Fcntl qw(:mode); use Digest::SHA (); use File::Temp ();
+my ($dir, $gitdir) = @ARGV;
+my @recs; if (open(my $m, '<', "$dir/manifest")) { local $/ = "\0";
+  while (defined(my $r = <$m>)) { chomp $r; push @recs, [split / /, $r, 3] } }
+opendir(my $d, $dir) or exit 1;
+my ($keep, @kept, $left);
+for my $f (sort { substr($a, 4) <=> substr($b, 4) } grep { /^new\.[1-9][0-9]{0,8}\z/ } readdir $d) {
+  my $r = $recs[substr($f, 4) - 1] // []; my @s = lstat "$dir/$f";
+  if (@s && S_ISREG($s[2]) && @$r == 3 && open(my $h, '<:raw', "$dir/$f")) {
+    my $c = do { local $/; <$h> } // ''; close $h; my $b = 'blob ' . length($c) . "\0" . $c;
+    my $id = length $r->[0] == 64 ? Digest::SHA::sha256_hex($b) : Digest::SHA::sha1_hex($b);
+    if ($id eq $r->[0] || $id eq $r->[1]) { unlink "$dir/$f" or $left = 1; next } }
+  $keep //= eval { File::Temp::tempdir('autopush.kept.XXXXXX', DIR => $gitdir) };
+  (my $name = $r->[2] // $f) =~ s{.*/}{};
+  if (defined $keep && rename("$dir/$f", "$keep/" . substr($f, 4) . ".$name")) { push @kept, $r->[2] // $f }
+  else { $left = 1 } }
+if (@kept) {
+  if (open(my $o, '>', "$keep/paths.txt")) { print {$o} map { "$_\n" } @kept; close $o }
+  print "$keep (", join(', ', @kept), ")" }
+elsif (defined $keep) { rmdir $keep }
+exit($left ? 1 : 0);
+PERL
+# A swap's leftovers in the scratch folder $1 (SPARE_PL), before it is
+# removed: an old file that may hold an edit is kept, and the message says
+# where. If that can't be done, the whole folder is kept: moved to
+# autopush.kept.*, or, if even that fails, left where it is (return 1), for
+# the next run to try again.
+spares() {
+  local dir=$1 kept rc
+  set -- "$dir"/new.*
+  { [ -e "$1" ] || [ -L "$1" ]; } || return 0
+  kept=$(perl -e "$SPARE_PL" "$dir" "$gitdir" 2>/dev/null 9>&-); rc=$?
+  [ -n "$kept" ] && note="${note-} - kept old copies of files a checkpoint was formatting, which changed while it swapped Biome's version in: compare them with your files ($kept)"
+  [ $rc -eq 0 ] && return 0
+  [ "$dir" = "$fmtdir" ] && fmtdir=
+  mv -f "$dir" "$gitdir/autopush.kept.${dir##*.}" 2>/dev/null || return 1
+  note="${note-} - kept a checkpoint's scratch folder, which may hold old copies of files it was formatting with an edit made meanwhile: compare them with your files ($gitdir/autopush.kept.${dir##*.})"
+}
 # After the commit, or when formatting left nothing to commit (SWAP_PL): the
 # files on disk may take only what HEAD, that commit, holds. If an exchange
-# failed, formatting is off from now on, and the message says so.
+# failed, formatting is off from now on, and the message says so. SWAP_PL keeps
+# the run's lock (fd 9) until it ends, so if this run is killed meanwhile, the
+# next can't start and clear the scratch folder under it. Until spares is done
+# with the folder, this run's EXIT trap leaves it too (swapping): a signal bash
+# doesn't trap (USR1, ALRM, PIPE...) runs that trap at once, even while
+# SWAP_PL is still running.
 fmt_swap() {
   local t0=$SECONDS off=$gitdir/autopush.noswap
   { [ -n "$fmtdir" ] && [ -s "$fmtdir/manifest" ]; } || return 0
-  perl -e "$SWAP_PL" "$fmtdir" 5 "$(git rev-parse -q --verify HEAD)" "$off" >/dev/null 2>&1 9>&-
+  swapping=1
+  perl -e "$SWAP_PL" "$fmtdir" 5 "$(git rev-parse -q --verify HEAD)" "$off" >/dev/null 2>&1
+  spares "$fmtdir"
+  swapping=
   [ -s "$off" ] && note="${note-} - formatting is off from now on: $(head -c 200 "$off" 2>/dev/null); the next checkpoint commits the files on disk as they are (delete $off to format again)"
   fmt_secs=$((fmt_secs + SECONDS - t0 + 1))
 }
@@ -673,16 +767,26 @@ else
 fi
 index=$(git rev-parse --git-path index)
 head=$(git rev-parse -q --verify HEAD) || head=none
-backup='' committed='' staging='' fmtdir='' fmt_secs=0 fmt_note='' mine=''
-trap '[ -n "$backup" ] && rm -f "$backup"; [ -n "$fmtdir" ] && rm -rf "$fmtdir"' EXIT
+backup='' committed='' staging='' fmtdir='' fmt_secs=0 fmt_note='' mine='' swapping=''
+trap '[ -n "$backup" ] && rm -f "$backup"; [ -n "$fmtdir" ] && [ -z "$swapping" ] && rm -rf "$fmtdir"' EXIT
 # Killed: leave the backup for the next run, or, while it has no restorable
 # name yet, put it back (bash runs this only once git add has returned).
 trap '[ -n "$staging" ] && mv -f "$staging" "$index" 2>/dev/null; trap - EXIT; exit 143' TERM INT HUP
 # A killed run's scratch folder (its copies, and any old file it was still
-# holding after a swap). If that run had committed but not yet replaced the
-# files on disk, they now differ from HEAD only by formatting, and this run
-# formats them back to HEAD's content, commits nothing, and replaces them.
-rm -rf "$gitdir"/autopush.fmt.* 2>/dev/null
+# holding after a swap, which spares keeps if it may hold an edit). If that
+# run had committed but not yet replaced the files on disk, they now differ
+# from HEAD only by formatting, and this run formats them back to HEAD's
+# content, commits nothing, and replaces them.
+for d in "$gitdir"/autopush.fmt.*; do
+  { [ -d "$d" ] && ! [ -L "$d" ]; } || continue
+  spares "$d" && rm -rf "$d" 2>/dev/null
+done
+# Every run names every kept folder until it is deleted, so one whose run was
+# stopped before its message still reaches the user.
+for k in "$gitdir"/autopush.kept.*; do
+  { [ -d "$k" ] && ! [ -L "$k" ]; } || continue
+  case ${note-} in *"${k##*/}"*) ;; *) note="${note-} - $k holds old copies of files a checkpoint was formatting, which may hold an edit: compare them with your files, then delete it" ;; esac
+done
 # Holding the lock, no other run is using a backup. One a killed run left holds
 # the user's staging from before that run, and is named after HEAD and the tree
 # that run staged: put it back only if neither has changed since (that run
@@ -701,7 +805,7 @@ for old in "$index".autopush.*; do
           perl -e "$INSTALL_PL" "$index" "$fmtdir/current" "$old" "$head" 9>&-
           case $? in
             0) ;;
-            3) say "nothing committed - another git command is using the index, so the staging an interrupted checkpoint saved isn't back yet; the next checkpoint puts it back" ;;
+            3) say "nothing committed - another git command is using the index, so the staging an interrupted checkpoint saved isn't back yet; the next checkpoint puts it back (if no git command is running, one that was killed left $index.lock: delete it)" ;;
             2|4) say "nothing committed - the index changed while the staging an interrupted checkpoint saved was being put back; the next checkpoint looks again" ;;
             *) say "nothing committed - could not put back the staging an interrupted checkpoint saved (${old##*/}); the next checkpoint tries again" ;;
           esac
@@ -763,8 +867,8 @@ if [ -n "$st" ]; then
       2) why='another git command changed the index meanwhile' ;;
       4) why='a commit was made or HEAD moved meanwhile' ;;
       3) case $backup in
-           "$index.autopush.$head".*) backup=; why='a git command was using the index; the next checkpoint puts it back' ;;
-           *) why='a git command was using the index' ;;
+           "$index.autopush.$head".*) backup=; why="a git command was using the index; the next checkpoint puts it back (if no git command is running, one that was killed left $index.lock: delete it)" ;;
+           *) why="a git command was using the index (if none is running, one that was killed left $index.lock: delete it)" ;;
          esac ;;
       *) why='it could not be put in place' ;;
     esac
@@ -794,7 +898,7 @@ if [ -n "$st" ]; then
   done < "$gitdir/autopush.nested"
   if [ "$leftout" -gt 0 ]; then
     [ "$leftout" -gt 10 ] && names+="and $((leftout - 10)) more "
-    note=" - left uncommitted (new files outside the checkpoint allow-list; commit them by hand if safe): ${names% }"
+    note="${note-} - left uncommitted (new files outside the checkpoint allow-list; commit them by hand if safe): ${names% }"
   fi
   # A SIGKILL between this git add and the backup's restorable name (below) is
   # the one point where a killed run's staging isn't put back: the next run
@@ -892,15 +996,20 @@ fi
 
 # Pin the branch's commit (not HEAD, which a 'git switch' may have moved): only
 # what is scanned below is pushed, whatever the branch does next.
-sha=$(git rev-parse -q --verify "$ref") || exit 0  # no commits yet, nothing to push
-git remote get-url origin >/dev/null 2>&1 ||
-  { [ -n "$committed" ] && say "committed on $branch; no origin remote, nothing pushed"; exit 0; }
+sha=$(git rev-parse -q --verify "$ref") ||  # no commits yet, nothing to push
+  { [ -n "${note-}" ] && say "nothing to push on $branch"; exit 0; }
+git remote get-url origin >/dev/null 2>&1 || {
+  [ -n "$committed" ] && say "committed on $branch; no origin remote, nothing pushed"
+  [ -n "${note-}" ] && say "no origin remote on $branch, nothing pushed"
+  exit 0
+}
 # Where git would push it: pushRemote, pushDefault, then the upstream's remote
 # ('.', a local upstream, is left to origin).
 pushremote=$(git config "branch.$branch.pushRemote" || git config remote.pushDefault ||
              git config "branch.$branch.remote")
 if [ "${pushremote:-origin}" != origin ] && [ "$pushremote" != . ]; then
   [ -n "$committed" ] && say "committed on $branch, which pushes to $pushremote, not origin; not pushed"
+  [ -n "${note-}" ] && say "$branch pushes to $pushremote, not origin; not pushed"
   exit 0
 fi
 if git rev-parse -q --verify "refs/remotes/origin/$branch" >/dev/null &&
@@ -974,11 +1083,14 @@ late=$(late_checkpoints) || say "not pushed - could not scan unpushed commits on
 # with it (push.followTags, submodule.recurse). Set the upstream only if the
 # branch has none. No terminal or credential-manager prompts (askpass helpers
 # still run, bounded). 60 s for the first attempt, pre-push hooks included,
-# less the whole seconds formatting took (10 s or so; its perl steps are killed
-# by 15 s and 10 s), then 15 s retries only for transient network errors:
-# formatting and pushing take about 96 s at most together (more only if
-# formatting's git steps outside perl take over 3 s; git commit's re-read of
-# the formatted files isn't counted), within the hook's 120 s timeout. Output
+# less the whole seconds formatting took (10 s or so; its perl steps stop by
+# 15 s and 10 s, the swap only once it has checked each file it swapped, which
+# takes milliseconds unless a read hangs), then 15 s retries only for transient
+# network errors:
+# formatting and pushing take about 96 s at most together (more only if a
+# read hangs, or formatting's git steps outside perl take over 3 s; git
+# commit's re-read of the formatted files isn't counted), within the hook's
+# 120 s timeout. Output
 # goes to a file, so a background child of git can't hold a pipe open past that. Hooks get the caller's locale, git's own
 # messages stay English for the retry check (unless the caller set LC_ALL).
 track=1
