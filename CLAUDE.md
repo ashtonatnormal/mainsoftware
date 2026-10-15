@@ -1,9 +1,9 @@
 # Hearth — Engineering Contract
 
-Hearth is an internal work suite (chat, drop-in voice rooms, meetings, calendar, tasks, and a Drive holding docs and wiki, sheets, slides and files) where AI agents are teammates, built over a permission-aware Org Brain. Its first customer is our own organisation, moving its work communication off WhatsApp. It is not an email client, a guest or cross-org tool, an integrations hub, a full Excel or PowerPoint replacement, or an assistant that acts on anyone's behalf. Spec: `docs/PRD.md`, where a decision (`Dn`) beats a requirement that disagrees with it. Keep each module at the depth its P0 rows set (D18).
+Hearth is an internal work suite (chat, drop-in voice rooms, meetings, calendar, tasks, and a Drive holding docs and wiki, sheets, slides and files) where AI agents are teammates, built over a permission-aware Org Brain. Its first customer is our own organisation, moving its work communication off WhatsApp. It is not an email client, a cross-org tool (one-time meeting guests aside, REC-08), an integrations hub, a full Excel or PowerPoint replacement, or an assistant that acts on anyone's behalf. Spec: `docs/PRD.md`, where a decision (`Dn`) beats a requirement that disagrees with it. Keep each module at the depth its P0 rows set (D18).
 
 - Build → simplify → automate. Start with manual input.
-- Scope guard: do NOT build email, external guests or shared channels, third-party integrations, native apps, agent computers, macros, pivot tables or other full Office parity, an assistant that sends or edits for a user (D16), WhatsApp import (D17), billing or self-serve sign-up, or AI scoring of what people say or voiceprints (D34). The full list is PRD §3.2.
+- Scope guard: do NOT build email (sign-in codes and guest invitations aside, ACC-01, REC-08), shared channels or guests anywhere but one scheduled meeting (D46), third-party integrations, native apps, agent computers, macros, pivot tables or other full Office parity, an assistant that sends or edits for a user (D16), WhatsApp import (D17), billing or self-serve sign-up, or AI scoring of what people say or voiceprints (D34). The full list is PRD §3.2.
 - Stack (D37): TypeScript strict end to end in an npm-workspaces monorepo (`apps/web`, `apps/server`, `packages/shared`, `packages/access`, `infra/`; `demo/` stays as the reference UI). Node 24 LTS. Web: Vite + React 19 + Tailwind v4 as an installable PWA. Server: Fastify + `ws`. PostgreSQL 17 (RDS; pgvector later), Valkey, S3, LiveKit Cloud. AWS CDK in ap-southeast-1. Vitest, Playwright, Biome. Not Next.js, Supabase or Vercel: hosting is AWS ap-southeast-1 (D37, B.6), and the server runs long-lived WebSocket, Yjs and recorder processes that serverless hosts don't. LiveKit Cloud metadata and OpenAI transcription still leave Singapore and are recorded in PDPA-10. Technical decisions (T1–T12, and T13 onwards as they're made) are recorded with their status in `docs/TECH-SPEC.md`. The database layer is Kysely: typed SQL queries and plain SQL migrations (T3).
 
 ## Build order
@@ -17,7 +17,7 @@ Hearth is an internal work suite (chat, drop-in voice rooms, meetings, calendar,
 - Recording is never hidden (Principle 6): every room and call UI shows the recording indicator.
 - The personal assistant suggests and drafts; it never sends, edits, creates or deletes for a user (D16).
 - Content is data, not instructions (Rule 8).
-- Privileged access (Rule 9) happens only in the DPO and Compliance consoles, against a logged case with a stated reason. It is never available to any AI feature.
+- People's privileged reads (Rule 9) happen only in the DPO and Compliance consoles, against a logged case with a stated reason. The only other privileged path, and the only AI that may read privileged content, is the personal assistant of a DPO or Compliance Officer (Rule 10, ADM-15, D48), with every item beyond the holder's own access logged as a privileged read. No other AI feature ever reads it.
 
 ## Git
 - Never commit directly to `main`. Create a feature branch.
