@@ -149,8 +149,8 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 - [ ] RLS, principal-kind and audit-immutability tests pass; the audit hash chain verifies.
 - [ ] The outbox contract test covers every write; rolled-back writes emit nothing; replay rebuilds identical projections.
 - [ ] A flag change reaches every process within 10 s; any ai.* flag is refused by the purpose gate.
-- [ ] The Rule 1-9 suite lists every case; non-AI cases pass (including §7.2's CFO case); AI cases are tagged todos.
-- [ ] On a real iPhone and Android against prod: SMS plus PIN sign-in, passkey, new-device step-up, PRD-53 limits, identical reply for non-roster numbers.
+- [ ] The Rule 1-9 suite lists every case (Rule 10's is R9-19); non-AI cases pass (including §7.2's CFO case); AI cases are tagged todos.
+- [ ] On a real iPhone and Android against prod: SMS plus PIN sign-in, passkey, new-device step-up, PRD-53 limits, identical reply for non-roster numbers; the same for email codes and roster addresses, and the desktop email link (C0.5b).
 - [ ] Deactivation closes sockets and resource removal drops topics within 60 s.
 - [ ] A test push arrives on both phones with ids-only payloads.
 - [ ] No API access before notice acknowledgement; a new version forces re-ack.
