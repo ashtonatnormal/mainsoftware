@@ -19,17 +19,23 @@
 #   - leaves nested repositories (e.g. Claude's .claude/worktrees/) uncommitted
 #   - formats the staged copies of what it commits with the repo's own Biome
 #     (never npx; at most 300 files and about 10 s), so a checkpoint isn't red
-#     for formatting alone. It formats only a file of a type Biome formats, of
-#     at most 1 MiB, that is a regular file with one link and no symlinked
-#     folder on its path, holds on disk exactly the staged bytes and has no
-#     checkout conversion (CRLF line endings, ident, filter,
+#     for formatting alone, but only where a file on disk can take Biome's
+#     version in an atomic exchange (Linux renameat2 RENAME_EXCHANGE, on x86_64
+#     or arm64, the work tree on the same mount as the git directory;
+#     not macOS). It formats only a file of a type Biome formats, of at most
+#     1 MiB, that is a regular file with one link and no symlinked folder on
+#     its path, on the git directory's mount, holds on disk exactly the staged
+#     bytes and has no checkout conversion (CRLF line endings, ident, filter,
 #     working-tree-encoding); any other file, and one Biome ignores or can't
 #     parse, is committed as it is. A checkpoint that commits says when
 #     formatting was skipped or stopped early. A file on disk gets Biome's
 #     version only after the commit (or when formatting leaves nothing to
 #     commit), only if the commit (or HEAD) holds that version, and only if
 #     the file still holds exactly what was staged (FMT_PL, SWAP_PL,
-#     format_staged). Secrets are looked for both before and after formatting
+#     format_staged). If an exchange fails anyway, formatting stays off until
+#     autopush.noswap in the git directory is deleted, so the files it left
+#     as they were are committed as they are, not formatted again every run.
+#     Secrets are looked for both before and after formatting
 #     (Biome can move a value onto a line of its own, out of reach of a
 #     one-line pattern)
 #   - only git add and git commit take the index's lock (other git commands
@@ -177,8 +183,16 @@ refuse_secrets() {
 #   - of 1 byte to 1 MiB (Biome's own default limit), as the object database
 #     says (cat-file --batch-check), so no larger or binary file is copied
 #     into .git or counts toward the cap;
-#   - that is a regular file with one link and no symlink on its path, and
-#     matches the index;
+#   - that is a regular file with one link and no symlink on its path, matches
+#     the index, and (where git ignores case) has the index's name on disk;
+#   - whose folder is on the git directory's mount, so the exchange that puts
+#     Biome's version on disk (SWAP_PL) can reach it. Nothing at all is
+#     formatted without that exchange (noswap: no syscall number for this
+#     system, or two files in $dir can't trade places, as on NFS, many FUSE
+#     file systems and kernels before 3.15), or with the work tree on another
+#     mount than the git directory (xdev): a file whose disk copy can never
+#     take Biome's version would leave the tree dirty, and be formatted again,
+#     on every run;
 #   - that git writes to disk exactly as it stores it: no CRLF line endings on
 #     checkout (eol=crlf, or text with core.autocrlf=true or core.eol=crlf),
 #     no ident, filter or working-tree-encoding attribute, and the bytes on
@@ -193,12 +207,28 @@ refuse_secrets() {
 # (manifest), and prints: files changed, files done, candidates, and why it
 # stopped early.
 IFS= read -r -d '' FMT_PL <<'PERL' || :
-use strict; use warnings; use POSIX (); use Fcntl qw(:DEFAULT :mode); use IO::Handle;
+use strict; use warnings; use POSIX (); use Fcntl qw(:DEFAULT :mode); use IO::Handle; use Config;
 use IPC::Open2 qw(open2); use Time::HiRes qw(time sleep lstat);
 my ($biome, $top, $dir, $budget, $cap) = @ARGV;
 my $end = time + $budget;
 delete @ENV{grep { /^BIOME_/ } keys %ENV};
 $SIG{PIPE} = 'IGNORE';
+# The exchange SWAP_PL uses (renameat2 RENAME_EXCHANGE, by syscall number).
+my $xchg = $^O eq 'linux' && $Config{ptrsize} == 8
+  ? ($Config{archname} =~ /^x86_64-linux/ ? 316 : $Config{archname} =~ /^aarch64-linux/ ? 276 : 0) : 0;
+sub exchange { my ($x, $y) = ("$_[0]", "$_[1]"); syscall($xchg, -100, $x, -100, $y, 2) == 0 }
+# A folder is on $dir's mount if an exchange from a name that doesn't exist in
+# $dir into it fails with ENOENT: the kernel checks the mount (EXDEV) and that
+# it is writable (EROFS) before it looks the names up, so nothing is moved.
+my %mnt;
+sub mount_ok { my $d = $_[0] =~ m{^(.*)/} ? $1 : '.';
+  $mnt{$d} //= !exchange("$dir/none", "$d/.autopush.none") && $!{ENOENT} ? 1 : 0 }
+{ my $ok = 0;
+  if ($xchg && open(my $x, '>', "$dir/xa") && open(my $y, '>', "$dir/xb")) {
+    my @a = lstat "$dir/xa"; $ok = @a && exchange("$dir/xa", "$dir/xb") && ((lstat "$dir/xb")[1] // -1) == $a[1] }
+  unlink "$dir/xa", "$dir/xb";
+  if (!$ok) { print "0 0 0 noswap\n"; exit 0 }
+  if (!mount_ok('./x')) { print "0 0 0 xdev\n"; exit 0 } }
 # Biome's Node wrapper runs the real binary as its child, so each Biome gets a
 # process group of its own, which a stop kills whole. Those groups would
 # outlive this script, and a kill of the hook's whole group, so a watchdog in a
@@ -230,6 +260,11 @@ sub snap { my @s = lstat $_[0]; @s ? join(' ', @s[0, 1, 2, 3, 7], map { sprintf 
 sub parents_ok { my @c = split m{/}, $_[0]; pop @c; my $q;
   for (@c) { $q = defined $q ? "$q/$_" : $_; my @s = lstat $q; return 0 unless @s && S_ISDIR($s[2]) } 1 }
 sub slurp { open(my $h, '<', $_[0]) or return; binmode $h; local $/; my $c = <$h>; defined $c ? $c : '' }
+# Where git ignores case, the name on disk must be the index's (SWAP_PL).
+my $icase;
+sub name_ok { $icase //= conf(qw(--bool --get core.ignorecase)) eq 'true'; return 1 unless $icase;
+  my ($d, $b) = $_[0] =~ m{^(?:(.*)/)?([^/]+)\z} or return 0;
+  opendir(my $h, defined $d ? $d : '.') or return 0; my $ok = grep { $_ eq $b } readdir $h; closedir $h; $ok }
 # Whether git converts the blob when it writes the file to disk, as convert.c
 # decides: CRLF line endings from the text (else crlf) and eol attributes,
 # core.autocrlf and core.eol; ident, filter and working-tree-encoding always.
@@ -251,7 +286,7 @@ sub converts { my ($a) = @_; my %act = (set => 'text', unset => 'binary', input 
     next unless defined $sha && $sha =~ /^[0-9a-f]+\z/ && ($mode eq '100644' || $mode eq '100755');
     next unless $p =~ /\.(?:[cm]?[jt]s|[jt]sx|jsonc?|css|graphql|gql|grit|html?|vue|svelte|astro)\z/i;
     next if $dirty{$p} || !parents_ok($p);
-    my @l = lstat $p; push @s, [$p, $mode, $sha] if @l && S_ISREG($l[2]) && $l[3] == 1 }
+    my @l = lstat $p; push @s, [$p, $mode, $sha] if @l && S_ISREG($l[2]) && $l[3] == 1 && mount_ok($p) && name_ok($p) }
   if (@s) {
     open(my $q, '>', "$dir/shas") or exit 1; print {$q} map { "$_->[2]\n" } @s; close $q or exit 1;
     my @z = split /\n/, run("$dir/shas", qw(git cat-file --batch-check)) // exit 1;
@@ -329,39 +364,47 @@ PERL
 # Compare-and-swap, after the commit: replace each formatted file on disk with
 # Biome's version, but only if the commit (or HEAD, when formatting left
 # nothing to commit) holds that version at that path, and the file still holds
-# exactly the bytes that were staged. The new copy is written and synced in
-# the git directory (neither a rename nor an exchange crosses file systems, so
-# such files are left as they are), takes the old file's mode, and takes the
-# path in one step, so the file is never seen half written or missing. A
-# symlink is never followed, a file with another hard link never replaced, and
-# on a case-insensitive file system a file whose name differs in case from the
-# index's is left alone. On Linux (x86_64, arm64) that step is an exchange
-# (renameat2 RENAME_EXCHANGE): the old file comes out under the temporary name,
-# so a save that renamed a new file over the path just before is seen and put
-# back at once. Elsewhere it is a rename, and a save that renames a new file
-# over the path between the last check and the rename (up to milliseconds,
-# under load) is lost: POSIX has no rename-if-unchanged. Either way the old
-# file is kept until every file is swapped, and 20 ms more: a write into it
-# meanwhile, by a writer that opened it before the swap (an editor or Node
-# writing in place), is then seen and the old file put back, so the edit wins;
-# only such a write landing after that is lost. A file that has changed is
-# left as it is; the next checkpoint commits it. Paths are checked by name
-# (Perl has no openat), so a folder swapped for a symlink in the microseconds
-# between a check and the open or exchange would be followed; whoever can do
-# that can write the file anyway. HFS+ keeps whole seconds, so there a
-# same-size write within the second of a check isn't seen (APFS keeps ns).
+# exactly the bytes that were staged, with the mode, owner and times it had
+# when they were read. The new copy is written and synced in the git
+# directory, and takes the old file's mode. A symlink is never followed, a
+# file with another hard link never replaced, and on a case-insensitive file
+# system a file whose name differs in case from the index's is left alone. The
+# path changes hands in one exchange (renameat2 RENAME_EXCHANGE), so the file
+# is never seen half written or missing, and the old file comes out under the
+# temporary name: a save that renamed a new file over the path just before is
+# seen and put back at once. There is no rename instead: POSIX has no
+# rename-if-unchanged, so a save landing between the last check and a rename
+# would be lost, and FMT_PL formats nothing where there is no exchange. If an
+# exchange fails anyway, and not because the path has gone, nothing more is
+# swapped and $off says why: formatting then stays off until that file is
+# deleted (format_staged), so the next checkpoint commits the files left as
+# they were as they are, instead of formatting them, and failing to swap them,
+# on every run. The old file is kept until every file is swapped, and 20 ms
+# more, then read again through the handle opened before the swap: if its
+# bytes differ from what was staged, its mode, owner, size or mtime from the
+# last check before the exchange, or its ctime from just after it (a write or
+# chmod meanwhile, by whoever opened it before the swap: an editor or Node
+# writing in place), it goes back over Biome's version, so the user's change
+# wins; only such a change landing after that is lost. The bytes are compared,
+# not just the size and mtime, because a same-size write within one tick of a
+# coarse clock (whole seconds on ext3, two on FAT) leaves both as they were. A
+# file that has changed is left as it is; the next checkpoint commits it.
+# Paths are checked by name (Perl has no openat), so a folder swapped for a
+# symlink in the microseconds between a check and the open or exchange would
+# be followed; whoever can do that can write the file anyway.
 IFS= read -r -d '' SWAP_PL <<'PERL' || :
 use strict; use warnings; use POSIX (); use Fcntl qw(:DEFAULT :mode); use IO::Handle; use Config;
 use IPC::Open2 qw(open2); use Time::HiRes qw(time stat lstat sleep);
-my ($dir, $budget, $commit) = @ARGV;
+my ($dir, $budget, $commit, $off) = @ARGV;
 my $end = time + $budget;
 $SIG{ALRM} = sub { POSIX::_exit(124) }; alarm($budget + 5); $SIG{PIPE} = 'IGNORE';
-exit 0 unless ($commit // '') =~ /^[0-9a-f]{40}(?:[0-9a-f]{24})?\z/;
+exit 0 unless ($commit // '') =~ /^[0-9a-f]{40}(?:[0-9a-f]{24})?\z/ && defined $off;
 # TERM, INT and HUP wait while a file is between names.
 my $held = POSIX::SigSet->new(POSIX::SIGTERM(), POSIX::SIGINT(), POSIX::SIGHUP());
 sub hold { POSIX::sigprocmask($_[0] ? POSIX::SIG_BLOCK() : POSIX::SIG_UNBLOCK(), $held) }
 my $xchg = $^O eq 'linux' && $Config{ptrsize} == 8
   ? ($Config{archname} =~ /^x86_64-linux/ ? 316 : $Config{archname} =~ /^aarch64-linux/ ? 276 : 0) : 0;
+exit 0 unless $xchg;
 sub exchange { my ($x, $y) = ("$_[0]", "$_[1]"); syscall($xchg, -100, $x, -100, $y, 2) == 0 }
 sub run { my $pid = open(my $h, '-|') // return; if (!$pid) { open(STDERR, '>', '/dev/null'); exec @_ or POSIX::_exit(127) }
   binmode $h; my $o = do { local $/; <$h> }; close $h ? $o // '' : undef }
@@ -384,62 +427,58 @@ sub blob { print {$to} "$_[0]\n" or return; $to->flush or return;
   my (undef, $type, $size) = split ' ', $hdr; return unless defined $size && $type eq 'blob';
   my $buf = ''; while (length $buf < $size + 1) { read($from, $buf, $size + 1 - length $buf, length $buf) or return }
   substr($buf, 0, $size) }
+# The bytes of the open file FH from the start, up to N + 1 of them (undef if
+# it can't be read).
+sub bytes { my ($fh, $n) = @_; defined sysseek($fh, 0, 0) or return; my $c = '';
+  while (length $c <= $n) { my $r = sysread($fh, $c, 65536, length $c); return unless defined $r; last unless $r }
+  $c }
 sub same { my ($x, $y, @i) = @_; for (@i) { return 0 unless $x->[$_] == $y->[$_] } 1 }
-my (@pending, $swapped);
+my (@pending, $swapped, $stop);
 # Exchange: whatever held the path comes out under $tmp; if that isn't the old
 # file, a save replaced it just before, and it goes straight back.
-sub xswap { my ($p, $fh, $s1, $tmp, $t) = @_;
-  my @s2 = stat $fh; my @l = lstat $p;
-  unless (@s2 && @l && same(\@l, $s1, 0, 1, 7, 9, 10) && $l[3] == 1 && same(\@s2, $s1, 7, 9)) { unlink $tmp; return 0 }
+sub xswap { my ($p, $fh, $sha, $s1, $tmp, $t) = @_;
+  my @l = lstat $p;
+  unless (@l && same(\@l, $s1, 0, 1, 2, 3, 4, 5, 7, 9, 10)) { unlink $tmp; return 0 }
   unless (exchange($tmp, $p)) {
-    if ($!{ENOSYS} || $!{EINVAL} || $!{EOPNOTSUPP}) { $xchg = 0; return 2 }  # not here: rename instead
-    unlink $tmp; return 0 }
+    my ($e, $gone) = ("$!", $!{ENOENT} || $!{ENOTDIR}); unlink $tmp; return 0 if $gone;
+    $stop = 1; if (open(my $o, '>', $off)) { print {$o} "swapping $p failed: $e"; close $o }
+    return 0 }
   my @o = lstat $tmp;
   unless (@o && same(\@o, $s1, 0, 1)) {
     my @now = lstat $p; exchange($tmp, $p) if @now && same(\@now, $t, 0, 1);
     unlink $tmp; return 0 }
-  push @pending, [$p, $fh, \@s2, $tmp, $t]; 1 }
-# Rename: the old file keeps a second name ($keep) until it is settled.
-sub rswap { my ($p, $fh, $s1, $tmp, $keep, $t) = @_;
-  unless (link($p, $keep)) { unlink $tmp; return 0 }
-  my @k = lstat $keep; my @s2 = stat $fh; my @l = lstat $p;
-  unless (@k && @s2 && @l && same(\@k, $s1, 0, 1) && same(\@s2, $s1, 7, 9) && same(\@l, \@s2, 0, 1, 7, 9, 10) && $l[3] == 2) {
-    unlink $tmp, $keep; return 0 }
-  unless (rename $tmp, $p) { unlink $tmp, $keep; return 0 }
-  push @pending, [$p, $fh, \@s2, $keep, $t]; 1 }
-sub swap { my ($p, $old, $new, $n) = @_;
-  return 0 unless defined $old && defined $new && length $new && parents_ok($p) && name_ok($p);
+  push @pending, [$p, $fh, $sha, $s1, \@o, $tmp, $t]; 1 }
+sub swap { my ($p, $sha, $old, $new, $n) = @_;
+  return 0 unless !$stop && defined $old && defined $new && length $new && parents_ok($p) && name_ok($p);
   sysopen(my $fh, $p, O_RDONLY | O_NOFOLLOW | O_NONBLOCK) or return 0;
   my @s0 = stat $fh;
   return 0 unless @s0 && S_ISREG($s0[2]) && $s0[3] == 1 && $s0[7] == length $old;
-  my $disk = '';
-  while (length $disk <= length $old) { my $r = sysread($fh, $disk, 65536, length $disk); return 0 unless defined $r; last unless $r }
+  my $disk = bytes($fh, length $old);
   my @s1 = stat $fh;
-  return 0 unless $disk eq $old && same(\@s0, \@s1, 0, 1, 3, 7, 9, 10);
-  my ($tmp, $keep) = ("$dir/new.$n", "$dir/old.$n");
+  return 0 unless defined $disk && $disk eq $old && @s1 && same(\@s0, \@s1, 0, 1, 2, 3, 4, 5, 7, 9, 10);
+  my $tmp = "$dir/new.$n";
   sysopen(my $t, $tmp, O_WRONLY | O_CREAT | O_EXCL, 0600) or return 0;
   my $ok = (syswrite($t, $new) // -1) == length $new && $t->sync;
   $ok = close($t) && $ok && chmod($s1[2] & 07777, $tmp);
   my @t = lstat $tmp;
   unless ($ok && @t) { unlink $tmp; return 0 }
-  hold(1);
-  my $r = $xchg ? xswap($p, $fh, \@s1, $tmp, \@t) : 2;
-  $r = rswap($p, $fh, \@s1, $tmp, $keep, \@t) if $r == 2;
-  hold(0); $r }
-# Once every file is swapped, and 20 ms more: an old file written meanwhile goes
-# back over Biome's version (if the path still holds it), so the edit wins.
+  hold(1); my $r = xswap($p, $fh, $sha, \@s1, $tmp, \@t); hold(0); $r }
+# Once every file is swapped, and 20 ms more: an old file changed meanwhile
+# goes back over Biome's version (if the path still holds it).
 sub settle { return unless @pending; sleep 0.02;
-  for (@pending) { my ($p, $fh, $s2, $spare, $t) = @$_; hold(1);
-    my @s3 = stat $fh;
-    unless (@s3 && same(\@s3, $s2, 7, 9)) { my @now = lstat $p;
-      if (@now && same(\@now, $t, 0, 1, 7, 9)) {
-        if (!$xchg) { $swapped-- if rename $spare, $p }
-        elsif (exchange($spare, $p)) { my @x = lstat $spare; exchange($spare, $p) unless @x && same(\@x, $t, 0, 1); $swapped-- } } }
+  for (@pending) { my ($p, $fh, $sha, $s1, $o, $spare, $t) = @$_; hold(1);
+    my $old = blob($sha); my @s3 = stat $fh; my $now = bytes($fh, length($old // ''));
+    my @s4 = stat $fh;
+    unless (defined $old && defined $now && $now eq $old && @s3 && @s4 && same(\@s3, $s1, 2, 4, 5, 7, 9) &&
+            same(\@s3, $o, 10) && same(\@s4, \@s3, 2, 4, 5, 7, 9, 10)) {
+      my @now = lstat $p;
+      if (@now && same(\@now, $t, 0, 1, 7, 9) && exchange($spare, $p)) {
+        my @x = lstat $spare; exchange($spare, $p) unless @x && same(\@x, $t, 0, 1); $swapped-- } }
     unlink $spare; hold(0); close $fh } }
 my $n = 0; $swapped = 0;
 for (@recs) { last if time >= $end; my ($o, $w, $p) = @$_; $n++;
   next unless ($want{$p} // '') eq $w;
-  $swapped += swap($p, blob($o), blob($w), $n) }
+  $swapped += swap($p, $o, blob($o), blob($w), $n) }
 settle();
 print "$swapped\n";
 PERL
@@ -524,7 +563,7 @@ PERL
 # fails a checkpoint.
 format_staged() {
   local biome=$top/node_modules/.bin/biome cfg=$top/biome.json t0=$SECONDS why= res tree2= rc
-  local re='^[0-9]+ [0-9]+ [0-9]+ (cap|time|broken|-)$'
+  local re='^[0-9]+ [0-9]+ [0-9]+ (cap|time|broken|noswap|xdev|-)$' off=$gitdir/autopush.noswap
   { [ -e "$cfg" ] || [ -L "$cfg" ]; } || cfg=$top/biome.jsonc  # Biome's own order
   # (Checked here and read by Biome a moment later: whoever could swap the file
   # in between could edit it anyway.)
@@ -535,6 +574,8 @@ format_staged() {
   elif ! command -v perl >/dev/null 2>&1; then why='perl is not on PATH'
   elif [ "$backup" != "$index.autopush.$head.${tree-}" ] || ! [ -f "$fmtdir/base" ]; then
     why='the index backup has no restorable name'
+  elif [ -e "$off" ]; then  # SWAP_PL could not put a formatted file on disk
+    why="a formatted file could not be put on disk before ($(head -c 200 "$off" 2>/dev/null)); delete $off to format again"
   else
     # Only the repo's config and Biome: no BIOME_* variable (BIOME_CONFIG_PATH,
     # BIOME_BINARY) reaches it, and --config-path stops it looking elsewhere.
@@ -549,6 +590,8 @@ format_staged() {
         time) fmt_note=" - formatting stopped after 10 s: $(($3 - $2)) of $3 files not checked" ;;
         cap) fmt_note=" - formatting stops at 300 files: $(($3 - $2)) of $3 files not checked" ;;
         broken) why='Biome failed on every file (check biome.json)' ;;
+        noswap) why="files here can't be swapped into place atomically (renameat2 RENAME_EXCHANGE: Linux on x86_64 or arm64, on a file system that has it), so the files on disk couldn't take Biome's version" ;;
+        xdev) why="the work tree is on another mount than $gitdir, so the files on disk couldn't take Biome's version" ;;
       esac
       if [ "$1" -gt 0 ]; then
         rc=1
@@ -580,11 +623,13 @@ format_staged() {
   fmt_secs=$((SECONDS - t0 + 1))  # whole seconds, rounded up
 }
 # After the commit, or when formatting left nothing to commit (SWAP_PL): the
-# files on disk may take only what HEAD, that commit, holds.
+# files on disk may take only what HEAD, that commit, holds. If an exchange
+# failed, formatting is off from now on, and the message says so.
 fmt_swap() {
-  local t0=$SECONDS
+  local t0=$SECONDS off=$gitdir/autopush.noswap
   { [ -n "$fmtdir" ] && [ -s "$fmtdir/manifest" ]; } || return 0
-  perl -e "$SWAP_PL" "$fmtdir" 5 "$(git rev-parse -q --verify HEAD)" >/dev/null 2>&1 9>&-
+  perl -e "$SWAP_PL" "$fmtdir" 5 "$(git rev-parse -q --verify HEAD)" "$off" >/dev/null 2>&1 9>&-
+  [ -s "$off" ] && note="${note-} - formatting is off from now on: $(head -c 200 "$off" 2>/dev/null); the next checkpoint commits the files on disk as they are (delete $off to format again)"
   fmt_secs=$((fmt_secs + SECONDS - t0 + 1))
 }
 
