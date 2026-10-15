@@ -767,7 +767,11 @@ export class JobRunner {
         byOrg.set(r.orgId, [...(byOrg.get(r.orgId) ?? []), r])
       }
       for (const [orgId, beat] of this.#beats) {
-        if (!beat.inFlight && !byOrg.has(orgId)) this.#beats.delete(orgId)
+        if (beat.inFlight || byOrg.has(orgId)) continue
+        this.#beats.delete(orgId)
+        // Its failures go with it, so the org's next jobs count theirs from the first and log
+        // at error level only after three in a row of their own.
+        this.#failures.delete(`heartbeats:${orgId}`)
       }
       // An org's first renewal is due a heartbeat after its jobs' leases were set (a job that joins
       // an org already renewing pulls the org's next renewal in the same way, in #begin).

@@ -809,6 +809,27 @@ describe('C0.6 T15 item 2 heartbeats', () => {
     runner.halt()
   })
 
+  it('Qodo-18 round 6: an org whose running jobs all ended counts its next heartbeat failures from the first', async () => {
+    const { run, release } = blocking()
+    const script: Script = { claims: [[claimed(1)]], renew: () => new Error('Connection terminated unexpectedly') }
+    const { runner, log } = start(script, { kinds: [run] })
+    await until(() => runner.active === 1)
+    // Its renewal fails at 10 s, and again when tried a tenth of an interval later.
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.heartbeatMs + JOB_POLICY.heartbeatMs / 10)
+    expect(log.events('worker_loop_failed').map(line => line.failures)).toEqual([1, 2])
+    release(1)
+    await until(() => runner.active === 0)
+    // With no job left, the org's heartbeat ends.
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.heartbeatMs)
+    script.claims.push([claimed(3)])
+    await until(() => runner.active === 1)
+    await vi.advanceTimersByTimeAsync(JOB_POLICY.heartbeatMs)
+    const failed = log.events('worker_loop_failed')
+    expect(failed.map(line => line.failures)).toEqual([1, 2, 1])
+    expect(failed.at(-1)).toMatchObject({ level: 40 })
+    runner.halt()
+  })
+
   it('Qodo-18 round 5 #2: halt() and stop() leave no timer behind, the heartbeat loop’s included', async () => {
     for (const end of ['halt', 'stop'] as const) {
       const { run } = blocking()

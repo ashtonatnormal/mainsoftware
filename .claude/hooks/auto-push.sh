@@ -16,6 +16,8 @@
 #   - pushes only the branch commit it scanned: no tags, submodule commits or
 #     git-lfs objects
 #   - leaves nested repositories (e.g. Claude's .claude/worktrees/) uncommitted
+#   - formats the files it commits with the repo's own Biome first (never npx);
+#     a file Biome can't parse is committed as it is
 #   - commits a new file only in a source folder or as a known root config file,
 #     and never one shaped like data (this repo is public; CLAUDE.md, Git).
 #     Changes to tracked files are always committed. Other new files stay
@@ -215,6 +217,27 @@ if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
   if ! out=$(git add -A -- . ':(exclude,glob)**/.claude/worktrees/**' ${nested[@]+"${nested[@]}"} 2>&1); then
     staging=; restore
     say "nothing committed - staging failed on $branch: $out"
+  fi
+  # Format what this checkpoint commits with the repo's own Biome, so it isn't red
+  # for formatting alone (lint errors and failing tests can still make it red).
+  # biome.json decides which files and how: it skips demo/, spike/ and file types
+  # it doesn't know. Only the local install runs, never npx (which could fetch
+  # code), for 15 s at most; a file Biome can't parse (work in progress) is
+  # committed as it is, so its exit status is ignored. Symlinks are left alone.
+  # The files are staged again, so the commit holds what is on disk.
+  biome=$top/node_modules/.bin/biome
+  if [ -x "$biome" ] && command -v node >/dev/null 2>&1; then
+    git diff --cached --name-only -z --diff-filter=d |
+      while IFS= read -r -d '' f; do
+        if [ -f "$f" ] && [ ! -L "$f" ]; then printf '%s\0' "$f"; fi
+      done > "$gitdir/autopush.fmt"
+    if [ -s "$gitdir/autopush.fmt" ]; then
+      bounded 15 xargs -0 "$biome" format --write --no-errors-on-unmatched -- < "$gitdir/autopush.fmt" >/dev/null 2>&1
+      if ! out=$(xargs -0 git --literal-pathspecs add -A -- < "$gitdir/autopush.fmt" 2>&1 9>&-); then
+        staging=; restore
+        say "nothing committed - staging the formatted files failed on $branch: $out"
+      fi
+    fi
   fi
   if [ -n "$backup" ] && tree=$(git write-tree 2>/dev/null) &&
      mv -f "$backup" "$index.autopush.$head.$tree" 2>/dev/null; then
