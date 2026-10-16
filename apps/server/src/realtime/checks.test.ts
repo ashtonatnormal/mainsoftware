@@ -7,6 +7,7 @@ import { loadTopicWorld } from '#src/access/world.ts'
 import { NoSystemPrincipal, withOrg } from '#src/db/database.ts'
 import {
   type Admission,
+  type CheckOrg,
   type CheckRequest,
   type CheckResult,
   checkOrg,
@@ -18,6 +19,7 @@ import {
 import { RevocationLatency } from '#src/revocation/latency.ts'
 import {
   connected,
+  type FakeChecks,
   known,
   ORG,
   OTHER_TEAM,
@@ -383,6 +385,31 @@ describe('C0.7 T19 item 8: the decision lane and the targeted queue', () => {
     expect(queue.size()).toBe(0)
   })
 
+  it('§8.3: a later trigger replaces the one kept only where the queue prefers it', () => {
+    vi.useFakeTimers()
+    const due = vi.fn()
+    const queue = new TargetedQueue<string>(due, {
+      delayMs: 100,
+      prefer: (kept, next) => kept === 'recheck' && next !== 'recheck',
+    })
+    queue.queue(ORG, ME, 'recheck')
+    queue.queue(ORG, ME, 'push')
+    queue.queue(ORG, ME, 'durable')
+    queue.queue(ORG, YOU, 'durable')
+    queue.queue(ORG, YOU, 'recheck')
+    vi.advanceTimersByTime(100)
+    expect(due.mock.calls).toEqual([
+      [
+        ORG,
+        new Map([
+          [ME, 'push'],
+          [YOU, 'durable'],
+        ]),
+      ],
+    ])
+    vi.useRealTimers()
+  })
+
   it('merges requests by person, without duplicates', () => {
     expect(
       mergeRequests([
@@ -432,6 +459,46 @@ describe('C0.7 T19 items 6 and 8: what the gateway does with what the checks fin
     // The other never asks for anything: the periodic check closes it.
     expect(await idle.closed).toEqual(GATEWAY_CLOSE.noticeRequired)
     expect(server.counts().closedNotAdmitted).toBe(2)
+  })
+
+  it('S9 C0.9: a sub’s not-admitted verdict closes only the person’s sockets open before its read, never one opened (and admitted) after it', async () => {
+    // A check that reads its answer when called, as the lane's transaction reads admission, and
+    // then, once armed, holds the rest of that transaction.
+    let fake: FakeChecks | undefined
+    let armed: Promise<void> | undefined
+    let release: () => void = () => {}
+    let calls = 0
+    const check: CheckOrg = async (orgId, request) => {
+      calls++
+      const result = (fake as FakeChecks).answer(orgId, request)
+      const wait = armed
+      armed = undefined
+      if (wait !== undefined) await wait
+      return result
+    }
+    const { url, server, checks } = await start({ admission: true, check })
+    fake = checks
+    const before = await connected(url)
+    // Its accept-time check admits it.
+    await until(() => calls === 1)
+    await delay(20)
+    // A new notice version: the sub's decision reads the person as not admitted, and is held.
+    checks.notAdmitted.add(ME)
+    armed = new Promise(resolve => {
+      release = resolve
+    })
+    before.send({ v: 1, t: 'sub', id: 1, topics: [personTopic(1)] })
+    await until(() => calls === 2)
+    // The person acknowledges in another tab, whose socket opens on the same session meanwhile.
+    checks.notAdmitted.delete(ME)
+    const after = await connected(url)
+    release()
+    expect(await before.closed).toEqual(GATEWAY_CLOSE.noticeRequired)
+    // The later socket's own accept-time check runs once the lane is free, and admits it.
+    await until(() => calls === 3)
+    await delay(50)
+    expect(after.ws.readyState).toBe(WebSocket.OPEN)
+    expect(server.counts()).toMatchObject({ closedNotAdmitted: 1, open: 1 })
   })
 
   it('S9: with an admission hook, every accept is checked at once', async () => {

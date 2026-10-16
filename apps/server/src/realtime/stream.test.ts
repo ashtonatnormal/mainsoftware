@@ -396,6 +396,63 @@ describe('C0.7 T19 item 9 the stream reader', () => {
     expect(g.resets).toHaveLength(1)
   })
 
+  it('S6: finds a failover that lost the tail although the new primary appended first, and replaces the epoch, so a resume from before the loss resets', async () => {
+    const { valkey, g, reader, log } = setup()
+    g.open(ORG, { [personTopic]: 'live' })
+    reader.start()
+    await run()
+    valkey.add(STREAM, entry(personTopic), T0 - 3000)
+    valkey.add(STREAM, entry(personTopic), T0 - 2000)
+    await run()
+    const before = reader.current(ORG) as Position
+    // The failover: the reader's connection drops, the replica lacked the newest entry, and a
+    // producer appends on the new primary before the reader looks again.
+    valkey.fail('xread')
+    await run(GATEWAY_POLICY.readerBlockMs)
+    valkey.loseTail(STREAM, 1)
+    const appended = valkey.add(STREAM, entry(personTopic))
+    await run(GATEWAY_POLICY.readerRetryMs)
+    expect(log.events('stream_reset').map(line => line.reason)).toEqual(['tail_lost'])
+    const [[, position] = []] = g.resets
+    expect(position?.pos).toBe(appended)
+    expect(position?.epoch).not.toBe(before.epoch)
+    expect(valkey.strings.get(EPOCH_KEY)).toBe(position?.epoch)
+    expect(reader.current(ORG)).toEqual(position)
+    // A client away since before the loss now resets, rather than resuming past the lost entry.
+    const away: ResumeRequest = {
+      since: { epoch: before.epoch, pos: `${T0 - 3000}-0` },
+      topics: [personTopic],
+      eras: new Map(),
+    }
+    const plan = await planResume(valkey.asClient, STREAM, away, reader.current(ORG), { now: Date.now() })
+    expect(plan.outcomes.get(personTopic)).toBe('reset_epoch')
+  })
+
+  it('S6: an org whose due gap check failed isn’t read until one passes, so a read can’t carry it past a lost tail unseen', async () => {
+    const { valkey, g, reader, log } = setup()
+    const live = g.open(ORG, { [personTopic]: 'live' })
+    reader.start()
+    await run()
+    valkey.add(STREAM, entry(personTopic), T0 - 3000)
+    valkey.add(STREAM, entry(personTopic), T0 - 2000)
+    await run()
+    expect(live.sent).toHaveLength(2)
+    valkey.fail('xread')
+    await run(GATEWAY_POLICY.readerBlockMs)
+    valkey.loseTail(STREAM, 1)
+    valkey.add(STREAM, entry(personTopic))
+    // The reader's connection is back, but the check's first command fails.
+    valkey.fail('get')
+    await run(GATEWAY_POLICY.readerRetryMs)
+    expect(log.events('stream_reader_failed').map(line => line.step)).toEqual(['read', 'check'])
+    expect(live.sent).toHaveLength(2)
+    expect(g.resets).toEqual([])
+    await run(GATEWAY_POLICY.readerRetryMs)
+    expect(log.events('stream_reset').map(line => line.reason)).toEqual(['tail_lost'])
+    // The new primary's entry was never sent as though the stream were whole: the reset covers it.
+    expect(live.sent).toHaveLength(2)
+  })
+
   it('S6: after a reconnect of its connection, checks every org for a gap before it reads again', async () => {
     // Periodic checks far apart, so only the reconnect can bring one.
     const { valkey, g, reader } = setup({ policy: { readerEpochCheckMs: 600_000 } })
@@ -585,6 +642,35 @@ describe('C0.7 T19 item 9 GW-09 P1 resume decisions, planResume()', () => {
       [119_000, personTopic],
     ])
     expect([...(await plan(recent, request(recent.ids[0] as string))).outcomes]).toEqual([[personTopic, 'resumed']])
+  })
+
+  it('T19 item 9: only the resumed topics’ own missed entries decide the window, so another topic’s 3-minute-old entry resumes', async () => {
+    const s = stream([
+      [200_000, personTopic],
+      [180_000, otherPersonTopic],
+      [1000, personTopic],
+    ])
+    const result = await plan(s, request(s.ids[0] as string))
+    expect([...result.outcomes]).toEqual([[personTopic, 'resumed']])
+    expect(result.frames.map(frame => frame.id)).toEqual([s.ids[2]])
+    // For the topic it belongs to, the same entry resets.
+    const theirs = await plan(s, request(s.ids[0] as string, [otherPersonTopic]))
+    expect([...theirs.outcomes]).toEqual([[otherPersonTopic, 'reset_window']])
+  })
+
+  it('T19 item 9: a since below the first entry of a stream never trimmed (a position in its grain from before a new stream’s first entry) resumes from it; below a trimmed one’s it resets', async () => {
+    const s = stream([
+      [4000, personTopic],
+      [3000, personTopic],
+    ])
+    const below = `${NOW - 25_000}-0`
+    const whole = await plan(s, request(below))
+    expect([...whole.outcomes]).toEqual([[personTopic, 'resumed']])
+    expect(whole.frames.map(frame => frame.id)).toEqual(s.ids)
+    s.valkey.trim(STREAM, 1)
+    expect([...(await plan(s, request(below))).outcomes]).toEqual([[personTopic, 'reset_trimmed']])
+    // A real id on an absent stream still resets.
+    expect([...(await plan(stream([]), request(below))).outcomes]).toEqual([[personTopic, 'reset_trimmed']])
   })
 
   it('1,001 entries scanned, or 501 matching, reset (too long); 1,000 and 500 replay', async () => {

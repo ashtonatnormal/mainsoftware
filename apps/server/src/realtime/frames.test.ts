@@ -45,8 +45,10 @@ afterEach(async () => {
   vi.useRealTimers()
   for (const app of running.splice(0)) await app.close()
 })
+// The positions here are small ids ('100-0'), so the gateway's 25 s grain is 1 ms unless a test
+// sets it: they come through exactly. The grain has a test of its own.
 async function start(options: Partial<SocketServerOptions> = {}) {
-  const gateway = await startGateway(options)
+  const gateway = await startGateway({ ...options, policy: { positionGrainMs: 1, ...options.policy } })
   running.push(gateway.app)
   return gateway
 }
@@ -230,6 +232,133 @@ describe('S2 T19 item 8: generations', () => {
     await until(() => client.all('ev').length === 3)
     await delay(20)
     expect(client.all('ev').map(ev => ev.pos)).toEqual(['60-0', '101-0', '103-0'])
+  })
+
+  it('S2 GW-09: a repeated sub of a topic an earlier sub is still deciding answers it retry, never in no list; once that sub’s ack has come it is ok', async () => {
+    const { url, checks, server } = await start()
+    checks.allow(ME, teamTopic())
+    const client = await connected(url)
+    checks.hold()
+    client.send({ v: 1, t: 'sub', id: 10, topics: [teamTopic()] })
+    await until(() => checks.calls.length === 1)
+    // No dropped frame was sent, so the topic can't be in none of the lists.
+    expect(await client.sub([teamTopic()])).toMatchObject({ ok: [], refused: [], reset: [], retry: [teamTopic()] })
+    expect(client.all('dropped')).toEqual([])
+    checks.release()
+    const first = await client.next('ack')
+    expect([first.id, first.ok]).toEqual([10, [teamTopic()]])
+    expect((await client.sub([teamTopic()])).ok).toEqual([teamTopic()])
+    // The one decision was the first sub's.
+    expect(checks.calls).toHaveLength(1)
+    expect(server.counts().retried).toBe(1)
+  })
+
+  it('S2 GW-09: a repeated sub during a paused replay is answered retry, never ok before the replay’s entries and its ack', async () => {
+    const stream = fakeStream()
+    stream.positions.set(ORG, at('100-0'))
+    const missed = (topic: string) => ({ id: '60-0', topic, text: evFrame(topic, '60-0', 'inbox.changed', {}) })
+    const held = heldResume(request => resumedAll(request, request.topics.map(missed)))
+    const { url, checks } = await start({ stream: stream.factory, resume: held.resume })
+    checks.allow(ME, teamTopic())
+    checks.eras.set(ME, new Map([[teamTopic(), 1]]))
+    const client = await connected(url)
+    client.send({ v: 1, t: 'sub', id: 10, topics: [teamTopic()], since: at('50-0') })
+    await until(() => held.asked.length === 1)
+    // The same since, sent again while the first replays: an ok here would move the topic to 100-0,
+    // and the client would drop the replayed 60-0 as seen.
+    const repeat = await client.sub([teamTopic()], at('50-0'))
+    expect(repeat).toMatchObject({ ok: [], reset: [], retry: [teamTopic()] })
+    held.release()
+    await until(() => client.all('ack').length === 2)
+    const order = client.frames.map(frame => (frame.t === 'ack' ? `ack ${frame.id} ${frame.ok}` : `${frame.t}`))
+    expect(order).toEqual(['welcome', `ack 1 `, 'ev', `ack 10 ${teamTopic()}`])
+    expect(client.all('ev').map(ev => ev.pos)).toEqual(['60-0'])
+    // Live now: a repeat is ok, with nothing replayed again.
+    expect((await client.sub([teamTopic()], at('50-0'))).ok).toEqual([teamTopic()])
+    expect(held.asked).toHaveLength(1)
+  })
+
+  it('S2: a repeated sub whose ack is built after its earlier sub answered the topic retry answers it retry too', async () => {
+    const stream = fakeStream()
+    stream.positions.set(ORG, at('100-0'))
+    const { url, checks } = await start({ stream: stream.factory })
+    checks.allow(ME, teamTopic())
+    const client = await connected(url)
+    // The earlier sub's lane fails while the repeat waits for the stream's position.
+    checks.hold()
+    checks.failNext(new Error('connection refused'))
+    client.send({ v: 1, t: 'sub', id: 10, topics: [teamTopic()] })
+    await until(() => checks.calls.length === 1)
+    stream.hold()
+    client.send({ v: 1, t: 'sub', id: 11, topics: [teamTopic()] })
+    // The repeat reaches the server, finds the topic held, and waits for the position.
+    await delay(50)
+    checks.release()
+    await delay(50)
+    stream.release()
+    await until(() => client.all('ack').length === 2)
+    // In whichever order they come, both say retry: neither lists it nowhere.
+    const acks = client.all('ack').sort((a, b) => Number(a.id) - Number(b.id))
+    expect(acks.map(ack => [ack.id, ack.ok, ack.retry])).toEqual([
+      [10, [], [teamTopic()]],
+      [11, [], [teamTopic()]],
+    ])
+  })
+
+  it('S2: a repeated sub of a topic dropped while it waited lists it in none of its ack’s lists, after the dropped frame', async () => {
+    const stream = fakeStream()
+    stream.positions.set(ORG, at('100-0'))
+    const { url, checks } = await start({ stream: stream.factory, recheckMs: 100 })
+    checks.allow(ME, teamTopic())
+    const client = await connected(url)
+    // A granted topic, so the periodic check's request names what the socket holds.
+    await client.sub([personTopic(1)])
+    checks.hold(isSubDecision)
+    client.send({ v: 1, t: 'sub', id: 10, topics: [teamTopic()] })
+    await until(() => checks.calls.some(call => isSubDecision(call.request)))
+    stream.hold()
+    client.send({ v: 1, t: 'sub', id: 11, topics: [teamTopic()] })
+    // The repeat reaches the server and finds the topic held; then the periodic check finds the
+    // team lost while both wait.
+    await delay(50)
+    checks.deny(ME, teamTopic())
+    const dropped = await client.next('dropped')
+    expect(dropped.topics).toEqual([teamTopic()])
+    stream.release()
+    checks.release()
+    await until(() => client.all('ack').length === 3)
+    const later = client.all('ack').slice(1)
+    expect(later.map(ack => ack.id).sort()).toEqual([10, 11])
+    for (const ack of later) expect(ack).toMatchObject({ ok: [], refused: [], reset: [], retry: [] })
+    expect(client.frames.indexOf(dropped)).toBeLessThan(Math.min(...later.map(ack => client.frames.indexOf(ack))))
+  })
+})
+
+describe('T19 item 9: positions in their grain', () => {
+  it('T19 item 9: ack, pong and an unsub’s ack carry the org’s position rounded down to its 25 s grain, so another topic’s event moves them only into a new grain; an ev of the socket’s own topic carries its exact id', async () => {
+    const stream = fakeStream()
+    const T = 1_800_000_000_000
+    stream.positions.set(ORG, at(`${T + 3000}-0`))
+    const { url, server } = await start({ stream: stream.factory, policy: { positionGrainMs: 25_000 } })
+    const client = await connected(url)
+    expect((await client.sub([personTopic(1)])).pos).toEqual(at(`${T}-0`))
+    const pong = async () => {
+      client.send({ v: 1, t: 'ping' })
+      return (await client.next('pong')).pos
+    }
+    // Someone else's person topic, which this socket can't hold.
+    stream.dispatch(ORG, personTopic(2), `${T + 7000}-2`)
+    expect(await pong()).toEqual(at(`${T}-0`))
+    expect((await client.unsub([orgTopic()])).pos).toEqual(at(`${T}-0`))
+    stream.dispatch(ORG, personTopic(1), `${T + 8000}-0`)
+    expect((await client.next('ev')).pos).toBe(`${T + 8000}-0`)
+    stream.dispatch(ORG, personTopic(2), `${T + 25_001}-0`)
+    expect(await pong()).toEqual(at(`${T + 25_000}-0`))
+    // A reset's position too.
+    stream.target().resetOrg(ORG, at(`${T + 31_234}-5`))
+    expect((await client.next('reset')).pos).toEqual(at(`${T + 25_000}-0`))
+    expect(JSON.stringify(client.frames)).not.toContain(`${T + 7000}`)
+    expect(server.counts().open).toBe(1)
   })
 })
 

@@ -117,7 +117,8 @@ function jobContext(payload: RevocationPayload, answer: (statement: Statement) =
   return { p, ctx, log }
 }
 
-const isSessionsRead = (statement: Statement) => statement.text.startsWith('select id, revoked_at from sessions')
+const isSessionsRead = (statement: Statement) =>
+  statement.text.startsWith('select s.id, (select min(e.at) from outbox_events e')
 
 describe('C0.7 T19 item 3 REG-01 the revocation registry', () => {
   const handler = (name: string, causes: string[] = ['keys_changed']): RevocationHandler =>
@@ -367,14 +368,14 @@ describe('C0.7 T19 items 4 and 5 the sockets handler', () => {
   const revocation = { cause: 'sessions_ended', person: PERSON, sessions: [S1, S2, S3] } as const
   const payload: RevocationPayload = { handler: 'sockets', ...revocation, sessions: [...revocation.sessions] }
 
-  it('re-reads which sessions ended, and when, as its role, and publishes them durable with the earliest revoked_at', async () => {
+  it('T19 item 13: re-reads which sessions ended, and the signin.ended event that ended them, as its role, and publishes them durable with the earliest event’s at, never revoked_at', async () => {
     const v = valkey()
     const { p, ctx } = jobContext(payload, s =>
       isSessionsRead(s)
         ? [
-            { id: S1, revoked_at: T1 },
-            { id: S2, revoked_at: T2 },
-            { id: S3, revoked_at: T1 },
+            { id: S1, ended_at: T1 },
+            { id: S2, ended_at: T2 },
+            { id: S3, ended_at: T1 },
           ]
         : [],
     )
@@ -384,8 +385,14 @@ describe('C0.7 T19 items 4 and 5 the sockets handler', () => {
       ctx,
     )
     const read = p.statements.find(isSessionsRead)
+    // The event's at, the clock when the revoking transaction appended it, after its lock waits;
+    // revoked_at, that transaction's now(), only bounds the scan.
     expect(read?.text).toBe(
-      'select id, revoked_at from sessions where org_id = $1 and user_id = $2 and id = any($3::uuid[]) and revoked_at is not null',
+      'select s.id, (select min(e.at) from outbox_events e where e.org_id = s.org_id' +
+        " and e.at between s.revoked_at - interval '1 minute' and s.revoked_at + interval '1 minute'" +
+        " and e.type = 'signin.ended' and e.entity_type = 'person' and e.entity_id = s.user_id" +
+        " and e.ids -> 'sessions' ? s.id::text) as ended_at from sessions s" +
+        ' where s.org_id = $1 and s.user_id = $2 and s.id = any($3::uuid[]) and s.revoked_at is not null',
     )
     expect(read?.values).toEqual([ORG, PERSON, [S1, S2, S3]])
     expect(p.texts()[0]).toBe('start transaction isolation level read committed read only')
@@ -412,9 +419,20 @@ describe('C0.7 T19 items 4 and 5 the sockets handler', () => {
     expect(JSON.stringify(log.lines)).not.toContain(PERSON)
   })
 
+  it('T19 item 13: publishes no start when no event names the sessions, so realtime counts it unknown', async () => {
+    const v = valkey()
+    const { ctx } = jobContext(payload, s => (isSessionsRead(s) ? [{ id: S1, ended_at: null }] : []))
+    await socketsHandler({ valkey: v.client, keyPrefix: 'it:unit:', logger: quiet() }).run(
+      revocation,
+      { orgId: ORG },
+      ctx,
+    )
+    expect(v.messages()).toEqual([{ v: 1, org: ORG, path: 'durable', cause: 'sessions_ended', sessions: [S1] }])
+  })
+
   it('publishes those that have ended when only some have, and logs how many have not', async () => {
     const v = valkey()
-    const { ctx, log } = jobContext(payload, s => (isSessionsRead(s) ? [{ id: S2, revoked_at: T1 }] : []))
+    const { ctx, log } = jobContext(payload, s => (isSessionsRead(s) ? [{ id: S2, ended_at: T1 }] : []))
     await socketsHandler({ valkey: v.client, keyPrefix: 'it:unit:', logger: quiet() }).run(
       revocation,
       { orgId: ORG },
@@ -429,7 +447,7 @@ describe('C0.7 T19 items 4 and 5 the sockets handler', () => {
   it('OUTBOX-2: fails when the publish fails, so the job is tried again', async () => {
     const failure = new Error('Connection is closed.')
     const logger = quiet()
-    const { ctx } = jobContext(payload, s => (isSessionsRead(s) ? [{ id: S1, revoked_at: T1 }] : []))
+    const { ctx } = jobContext(payload, s => (isSessionsRead(s) ? [{ id: S1, ended_at: T1 }] : []))
     await expect(
       socketsHandler({ valkey: { publish: vi.fn().mockRejectedValue(failure) }, keyPrefix: 'it:unit:', logger }).run(
         revocation,

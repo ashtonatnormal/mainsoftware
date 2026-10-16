@@ -3,10 +3,10 @@
 //   - checkOrg() answers, for one org in one read-only transaction acting as the org's system
 //     principal, whether each socket's session is still live (and if not, when it ended), whether
 //     the admission hook (C0.9) still admits each person with a live session, whether each person may
-//     hold each topic now (packages/access, through loadTopicWorld and canTopics), when each lost
-//     topic's token was first absent (for the latency metric), and when each current team membership
-//     began (for a resume's era test). It takes no row lock and writes nothing, so it never holds the
-//     outbox's horizon and never joins the lock order.
+//     hold each topic now (packages/access, through loadTopicWorld and canTopics), when the change
+//     that took each lost topic's token was made (for the latency metric), and when each current
+//     team membership began (for a resume's era test). It takes no row lock and writes nothing, so
+//     it never holds the outbox's horizon and never joins the lock order.
 //   - The periodic check (realtime/socket.ts, every 15 s, with its own connection) asks it of every
 //     open socket. The decision lane (DecisionLane) asks it for subscribe decisions, accept-time
 //     checks and targeted re-checks, batched per org every 20 ms, one transaction at a time. A lane
@@ -48,8 +48,10 @@ export interface CheckRequest {
   eras?: ReadonlyMap<string, ReadonlySet<string>>
 }
 
-// A session that is live, with its person; or one that has ended, and when (epoch ms) if known. A
-// session the database doesn't return has ended at an unknown time.
+// A session that is live, with its person; or one that has ended, and when (epoch ms) if known, by
+// its base rows (startSource 'database', revocation/latency.ts): a revoking transaction's now(), its
+// start, or an expiry's or the idle limit's own time. A session the database doesn't return has
+// ended at an unknown time.
 export type SessionCheck = { live: true; person: string } | { live: false; endedAt: number | undefined }
 
 export interface CheckResult {
@@ -58,8 +60,9 @@ export interface CheckResult {
   notAdmitted: ReadonlySet<string>
   // For each person decided (a live session, admitted): each topic asked, and whether it is allowed.
   topics: ReadonlyMap<string, ReadonlyMap<string, boolean>>
-  // For each person: each held topic now refused, and the earliest time its token has been absent
-  // (epoch ms), or undefined if unknown.
+  // For each person: each held topic now refused, and the earliest time the base rows give for the
+  // change that took its token (epoch ms; the revoking transaction's now(), its start), or undefined
+  // if unknown.
   lostAt: ReadonlyMap<string, ReadonlyMap<string, number | undefined>>
   // For each person: each allowed team topic of eras, and when the current membership began.
   eras: ReadonlyMap<string, ReadonlyMap<string, number>>
@@ -92,7 +95,9 @@ export async function checkOrg(
   if (ids.length > 0) {
     // The rules of session_by_token (0006) and the api's acting-session re-read: not revoked, not
     // expired, used within the idle limit, on a device still signed in, of a person who hasn't left.
-    // ended_at is the earliest of the times that ended it, by Postgres's clock (m3).
+    // ended_at is the earliest of the times that ended it, by Postgres's clock (m3): a revocation's,
+    // sign-out's or deactivation's is its transaction's now(), which comes before that transaction's
+    // commit by however long it ran (T19 item 13).
     const { rows } = await sql<{ id: string; user_id: string; live: boolean; ended_at: Date | null }>`
       select s.id, s.user_id,
         (s.revoked_at is null and s.expires_at > now() and s.last_seen_at > now() - ${idle}::interval
@@ -144,10 +149,11 @@ export async function checkOrg(
     }
   }
   if (lost.length > 0) {
-    // When each lost topic's token was first absent (m3): a person or org topic at the deactivation;
-    // a team topic at the earlier of the deactivation and, when no membership of the team is
-    // active, the last removal. least() skips nulls, so the answer is the earliest cause; null is
-    // an unknown start.
+    // When the change that took each lost topic's token was made (m3): a person or org topic's is the
+    // deactivation's; a team topic's the earlier of the deactivation's and, when no membership of
+    // the team is active, the last removal's. Each is its transaction's now(), which comes before
+    // its commit, when the token went, by however long it ran (T19 item 13). least() skips nulls,
+    // so the answer is the earliest cause; null is an unknown start.
     const { rows } = await sql<{ person: string; topic: string; lost_at: Date | null }>`
       select x.person, x.topic,
         least(p.deactivated_at,
@@ -356,29 +362,33 @@ export class DecisionLane {
 }
 
 // Coalesces the people whose access a revocation may have changed (§8.3): each (org, person) is
-// queued with the label of its first trigger, and after delayMs (100 ms) every org's people are
-// handed on in chunks of at most max (500), for a re-check in the lane.
+// queued with the label of its first trigger, unless a later one is preferred (the gateway prefers
+// a people signal's to a plain re-check's, so the signal's drops carry its path), and after
+// delayMs (100 ms) every org's people are handed on in chunks of at most max (500), for a
+// re-check in the lane.
 export class TargetedQueue<L> {
   readonly #due: (orgId: string, people: ReadonlyMap<string, L>) => void
   readonly #delayMs: number
   readonly #max: number
+  readonly #prefer: (kept: L, next: L) => boolean
   #pending = new Map<string, Map<string, L>>()
   #timer: NodeJS.Timeout | undefined
   #stopped = false
 
   constructor(
     due: (orgId: string, people: ReadonlyMap<string, L>) => void,
-    options: { delayMs?: number; max?: number } = {},
+    options: { delayMs?: number; max?: number; prefer?: (kept: L, next: L) => boolean } = {},
   ) {
     this.#due = due
     this.#delayMs = options.delayMs ?? GATEWAY_POLICY.targetedDelayMs
     this.#max = options.max ?? GATEWAY_POLICY.decisionBatchMax
+    this.#prefer = options.prefer ?? (() => false)
   }
 
   queue(orgId: string, person: string, label: L): void {
     if (this.#stopped) return
     const people = inner(this.#pending, orgId)
-    if (!people.has(person)) people.set(person, label)
+    if (!people.has(person) || this.#prefer(people.get(person) as L, label)) people.set(person, label)
     if (this.#timer === undefined) {
       this.#timer = setTimeout(() => this.#fire(), Math.max(1, this.#delayMs))
       this.#timer.unref()

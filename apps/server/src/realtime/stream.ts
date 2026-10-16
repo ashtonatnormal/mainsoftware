@@ -11,19 +11,27 @@
 //     holds it until the replay is done. Entries are read and sent in stream order, and a socket's
 //     frames go out in order, so a frame carrying the reader's position follows every entry at or
 //     below it: ack, ev, pong and reset each tell the client every topic acked on the socket is
-//     caught up to there (§6.9 item 3).
+//     caught up to there (§6.9 item 3). ack, pong and reset carry it rounded down to a 25 s grain
+//     (grainOf), so no member learns when other topics' events happened.
 //   - The epoch, a random uuid beside the stream, names its continuity. A Valkey restart or failover
 //     that loses the key gives a new one, and a reader that finds its epoch changed, its position
-//     trimmed or the tail it read gone sends reset to every socket of the org. An absent stream
-//     under the same epoch is no gap: nothing was written after the reader's position (S6). While
+//     trimmed or the tail it read gone sends reset to every socket of the org. The tail is gone when
+//     the stream's last entry is below the reader's position, or the entry at its position is
+//     missing although the head is at or below it, which finds a failover's lost tail even when a
+//     producer appended on the new primary first. Lost entries are lost for every reader and every
+//     resume, so that reader also replaces the epoch: a since from before the loss then resets. The
+//     reader reads an org only once its due gap check has passed, so no read moves its position past
+//     a gap unseen. An absent stream under the same epoch is no gap: nothing was written after the
+//     reader's position (S6). Entries lost before any reader read them can't be found. While
 //     realtime has sockets in an org it refreshes both keys every 60 s, so a quiet org's stream
 //     doesn't expire under its readers.
 //   - A client resubscribes with since { epoch, pos }. planResume() decides whether the entries it
 //     missed can be replayed: the same epoch, nothing after since trimmed, the oldest missed entry
-//     at most 2 minutes old, at most 1,000 scanned and 500 sent, and for a team topic a membership
-//     that began before since (so a team left and rejoined while away replays nothing from the gap;
-//     GW-09). Otherwise those topics answer reset and the client refetches them over REST.
-//     ReplayQueue bounds how many replays run at once (S5).
+//     of its own topics at most 2 minutes old (other topics' entries never decide it, so the answer
+//     says nothing of when they happened), at most 1,000 scanned and 500 sent, and for a team topic
+//     a membership that began before since (so a team left and rejoined while away replays nothing
+//     from the gap; GW-09). Otherwise those topics answer reset and the client refetches them over
+//     REST. ReplayQueue bounds how many replays run at once (S5).
 // Every entry and frame holds ids, codes and whole numbers only (T19 item 9): clients read content
 // over REST, which checks access. A topic is decided by can() before anything of it is replayed or
 // sent. Stream ids compare as (ms, seq) pairs of 64-bit numbers, never as strings (compareIds).
@@ -81,6 +89,21 @@ export function compareIds(a: string, b: string): -1 | 0 | 1 {
 // The time an id was made (epoch ms, by Valkey's clock).
 export function idTime(id: string): number {
   return Number(idParts(id)[0])
+}
+
+// The org's position as a socket is told it in ack, pong and reset (T19 item 9): rounded down to
+// the start of its grainMs, as <ms>-0. It is at or below the position, so every entry at or below it
+// has still been dispatched, and the client's "caught up to here" holds. The exact id would tell
+// every member when the org's latest event happened, on any topic, theirs or not; rounded, it says
+// at most that some event happened in that grain. Only an ev, for a topic the socket holds, carries
+// an exact id.
+export function grainOf(position: Position, grainMs: number): Position
+export function grainOf(position: Position | null, grainMs: number): Position | null
+export function grainOf(position: Position | null, grainMs: number): Position | null {
+  if (position === null) return null
+  const [ms] = idParts(position.pos)
+  const grain = BigInt(grainMs)
+  return { epoch: position.epoch, pos: `${(ms / grain) * grain}-0` }
 }
 
 // The ev frame for an entry, serialised once for every socket it goes to (§6.3).
@@ -322,10 +345,16 @@ export class StreamReader<S> {
         continue
       }
       // The gap checks and refreshes that are due, before the read: an XREAD from a trimmed
-      // position returns what is left after it, so a trim is found only by comparing the stream's
-      // head with the position the read would start from.
-      await this.#maintain(ready)
+      // position returns what is left after it, and one after a failover that lost the tail
+      // returns what the new primary appended, so a gap is found only by comparing the stream with
+      // the position the read would start from. An org whose due check failed waits for one that
+      // passes.
+      const readable = await this.#maintain(ready)
       if (this.#stopped) break
+      if (readable.length === 0) {
+        await this.#sleep(this.#policy.readerRetryMs)
+        continue
+      }
       let reply: [stream: string, entries: [id: string, fields: string[]][]][] | null
       try {
         reply = await this.#reader.xread(
@@ -334,8 +363,8 @@ export class StreamReader<S> {
           'BLOCK',
           this.#policy.readerBlockMs,
           'STREAMS',
-          ...ready.map(([, state]) => state.stream),
-          ...ready.map(([, state]) => state.lastId as string),
+          ...readable.map(([, state]) => state.stream),
+          ...readable.map(([, state]) => state.lastId as string),
         )
       } catch (error) {
         if (this.#stopped) break
@@ -347,7 +376,7 @@ export class StreamReader<S> {
       this.#streak = 0
       this.#lastGoodAt = this.#now()
       if (this.#stopped) break
-      const byStream = new Map(ready.map(([orgId, state]) => [state.stream, { orgId, state }]))
+      const byStream = new Map(readable.map(([orgId, state]) => [state.stream, { orgId, state }]))
       for (const [stream, entries] of reply ?? []) {
         const read = byStream.get(stream)
         if (read === undefined || this.#orgs.get(read.orgId) !== read.state) continue
@@ -453,17 +482,22 @@ export class StreamReader<S> {
     return value
   }
 
-  // Before a read: the gap checks and expiry refreshes that are due, one org at a time.
-  async #maintain(ready: readonly [string, OrgState][]): Promise<void> {
+  // Before a read: the gap checks and expiry refreshes that are due, one org at a time. Answers the
+  // orgs the read may include: those whose check wasn't due, or passed. One whose due check failed
+  // is left out until a check passes, so the read can't move its position past a gap unseen.
+  async #maintain(ready: readonly [string, OrgState][]): Promise<[string, OrgState][]> {
+    const readable: [string, OrgState][] = []
     for (const [orgId, state] of ready) {
       if (this.#stopped || this.#orgs.get(orgId) !== state) continue
       const now = this.#now()
+      let checked = true
       if (now >= state.checkAt) {
         try {
           await this.#check(orgId, state)
           state.checkAt = this.#now() + this.#policy.readerEpochCheckMs
         } catch (error) {
-          // Tried again after the next read.
+          // Still due: tried again before the org is next read.
+          checked = false
           this.#failed('check', error)
         }
       }
@@ -478,28 +512,52 @@ export class StreamReader<S> {
           this.#failed('refresh', error)
         }
       }
+      if (checked && this.#orgs.get(orgId) === state) readable.push([orgId, state])
     }
+    return readable
   }
 
   // The gap check (§5.5): the epoch changed (the key was lost: a restart, a failover), the stream
-  // was trimmed past this reader, or the tail it read is gone. Any of these resets the org's
-  // sockets, and the reader continues from the stream's last entry in the epoch it found.
+  // was trimmed past this reader, or the tail it read is gone: the stream's last entry is below the
+  // reader's position, or the entry at its position is missing while the head is at or below it
+  // (a failover that lost the tail, after which the new primary may already have appended above
+  // it). Any of these resets the org's sockets, and the reader continues from the stream's last
+  // entry in the epoch it found. A lost tail is lost for every reader and every resume, so the
+  // reader replaces the epoch too: a since from before the loss then answers reset_epoch, rather
+  // than resuming past entries that are gone.
   async #check(orgId: string, state: OrgState): Promise<void> {
+    const lastId = state.lastId
     const epoch = await this.#epoch(state, false)
     const [first] = await this.#valkey.xrange(state.stream, '-', '+', 'COUNT', 1)
     const [last] = await this.#valkey.xrevrange(state.stream, '+', '-', 'COUNT', 1)
-    const lastId = state.lastId
-    if (this.#orgs.get(orgId) !== state || lastId === undefined) return
+    const shouldHold =
+      lastId !== undefined && lastId !== '0-0' && first !== undefined && compareIds(first[0], lastId) <= 0
+    const [held] = shouldHold ? await this.#valkey.xrange(state.stream, lastId, lastId, 'COUNT', 1) : []
+    if (this.#orgs.get(orgId) !== state || lastId === undefined || state.lastId !== lastId) return
     let reason: 'epoch' | 'trimmed' | 'tail_lost' | undefined
     if (epoch !== state.epoch) reason = 'epoch'
     else if (first !== undefined && lastId !== '0-0' && compareIds(first[0], lastId) > 0) reason = 'trimmed'
-    else if (last !== undefined && compareIds(last[0], lastId) < 0) reason = 'tail_lost'
+    else if ((last !== undefined && compareIds(last[0], lastId) < 0) || (shouldHold && held === undefined)) {
+      reason = 'tail_lost'
+    }
     if (reason === undefined) return
-    state.epoch = epoch
+    const continued = reason === 'tail_lost' ? await this.#replaceEpoch(state) : epoch
+    if (this.#orgs.get(orgId) !== state || state.lastId !== lastId) return
+    state.epoch = continued
     state.lastId = last?.[0] ?? '0-0'
     this.#resets++
     this.#logger.info({ event: 'stream_reset', org: orgId, reason }, 'the org’s event stream lost continuity')
-    this.#target.resetOrg(orgId, { epoch, pos: state.lastId })
+    this.#target.resetOrg(orgId, { epoch: continued, pos: state.lastId })
+  }
+
+  // A new epoch for the org's stream, written over the old one, and the value that won (another
+  // reader that found the same loss may have written its own meanwhile; a reader still holding the
+  // other finds the change at its next check).
+  async #replaceEpoch(state: OrgState): Promise<string> {
+    await this.#valkey.set(state.epochKey, randomUUID(), 'PX', this.#policy.streamTtlMs)
+    const value = await this.#valkey.get(state.epochKey)
+    if (value === null || !UUID_PATTERN.test(value)) throw new Error('the stream’s epoch could not be read')
+    return value
   }
 
   #checkAllSoon(): void {
@@ -552,8 +610,8 @@ function jsonOf(text: unknown): unknown {
 // replayed; or reset, the client refetches it, because the membership began after since
 // (reset_era), the stream's continuity can't be confirmed (reset_epoch: another epoch, or the stream
 // couldn't be reached), entries after since were trimmed (reset_trimmed), the oldest missed entry
-// is past the window (reset_window), the replay would be too long (reset_long), or it couldn't start
-// in time (reset_busy). fresh is a subscribe with no since.
+// of the resumed topics is past the window (reset_window), the replay would be too long
+// (reset_long), or it couldn't start in time (reset_busy). fresh is a subscribe with no since.
 export const RESUME_OUTCOMES = [
   'resumed',
   'reset_era',
@@ -584,31 +642,37 @@ export interface ResumePlan {
 // Whether every entry after since is still in the stream. For 0-0: the stream is absent, or was
 // never trimmed (XINFO STREAM's entries-added equals its length; MAXLEN trimming doesn't move
 // max-deleted-entry-id, so that can't be used). For a real id: the stream's first entry is at or
-// below it, since trimming removes only from the head.
+// below it, since trimming removes only from the head; or, for one below the first entry (a
+// position rounded down to its grain can fall before a new stream's first entry), the stream was
+// never trimmed, as for 0-0.
 async function untrimmed(valkey: Pick<Redis, 'xrange' | 'xinfo'>, stream: string, since: string): Promise<boolean> {
-  if (since === '0-0') {
-    let info: unknown
-    try {
-      info = await valkey.xinfo('STREAM', stream)
-    } catch (error) {
-      if (error instanceof Error && /no such key/i.test(error.message)) return true
-      throw error
-    }
-    const added = Number(fieldOf(info, 'entries-added'))
-    const length = Number(fieldOf(info, 'length'))
-    if (!Number.isFinite(added) || !Number.isFinite(length)) throw new Error('XINFO STREAM answered unexpectedly')
-    return added === length
+  if (since !== '0-0') {
+    const [first] = await valkey.xrange(stream, '-', '+', 'COUNT', 1)
+    if (first === undefined) return false
+    if (compareIds(first[0], since) <= 0) return true
   }
-  const [first] = await valkey.xrange(stream, '-', '+', 'COUNT', 1)
-  return first !== undefined && compareIds(first[0], since) <= 0
+  let info: unknown
+  try {
+    info = await valkey.xinfo('STREAM', stream)
+  } catch (error) {
+    // Absent: for 0-0 nothing was ever written; for a real id, the stream went since its head was read.
+    if (error instanceof Error && /no such key/i.test(error.message)) return since === '0-0'
+    throw error
+  }
+  const added = Number(fieldOf(info, 'entries-added'))
+  const length = Number(fieldOf(info, 'length'))
+  if (!Number.isFinite(added) || !Number.isFinite(length)) throw new Error('XINFO STREAM answered unexpectedly')
+  return added === length
 }
 
 // Decides how each topic of a resubscribe resumes from since, given the org's position now (the
 // reader's, or null if Valkey can't be reached), in §7.6's order: the era of each team topic, then
 // for the rest the epoch, trimming, a since at or past the position (nothing to replay: the client
-// saw it on another task), and the missed entries themselves. An empty gap resumes however old
-// since is (P1). Reads on the command client; throws if Valkey can't answer, and the caller resets
-// every topic (reset_epoch).
+// saw it on another task), and the missed entries themselves: the scan's cap, the frames' cap, and
+// the window, which only the resumed topics' own entries decide, so no answer depends on when
+// another topic's event happened (T19 item 9). A gap with none of their entries resumes however
+// old since is (P1). Reads on the command client; throws if Valkey can't answer, and the caller
+// resets every topic (reset_epoch).
 export async function planResume(
   valkey: Pick<Redis, 'xrange' | 'xinfo'>,
   stream: string,
@@ -642,9 +706,6 @@ export async function planResume(
   if (!(await untrimmed(valkey, stream, request.since.pos))) return all('reset_trimmed')
   if (compareIds(request.since.pos, current.pos) >= 0) return all('resumed')
   const missed = await valkey.xrange(stream, `(${request.since.pos}`, current.pos, 'COUNT', policy.replayScanMax + 1)
-  const [oldest] = missed
-  if (oldest === undefined) return all('resumed')
-  if (idTime(oldest[0]) < now - policy.resumeWindowMs) return all('reset_window')
   if (missed.length > policy.replayScanMax) return all('reset_long')
   const wanted = new Set(rest)
   const frames: ResumePlan['frames'] = []
@@ -655,6 +716,8 @@ export async function planResume(
     const { topic, type, ids } = parsed.data
     frames.push({ id, topic, text: evFrame(topic, id, type, ids) })
   }
+  const [oldest] = frames
+  if (oldest !== undefined && idTime(oldest.id) < now - policy.resumeWindowMs) return all('reset_window')
   return all('resumed', frames)
 }
 

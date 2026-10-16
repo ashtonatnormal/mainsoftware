@@ -271,7 +271,7 @@ BUILD-PLAN C0.6 sets "ids-only, 14 days", the envelope (Part 2, the notes for C0
 1. **Order.** Per org, by `(tx_id, id)`, where `tx_id` is the writer's top-level `xid8` (`pg_current_xact_id()`, the column default, which no producer may set). There is no order across orgs. It isn't commit order, nor per-entity order: a consumer re-reads the entity's current state (`ordering: 'reread'`, the default), or compares `acl_epoch` for ACL rows (`ordering: 'epoch'`). A commit-time sequencer stays in reserve as a migration-only change if a consumer ever needs commit order.
 2. **The horizon.** A consumer reads only rows with `tx_id < pg_snapshot_xmin(pg_current_snapshot())`, in the same statement as the rows. Any transaction holding an xid anywhere on the cluster holds every consumer back: events are delayed, never lost. So every transaction the server opens is bounded (T18 item 7), and the worker logs how long consumers are held back (item 19).
 3. **Checkpoints.**
-   - One per (org, consumer), moved only by the role the consumer runs as: a trigger (`outbox_checkpoints_own_row()`) refuses any other role, a role name that doesn't exist and a renamed row (`42501`).
+   - One per (org, consumer), moved only by the role the consumer runs as: a trigger (`outbox_checkpoints_own_row()`) refuses any other role, a role name that doesn't exist and a renamed row (`42501`). From 0008 it also binds each consumer the server runs to that role (`offboarding` to `hearth_job_offboarding`, `revocation` to `hearth_job_revocation`), so one consumer's role can't start another's checkpoint in an org where it has none yet, and nobody, the superuser included, can pair the name with another role. A migration that adds a consumer binds its name in the same function; names it doesn't bind (the tests' own consumers) may name any role their writer can use.
    - It moves in the transaction that applies the batch's effects, by compare-and-set from the position the round read. A consumer takes `pg_try_advisory_xact_lock` per (consumer, org), so one instance runs at a time, and reads its batch (at most 500 events) before it writes, so its own xid never lowers its horizon.
    - A new consumer starts at the oldest kept event (`start: 'oldest'`: the floor, or the beginning when nothing has been purged), or at the current horizon (`'now'`) when it bootstraps from enumerators (C1.7) or a re-check covers anything before it (C0.7's revocation consumer, T19 item 4).
    - Each round passes the job gate (T15 item 10) for the consumer's purpose and providers, and withholds an event whose subjects' processing switch refuses that purpose (`outbox_event_withheld`). A protective consumer (T19 item 4), which only takes access away, is never withheld an event for a subject's processing switch, and its purpose gate still applies. A round for an org whose flags the process hasn't read yet is refused, and the flags reloaded, rather than fenced with nothing to compare.
@@ -332,7 +332,7 @@ BUILD-PLAN C0.6 sets "≤10 s propagation", job cancellation and "ai.* registere
 
 PRD-112 asks for scoped credentials per service and `CLAUDE.md` for a role per system job; the shape is C0.6's. `db/tests/032_worker_roles.sql`, `apps/server/src/db/roles.integration.test.ts`, `scripts/check-migrations.sh` and `scripts/guards/db-entry.test.ts` pin each one.
 
-1. **One login per service, a role per job per transaction.** `hearth_worker` holds nothing itself and takes one job role per transaction through `withOrg()`'s `as`, in its first statement (`set_config('role', …, true)`, so the role ends with the transaction). The job roles are `hearth_queue` (claims, heartbeats, outcomes, the scheduler, the flag cache, metrics and the org list), `hearth_job_offboarding` (the offboarding consumer and its jobs), `hearth_job_partitions`, `hearth_job_purge` and, from C0.7, `hearth_job_revocation` (the revocation consumer and its jobs, which read only sessions' ends: T19 item 4), as `apps/server/src/db/roles.ts` lists them. Job roles limit what a buggy handler can touch: a consumer can't move another's checkpoint, a maintenance job can't read sessions, the clean-up can delete only what its functions allow. They don't separate jobs from a compromised worker process, which can take any of its roles. Services that read sensitive data (the recorder in C2.6, conversion in C4, calculation in C5, the Rule 9 role in C1.11) get logins of their own when they arrive.
+1. **One login per service, a role per job per transaction.** `hearth_worker` holds nothing itself and takes one job role per transaction through `withOrg()`'s `as`, in its first statement (`set_config('role', …, true)`, so the role ends with the transaction). The job roles are `hearth_queue` (claims, heartbeats, outcomes, the scheduler, the flag cache, metrics and the org list), `hearth_job_offboarding` (the offboarding consumer and its jobs), `hearth_job_partitions`, `hearth_job_purge` and, from C0.7, `hearth_job_revocation` (the revocation consumer and its jobs, which read only sessions' ends: T19 item 4), as `apps/server/src/db/roles.ts` lists them. Job roles limit what a buggy handler can touch: a consumer can't start or move another's checkpoint (T16 item 3), a maintenance job can't read sessions, the clean-up can delete only what its functions allow. They don't separate jobs from a compromised worker process, which can take any of its roles. Services that read sensitive data (the recorder in C2.6, conversion in C4, calculation in C5, the Rule 9 role in C1.11) get logins of their own when they arrive.
 2. **The worker's org list.** `worker_org_ids()`, ids only, executable by `hearth_queue` only, called by `listOrgs()` in `database.ts` in its own short read-only transaction, at start and every 60 s: a second, named exception to "every query filters by org", beside the sign-in lookups. Everything after it runs in `withOrg()` for one org, under row level security.
 3. **Who runs the partition function.** `hearth_job_partitions`; `hearth_app` still can't (T15 item 16).
 4. **Every runtime role is held to `hearth_app`'s rule.** Any role granted anything in the database, and any role that can use one by SET or INHERIT, is never a superuser, BYPASSRLS, an owner or a member of one (`scripts/check-migrations.sh`). 0007 itself checks, grant by grant, that `hearth_worker` holds only job roles, by SET and never INHERIT or ADMIN (and, on RDS, the powerless `rds_iam` that IAM sign-in needs), telling a job role by its shape rather than a list of names, so one a later migration adds still passes on a server that has it: `hearth_queue` or a `hearth_job_` name, with no power (login, superuser, BYPASSRLS, CREATEROLE, CREATEDB, replication), a member of no role and owning nothing, that only `hearth_worker` may act as a job role, and that nobody may act as `hearth_worker`. The api's and realtime's `/ready` refuse a login that skips RLS or can use any job role; the worker's refuses one that can become a role that skips RLS, is a member of `hearth_app` or of any `pg_*` predefined role, or holds anything but `rds_iam` and roles of that shape by SET, and its `worker_roles` check refuses one that can't take each of its job roles (`apps/server/src/db/pool.ts`).
@@ -383,7 +383,7 @@ The limits a client must keep are also in `packages/shared` (`GATEWAY_LIMITS`), 
    - *Why:* job payloads hold codes, never free text.
 
 4. **The revocation consumer and its jobs (OD-08, owner; OD-09, OD-28, OD-39, OD-40).**
-   - **The consumer.** `revocation` runs as `hearth_job_revocation` (0008), under `core.system`, with purpose `accounts`. `core.system` is locked on, so no flag gates it (T17 item 5).
+   - **The consumer.** `revocation` runs as `hearth_job_revocation` (0008), under `core.system`, with purpose `accounts`. `core.system` is locked on, so no flag gates it (T17 item 5). 0008 binds the name to that role, so the offboarding role can't start the revocation checkpoint before the consumer does, or the reverse (T16 item 3).
      - It reads `signin.ended` (any reason) and `acl.changed` (`keys`, any reason). It passes over `rows` with a debug line until C1.1.
      - It starts at `'now'`, and has a lag budget of 10 s.
    - **It is protective** (`OutboxConsumer.protective`). It only takes access away, so the consumer runner never withholds one of its events because of a subject's processing switch (PDPA-04). The purpose gate still applies.
@@ -396,7 +396,7 @@ The limits a client must keep are also in `packages/shared` (`GATEWAY_LIMITS`), 
      - A `sockets` job is keyed `sockets:<first session id>`. The key is unique because a session ends once.
      - A `topics` job has no key. A repeated re-check is harmless, and the only id unique to the event is its bigint, which no key may hold.
      - Jobs try up to 20 times, with a back-off from 1 s doubling to 15 s (±20%). About seven tries start inside the first minute, and the last about 4 minutes after the first. Each try may run for 30 s. A job that dies logs `revocation_handler_dead` at error level.
-     - The `sockets` job re-reads which of its sessions have ended, and when (`sessions.revoked_at`), and publishes only those, with the earliest `revoked_at` as `at`. If none has ended, the claim was forged: the job logs `revocation_not_ended` at error level and dies (`not_ended`). If only some have, it logs the same line with the count and publishes those.
+     - The `sockets` job re-reads which of its sessions have ended, and the `signin.ended` event that ended them, and publishes only those, with that event's `at` as `at` (item 13; with no such event, no `at`). The event is found by its session within a minute either side of the session's `revoked_at`, which only bounds the scan of the outbox's `(org_id, at)` index, since a session ends once. If none has ended, the claim was forged: the job logs `revocation_not_ended` at error level and dies (`not_ended`). If only some have, it logs the same line with the count and publishes those.
      - The `topics` job publishes the people as they are, with no `at`, because a re-check can only drop what Postgres says is lost.
      - A publish that fails fails the job, which is tried again.
    - **C0.9.** Its register must keep `accounts` non-consent and active from notice v0, because the purpose gate still applies. Tests pin two things:
@@ -443,7 +443,7 @@ The limits a client must keep are also in `packages/shared` (`GATEWAY_LIMITS`), 
    - **The periodic check.** Every 15 s, each realtime process checks every open socket's session, its admission (from C0.9), and every topic it holds, in any state.
      - Each org gets one transaction: read only, with a 10 s `transaction_timeout`, acting as the org's system principal, with no row locks. The whole check, every org included, has 10 s to answer.
      - The topic part loads only the subscribers' person rows, their active team memberships and role rows, and the org's teams (`loadTopicWorld`). It decides each distinct (person, topic) pair once through `@hearth/access`'s `canTopics`, which is `can()` for a list.
-     - A lost topic's start time is the earliest time its token has been absent.
+     - A lost topic's start time is the earliest time its base rows give for the change that took its token (item 13).
      - What a check finds applies only to the topics it asked about, in the generation it asked about, and confirms them as of the check's start.
    - **When checks fail.** A check that hasn't answered within 10 s has failed, and one failed check closes nothing. A socket closes with 1013 only when its session, or one of its granted topics, would go unconfirmed past 60 s if the next check failed too. The arithmetic is T14 item 14's: 2 × (15 + 10) s < 60 s.
    - **The lane.** Subscribe decisions, accept-time checks and targeted re-checks share one lane per process.
@@ -451,6 +451,7 @@ The limits a client must keep are also in `packages/shared` (`GATEWAY_LIMITS`), 
      - It acts as the org's system principal, not as each subscriber. One transaction serves up to 500 sessions of the org. RLS is org-scoped, so the rows read are the same either way. `can()` decides in memory with the subscriber as its subject. The subscriber's org and id come from the socket's server-side session, never from a frame.
      - A lane that fails closes nothing. The ack lists its undecided topics in `retry`, and the client sends them again after a jittered back-off. Only `closeUnconfirmed` closes sockets for failed checks.
    - **Generations.** Several steps resume after an await: a lane result, the stream position, a replay's read, a flush. Each acts only if the socket is still open and the topic still has the generation and state it started with. Unsub, drop and close end a generation. An ack is built from the state after its last await, so a topic dropped meanwhile is in none of its lists.
+   - **Repeated subs.** A sub of a topic the socket already holds decides nothing. Its ack lists the topic `ok` if it is live in the generation the sub found. Otherwise it lists it in `retry`: an earlier sub is still deciding or resuming it, or answered it `refused` or `retry` meanwhile. An `ok` while it replays would claim a catch-up that sub's replay hasn't sent yet, and the client would drop the replayed entries as seen. A topic dropped or unsubscribed meanwhile is in none of the lists, since the client heard of its end.
    - **Locks.** Teams and memberships are never locked, so the lock order (`CLAUDE.md`) is unchanged.
    - *Why:* the realtime pool's lanes are fixed (item 11), and plain reads take no xid, so the outbox horizon is never held.
 
@@ -460,14 +461,18 @@ The limits a client must keep are also in `packages/shared` (`GATEWAY_LIMITS`), 
      - Both keys expire 24 h after their last write. While realtime has sockets in the org, it refreshes both keys every 60 s with `PEXPIRE`, and makes the epoch if it is missing. So a quiet org's stream doesn't vanish under its readers.
    - **The reader.** Every realtime process reads the streams of the orgs it has sockets in, with `XREAD BLOCK 2000 COUNT 500`. It uses its own connection, whose timeouts can't cut a block. It checks each org's epoch and gaps before a read, every 2 s, and after a reconnect, a failure or a full page. When an org's last socket on the process closes, the reader forgets that org's position and epoch.
    - **Frames.** Every frame and entry holds ids, codes and whole numbers only. Clients read content over REST, which checks access.
-   - **Positions.** `ack`, `ev`, `pong` and `reset` carry the org's stream position. Each tells the client that every topic acked on that socket is caught up to that position, because a socket's frames go out in stream order. So a connected client's position is at most a heartbeat old, however quiet its own topics are.
+   - **Positions.** `ack`, `ev`, `pong` and `reset` carry a stream position. Each tells the client that every topic acked on that socket is caught up to that position, because a socket's frames go out in stream order.
+     - An `ev` carries its entry's exact id, for a topic the socket holds.
+     - `ack`, `pong` and `reset` carry the reader's position rounded down to a 25 s grain (`positionGrainMs`, `grainOf()` in `realtime/stream.ts`), as `<ms>-0`. Every entry at or below it has been dispatched, so the claim still holds, and a connected client's position is at most a heartbeat and a grain old, however quiet its own topics are.
+     - *Why the grain (a C0.7 default for the owner to confirm).* The exact position is the id of the org's latest entry, on any topic. Any member could poll it, up to 5 frames a second, and see when events happened on topics they can't hold: another person's inbox, a team they aren't in, and from C1.1 DMs and restricted spaces. Rounded, a member learns at most that some event in the org happened within a 25 s grain, never when, how many, or on which topic. The cost is small: a resume from a rounded position replays the socket's own entries of up to one grain again, and the client drops those as at or below their topics' positions (`gateway.ts` header item 3).
+     - *Left for C1.1*, which decides how chat topics resume (item 9's replay caps): the resume's trim test and its scan cap still read the whole org stream, so a crafted `since` can learn where the stream's head is and whether more than 1,000 entries follow a point. Per-topic sequences would close that too.
    - **Resume.** A client resubscribes with `since: { epoch, pos }`. The server decides each topic with `can()` first. It then replays that topic's entries in `(since, current]`, provided all of these hold:
      - for a `team` topic, the person's current membership began before `since` (`team_memberships.created_at`, with 5 s of margin toward `reset`). Otherwise the replay would cover a span in which they weren't a member: they left and rejoined while away. A `person` or `org` topic is held from the account's start, and a deactivation is final (`keep_history`), so it needs no such test;
      - the epoch matches;
      - nothing after `since` was trimmed:
-       - for a real id, the stream's first entry is at or below `since`;
+       - for a real id, the stream's first entry is at or below `since`; or, for one below it (a rounded position can fall before a new stream's first entry), the stream was never trimmed, as for `0-0`;
        - for `0-0`, the stream is absent or was never trimmed (`XINFO STREAM`: `entries-added` equals `length`). `MAXLEN` trimming doesn't move `max-deleted-entry-id`, so that field can't be used;
-     - the oldest missed entry is at most 2 minutes old. A resume that missed nothing is valid however old `since` is;
+     - the oldest missed entry of the topics being resumed is at most 2 minutes old. Other topics' entries never decide it, so the answer says nothing about when they happened. A resume that missed none of its topics' entries is valid however old `since` is;
      - the replay is within 1,000 entries scanned and 500 frames sent.
 
      Otherwise it answers `reset` for those topics, and the client refetches them over REST. The ack comes after the replayed entries, and the entries the reader held for those topics meanwhile follow it, in stream order.
@@ -478,6 +483,10 @@ The limits a client must keep are also in `packages/shared` (`GATEWAY_LIMITS`), 
      - At C1's volumes a resume also scans other topics' entries. C1.1 decides whether chat topics resume from their own sequences or from a window of recent entries each process keeps, and C1.12 measures it.
    - **Gaps.**
      - A reader can find the epoch changed, its position trimmed, or the tail it read gone (Valkey restarted, failed over, or the reader fell behind). It then sends `reset` to every socket of the org at once.
+     - The tail is gone when the stream's last entry is below the reader's position, or when the entry at its position is missing although the stream's head is at or below it. The second test finds a failover's lost tail even when a producer appended on the new primary before the check.
+     - A lost tail is lost for every reader and every resume, so the reader that finds it also replaces the epoch. A `since` from before the loss then answers `reset`, rather than resuming past entries that are gone.
+     - An org whose due gap check fails isn't read until a check passes, so no read carries the reader's position past a gap unseen.
+     - Entries lost before any reader read them can't be found.
      - An absent stream under an unchanged epoch is no gap: nothing has been written since the reader's position.
    - *Why:*
      - Streams don't lose entries across a Valkey reconnect, and any task can resume any client.
@@ -504,6 +513,7 @@ The limits a client must keep are also in `packages/shared` (`GATEWAY_LIMITS`), 
       - The client refetches after a random delay within the reconnect spread, so 25,000 clients don't call `GET /api/flags` at once.
     - **Admission.** An admission hook admits everyone until C0.9. It is asked inside the gateway's own read-only transactions: at accept (as a targeted check), in each subscribe batch and in each periodic check.
       - Someone it no longer admits has every socket closed with 4403 `notice_required`. That happens within one check (25 s) of a new notice version, and the client shows the notice.
+      - Only the sockets open when the check or the subscribe decision read admission are closed. A socket opened after that read, as one in a tab where the person has just acknowledged, is left to its own accept-time check.
       - It isn't a sign-out, so nothing local is wiped.
     - **4401.** `signed_out` means signed out on that session, for any reason.
       - Whether the close should say which reason (PRD-74 against NFR-04) is C1.8's decision for the owner (OD-42).
@@ -520,12 +530,14 @@ The limits a client must keep are also in `packages/shared` (`GATEWAY_LIMITS`), 
       - A person holds at most 40 sockets, five devices' worth (429), so no one person can fill a task.
       - A process holds at most 25,000 sockets (503). The cap is checked before the lookup, as a fast path, and again in the same tick as `handleUpgrade`.
       - A process runs at most 5 session lookups at once, and queues at most 1,000 (503 beyond that). A lookup still waiting 5 s after the upgrade arrived is refused 503. Its slot is freed only when its transaction ends, so lookups abandoned on a slow database never take more than 5 connections.
+      - An upgrade waits for a slot only until 1 s before that limit (`lookupReserveMs`), and is then refused 503 without a lookup, so every lookup that runs has at least a second to answer. Without the reserve, under sustained overload the queue's oldest waiter would get each freed slot with almost no time left, run its lookup anyway, and still be refused: no upgrade would get through while the database stayed slow.
     - **Frame limits.**
       - A client frame is at most 4 KiB (1009) and names at most 50 topics.
       - A socket holds at most 100 topics. A topic counts from the moment it is asked for, deciding and replaying included. More closes the socket with 1008 `too_many_topics`.
       - Each socket gets a token bucket of 20 frames, full when it opens, which refills at 5 a second. An empty bucket closes the socket with 1008 `too_many_frames`.
+      - Every frame takes a token, protocol pings and unasked-for pongs included; only the pong answering the server's own ping is free. ws's automatic pong is off, and the gateway answers a ping itself, through the bucket and the backpressure marks. So a client that floods pings and never reads can't grow the send buffer.
       - A malformed frame, a binary one, or one in another version than `welcome` chose closes it with 1008 `bad_frame`.
-    - **Backpressure.** Above 256 KiB buffered, droppable frames (`nudge` now; C1.3's typing and presence) are shed. Above 1 MiB, or above 256 KiB for 10 s, the socket closes with 4408 `too_slow`, and the client resumes.
+    - **Backpressure.** Above 256 KiB buffered, droppable frames (`nudge` now; C1.3's typing and presence) are shed. Above 1 MiB, or above 256 KiB for 10 s, the socket closes with 4408 `too_slow`, and the client resumes. The marks apply to every frame the server sends, protocol pings and pongs included (both droppable), and the heartbeat sweep applies them to every socket every 5 s, whether or not anything is sent to it.
     - **The pool.** Realtime's pool grows from 10 to 12 connections:
       - up to 5 lookups;
       - 1 lane;
@@ -561,19 +573,25 @@ The limits a client must keep are also in `packages/shared` (`GATEWAY_LIMITS`), 
       - `path` (`push`, `durable` or `recheck`);
       - `cause`, `org` and `count`;
       - `latencyMs`, measured from the change's own time;
-      - `startSource`: `publisher`, `database`, or `unknown` (then `latencyMs` is null, and the summary counts it as `unknownStart`).
+      - `startSource`: `publisher`, `outbox`, `database`, or `unknown` (then `latencyMs` is null, and the summary counts it as `unknownStart`).
 
       A revocation message's session closes are one line per org. A check's closes and drops (targeted ones included, so a people signal's) are one line per person, from the earliest known start among them.
-    - **Start times.**
-      - The push uses the api's `Date.now()` just after its commit.
-      - The durable path uses the sessions' `revoked_at`, which the worker read.
-      - A re-check uses Postgres's own time for what ended:
+    - **Labels.** A check's session closes carry cause `ended`, whatever brought the check: an expiry or another session's end is no keys change. Its drops carry the cause of the trigger that asked for it (`keys_changed` for a periodic check).
+      - A people signal's re-check takes the signal's path, since the signal is what brought in promptly what the change did (a deactivation's session ends included).
+      - The re-check a session message queues for the person's other sessions is labelled `recheck`, since what it finds is by construction what the message didn't name. When it coalesces with a people signal for the same person, the signal's path wins.
+      - So `closedRevoked` counts the push's own closes and those a re-check of the people it named finds, never an expiry that happened to sit next to a push.
+    - **Start times.** Access is lost when the revoking transaction commits (or when an expiry passes), and each start names where it came from (`startSource`):
+      - `publisher`: the push uses the api's `Date.now()` just after its commit.
+      - `outbox`: the durable path's sessions message uses the `at` of the `signin.ended` event the revoking transaction appended (item 4). That is Postgres's `clock_timestamp()` when it was appended, after the writes that ended the sessions and every lock they waited for, so just before the commit. Neither start counts how long the revoking transaction ran, so the push's and the durable path's latencies can be compared.
+      - `database`: a re-check uses Postgres's base rows for what ended:
         - a session's `revoked_at`, its device's `signed_out_at`, its person's `deactivated_at`, `expires_at` or the idle limit;
-        - for a lost topic, the earliest time its token has been absent. A team topic's is the earlier of the person's deactivation and, when no membership of the team is active, the last removal. A person or org topic's is the deactivation.
-      - A people signal is measured from the base rows the re-check reads.
+        - for a lost topic, the earliest time the base rows give for the change that took its token. A team topic's is the earlier of the person's deactivation and, when no membership of the team is active, the last removal. A person or org topic's is the deactivation.
+
+        Realtime reads no outbox (item 14), so a re-check has no commit-side time. `revoked_at`, `signed_out_at`, `deactivated_at` and `removed_at` are each the revoking transaction's `now()`, its start, which comes before its commit by however long it ran: usually milliseconds, each lock wait at most 2 s (`lock_timeout`), the whole at most 30 s (`transaction_timeout`). A `database` latency can therefore read high by that much, never low: it may report a Rule 6 breach that didn't happen, never hide one. The stamps stay `now()`, because the deactivation, device sign-out and PIN reset find the rows they ended by `revoked_at = now()` and `signed_out_at = now()`. An expiry's and the idle limit's times are exact.
+      - A people signal is measured from the base rows the re-check reads (`database`), whichever path brought it.
     - **Clamping.** The end time is realtime's `Date.now()` when the close or `dropped` frame is sent. Values are clamped to 1 ms–1 h. A latency below −1 s is counted (`skewed`), with its `skewMs`.
     - **Summaries and gauges.** Every 30 s the gateway logs:
-      - `revocation_latency` per (handler, path), with `count`, `p50`, `p95`, `p99`, `max`, `unknownStart`, `skewed` and `windowMs`. `max` is exact, and the percentiles (from `node:perf_hooks` `createHistogram`, to 3 significant figures) never exceed it;
+      - `revocation_latency` per (handler, path, startSource), so no summary mixes starts from different points, with `count`, `p50`, `p95`, `p99`, `max`, `unknownStart`, `skewed` and `windowMs`. `max` is exact, and the percentiles (from `node:perf_hooks` `createHistogram`, to 3 significant figures) never exceed it;
       - `gateway_gauges`, with `oldestUnconfirmedMs`, socket, topic and org counts, the reader's lag, the spread, lookups and replays running and waiting, decisions waiting, the recently-revoked set's size, refusals and closes by cause, resume outcomes, topics dropped by path, shed frames, topics answered `retry`, and `longestLatencyMs`, the longest revocation latency since the last gauges line (read before the summary starts a new window; null when none had a known start). It is written every 30 s while there are sockets, and once a minute otherwise.
     - **Levels.** Info up to 30 s, warn above 30 s, and error above 60 s (a Rule 6 breach). The gauges warn when `oldestUnconfirmedMs` is above 40 s, and are an error above 60 s.
     - No latency or gauges line carries a person's or session's id, a topic, a token, a phone number or content; the counts are per org.
@@ -597,14 +615,17 @@ The limits a client must keep are also in `packages/shared` (`GATEWAY_LIMITS`), 
     - An idle timeout of at least 60 s on the load balancer, and on CloudFront if it fronts `/ws`. The PRD's hour is fine.
     - A target-group deregistration delay of 10 s or less. ECS deregisters a task's target before SIGTERM, so clients usually see 1006 rather than the drain's 1001. The reconnect spread covers both (item 11).
     - Target-group health checks on `/ready/local`, never the full `/ready`. An outage of a shared dependency must not get every realtime task replaced at once.
-    - A Valkey with `maxmemory-policy noeviction`, whose ACLs BUILD-PLAN C0.12 lists. The ACLs include the commands every ioredis connection sends: `HELLO`, `AUTH`, `CLIENT|SETNAME`, `INFO`, `PING` and `QUIT`.
+    - A Valkey with `maxmemory-policy noeviction`, whose ACLs BUILD-PLAN C0.12 lists. Every service's user may run `CLIENT|SETNAME`, `CLIENT|SETINFO` and `INFO`, which ioredis 6 sends on every connect (the connection's name, its library's name and version, and its ready check), and `PING`, which Hearth sends itself (`/ready`'s check and the subscribers' keep-alive, item 12).
+      - A refused `CLIENT` doesn't fail the connection: ioredis ignores it, so the connection goes unnamed, and Valkey's ACL log gains a `NOPERM` entry on every connect.
+      - A refused `INFO` makes ioredis write a plain-text warning on every connect, outside the JSON logs.
+      - `HELLO`, `AUTH` and `QUIT` need no grant: Valkey runs its no-auth commands whatever the ACL says.
 
 17. **How the Done line is proved (OD-03, OD-38).**
     - Integration tests on the Compose stack prove it, with two realtime processes:
       - a deactivation closes every socket of the person within 60 s on each path: the push, the durable path alone (with the api's publish off), and the re-check alone;
       - a sign-out and a device sign-out close their sockets by the push and by the durable path alone, leaving the person's other sockets open;
       - a PIN reset and an admin's sign-out of someone's devices close their sockets by the push. Each appends `signin.ended` and ends the same session rows, so the durable path and the re-check treat them as they treat a sign-out.
-      - The durable tests first wait for the consumer's checkpoint.
+      - The durable tests first wait for the consumer's checkpoint. They run on a realtime process whose periodic check can't fire during the test, so its per-path counters show that the durable path closed each socket or dropped each topic, not a check that read the change first.
     - Removal from a team drops the `team` topic within 60 s on each path, and keeps the socket and its other topics. The tests write the removal as the harness superuser, because C0.16 adds the first runtime producer.
       - The push path uses `publishAccess`, as C0.16's api will.
       - The durable path uses an appended `acl.changed` with C0.16's future reason.

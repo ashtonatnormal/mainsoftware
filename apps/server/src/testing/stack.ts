@@ -259,6 +259,18 @@ export interface RealtimeOptions {
   wrapCheck?: (check: CheckOrg) => CheckOrg
 }
 
+// For a test that proves one path alone by its counter (counts().closedDurable, dropped.durable):
+// timings under which a realtime app's periodic re-check never runs during the test, its first tick
+// coming ten minutes after the app starts, past the integration mode's 120 s test timeout. The
+// stack's own app ticks every SOCKET_RECHECK_MS from the suite's start, at a phase the earlier tests
+// set, and a tick whose read lands between the revoking commit and that path's message closes the
+// socket, or drops the topic, as its own (recheck) first. The deadline is lengthened with it, since
+// the start-up guard holds the interval plus its timeout under it (socket.ts timings); with no
+// periodic check to fail, nothing else reads it. The same tick's pruning and refusal summary wait
+// too, which no such test reads. The targeted re-checks a message queues still run, counted under
+// that message's path.
+export const NO_PERIODIC_RECHECK = { recheckMs: 10 * 60_000, revokeWithinMs: 11 * 60_000 } as const
+
 type Frame = TestClient['frames'][number]
 
 // A socket that speaks the gateway's protocol (testing/gateway.ts TestClient): every frame it gets,

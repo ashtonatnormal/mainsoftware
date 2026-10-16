@@ -237,6 +237,50 @@ from public.outbox_checkpoints where org_id = pg_temp.id('1', '00') and consumer
 select pg_temp.check(last_id <> 9, 'another role moved the offboarding checkpoint')
 from public.outbox_checkpoints where org_id = pg_temp.id('1', '00') and consumer = 'offboarding';
 
+-- 7c. Each consumer the server runs is bound to its role (0008): in an org where a consumer has no
+-- checkpoint yet, the other consumer's role can't start it under its own role name, so it can't
+-- plant the position the consumer would read from, or keep the consumer from moving it (42501).
+-- Org 2, with its offboarding checkpoint removed as the superuser, has neither consumer's yet.
+-- Nobody pairs a bound consumer with another role, the superuser included, and each role still
+-- starts and moves its own.
+delete from public.outbox_checkpoints where org_id = pg_temp.id('2', '00') and consumer = 'offboarding';
+select pg_temp.act_as_job('2', 'hearth_job_revocation');
+select pg_temp.expect_error($$insert into public.outbox_checkpoints (org_id, consumer, role_name, last_tx, last_id)
+  values ('f2000000-0000-4000-8000-000000000000', 'offboarding', 'hearth_job_revocation', '1000000', 999999)$$, '42501',
+  '%Only the role that runs a consumer%');
+reset role;
+select pg_temp.act_as_job('2', 'hearth_job_offboarding');
+select pg_temp.expect_error($$insert into public.outbox_checkpoints (org_id, consumer, role_name, last_tx, last_id)
+  values ('f2000000-0000-4000-8000-000000000000', 'revocation', 'hearth_job_offboarding', '1000000', 999999)$$, '42501',
+  '%Only the role that runs a consumer%');
+reset role;
+select pg_temp.expect_error($$insert into public.outbox_checkpoints (org_id, consumer, role_name)
+  values ('f2000000-0000-4000-8000-000000000000', 'revocation', 'hearth_job_purge')$$, '42501', '%Only the role that runs a consumer%');
+select pg_temp.act_as_job('2', 'hearth_job_offboarding');
+select pg_temp.expect_rows($$insert into public.outbox_checkpoints (org_id, consumer, role_name)
+  values ('f2000000-0000-4000-8000-000000000000', 'offboarding', 'hearth_job_offboarding')$$, 1);
+select pg_temp.expect_rows($$update public.outbox_checkpoints set last_id = 2 where consumer = 'offboarding'$$, 1);
+reset role;
+select pg_temp.act_as_job('2', 'hearth_job_revocation');
+select pg_temp.expect_rows($$insert into public.outbox_checkpoints (org_id, consumer, role_name)
+  values ('f2000000-0000-4000-8000-000000000000', 'revocation', 'hearth_job_revocation')$$, 1);
+select pg_temp.expect_rows($$update public.outbox_checkpoints set last_id = 3 where consumer = 'revocation'$$, 1);
+reset role;
+select pg_temp.check(count(*) = 2 and bool_and(role_name = 'hearth_job_' || consumer and last_tx = '0'
+                                              and last_id = case consumer when 'offboarding' then 2 else 3 end),
+                     'a consumer''s org 2 checkpoint was started by another role, or not moved by its own')
+from public.outbox_checkpoints where org_id = pg_temp.id('2', '00');
+-- A row that broke the binding before 0008 (planted here as the superuser with triggers off, since
+-- nobody can plant one now): the role it names can't move it either.
+set local session_replication_role = replica;
+update public.outbox_checkpoints set role_name = 'hearth_job_offboarding'
+where org_id = pg_temp.id('2', '00') and consumer = 'revocation';
+set local session_replication_role = origin;
+select pg_temp.act_as_job('2', 'hearth_job_offboarding');
+select pg_temp.expect_error($$update public.outbox_checkpoints set last_id = 9 where consumer = 'revocation'$$, '42501',
+                            '%Only the role that runs a consumer%');
+reset role;
+
 -- 8. Nobody deletes an event directly, the purge job's role included (42501): rows leave only
 -- through purge_outbox().
 select pg_temp.act_as_job('1', 'hearth_job_purge');

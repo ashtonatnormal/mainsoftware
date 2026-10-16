@@ -2,15 +2,25 @@
 // lost each revocation took effect. Whoever applies one records it: realtime's gateway when it
 // closes sockets or drops topics, and from C2.2 the worker-side handlers (LiveKit, AI caches) for
 // their own effects. Each record logs one revocation_applied line; every 30 s one
-// revocation_latency line per (handler, path) summarises the window, from a node:perf_hooks
-// histogram, and the window starts again.
+// revocation_latency line per (handler, path, startSource) summarises the window, from a
+// node:perf_hooks histogram, and the window starts again.
 //
-// Start times come from the change's own clock: the api's Date.now() just after its commit on the
-// push path (startSource 'publisher'), Postgres's base rows (revoked_at, deactivated_at, a removal's
-// time, an expiry) on the durable path and the re-check ('database'). A record with no known start
-// logs latencyMs null and counts as unknownStart. Every value is clamped to 1 ms-1 h, since a host
-// clock may be off: the histogram refuses a value below its lowest and silently drops one above its
-// highest. A latency below -1 s is counted as skewed, with its skewMs on the line.
+// Access is lost when the revoking transaction commits (or an expiry passes). Each start says where
+// it came from (startSource), and a summary never mixes sources:
+//   'publisher'  the api's Date.now() just after its commit (the push);
+//   'outbox'     the at of the signin.ended event the revoking transaction appended, Postgres's clock
+//                after its writes and their lock waits, just before its commit (the durable
+//                sessions message, registry.ts);
+//   'database'   the base rows a re-check reads: revoked_at, signed_out_at, deactivated_at or a
+//                removal's removed_at, each the revoking transaction's now(), its start, or an
+//                expiry's or the idle limit's own time. A transaction's start comes before its commit
+//                by however long it ran (each lock wait at most 2 s, the whole at most 30 s), so a
+//                'database' latency can read high by that much, never low: it may report a breach
+//                of Rule 6's bound that didn't happen, never hide one.
+// A record with no known start logs latencyMs null and counts as unknownStart. Every value is
+// clamped to 1 ms-1 h, since a host clock may be off: the histogram refuses a value below its lowest
+// and silently drops one above its highest. A latency below -1 s is counted as skewed, with its
+// skewMs on the line.
 //
 // Levels: info up to 30 s, warn above 30 s, error above 60 s (a breach of Rule 6's bound). No line
 // carries a person's or session's id, a topic, a token, a phone number or content: an org id and
@@ -22,7 +32,8 @@ import type { Logger } from 'pino'
 // How the revocation reached whoever applied it: the api's push after its commit, the worker's
 // durable revocation jobs, or a re-check against Postgres.
 export type RevocationPath = 'push' | 'durable' | 'recheck'
-export type StartSource = 'database' | 'publisher' | 'unknown'
+// Where a start time came from (above).
+export type StartSource = 'publisher' | 'outbox' | 'database' | 'unknown'
 
 export interface Applied {
   // The handler that applied it: 'sockets' or 'topics' in the gateway (registry.ts names them), a
@@ -35,7 +46,7 @@ export interface Applied {
   orgId: string
   // Sockets closed, or (socket, topic) pairs dropped.
   count: number
-  // When access was lost (epoch ms), if known.
+  // When access was lost (epoch ms), if known, by the clock startSource names.
   startedAt: number | undefined
   startSource: StartSource
   // When the close or the dropped frame was sent (epoch ms).
@@ -60,6 +71,7 @@ export function clampLatency(latencyMs: number): number {
 interface Window {
   handler: string
   path: RevocationPath
+  startSource: StartSource
   histogram: RecordableHistogram
   // The exact longest latency: the histogram's max is the top of its bucket (3 significant figures),
   // which could put 60,000 ms over Rule 6's bound.
@@ -93,9 +105,12 @@ export class RevocationLatency {
     }
   }
 
-  // Logs one revocation_applied line and counts the latency into its (handler, path)'s window.
+  // Logs one revocation_applied line and counts the latency into its (handler, path, startSource)'s
+  // window.
   record(applied: Applied): void {
-    const window = this.#window(applied.handler, applied.path)
+    const { startedAt } = applied
+    const known = startedAt !== undefined && applied.startSource !== 'unknown'
+    const window = this.#window(applied.handler, applied.path, known ? applied.startSource : 'unknown')
     const line = {
       event: 'revocation_applied',
       handler: applied.handler,
@@ -104,12 +119,12 @@ export class RevocationLatency {
       org: applied.orgId,
       count: applied.count,
     }
-    if (applied.startedAt === undefined || applied.startSource === 'unknown') {
+    if (!known) {
       window.unknownStart++
       this.#logger.info({ ...line, latencyMs: null, startSource: 'unknown' }, 'a revocation was applied')
       return
     }
-    const raw = applied.appliedAt - applied.startedAt
+    const raw = applied.appliedAt - startedAt
     const latencyMs = clampLatency(raw)
     const skewed = raw < SKEW_MS
     if (skewed) window.skewed++
@@ -121,9 +136,9 @@ export class RevocationLatency {
     )
   }
 
-  // One revocation_latency line per (handler, path) with records since the last summary, then a new
-  // window. Percentiles (to 3 significant figures, never above the exact max) and max are null when
-  // every record had an unknown start.
+  // One revocation_latency line per (handler, path, startSource) with records since the last
+  // summary, then a new window. Percentiles (to 3 significant figures, never above the exact max)
+  // and max are null in the window of unknown starts.
   summarise(): void {
     const now = this.#now()
     const windowMs = Math.max(0, Math.round(now - this.#windowStart))
@@ -142,6 +157,7 @@ export class RevocationLatency {
           event: 'revocation_latency',
           handler: window.handler,
           path: window.path,
+          startSource: window.startSource,
           count,
           p50: at(50),
           p95: at(95),
@@ -153,8 +169,8 @@ export class RevocationLatency {
         },
         'revocation latency',
       )
-      // A window with nothing recorded next time is dropped then, so a handler and path seen once
-      // logs no empty lines after.
+      // A window with nothing recorded next time is dropped then, so a handler, path and source seen
+      // once logs no empty lines after.
       histogram.reset()
       window.max = 0
       window.unknownStart = 0
@@ -178,13 +194,14 @@ export class RevocationLatency {
     clearInterval(this.#timer)
   }
 
-  #window(handler: string, path: RevocationPath): Window {
-    const key = `${handler}:${path}`
+  #window(handler: string, path: RevocationPath, startSource: StartSource): Window {
+    const key = `${handler}:${path}:${startSource}`
     let window = this.#windows.get(key)
     if (window === undefined) {
       window = {
         handler,
         path,
+        startSource,
         histogram: createHistogram({ lowest: LATENCY_LOWEST_MS, highest: LATENCY_HIGHEST_MS, figures: 3 }),
         max: 0,
         unknownStart: 0,

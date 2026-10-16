@@ -125,7 +125,7 @@ describe('C0.5 T5 ACC-05 C0.7 T19: the realtime role, wired', () => {
     }
   })
 
-  it('P12 T19 item 5: an access message’s sessions close at once, labelled handler sockets, path durable, cause sessions_ended, startSource database', async () => {
+  it('P12 T19 items 5 and 13: an access message’s sessions close at once, labelled handler sockets, path durable, cause sessions_ended, startSource outbox', async () => {
     const { sub, gateway, events, socket, stop } = await wired()
     try {
       const { ws, closed } = await socket()
@@ -151,7 +151,7 @@ describe('C0.5 T5 ACC-05 C0.7 T19: the realtime role, wired', () => {
           handler: 'sockets',
           path: 'durable',
           cause: 'sessions_ended',
-          startSource: 'database',
+          startSource: 'outbox',
           latencyMs: expect.any(Number),
         }),
       ])

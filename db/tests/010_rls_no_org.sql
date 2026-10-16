@@ -76,8 +76,18 @@ select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key
   values ('f1000000-0000-4000-8000-000000000000', 'test.no_org', 'core.system', 'accounts')$$, '42501');
 select pg_temp.expect_rows($$update public.outbox_checkpoints set processed = processed + 1$$, 0);
 reset role;
--- The revocation consumer's role (0008): no checkpoint or job to start, and no checkpoint of its
--- own to move (the update names its consumer, as the consumer's does).
+-- The revocation consumer's role (0008): no checkpoint or job to start, and its own checkpoints
+-- out of reach. It starts one in each org first, acting in that org, so the update (which names
+-- its consumer, as the consumer's does) has rows it would move if no org meant every org.
+select pg_temp.act_as_job('1', 'hearth_job_revocation');
+select pg_temp.expect_rows($$insert into public.outbox_checkpoints (org_id, consumer, role_name)
+  values ('f1000000-0000-4000-8000-000000000000', 'revocation', 'hearth_job_revocation')$$, 1);
+reset role;
+select pg_temp.act_as_job('2', 'hearth_job_revocation');
+select pg_temp.expect_rows($$insert into public.outbox_checkpoints (org_id, consumer, role_name)
+  values ('f2000000-0000-4000-8000-000000000000', 'revocation', 'hearth_job_revocation')$$, 1);
+reset role;
+select set_config('app.org_id', '', true), set_config('app.user_id', pg_temp.id('1', 'a0')::text, true);
 set local role hearth_job_revocation;
 select pg_temp.expect_error($$insert into public.outbox_checkpoints (org_id, consumer, role_name)
   values ('f1000000-0000-4000-8000-000000000000', 'revocation', 'hearth_job_revocation')$$, '42501');

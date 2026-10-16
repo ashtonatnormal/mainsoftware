@@ -18,10 +18,13 @@
 // followed by a targeted re-check of the person (coalesced for 100 ms, in the decision lane).
 //
 // Limits (T19 item 11): 8 sockets a session, 40 a person and 25,000 a process; 5 session lookups at
-// once and 1,000 waiting, each slot held until its lookup settles (M1); an inbound token bucket and
-// 100 topics a socket; send-buffer marks. The heartbeat (T19 item 12): a protocol ping 25 s after the
-// last, and a socket silent for 55 s is cut. At SIGTERM the gateway refuses upgrades and closes every
-// socket with 1001 within 1 s; clients reconnect within the spread welcome and pong carry (P3).
+// once and 1,000 waiting, each slot held until its lookup settles, and a waiter giving up a second
+// before its limit (M1); an inbound token bucket, which protocol pings and unasked-for pongs share
+// with frames, and 100 topics a socket; send-buffer marks on everything sent, protocol pings and
+// pongs included, and at every heartbeat sweep. The heartbeat (T19 item 12): a protocol ping 25 s
+// after the last, and a socket silent for 55 s is cut. At SIGTERM the gateway refuses upgrades and
+// closes every socket with 1001 within 1 s; clients reconnect within the spread welcome and pong
+// carry (P3).
 //
 // Once a listener for 'upgrade' exists, Node hands every upgrade request to it and never to Fastify,
 // and leaves one it doesn't answer hanging. So the handler here answers every upgrade, whatever its
@@ -55,9 +58,23 @@ import {
   DecisionLane,
   TargetedQueue,
 } from '#src/realtime/checks.ts'
-import { type Conn, type FrameContext, Frames, isOpen, Nudger, newConn, sendFrame } from '#src/realtime/frames.ts'
+import {
+  type Conn,
+  type FrameContext,
+  Frames,
+  forget,
+  isOpen,
+  marks,
+  Nudger,
+  newConn,
+  type SendResult,
+  sendControl,
+  sendFrame,
+  takeToken,
+} from '#src/realtime/frames.ts'
 import { GATEWAY_POLICY, type GatewayPolicy, gatewayPolicy, reconnectSpreadMs } from '#src/realtime/policy.ts'
 import {
+  grainOf,
   RESUME_OUTCOMES,
   ReplayQueue,
   type ResumeOutcome,
@@ -150,8 +167,13 @@ export interface Trigger {
   at?: number | undefined
 }
 
-// How what a check finds is labelled: its path, and the cause of the trigger that asked for it (a
-// periodic check has none: its closes are 'ended', its drops 'keys_changed').
+// How what a check finds is labelled (T19 item 13): its path, and the cause of the trigger that asked
+// for it, which only its drops carry (a periodic check's are 'keys_changed'). Every session a check
+// finds ended is recorded as 'ended', whatever brought the check: an expiry or another session's
+// end is no keys change. A people signal's re-check takes the signal's path, since the signal is
+// what brought in promptly what the change did; the re-check a session message queues for the
+// person's other sessions is labelled 'recheck', since what it finds is by construction what the
+// message didn't name.
 interface Label {
   path: RevocationPath
   cause?: string | undefined
@@ -218,7 +240,9 @@ export interface SocketCounts {
   topics: number
   // Upgrades refused since the server started, by reason.
   refused: Record<Refusal, number>
-  // Sockets closed by the server, by why. closedRevoked is the api's push alone.
+  // Sockets closed by the server, by why. closedRevoked is the api's push: the sessions it named,
+  // and those a re-check of the people it named found ended; closedDurable the same for the
+  // worker's durable path; closedRecheck every other close a check made.
   closedRevoked: number
   closedDurable: number
   closedRecheck: number
@@ -369,12 +393,15 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   const { policy, recheckTimeoutMs, revokeWithinMs } = timings(options)
   const now = () => performance.now()
   const latency = options.latency
-  // The gateway tracks its own sockets, so ws adds no close listener of its own (P9).
+  // The gateway tracks its own sockets, so ws adds no close listener of its own (P9). It answers a
+  // client's protocol ping itself (accept), through the bucket and the marks, so ws's own automatic
+  // pong, which would answer every ping however fast they came and whatever was buffered, is off.
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: policy.maxFrameBytes,
     perMessageDeflate: false,
     clientTracking: false,
+    autoPong: false,
   })
 
   // Every open socket, and the indexes: by session, by `<org>:<person>`, by org, and by org and
@@ -515,9 +542,19 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     // A fast path only: the same cap is checked again in the tick that opens the socket (S3).
     if (conns.size >= policy.maxSocketsPerProcess) return refuse(socket, 'full')
 
-    const slot = slots.take(policy.lookupTimeoutMs)
+    // An upgrade waits for a slot only until lookupReserveMs before its limit (M1). Under overload
+    // the queue serves its oldest waiter first; without the reserve, that waiter would get a slot
+    // with almost nothing left, run its lookup to the end (holding the slot and a connection) and
+    // still be refused, and every later one the same, so no upgrade would get through while the
+    // database stayed slow. With it, every lookup that runs has at least the reserve to answer.
+    const slot = slots.take(policy.lookupTimeoutMs - policy.lookupReserveMs)
     if (slot === undefined) return refuse(socket, 'full')
-    if (!(await slot)) {
+    const granted = await slot
+    // A slot handed over late (a busy event loop can run a release before the waiter's own timer)
+    // goes straight back.
+    const late = granted && arrivedAt + policy.lookupTimeoutMs - now() < policy.lookupReserveMs
+    if (late) slots.release()
+    if (!granted || late) {
       logger.warn({ event: 'ws_lookup_timed_out', queued: true }, 'session lookup timed out')
       return refuse(socket, 'error')
     }
@@ -571,7 +608,26 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     add(byPerson, conn.person, conn)
     add(byOrg, session.orgId, conn)
     ws.on('message', (data, isBinary) => frames.message(conn, data, isBinary))
+    // Control frames (T19 item 11). A protocol ping takes a token, as any frame does, and is
+    // answered through the marks; past the bucket the socket closes with 1008 too_many_frames. So a
+    // client that floods pings and never reads can't grow the send buffer. The pong answering the
+    // server's own ping is free; any other takes a token too.
+    ws.on('ping', data => {
+      if (!isOpen(conn)) return
+      if (!takeToken(conn, policy, now())) {
+        closeConn(conn, 'tooManyFrames', 'policy')
+        return
+      }
+      conn.lastSeen = now()
+      control(conn, 'pong', data)
+    })
     ws.on('pong', () => {
+      if (!isOpen(conn)) return
+      if (conn.awaitingPong) conn.awaitingPong = false
+      else if (!takeToken(conn, policy, now())) {
+        closeConn(conn, 'tooManyFrames', 'policy')
+        return
+      }
       conn.lastSeen = now()
     })
     // The socket's one close listener: out of every index, and every topic generation ends.
@@ -616,7 +672,17 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   }
 
   function send(conn: Conn, text: string, droppable = false): void {
-    const result = sendFrame(conn, text, droppable, policy, now())
+    outcome(conn, sendFrame(conn, text, droppable, policy, now()))
+  }
+
+  // A protocol ping or pong, through the same marks (droppable). True if it went.
+  function control(conn: Conn, kind: 'ping' | 'pong', data?: Buffer): boolean {
+    const result = sendControl(conn, kind, data, policy, now())
+    outcome(conn, result)
+    return result === 'sent'
+  }
+
+  function outcome(conn: Conn, result: SendResult): void {
     if (result === 'shed') shed++
     else if (result === 'too_slow') closeConn(conn, 'tooSlow', 'slow')
   }
@@ -639,8 +705,10 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
 
   const counterOf = (path: RevocationPath): CloseCounter =>
     path === 'push' ? 'revoked' : path === 'durable' ? 'durable' : 'recheck'
+  // A message's own start (T19 item 13): the api's clock after its commit on the push, its
+  // signin.ended event's at on the durable path (revocation/registry.ts).
   const sourceOf = (path: RevocationPath, at: number | undefined): StartSource =>
-    at === undefined ? 'unknown' : path === 'push' ? 'publisher' : 'database'
+    at === undefined ? 'unknown' : path === 'push' ? 'publisher' : 'outbox'
 
   function record(
     handler: 'sockets' | 'topics',
@@ -679,9 +747,12 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     for (const [orgId, count] of closedIn) {
       record('sockets', label, trigger.cause, orgId, count, trigger.at, sourceOf(trigger.path, trigger.at))
     }
-    // The person's other sessions, and their topics, are re-checked (§8.1 step 3).
+    // The person's other sessions, and their topics, are re-checked (§8.1 step 3). The message
+    // named only the sessions just closed, so whatever this finds is the re-check's own (Label).
     for (const [key, conn] of people) {
-      if (liveOf(byPerson.get(key)).length > 0) targeted.queue(conn.session.orgId, conn.session.userId, label)
+      if (liveOf(byPerson.get(key)).length > 0) {
+        targeted.queue(conn.session.orgId, conn.session.userId, { path: 'recheck' })
+      }
     }
     return sockets
   }
@@ -696,8 +767,8 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   }
 
   // Closes the sockets of sessions a check found ended, with 4401, and records each person's
-  // closes from the earliest time their sessions ended.
-  function closeEnded(orgId: string, ended: ReadonlyMap<string, number | undefined>, label: Label): void {
+  // closes from the earliest time their sessions ended, with cause 'ended' (Label).
+  function closeEnded(orgId: string, ended: ReadonlyMap<string, number | undefined>, path: RevocationPath): void {
     const byPersonClosed = new Map<string, { count: number; startedAt: number | undefined; unknown: boolean }>()
     let sessions = 0
     let sockets = 0
@@ -705,7 +776,7 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
       revoked(sessionId)
       let any = false
       for (const conn of liveOf(bySession.get(sessionId))) {
-        if (!closeConn(conn, 'signedOut', counterOf(label.path))) continue
+        if (!closeConn(conn, 'signedOut', counterOf(path))) continue
         any = true
         sockets++
         const closed = byPersonClosed.get(conn.person) ?? { count: 0, startedAt: undefined, unknown: false }
@@ -717,11 +788,10 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
       if (any) sessions++
     }
     if (sockets === 0) return
-    logger.info({ event: 'ws_closed', cause: counterOf(label.path), sessions, sockets })
-    const cause = label.cause ?? 'ended'
+    logger.info({ event: 'ws_closed', cause: counterOf(path), sessions, sockets })
     for (const closed of byPersonClosed.values()) {
       const source: StartSource = closed.startedAt === undefined ? 'unknown' : 'database'
-      record('sockets', label, cause, orgId, closed.count, closed.startedAt, source)
+      record('sockets', { path }, 'ended', orgId, closed.count, closed.startedAt, source)
     }
   }
 
@@ -738,9 +808,8 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     let granted = 0
     const gone: string[] = []
     for (const topic of topics) {
-      const entry = conn.topics.get(topic)
+      const entry = forget(conn, topic)
       if (entry === undefined) continue
-      conn.topics.delete(topic)
       unindex(conn, topic)
       gone.push(topic)
       if (entry.state !== 'deciding') granted++
@@ -761,21 +830,20 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     labelOf: (person: string) => Label,
     startedAt: number,
   ): void {
-    // Grouped by label, so each is one ws_closed line.
-    const endedBy = new Map<string, { label: Label; ended: Map<string, number | undefined> }>()
+    // Grouped by path, so each is one ws_closed line.
+    const endedBy = new Map<RevocationPath, Map<string, number | undefined>>()
     for (const { conn } of taken.conns) {
       const session = result.sessions.get(conn.session.sessionId)
       if (session === undefined || session.live) continue
-      const label = labelOf(conn.session.userId)
-      const key = `${label.path} ${label.cause ?? ''}`
-      let group = endedBy.get(key)
-      if (group === undefined) {
-        group = { label, ended: new Map() }
-        endedBy.set(key, group)
+      const { path } = labelOf(conn.session.userId)
+      let ended = endedBy.get(path)
+      if (ended === undefined) {
+        ended = new Map()
+        endedBy.set(path, ended)
       }
-      group.ended.set(conn.session.sessionId, session.endedAt)
+      ended.set(conn.session.sessionId, session.endedAt)
     }
-    for (const { label, ended } of endedBy.values()) closeEnded(orgId, ended, label)
+    for (const [path, ended] of endedBy) closeEnded(orgId, ended, path)
     closeNotAdmitted(taken.conns.filter(({ conn }) => result.notAdmitted.has(conn.session.userId)).map(t => t.conn))
 
     const lostByPerson = new Map<string, { count: number; startedAt: number | undefined }>()
@@ -838,15 +906,23 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
         },
       )
     },
-    { delayMs: policy.targetedDelayMs, max: policy.decisionBatchMax },
+    {
+      delayMs: policy.targetedDelayMs,
+      max: policy.decisionBatchMax,
+      // A people signal's path wins over a plain re-check queued first (an accept's, or a session
+      // message's for the person's other sessions), so what the signal changed carries its path.
+      prefer: (kept, next) => kept.path === 'recheck' && next.path !== 'recheck',
+    },
   )
 
-  // The stream lost continuity (§5.5): every socket of the org that has said hello is told at once.
+  // The stream lost continuity (§5.5): every socket of the org that has said hello is told at once,
+  // with the position the reader continues from in its grain (T19 item 9).
   function resetOrg(orgId: string, position: Position): void {
     resets.set(orgId, (resets.get(orgId) ?? 0) + 1)
+    const text = (v: number) => JSON.stringify({ v, t: 'reset', pos: grainOf(position, policy.positionGrainMs) })
     for (const conn of liveOf(byOrg.get(orgId))) {
       if (conn.version === undefined) continue
-      send(conn, JSON.stringify({ v: conn.version, t: 'reset', pos: position }))
+      send(conn, text(conn.version))
     }
   }
 
@@ -875,10 +951,11 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     index,
     unindex,
     decide: (conn, request) => lane.decide(conn.session.orgId, request),
+    personSockets: conn => liveOf(byPerson.get(conn.person)),
     sessionEnded: (conn, endedAt) =>
-      closeEnded(conn.session.orgId, new Map([[conn.session.sessionId, endedAt]]), { path: 'recheck' }),
-    notAdmitted: conn => {
-      closeNotAdmitted(liveOf(byPerson.get(conn.person)))
+      closeEnded(conn.session.orgId, new Map([[conn.session.sessionId, endedAt]]), 'recheck'),
+    notAdmitted: sockets => {
+      closeNotAdmitted(sockets)
     },
     recheckIfChanged: (conn, askedAt) => {
       const changed = keysChanged.get(conn.person)
@@ -1002,7 +1079,10 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   }
 
   // The heartbeat sweep (T19 item 12): a protocol ping heartbeatMs after the last, and a socket
-  // heard from by neither pong nor frame for deadAfterMs is cut.
+  // heard from by neither pong nor frame for deadAfterMs is cut. It also holds every socket to the
+  // send-buffer marks (T19 item 11), whether or not it sends, so a socket whose buffer grew past
+  // them closes with 4408 within a sweep even when no frame goes to it. A ping the marks shed is
+  // tried again at the next sweep.
   function sweep(): void {
     const t = now()
     for (const conn of conns) {
@@ -1015,8 +1095,12 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
         continue
       }
       if (t - conn.lastPing >= policy.heartbeatMs) {
-        conn.lastPing = t
-        conn.ws.ping()
+        if (control(conn, 'ping')) {
+          conn.lastPing = t
+          conn.awaitingPong = true
+        }
+      } else if (marks(conn, true, policy, t) === 'too_slow') {
+        closeConn(conn, 'tooSlow', 'slow')
       }
     }
   }

@@ -9,8 +9,13 @@
 // entry still has the generation and state it started with; unsub, a drop and the close delete the
 // entry, so a later sub makes a new generation and nothing pending can bring the old one back. An
 // ack is built from the state after its last await, so a topic dropped meanwhile is in none of its
-// lists: its dropped frame went first. A topic counts towards the 100 from the moment it is asked
-// for, deciding and replaying included.
+// lists: its dropped frame went first. A sub of a topic the socket already holds decides nothing:
+// it is acked ok if live, and retry while an earlier sub is still deciding or resuming it, since
+// an ok then would claim a catch-up that sub's replay hasn't sent yet. A topic counts towards the
+// 100 from the moment it is asked for, deciding and replaying included.
+//
+// Positions (T19 item 9): ack and pong carry the org's position rounded down to its grain
+// (stream.ts grainOf), so they tell no member when other topics' events happened.
 //
 // Resume (§7.6, GW-09): a sub with since whose topics are allowed replays each topic's missed
 // entries (realtime/stream.ts planResume), one replay at a time per socket and eight per process
@@ -33,6 +38,7 @@ import type { CheckRequest, CheckResult } from '#src/realtime/checks.ts'
 import type { GatewayPolicy } from '#src/realtime/policy.ts'
 import {
   compareIds,
+  grainOf,
   type HeldEntry,
   type ResumeOutcome,
   type ResumePlan,
@@ -64,9 +70,11 @@ export interface Conn {
   closing: boolean
   closeTimer: NodeJS.Timeout | undefined
   helloTimer: NodeJS.Timeout | undefined
-  // When a frame or pong was last heard, and when the server last pinged (performance.now).
+  // When a frame or pong was last heard, and when the server last pinged (performance.now). The
+  // pong answering that ping is free of the bucket; any other takes a token (awaitingPong).
   lastSeen: number
   lastPing: number
+  awaitingPong: boolean
   // The inbound token bucket (P7): full when the socket opens.
   tokens: number
   refilledAt: number
@@ -75,6 +83,11 @@ export interface Conn {
   // The generation counter, and the topics held in any state.
   gen: number
   readonly topics: Map<string, TopicEntry>
+  // Subs still being answered, and while there are any, the generations an unsub or a drop ended
+  // (forget()): a sub that found such a topic held leaves it out of every list of its ack, since the
+  // client heard of its end, and asks for any other it found held but not live in retry.
+  subs: number
+  readonly ended: Set<number>
   // When the session was last confirmed live: the upgrade's arrival, then each check's start.
   sessionConfirmedAt: number
   // Resolves once the socket has closed, which the socket's one close listener says (closed()).
@@ -98,11 +111,14 @@ export function newConn(ws: WebSocket, session: SessionIds, at: number, askedAt:
     helloTimer: undefined,
     lastSeen: at,
     lastPing: at,
+    awaitingPong: false,
     tokens: burst,
     refilledAt: at,
     softSince: undefined,
     gen: 0,
     topics: new Map(),
+    subs: 0,
+    ended: new Set(),
     sessionConfirmedAt: askedAt,
     done,
     closed,
@@ -113,6 +129,16 @@ export function newConn(ws: WebSocket, session: SessionIds, at: number, askedAt:
 // await.
 export function isOpen(conn: Conn): boolean {
   return !conn.closing && conn.ws.readyState === WebSocket.OPEN
+}
+
+// Ends the socket's hold on a topic in a way its client hears of, an unsub or a dropped frame, and
+// answers the entry that ended (undefined if none was held). The caller unindexes it.
+export function forget(conn: Conn, topic: string): TopicEntry | undefined {
+  const entry = conn.topics.get(topic)
+  if (entry === undefined) return undefined
+  conn.topics.delete(topic)
+  if (conn.subs > 0) conn.ended.add(entry.gen)
+  return entry
 }
 
 // Takes a token from the socket's bucket, refilled at framesPerSecond up to frameBurst; false if
@@ -128,16 +154,13 @@ export function takeToken(conn: Conn, policy: Pick<GatewayPolicy, 'frameBurst' |
 
 export type SendResult = 'sent' | 'shed' | 'too_slow' | 'closed'
 
-// Sends a frame with the backpressure marks (T19 item 11): nothing to a socket that isn't open or is
-// closing (P9); past hardBufferBytes buffered, or past softBufferBytes for softBufferMs, the socket is
-// too slow (the caller closes it with 4408); past softBufferBytes a droppable frame is shed.
-export function sendFrame(
-  conn: Conn,
-  text: string,
-  droppable: boolean,
-  policy: Pick<GatewayPolicy, 'softBufferBytes' | 'hardBufferBytes' | 'softBufferMs'>,
-  now: number,
-): SendResult {
+type Marks = Pick<GatewayPolicy, 'softBufferBytes' | 'hardBufferBytes' | 'softBufferMs'>
+
+// The backpressure marks (T19 item 11), for one more frame: nothing to a socket that isn't open or
+// is closing (P9); past hardBufferBytes buffered, or past softBufferBytes for softBufferMs, the socket
+// is too slow (the caller closes it with 4408); past softBufferBytes a droppable frame is shed.
+// 'sent' means it may go.
+export function marks(conn: Conn, droppable: boolean, policy: Marks, now: number): SendResult {
   if (!isOpen(conn)) return 'closed'
   const buffered = conn.ws.bufferedAmount
   if (buffered >= policy.hardBufferBytes) return 'too_slow'
@@ -148,8 +171,32 @@ export function sendFrame(
   } else {
     conn.softSince = undefined
   }
-  conn.ws.send(text)
   return 'sent'
+}
+
+// Sends a frame through the marks.
+export function sendFrame(conn: Conn, text: string, droppable: boolean, policy: Marks, now: number): SendResult {
+  const result = marks(conn, droppable, policy, now)
+  if (result === 'sent') conn.ws.send(text)
+  return result
+}
+
+// Sends a protocol ping (the heartbeat) or pong (the answer to a client's ping) through the same
+// marks, as a droppable frame: ws's own automatic pong is off, so no frame the server sends gets
+// past them (T19 item 11).
+export function sendControl(
+  conn: Conn,
+  kind: 'ping' | 'pong',
+  data: Buffer | undefined,
+  policy: Marks,
+  now: number,
+): SendResult {
+  const result = marks(conn, true, policy, now)
+  if (result === 'sent') {
+    if (kind === 'ping') conn.ws.ping(data)
+    else conn.ws.pong(data)
+  }
+  return result
 }
 
 // What a socket's protocol needs of the gateway (realtime/socket.ts).
@@ -170,10 +217,13 @@ export interface FrameContext {
   unindex(conn: Conn, topic: string): void
   // The decision lane: the batch's whole result, or a rejection (the lane failed).
   decide(conn: Conn, request: CheckRequest): Promise<CheckResult>
+  // The open sockets of the socket's person, now.
+  personSockets(conn: Conn): readonly Conn[]
   // A lane found the socket's session ended (4401 for every socket of it, path recheck), or its
-  // person not admitted (4403 for every socket of theirs).
+  // person not admitted: 4403 for the person's sockets taken before the decision was asked for,
+  // never one opened after its read (as for a check, which closes only the sockets it asked about).
   sessionEnded(conn: Conn, endedAt: number | undefined): void
-  notAdmitted(conn: Conn): void
+  notAdmitted(sockets: readonly Conn[]): void
   // A people signal for the socket's person arrived at or after askedAt: re-check them now (§8.2).
   recheckIfChanged(conn: Conn, askedAt: number): void
   // The org's stream: its position once read (null if Valkey can't be reached), read at once, and
@@ -199,6 +249,14 @@ interface Lists {
   refused: string[]
   retry: string[]
   reset: string[]
+}
+
+// A sub's topics: those asked, those it decided (with the generation it made each in), and those it
+// found held (with theirs).
+interface Own {
+  asked: readonly string[]
+  gens: ReadonlyMap<string, number>
+  held: ReadonlyMap<string, number>
 }
 
 export class Frames {
@@ -298,8 +356,8 @@ export class Frames {
     )
   }
 
-  // The org's position as the reader last dispatched it (null before it has read the tail), and the
-  // spread.
+  // The org's position as the reader last dispatched it (null before it has read the tail), in its
+  // grain, and the spread.
   #pong(conn: Conn): void {
     const ctx = this.#ctx
     ctx.send(
@@ -307,7 +365,7 @@ export class Frames {
       JSON.stringify({
         v: conn.version,
         t: 'pong',
-        pos: ctx.current(conn.session.orgId),
+        pos: grainOf(ctx.current(conn.session.orgId), ctx.policy.positionGrainMs),
         reconnectSpreadMs: ctx.spreadMs(),
       }),
     )
@@ -319,7 +377,7 @@ export class Frames {
     const ctx = this.#ctx
     const asked = [...new Set(topics)]
     for (const topic of asked) {
-      if (conn.topics.delete(topic)) ctx.unindex(conn, topic)
+      if (forget(conn, topic) !== undefined) ctx.unindex(conn, topic)
     }
     ctx.send(
       conn,
@@ -331,7 +389,7 @@ export class Frames {
         refused: [],
         reset: [],
         retry: [],
-        pos: ctx.current(conn.session.orgId),
+        pos: grainOf(ctx.current(conn.session.orgId), ctx.policy.positionGrainMs),
       }),
     )
   }
@@ -339,14 +397,31 @@ export class Frames {
   // sub (§7.4): new topics are decided in the lane (the session confirmed first), then acked, or
   // resumed from since.
   async #sub(conn: Conn, frame: Sub): Promise<void> {
+    conn.subs++
+    try {
+      await this.#subscribe(conn, frame)
+    } finally {
+      if (--conn.subs === 0) conn.ended.clear()
+    }
+  }
+
+  async #subscribe(conn: Conn, frame: Sub): Promise<void> {
     const ctx = this.#ctx
     const { orgId, userId: person } = conn.session
     const asked = [...new Set(frame.topics)]
-    const fresh = asked.filter(topic => !conn.topics.has(topic))
+    // The topics already held, in any state, with the generation each is held in: never decided
+    // again, and acked from their state at the ack (S2).
+    const held = new Map<string, number>()
+    for (const topic of asked) {
+      const entry = conn.topics.get(topic)
+      if (entry !== undefined) held.set(topic, entry.gen)
+    }
+    const fresh = asked.filter(topic => !held.has(topic))
     if (conn.topics.size + fresh.length > ctx.policy.maxTopicsPerSocket) {
       ctx.close(conn, 'tooManyTopics', 'policy')
       return
     }
+    // This sub's own topics, with their generations.
     const gens = new Map<string, number>()
     for (const topic of fresh) {
       conn.gen++
@@ -364,6 +439,9 @@ export class Frames {
         topics: new Map([[person, new Set(fresh)]]),
         ...(teams.length > 0 ? { eras: new Map([[person, new Set(teams)]]) } : {}),
       }
+      // The person's sockets before the decision reads admission: a not-admitted verdict closes only
+      // these, never one opened (and admitted) after its read.
+      const sockets = ctx.personSockets(conn)
       let result: CheckResult | undefined
       try {
         result = await ctx.decide(conn, request)
@@ -387,7 +465,7 @@ export class Frames {
         const session = result.sessions.get(conn.session.sessionId)
         // An ended session is never granted a topic (S1, m2).
         if (session === undefined || !session.live) return ctx.sessionEnded(conn, session?.endedAt)
-        if (result.notAdmitted.has(person)) return ctx.notAdmitted(conn)
+        if (result.notAdmitted.has(person)) return ctx.notAdmitted(sockets)
         conn.sessionConfirmedAt = Math.max(conn.sessionConfirmedAt, askedAt)
         const decided = result.topics.get(person)
         for (const [topic, gen] of gens) {
@@ -409,22 +487,43 @@ export class Frames {
         ctx.recheckIfChanged(conn, askedAt)
       }
     }
+    const own = { asked, gens, held }
     if (frame.since !== undefined && replaying.size > 0) {
-      return this.#resume(conn, frame.id, asked, frame.since, replaying, eras, lists)
+      return this.#resume(conn, frame.id, own, frame.since, replaying, eras, lists)
     }
     const pos = await ctx.position(orgId)
     if (!isOpen(conn)) return
-    this.#ack(conn, frame.id, asked, lists, pos)
+    this.#ack(conn, frame.id, own, lists, pos)
   }
 
-  // The ack, built from the state now: ok is every topic asked that is replaying or live and not
-  // reset.
-  #ack(conn: Conn, id: number, asked: readonly string[], lists: Lists, pos: Position | null): void {
-    const ok = asked.filter(topic => {
+  // The ack, built from the state now, with the position in its grain.
+  //   - ok: each topic this sub granted (replaying or live) and not reset, and each it found held
+  //     that is live now in the same generation.
+  //   - retry, besides the lane's: each other topic it found held, unless an unsub or a drop ended
+  //     it meanwhile. Such a topic was still being decided or resumed for an earlier sub, or that
+  //     sub refused it or answered it retry. An ok while it replays would claim a catch-up that
+  //     sub's replay hasn't sent yet (a client would drop the replayed entries as seen); the client
+  //     asks again after its back-off, by when the earlier sub's ack has come.
+  //   - A topic asked for in none of the lists was dropped first (its dropped frame came before the
+  //     ack), or unsubscribed since.
+  #ack(conn: Conn, id: number, sub: Own, lists: Lists, pos: Position | null): void {
+    const ctx = this.#ctx
+    const ok: string[] = []
+    const pending: string[] = []
+    for (const topic of sub.asked) {
       const entry = conn.topics.get(topic)
-      return entry !== undefined && entry.state !== 'deciding' && !lists.reset.includes(topic)
-    })
-    this.#ctx.send(
+      const mine = sub.gens.get(topic)
+      if (mine !== undefined) {
+        if (entry?.gen === mine && entry.state !== 'deciding' && !lists.reset.includes(topic)) ok.push(topic)
+        continue
+      }
+      const gen = sub.held.get(topic)
+      if (gen === undefined) continue
+      if (entry?.gen === gen && entry.state === 'live') ok.push(topic)
+      else if (!conn.ended.has(gen)) pending.push(topic)
+    }
+    if (pending.length > 0) ctx.retried(pending.length)
+    ctx.send(
       conn,
       JSON.stringify({
         v: conn.version,
@@ -433,8 +532,8 @@ export class Frames {
         ok,
         refused: lists.refused,
         reset: lists.reset,
-        retry: lists.retry,
-        pos,
+        retry: [...lists.retry, ...pending],
+        pos: grainOf(pos, ctx.policy.positionGrainMs),
       }),
     )
   }
@@ -442,7 +541,7 @@ export class Frames {
   async #resume(
     conn: Conn,
     id: number,
-    asked: readonly string[],
+    sub: Own,
     since: Position,
     replaying: ReadonlyMap<string, number>,
     eras: ReadonlyMap<string, number>,
@@ -507,10 +606,11 @@ export class Frames {
       flushing.push(entry)
     }
     const pos = reset || ran === 'busy' ? ctx.current(orgId) : position
-    this.#ack(conn, id, asked, lists, pos)
-    // What the reader held for these topics meanwhile, after the replay's position, in stream order
-    // across them all, so the client's per-socket positions never skip one. Each topic is live from
-    // here on, a reset one too: it is held, and the client refetches it.
+    this.#ack(conn, id, sub, lists, pos)
+    // What the reader held for these topics meanwhile, after the replay's exact position (the ack
+    // carries it in its grain), in stream order across them all, so the client's per-socket
+    // positions never skip one. Each topic is live from here on, a reset one too: it is held, and
+    // the client refetches it.
     const held: HeldEntry[] = []
     for (const entry of flushing) {
       for (const h of entry.held ?? []) if (pos === null || compareIds(h.id, pos.pos) > 0) held.push(h)

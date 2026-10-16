@@ -14,7 +14,9 @@
 -- because a C0.6 worker may still run its offboarding sockets job while C0.7 deploys; a later
 -- migration revokes it once no such worker can run.
 --
--- No table, row, constraint or function changes; the database's types are unchanged.
+-- With a second role that may start checkpoints, outbox_checkpoints_own_row() now also binds each
+-- consumer the server runs to the role it runs as (below). No table, row or constraint changes;
+-- the database's types are unchanged.
 do $$
 declare
   r pg_roles%rowtype;
@@ -56,8 +58,8 @@ grant hearth_job_revocation to hearth_worker with inherit false, set true;
 -- withOrg()'s system principal.
 grant select (id, org_id, kind, system_key) on public.principals to hearth_job_revocation;
 
--- The consumer: read the outbox, start and move its own checkpoint (outbox_checkpoints_own_row
--- keeps it to its own), read the floors, and end every round with the fence.
+-- The consumer: read the outbox, start and move its own checkpoint (outbox_checkpoints_own_row,
+-- below, keeps it to its own), read the floors, and end every round with the fence.
 grant select on public.outbox_events to hearth_job_revocation;
 grant select, insert (org_id, consumer, role_name, last_tx, last_id) on public.outbox_checkpoints to hearth_job_revocation;
 grant update (last_tx, last_id, processed, updated_at) on public.outbox_checkpoints to hearth_job_revocation;
@@ -74,3 +76,47 @@ grant execute on function public.job_fence(uuid, uuid, bigint[]), public.job_fin
 
 -- The sockets job's re-read: which of the sessions an event names have ended, and when.
 grant select (id, org_id, user_id, revoked_at) on public.sessions to hearth_job_revocation;
+
+-- A checkpoint is still the business of the role it names (0007), and from here each consumer the
+-- server runs is bound to the role it runs as (its OutboxConsumer's role). 0007 checked only that
+-- the writer may use the role a row names, which held while one role could start checkpoints. With
+-- two, either could start the other's checkpoint under its own name, in an org where that consumer
+-- hasn't made it yet, and the consumer could then never move it (42501 at every round), or would
+-- read on from wherever it was planted. Now a row whose consumer is bound must name that role, so
+-- only a writer who may use it can start or move the row: anyone else, the superuser included, is
+-- refused the same way. A name that isn't bound (the tests' own consumers) may still name any role
+-- its writer may use. A migration that adds a consumer replaces this function with its name bound.
+create or replace function public.outbox_checkpoints_own_row() returns trigger
+language plpgsql set search_path = '' as $$
+declare
+  owner_role oid := (select r.oid from pg_catalog.pg_roles r where r.rolname = new.role_name);
+  bound text := case new.consumer
+                  when 'offboarding' then 'hearth_job_offboarding'
+                  when 'revocation' then 'hearth_job_revocation'
+                end;
+begin
+  if owner_role is null or not pg_catalog.pg_has_role(current_user, owner_role, 'USAGE')
+     or (bound is not null and new.role_name <> bound)
+     or (tg_op = 'UPDATE' and new.role_name is distinct from old.role_name) then
+    raise exception 'Only the role that runs a consumer may move its checkpoint.' using errcode = 'insufficient_privilege';
+  end if;
+  return new;
+end
+$$;
+revoke execute on function public.outbox_checkpoints_own_row() from public;
+
+-- No checkpoint already breaks the binding (none can: before this migration only the offboarding
+-- role could start one, and C0.6 starts only its own), so every row is held to it from here.
+do $$
+declare
+  bad text;
+begin
+  select string_agg(format('%s (%s, naming %s)', c.consumer, c.org_id, c.role_name), '; ') into bad
+  from public.outbox_checkpoints c
+  where (c.consumer = 'offboarding' and c.role_name <> 'hearth_job_offboarding')
+     or (c.consumer = 'revocation' and c.role_name <> 'hearth_job_revocation');
+  if bad is not null then
+    raise exception 'A checkpoint names a role other than the one its consumer runs as: %', bad;
+  end if;
+end
+$$;

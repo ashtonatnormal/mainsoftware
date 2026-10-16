@@ -106,8 +106,14 @@ select pg_temp.check(count(*) = 1, 'an org 2 update reached an org 1 checkpoint'
 from public.outbox_checkpoints where org_id = 'f1000000-0000-4000-8000-000000000000' and processed = 0;
 -- The revocation consumer's role (0008), acting in org 2: it can't start org 1's checkpoint, starts
 -- and moves its own, and an update that doesn't name its consumer reaches offboarding's org 2 row,
--- which only offboarding's role may move (outbox_checkpoints_own_row, 42501). After the checks
--- above, so they still see one checkpoint per org.
+-- which only offboarding's role may move (outbox_checkpoints_own_row, 42501). Org 1 has its own
+-- revocation checkpoint first, started by the role acting in org 1, so the update that names the
+-- consumer has another org's row it could reach. After the checks above, so they still see one
+-- checkpoint per org.
+select pg_temp.act_as_job('1', 'hearth_job_revocation');
+select pg_temp.expect_rows($$insert into public.outbox_checkpoints (org_id, consumer, role_name)
+  values ('f1000000-0000-4000-8000-000000000000', 'revocation', 'hearth_job_revocation')$$, 1);
+reset role;
 select pg_temp.act_as_job('2', 'hearth_job_revocation');
 select pg_temp.expect_error($$insert into public.outbox_checkpoints (org_id, consumer, role_name)
   values ('f1000000-0000-4000-8000-000000000000', 'revocation', 'hearth_job_revocation')$$, '42501');
@@ -117,7 +123,7 @@ select pg_temp.expect_rows($$update public.outbox_checkpoints set processed = pr
 select pg_temp.expect_error($$update public.outbox_checkpoints set processed = processed + 1$$, '42501',
                             '%Only the role that runs a consumer%');
 reset role;
-select pg_temp.check(count(*) = 0, 'an org 2 insert made an org 1 revocation checkpoint')
+select pg_temp.check(count(*) = 1 and min(processed) = 0, 'an org 2 insert or update reached org 1''s revocation checkpoint')
 from public.outbox_checkpoints where org_id = 'f1000000-0000-4000-8000-000000000000' and consumer = 'revocation';
 select pg_temp.check(count(*) = 1 and min(processed) = 1, 'the revocation role did not move exactly its own org 2 checkpoint')
 from public.outbox_checkpoints where org_id = 'f2000000-0000-4000-8000-000000000000' and consumer = 'revocation';

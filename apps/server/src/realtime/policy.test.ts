@@ -34,6 +34,21 @@ describe('C0.7 T19 the gateway’s numbers', () => {
     expect(gatewayPolicy()).toEqual(GATEWAY_POLICY)
   })
 
+  it('M1 T19 item 11: an upgrade stops waiting for a lookup slot a second before its limit, and a reserve that leaves no wait is refused at start', () => {
+    expect(P.lookupReserveMs).toBe(1000)
+    expect(P.lookupReserveMs).toBeLessThan(P.lookupTimeoutMs)
+    expect(() => gatewayPolicy({ lookupReserveMs: 5000 })).toThrow(/reserve/)
+    expect(() => gatewayPolicy({ lookupReserveMs: 0 })).toThrow(/reserve/)
+    expect(gatewayPolicy({ lookupTimeoutMs: 50, lookupReserveMs: 10 })).toMatchObject({ lookupReserveMs: 10 })
+  })
+
+  it('T19 item 9: positions go out in a grain of a heartbeat, well inside the resume window, so a quiet client’s rounded position still resumes', () => {
+    expect(P.positionGrainMs).toBe(P.heartbeatMs)
+    expect(P.positionGrainMs + P.heartbeatMs).toBeLessThan(P.resumeWindowMs)
+    expect(() => gatewayPolicy({ positionGrainMs: 0 })).toThrow(/grain/)
+    expect(() => gatewayPolicy({ positionGrainMs: 2.5 })).toThrow(/grain/)
+  })
+
   it('M1 T19 item 11: the realtime pool keeps a connection for the lane, the check, the flag reads and /ready besides the lookups', () => {
     expect(P.poolSize).toBeGreaterThanOrEqual(P.lookupsRunning + 1 + 1 + FLAG_READS_IN_FLIGHT + 2)
     // The api's pool stays at 10 (db/pool.ts); realtime's is its own number.

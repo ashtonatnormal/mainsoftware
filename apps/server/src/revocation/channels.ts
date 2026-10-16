@@ -4,10 +4,10 @@
 //            sign-out, a deactivation, a PIN reset): their ids, and the api's clock just after the
 //            commit. Every realtime process closes those sessions' sockets at once.
 //   access   (C0.7, v1) everything new: the worker's revocation jobs (revocation/registry.ts) publish
-//            the sessions they re-read as ended, with their revoked_at, and the people whose keys
-//            changed, whom realtime re-checks against Postgres; from C0.16 the api's push for team,
-//            role and phone changes too. Each message says which path sent it (push or durable) and
-//            why (a cause code).
+//            the sessions they re-read as ended, with when their signin.ended event was appended,
+//            and the people whose keys changed, whom realtime re-checks against Postgres; from
+//            C0.16 the api's push for team, role and phone changes too. Each message says which
+//            path sent it (push or durable) and why (a cause code).
 // Both are read tolerantly: a reader ignores fields it doesn't know, so a later step can add one
 // once every running reader is from C0.7 or later, and on access an unknown cause is read as a
 // re-check of the people it names. A publish is best effort for the api: a lost message is caught
@@ -32,7 +32,7 @@ export const REVOKED_CHUNK = 500
 export const RevokedMessage = z.object({
   v: z.literal(1),
   // When the api published it (epoch ms), just after its commit: the push path's start time. The
-  // durable path carries its own on access (the sessions' revoked_at).
+  // durable path carries its own on access (its signin.ended event's at, just before the commit).
   at: z.number(),
   sessions: z.array(z.uuid()).max(REVOKED_CHUNK),
 })
@@ -50,8 +50,10 @@ export const AccessMessage = z
     path: z.enum(['push', 'durable']),
     // 'sessions_ended' or 'keys_changed' now (registry.ts REVOCATION_CAUSES).
     cause: Code,
-    // When the change happened (epoch ms), if the publisher knows: a durable sessions message
-    // carries the sessions' revoked_at; the api's push its clock just after its commit.
+    // When the change took effect (epoch ms), if the publisher knows: a durable sessions message
+    // carries its signin.ended event's at, the clock when the revoking transaction appended it, just
+    // before its commit (startSource 'outbox'); the api's push its clock just after its commit
+    // ('publisher'). Both leave out how long the revoking transaction ran (T19 item 13).
     at: z.number().int().positive().optional(),
     // Sessions that have ended: their sockets close at once with 4401.
     sessions: z.array(z.uuid()).max(ACCESS_CHUNK).optional(),

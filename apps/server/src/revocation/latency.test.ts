@@ -121,7 +121,7 @@ describe('C0.7 T19 item 13 REG-04 REG-05 CR-05 the revocation latency metric', (
     ])
   })
 
-  it('summarises each (handler, path) with records: count, p50, p95, p99, max, then starts a new window', () => {
+  it('summarises each (handler, path, startSource) with records: count, p50, p95, p99, max, then starts a new window', () => {
     const { latency, log, advance } = metric()
     for (let ms = 1; ms <= 100; ms++) latency.record(applied(ms * 10))
     latency.record(applied(45_000, { handler: 'topics', path: 'recheck', startSource: 'database' }))
@@ -131,13 +131,26 @@ describe('C0.7 T19 item 13 REG-04 REG-05 CR-05 the revocation latency metric', (
     const lines = log.events('revocation_latency')
     expect(lines).toHaveLength(2)
     const sockets = lines.find(line => line.handler === 'sockets')
-    expect(sockets).toMatchObject({ level: 30, path: 'push', count: 100, max: 1000, unknownStart: 0, skewed: 0 })
+    expect(sockets).toMatchObject({
+      level: 30,
+      path: 'push',
+      startSource: 'publisher',
+      count: 100,
+      max: 1000,
+      unknownStart: 0,
+      skewed: 0,
+    })
     expect(sockets?.windowMs).toBe(LATENCY_SUMMARY_MS)
     // HDR histograms keep 3 significant figures.
     expect(Math.abs(Number(sockets?.p50) - 500)).toBeLessThanOrEqual(1)
     expect(Math.abs(Number(sockets?.p95) - 950)).toBeLessThanOrEqual(1)
     expect(Math.abs(Number(sockets?.p99) - 990)).toBeLessThanOrEqual(1)
-    expect(lines.find(line => line.handler === 'topics')).toMatchObject({ level: 40, path: 'recheck', count: 1 })
+    expect(lines.find(line => line.handler === 'topics')).toMatchObject({
+      level: 40,
+      path: 'recheck',
+      startSource: 'database',
+      count: 1,
+    })
     // A new window: nothing recorded since, so nothing is logged.
     latency.summarise()
     expect(log.events('revocation_latency')).toHaveLength(2)
@@ -145,6 +158,32 @@ describe('C0.7 T19 item 13 REG-04 REG-05 CR-05 the revocation latency metric', (
     latency.record(applied(61_000))
     latency.summarise()
     expect(log.events('revocation_latency').at(-1)).toMatchObject({ level: 50, count: 1, max: 61_000 })
+  })
+
+  it('T19 item 13: summarises each start source apart, so the outbox’s commit-side starts never mix with the base rows’ transaction starts', () => {
+    const { latency, log } = metric()
+    latency.record(applied(100, { path: 'durable', startSource: 'outbox' }))
+    latency.record(applied(200, { path: 'durable', startSource: 'outbox' }))
+    // A re-check that a people signal brought in, under the signal's path, finding the sessions
+    // ended by their base rows.
+    latency.record(applied(45_000, { path: 'durable', cause: 'ended', startSource: 'database' }))
+    latency.record(applied(undefined, { path: 'durable' }))
+    expect(log.events('revocation_applied').map(line => line.startSource)).toEqual([
+      'outbox',
+      'outbox',
+      'database',
+      'unknown',
+    ])
+    latency.summarise()
+    expect(
+      log
+        .events('revocation_latency')
+        .map(line => [line.handler, line.path, line.startSource, line.count, line.max, line.unknownStart, line.level]),
+    ).toEqual([
+      ['sockets', 'durable', 'outbox', 2, 200, 0, 30],
+      ['sockets', 'durable', 'database', 1, 45_000, 0, 40],
+      ['sockets', 'durable', 'unknown', 0, null, 1, 30],
+    ])
   })
 
   it('summarises every 30 s on its own until stopped', () => {

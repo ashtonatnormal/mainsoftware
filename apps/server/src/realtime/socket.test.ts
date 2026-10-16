@@ -1,6 +1,6 @@
 import { connect } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
-import { GATEWAY_CLOSE } from '@hearth/shared'
+import { GATEWAY_CLOSE, GATEWAY_LIMITS } from '@hearth/shared'
 import type { FastifyInstance } from 'fastify'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
@@ -146,7 +146,11 @@ describe('C0.5 T5 the WebSocket upgrade: path, Origin, then session (CLAUDE.md, 
     expect(JSON.parse(failed.body)).toEqual({ error: 'unavailable' })
     expect(failed.body).not.toContain('connection refused')
 
-    const slow = await start({ lookup: () => new Promise(() => {}), lookupTimeoutMs: 50 })
+    const slow = await start({
+      lookup: () => new Promise(() => {}),
+      lookupTimeoutMs: 50,
+      policy: { lookupReserveMs: 10 },
+    })
     const started = Date.now()
     const timedOut = await refused(slow.url, signedIn())
     expect(timedOut.status).toBe(503)
@@ -242,7 +246,7 @@ describe('C0.7 T19 item 11 S3 S4 M1: the connection budget', () => {
       most = Math.max(most, runningNow)
       return new Promise<SessionIds | undefined>(() => {})
     })
-    const { url, server } = await start({ lookup, lookupTimeoutMs: 200 })
+    const { url, server } = await start({ lookup, lookupTimeoutMs: 200, policy: { lookupReserveMs: 50 } })
     const started = Date.now()
     const answers = await Promise.all(Array.from({ length: 5 }, () => refused(url, signedIn())))
     expect(answers.map(a => a.status)).toEqual([503, 503, 503, 503, 503])
@@ -253,6 +257,58 @@ describe('C0.7 T19 item 11 S3 S4 M1: the connection budget', () => {
     expect(lookup).toHaveBeenCalledTimes(5)
     expect(most).toBe(5)
     expect(server.counts().refused.error).toBe(6)
+  })
+
+  it('M1: an upgrade stops waiting for a slot its reserve before its limit, and its lookup never runs', async () => {
+    const held = heldLookup()
+    const { url, server } = await start({
+      lookup: held.lookup,
+      lookupTimeoutMs: 400,
+      policy: { lookupsRunning: 1, lookupReserveMs: 200 },
+    })
+    const first = openSocket(url)
+    await until(() => held.asked() === 1)
+    const started = Date.now()
+    const second = await refused(url, signedIn())
+    // Refused when 200 ms were left, not at the 400 ms limit, and without a lookup of its own: one
+    // granted then would have had too little time to answer.
+    expect(second.status).toBe(503)
+    expect(Date.now() - started).toBeLessThan(350)
+    held.release()
+    expect('client' in (await first)).toBe(true)
+    expect(held.asked()).toBe(1)
+    expect(server.counts().refused.error).toBe(1)
+  })
+
+  it('M1: under sustained overload of a slow database, every lookup that runs ends in an open, and upgrades keep getting through', async () => {
+    // One lookup at a time, 25 ms each (40 a second), against upgrades at about twice that for
+    // about a second. The queue holds more than the limit's worth, so without the reserve its
+    // oldest waiter would get each slot as it ran out of time.
+    let n = 0
+    const lookup = vi.fn(async () => {
+      await delay(25)
+      n++
+      const hex = (prefix: string) => `${prefix}-0000-4000-8000-${(0x1000 + n).toString(16).padStart(12, '0')}`
+      return { sessionId: hex('b0000001'), orgId: ORG, userId: hex('b0000002'), deviceId: hex('b0000003') }
+    })
+    const { url, server } = await start({
+      lookup,
+      lookupTimeoutMs: 400,
+      policy: { lookupsRunning: 1, lookupsWaiting: 40, lookupReserveMs: 200 },
+    })
+    const pending: Promise<Awaited<ReturnType<typeof openSocket>>>[] = []
+    for (let i = 0; i < 80; i++) {
+      pending.push(openSocket(url))
+      await delay(12)
+    }
+    const results = await Promise.all(pending)
+    const opened = results.map(result => 'client' in result)
+    // No lookup's answer was thrown away.
+    expect(opened.filter(Boolean)).toHaveLength(lookup.mock.calls.length)
+    expect(opened.filter(Boolean).length).toBeGreaterThanOrEqual(20)
+    // And the later half still got through, rather than only the first few.
+    expect(opened.slice(40).filter(Boolean).length).toBeGreaterThan(0)
+    expect(server.counts().open).toBe(opened.filter(Boolean).length)
   })
 
   it('M1: with every slot taken and the queue full, an upgrade is refused 503 full at once', async () => {
@@ -481,7 +537,7 @@ describe('C0.7 P9: computed delays', () => {
     const { url, server } = await start({
       lookup,
       lookupTimeoutMs: 100,
-      policy: { lookupsRunning: 1, nudgeCoalesceMs: 50 },
+      policy: { lookupsRunning: 1, lookupReserveMs: 20, nudgeCoalesceMs: 50 },
     })
     const first = openSocket(url)
     await until(() => calls === 1)
@@ -525,16 +581,70 @@ describe('C0.7 T19 item 12 GW-08: the heartbeat', () => {
     expect(live.ws.readyState).toBe(WebSocket.OPEN)
   })
 
-  it('GW-08: pong carries the org’s position and the spread', async () => {
+  it('GW-08 T19 item 9: pong carries the org’s position, rounded down to its 25 s grain, and the spread', async () => {
     const stream = fakeStream()
     const { url } = await start({ stream: stream.factory })
     const client = await connected(url)
     client.send({ v: 1, t: 'ping' })
     expect(await client.next('pong')).toEqual({ v: 1, t: 'pong', pos: null, reconnectSpreadMs: 5000 })
-    const pos = { epoch: 'e0000000-0000-4000-8000-000000000001', pos: '1800000000000-3' }
-    stream.positions.set(ORG, pos)
+    const epoch = 'e0000000-0000-4000-8000-000000000001'
+    stream.positions.set(ORG, { epoch, pos: '1800000012345-3' })
     client.send({ v: 1, t: 'ping' })
-    expect(await client.next('pong')).toEqual({ v: 1, t: 'pong', pos, reconnectSpreadMs: 5000 })
+    expect(await client.next('pong')).toEqual({
+      v: 1,
+      t: 'pong',
+      pos: { epoch, pos: '1800000000000-0' },
+      reconnectSpreadMs: 5000,
+    })
+  })
+
+  it('T19 item 11: a protocol ping is answered with its data, and one past the bucket closes the socket with 1008 too_many_frames, so a client that floods pings gets at most the burst’s pongs', async () => {
+    const { url, server } = await start()
+    const client = await connected(url)
+    const pongs: string[] = []
+    client.ws.on('pong', data => pongs.push(data.toString()))
+    client.ws.ping(Buffer.from('first'))
+    await until(() => pongs.length === 1)
+    expect(pongs).toEqual(['first'])
+    // 125 bytes each, the most a control frame may carry, sent without waiting.
+    for (let i = 0; i < 100; i++) client.ws.ping(Buffer.alloc(125, 'p'))
+    expect(await client.closed).toEqual(GATEWAY_CLOSE.tooManyFrames)
+    // The burst of 20 (hello took one), and what refilled meanwhile: never one a ping.
+    expect(pongs.length).toBeLessThanOrEqual(GATEWAY_LIMITS.frameBurst)
+    expect(server.counts().closedPolicy).toBe(1)
+  })
+
+  it('T19 item 11: a pong the server didn’t ask for takes a token, so a flood of them closes the socket; the one answering its ping is free', async () => {
+    // A bucket of 5 refilled at 1 a second, and a ping every 100 ms.
+    const { url } = await start({
+      policy: { heartbeatMs: 100, deadAfterMs: 250, heartbeatSweepMs: 20, frameBurst: 5, framesPerSecond: 1 },
+    })
+    const answering = await connected(url)
+    // ws answers each of the server's pings itself: about 12 pongs, past what the bucket holds, and
+    // all free.
+    await delay(1200)
+    expect(answering.ws.readyState).toBe(WebSocket.OPEN)
+    const flooding = await connected(url, B.token)
+    for (let i = 0; i < 30; i++) flooding.ws.pong()
+    expect(await flooding.closed).toEqual(GATEWAY_CLOSE.tooManyFrames)
+  })
+
+  it('T19 item 11: the heartbeat sweep holds every socket to the send-buffer marks, so one past 1 MiB closes with 4408 though nothing is sent to it; and pings and pongs go through the marks', async () => {
+    const { url, server } = await start({
+      policy: { heartbeatMs: 59_000, deadAfterMs: 3_600_000, heartbeatSweepMs: 20 },
+    })
+    const buffered = vi.spyOn(WebSocket.prototype, 'bufferedAmount', 'get')
+    const client = await connected(url)
+    // Past the soft mark a client's ping goes unanswered (a pong is droppable), and is counted.
+    buffered.mockReturnValue(300 * 1024)
+    const pongs: Buffer[] = []
+    client.ws.on('pong', data => pongs.push(data))
+    client.ws.ping()
+    await until(() => server.counts().shed === 1)
+    expect(pongs).toEqual([])
+    buffered.mockReturnValue(2 * 1024 * 1024)
+    expect(await client.closed).toEqual(GATEWAY_CLOSE.tooSlow)
+    expect(server.counts().closedSlow).toBe(1)
   })
 })
 
@@ -579,7 +689,8 @@ describe('C0.5 T5 ACC-05 C0.7 T19 item 8: closing a session’s sockets', () => 
         startSource: 'publisher',
         latencyMs: expect.any(Number),
       }),
-      expect.objectContaining({ handler: 'sockets', path: 'durable', startSource: 'database', count: 1 }),
+      // The durable message's at is its signin.ended event's (revocation/registry.ts).
+      expect.objectContaining({ handler: 'sockets', path: 'durable', startSource: 'outbox', count: 1 }),
     ])
     expect(capture.events('revocation_applied')[0]?.latencyMs).toBeGreaterThanOrEqual(1500)
     const text = JSON.stringify(capture.lines)
@@ -617,6 +728,58 @@ describe('C0.5 T5 ACC-05 C0.7 T19 item 8: closing a session’s sockets', () => 
     expect(durable).toBeGreaterThanOrEqual(20_000)
     await vi.advanceTimersByTimeAsync(1000)
     expect(gauges()).toEqual([pushed, null, durable])
+  })
+
+  it('T19 item 13: the re-check a session message queues records what it finds as its own (recheck, ended), and a people signal’s re-check records the sessions it finds ended under its path with cause ended', async () => {
+    const { logger, ...capture } = captureLogger('realtime')
+    // Person 1 on two devices, and person 3.
+    const [first, second] = [known(1, 1), known(2, 1)]
+    const third = known(3)
+    const byHash = new Map([first, second, third].map(k => [sha256(k.token).toString('hex'), k.session]))
+    const { url, server, checks } = await start({
+      lookup: async hash => byHash.get(hash.toString('hex')),
+      latency: new RevocationLatency({ logger, summaryMs: 0 }),
+    })
+    checks.people.set(second.session.sessionId, first.session.userId)
+    const a = await connected(url, first.token)
+    const b = await connected(url, second.token)
+    // The second device's session expired 10 s ago, and nothing named it; the push names the first.
+    checks.ended.set(second.session.sessionId, Date.now() - 10_000)
+    server.closeSessions([first.session.sessionId], { path: 'push', cause: 'sessions_ended', at: Date.now() })
+    expect(await a.closed).toEqual(GATEWAY_CLOSE.signedOut)
+    expect(await b.closed).toEqual(GATEWAY_CLOSE.signedOut)
+    expect(server.counts()).toMatchObject({ closedRevoked: 1, closedRecheck: 1 })
+    const applied = () => capture.events('revocation_applied').map(l => [l.handler, l.path, l.cause, l.startSource])
+    expect(applied()).toEqual([
+      ['sockets', 'push', 'sessions_ended', 'publisher'],
+      ['sockets', 'recheck', 'ended', 'database'],
+    ])
+    // A people signal (a deactivation's keys change) whose re-check finds the person's session
+    // ended: closed under the signal's path, as a session end.
+    const c = await connected(url, third.token)
+    checks.ended.set(third.session.sessionId, Date.now() - 2000)
+    server.peopleChanged(ORG, [third.session.userId], { path: 'durable', cause: 'keys_changed' })
+    expect(await c.closed).toEqual(GATEWAY_CLOSE.signedOut)
+    expect(server.counts()).toMatchObject({ closedRevoked: 1, closedRecheck: 1, closedDurable: 1 })
+    expect(applied().at(-1)).toEqual(['sockets', 'durable', 'ended', 'database'])
+  })
+
+  it('§8.3 T19 item 13: a people signal coalesced with a session message’s re-check of the same person gives that re-check the signal’s path', async () => {
+    const [first, second] = [known(1, 1), known(2, 1)]
+    const byHash = new Map([first, second].map(k => [sha256(k.token).toString('hex'), k.session]))
+    const { url, server, checks } = await start({ lookup: async hash => byHash.get(hash.toString('hex')) })
+    const person = first.session.userId
+    checks.people.set(second.session.sessionId, person)
+    checks.allow(person, teamTopic())
+    await connected(url, first.token)
+    const b = await connected(url, second.token)
+    expect((await b.sub([teamTopic()])).ok).toEqual([teamTopic()])
+    // Within the 100 ms the queue coalesces for: the first device signed out, then a removal.
+    server.closeSessions([first.session.sessionId], { path: 'push', cause: 'sessions_ended', at: Date.now() })
+    checks.deny(person, teamTopic())
+    server.peopleChanged(ORG, [person], { path: 'push', cause: 'keys_changed', at: Date.now() })
+    expect(await b.next('dropped')).toMatchObject({ topics: [teamTopic()] })
+    expect(server.counts().dropped).toEqual({ push: 1, durable: 0, recheck: 0 })
   })
 
   it('the re-check closes a socket whose session has ended, counted as closedRecheck', async () => {

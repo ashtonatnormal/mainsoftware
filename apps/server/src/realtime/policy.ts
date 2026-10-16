@@ -22,7 +22,8 @@ export interface GatewayPolicy {
   // What a client may send (T19 item 11): a frame of at most maxFrameBytes (ws closes a larger one
   // with 1009), at most maxTopicsPerFrame topics a sub and maxTopicsPerSocket held, deciding and
   // replaying ones included, and an inbound token bucket of frameBurst, full when a socket opens,
-  // refilled at framesPerSecond.
+  // refilled at framesPerSecond. Every frame takes a token, protocol pings and unasked-for pongs
+  // included; only the pong answering the server's own ping is free.
   maxFrameBytes: number
   maxTopicsPerFrame: number
   maxTopicsPerSocket: number
@@ -31,6 +32,8 @@ export interface GatewayPolicy {
 
   // Backpressure (T19 item 11). Above softBufferBytes buffered, droppable frames are shed, and a
   // socket that stays there for softBufferMs closes with 4408, as one above hardBufferBytes does.
+  // The marks apply to every frame the server sends, protocol pings and pongs included (both
+  // droppable), and the heartbeat sweep applies them to every socket, whether or not it sends.
   softBufferBytes: number
   hardBufferBytes: number
   softBufferMs: number
@@ -39,12 +42,15 @@ export interface GatewayPolicy {
 
   // The connection budget (the owner's, 16 Oct 2026; T19 item 11): sockets per process and per
   // person (SOCKETS_PER_SESSION is T14's); session lookups running and waiting per process, each
-  // slot held until its lookup settles; how long a lookup may take, from the upgrade's arrival.
+  // slot held until its lookup settles; how long a lookup may take, from the upgrade's arrival. An
+  // upgrade stops waiting for a slot lookupReserveMs before that limit, so every lookup that runs
+  // has at least that long to answer, and none runs only to be thrown away (M1).
   maxSocketsPerProcess: number
   maxSocketsPerPerson: number
   lookupsRunning: number
   lookupsWaiting: number
   lookupTimeoutMs: number
+  lookupReserveMs: number
   // The realtime pool: lookupsRunning, 1 decision lane, 1 periodic check, FLAG_READS_IN_FLIGHT flag
   // reads, 1 for /ready's role check and 1 spare (T19 item 11).
   poolSize: number
@@ -67,14 +73,17 @@ export interface GatewayPolicy {
   recentlyRevokedMax: number
   keysChangedMs: number
 
-  // Resume (T19 item 9). A replay is valid while its oldest missed entry is at most resumeWindowMs
-  // old, it scans at most replayScanMax entries and sends at most replayFramesMax frames (the same
-  // cap holds a replaying topic's live entries). A team topic whose current membership began after
-  // since's time less eraMarginMs resets (Valkey's and Postgres's clocks may differ by that much).
+  // Resume (T19 item 9). A replay is valid while the oldest missed entry of the topics it resumes is
+  // at most resumeWindowMs old, it scans at most replayScanMax entries and sends at most
+  // replayFramesMax frames (the same cap holds a replaying topic's live entries). A team topic
+  // whose current membership began after since's time less eraMarginMs resets (Valkey's and
+  // Postgres's clocks may differ by that much). The positions ack, pong and reset carry are the
+  // org's rounded down to positionGrainMs, so they say nothing finer about other topics' events.
   resumeWindowMs: number
   replayScanMax: number
   replayFramesMax: number
   eraMarginMs: number
+  positionGrainMs: number
   // Replay caps (S5): replaysRunning at once per process and replaysWaiting queued; one at a time
   // per socket, with replaysWaitingPerSocket queued; one that can't start within replayStartMs
   // answers reset.
@@ -142,6 +151,7 @@ export const GATEWAY_POLICY: GatewayPolicy = {
   lookupsRunning: 5,
   lookupsWaiting: 1000,
   lookupTimeoutMs: 5000,
+  lookupReserveMs: 1000,
   poolSize: 12,
 
   decisionBatchMs: 20,
@@ -158,6 +168,7 @@ export const GATEWAY_POLICY: GatewayPolicy = {
   replayScanMax: 1000,
   replayFramesMax: 500,
   eraMarginMs: 5000,
+  positionGrainMs: 25_000,
   replaysRunning: 8,
   replaysWaiting: 1000,
   replaysWaitingPerSocket: 2,
@@ -187,7 +198,8 @@ export const GATEWAY_POLICY: GatewayPolicy = {
 // The policy with a test's overrides, refused at start if its numbers can't keep the heartbeat's
 // rules (T19 item 12): a socket is declared dead only after two missed pings, and the ping comes
 // before an ALB's default 60 s idle timeout cuts the connection. A test that shortens the heartbeat
-// (200/550 ms) passes both.
+// (200/550 ms) passes both. A lookup's reserve must leave the queue some time to wait (M1), and the
+// positions' grain must be a whole number of ms.
 export function gatewayPolicy(overrides: Partial<GatewayPolicy> = {}): GatewayPolicy {
   const policy = { ...GATEWAY_POLICY, ...overrides }
   if (policy.deadAfterMs <= 2 * policy.heartbeatMs) {
@@ -195,6 +207,12 @@ export function gatewayPolicy(overrides: Partial<GatewayPolicy> = {}): GatewayPo
   }
   if (policy.heartbeatMs >= 60_000) throw new Error('the gateway’s heartbeat must be shorter than 60 s')
   if (policy.spreadMinMs > policy.spreadMaxMs) throw new Error('the reconnect spread’s minimum is above its maximum')
+  if (!(policy.lookupReserveMs > 0 && policy.lookupReserveMs < policy.lookupTimeoutMs)) {
+    throw new Error('the session lookup’s reserve must be above 0 and below its time limit')
+  }
+  if (!Number.isInteger(policy.positionGrainMs) || policy.positionGrainMs < 1) {
+    throw new Error('the positions’ grain must be a whole number of ms, at least 1')
+  }
   return policy
 }
 

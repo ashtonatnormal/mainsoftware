@@ -17,10 +17,11 @@
 //                 must never hold back a revocation). Each tries 20 times, from 1 s doubling to 15 s,
 //                 so about seven tries start inside Rule 6's minute; one that dies logs
 //                 revocation_handler_dead at error level (C0.13 alarms on it).
-//   the handlers  sockets (sessions_ended): re-reads which of the sessions have ended, and when, and
-//                 publishes those on the access channel (revocation/channels.ts) with the earliest
-//                 revoked_at, so realtime closes their sockets at once; none ended means the claim
-//                 was forged, and the job dies (not_ended). topics (keys_changed): publishes the
+//   the handlers  sockets (sessions_ended): re-reads which of the sessions have ended, and the
+//                 signin.ended event that ended them, and publishes those on the access channel
+//                 (revocation/channels.ts) with that event's at (just before the revoking commit),
+//                 so realtime closes their sockets at once; none ended means the claim was forged,
+//                 and the job dies (not_ended). topics (keys_changed): publishes the
 //                 people, whom realtime re-checks against Postgres, so it can only drop what
 //                 Postgres says is lost.
 //
@@ -240,9 +241,16 @@ export interface PublishDeps {
   logger: Pick<Logger, 'warn' | 'error'>
 }
 
-// Closes ended sessions' sockets: re-reads which of the sessions have ended, and when, as the job's
-// role, then publishes those, durable, with the earliest revoked_at as the latency's start. The
-// sessions' revocation is final (keep_history), so a re-run publishes the same again, harmlessly.
+// Closes ended sessions' sockets: re-reads which of the sessions have ended, and the signin.ended
+// event that ended them, as the job's role, then publishes those, durable, with that event's at as
+// the latency's start (T19 item 13, startSource 'outbox'). The event's at is the clock when the
+// revoking transaction appended it, after the writes that ended the sessions and every lock they
+// waited for, so just before the commit, as the push's start is just after it. The sessions'
+// revoked_at is that transaction's now(), its start, which would count however long it ran (up to
+// its 30 s limit) into the latency. A session ends once, and only the transaction that ended it
+// appends an event naming it, so the minute either side of revoked_at only bounds the index scan.
+// With no such event the message carries no start, and realtime counts it unknown. The sessions'
+// revocation is final (keep_history), so a re-run publishes the same again, harmlessly.
 export function socketsHandler(deps: PublishDeps): RevocationHandler {
   return {
     name: 'sockets',
@@ -250,9 +258,15 @@ export function socketsHandler(deps: PublishDeps): RevocationHandler {
     async run(revocation, { orgId }, job) {
       if (revocation.cause !== 'sessions_ended') throw new PermanentJobError('cause_not_handled')
       const ended = await job.read(async trx => {
-        const { rows } = await sql<{ id: string; revoked_at: Date }>`select id, revoked_at from sessions
-          where org_id = ${orgId} and user_id = ${revocation.person} and id = any(${[...revocation.sessions]}::uuid[])
-            and revoked_at is not null`.execute(trx)
+        const { rows } = await sql<{ id: string; ended_at: Date | null }>`select s.id,
+            (select min(e.at) from outbox_events e
+              where e.org_id = s.org_id
+                and e.at between s.revoked_at - interval '1 minute' and s.revoked_at + interval '1 minute'
+                and e.type = 'signin.ended' and e.entity_type = 'person' and e.entity_id = s.user_id
+                and e.ids -> 'sessions' ? s.id::text) as ended_at
+          from sessions s
+          where s.org_id = ${orgId} and s.user_id = ${revocation.person} and s.id = any(${[...revocation.sessions]}::uuid[])
+            and s.revoked_at is not null`.execute(trx)
         return rows
       })
       if (ended.length === 0) {
@@ -268,6 +282,9 @@ export function socketsHandler(deps: PublishDeps): RevocationHandler {
           'an event names sessions that have not ended: only those that have are published',
         )
       }
+      // Every session of one job comes from one event, so their times agree; the earliest is taken
+      // all the same.
+      const times = ended.flatMap(row => (row.ended_at === null ? [] : [new Date(row.ended_at).getTime()]))
       // A failed publish fails the job, which is tried again (T16 item 4).
       await publishAccess(
         deps.valkey,
@@ -277,7 +294,7 @@ export function socketsHandler(deps: PublishDeps): RevocationHandler {
           org: orgId,
           path: 'durable',
           cause: 'sessions_ended',
-          at: Math.min(...ended.map(row => new Date(row.revoked_at).getTime())),
+          ...(times.length === 0 ? {} : { at: Math.min(...times) }),
           sessions: ended.map(row => row.id),
         },
         deps.logger,

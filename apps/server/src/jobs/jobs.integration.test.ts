@@ -20,7 +20,14 @@ import { defineJob, type JobKind, type ScheduleDef } from '#src/jobs/kinds.ts'
 import { offboardingJob, offboardingRegistry } from '#src/offboarding.ts'
 import { RevocationPayload, revocationJob, revocationRegistry } from '#src/revocation/registry.ts'
 import { installJobTables } from '#src/testing/jobs.ts'
-import { type Opened, type Person, type Stack, startStack, type WorkerInstance } from '#src/testing/stack.ts'
+import {
+  NO_PERIODIC_RECHECK,
+  type Opened,
+  type Person,
+  type Stack,
+  startStack,
+  type WorkerInstance,
+} from '#src/testing/stack.ts'
 import { everyTestPassed, expectEveryWriteCovered } from '#src/testing/writes.ts'
 import { createSubscriber } from '#src/valkey.ts'
 
@@ -470,21 +477,29 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
         await s.query("select id from jobs where kind = 'offboarding.handler' and subject_id = $1", [first.id]),
       ).toEqual([])
 
-      // Without it (A6): only the worker's revocation jobs can close the socket now (the re-check
-      // comes every 15 s).
+      // Without it (A6): only the worker's revocation jobs can close the socket now, on a realtime
+      // app of its own whose periodic re-check can't close it first (NO_PERIODIC_RECHECK). The
+      // stack's own ticks every 15 s at a phase the tests before this one set.
       const quiet = await s.startApi({ publishRevoked: false })
       const quietAdmin = s.client({ app: quiet })
       quietAdmin.setCookie('__Host-hearth_session', adminClient.cookie('__Host-hearth_session') ?? '')
+      const rt = await s.startRealtime({ ...NO_PERIODIC_RECHECK, subscribe: true })
+      // Listening on both revocation channels, or the sockets job's message would go unheard.
+      await eventually(
+        () => rt.readiness('/ready'),
+        r => r.status === 200,
+      )
       const leaver = await s.person({ pin: s.newPin() })
-      const socket = opened(await s.openSocket(await s.signIn(leaver)))
-      const before = s.realtime.server.counts().closedDurable
+      const socket = opened(await s.openSocket(await s.signIn(leaver), { url: rt.url }))
+      const before = rt.server.counts().closedDurable
       const started = Date.now()
       expect((await quietAdmin.post('/api/admin/people/deactivate', { person: leaver.id })).status).toBe(200)
       const closed = await Promise.race([socket.closed, sleep(10_000).then(() => undefined)])
       expect(closed, 'the socket stayed open for 10 s').toMatchObject({ code: 4401 })
       console.info(`deactivation to socket closed through the revocation consumer: ${(closed?.at ?? 0) - started} ms`)
-      // Closed by the durable path, not the push (which is off) or the re-check (every 15 s).
-      expect(s.realtime.server.counts()).toMatchObject({ closedDurable: before + 1 })
+      // Closed by the durable path, not the push (which is off) or a periodic re-check (none in this
+      // app's life).
+      expect(rt.server.counts()).toMatchObject({ closedDurable: before + 1 })
       // The sockets job re-read the ended sessions and published them, then finished in a
       // transaction of its own; it names no subject, and is keyed by its first session.
       const ended = await sessionsOf(leaver)
@@ -551,7 +566,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
           cause: 'sessions_ended',
           at: expect.any(Number),
         })
-        expect(s.realtime.server.counts().closedDurable).toBe(before + 1)
+        expect(rt.server.counts().closedDurable).toBe(before + 1)
       } finally {
         listener.disconnect()
       }
