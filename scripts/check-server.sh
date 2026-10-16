@@ -8,7 +8,9 @@
 # within 15 s, with nothing but JSON log lines written (a Node warning would show up as plain
 # text) and none at error level or above (`"level":50` or more), so a worker whose loops fail
 # can't pass. With the stack up, each role must also have logged its subscription to the flags
-# channel (channel_subscribed).
+# channel (channel_subscribed), and the realtime role its subscriptions to the revoked and access
+# channels too, and answer 200 on /ready/local, the load balancer's health check (C0.7, TECH-SPEC T19
+# item 12).
 #
 # The routes (C0.5): a code request (POST /api/auth/otp/request from APP_ORIGIN, for the number
 # "x") and a WebSocket upgrade to /ws from another origin. The api role answers them 400
@@ -114,6 +116,12 @@ for role in api realtime worker; do
       sleep 0.2
     done
     [ "$status" = 200 ] || { show_log; cat "$log.ready" >&2; fail "$role /ready answered $status, not 200, for 20 s"; }
+    # The realtime role's local readiness, which calls no dependency: it passes once the gateway has
+    # listened on both revocation channels, which /ready has just shown.
+    if [ "$role" = realtime ]; then
+      status=$(curl -sS --max-time 5 -o "$log.ready" -w '%{http_code}' "http://127.0.0.1:$port/ready/local" || true)
+      [ "$status" = 200 ] || { show_log; cat "$log.ready" >&2; fail "realtime /ready/local answered $status, not 200"; }
+    fi
   fi
 
   # Each role serves only its own routes (see the top of this file).
@@ -168,6 +176,15 @@ for role in api realtime worker; do
   if [ "$expect_ready" = 1 ] && ! grep -q '"event":"channel_subscribed","channel":"flags"' "$log"; then
     show_log
     fail "$role never logged its subscription to the flags channel"
+  fi
+  # The realtime role also listens on both revocation channels (main.ts's wiring, T19 item 5).
+  if [ "$expect_ready" = 1 ] && [ "$role" = realtime ]; then
+    for channel in revoked access; do
+      if ! grep -q "\"event\":\"channel_subscribed\",\"channel\":\"$channel\"" "$log"; then
+        show_log
+        fail "realtime never logged its subscription to the $channel channel"
+      fi
+    done
   fi
 
   echo "check-server: $role ok${image:+ (image $image)}"

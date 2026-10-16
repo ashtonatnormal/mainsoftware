@@ -26,7 +26,7 @@ import { sessionByToken } from '#src/db/pre-org.ts'
 import type { FlagCache } from '#src/flags/cache.ts'
 import type { Subscriptions } from '#src/pubsub.ts'
 import type { Check } from '#src/ready.ts'
-import { type Admission, orgChecker } from '#src/realtime/checks.ts'
+import { type Admission, type CheckOrg, orgChecker } from '#src/realtime/checks.ts'
 import { type GatewayPolicy, gatewayPolicy } from '#src/realtime/policy.ts'
 import { attachSocketServer, type SocketServer } from '#src/realtime/socket.ts'
 import { planResume, StreamReader } from '#src/realtime/stream.ts'
@@ -55,6 +55,9 @@ export interface RealtimeDeps {
   policy?: Partial<GatewayPolicy>
   revokeWithinMs?: number
   recheckTimeoutMs?: number
+  // Tests only (main.ts never sets it): wraps each org's check, the lane's and the periodic one's, so
+  // an integration test can hold a subscribe decision after its read (T19 item 6's race).
+  wrapCheck?: (check: CheckOrg) => CheckOrg
 }
 
 // The gateway, and its two readiness checks.
@@ -73,6 +76,7 @@ export function registerRealtime(
   const policy = gatewayPolicy(deps.policy)
   const keys = valkeyKeys(deps.keyPrefix)
   const latency = new RevocationLatency({ logger, summaryMs: 0 })
+  const checker = orgChecker(db, { admission: deps.admission, policy })
   const server = attachSocketServer(app, {
     appOrigin: deps.appOrigin,
     logger,
@@ -82,7 +86,7 @@ export function registerRealtime(
       if (session !== undefined) void flags?.track(session.orgId)
       return session
     },
-    check: orgChecker(db, { admission: deps.admission, policy }),
+    check: deps.wrapCheck === undefined ? checker : deps.wrapCheck(checker),
     recheckMs: deps.recheckMs ?? SOCKET_RECHECK_MS,
     ...(deps.revokeWithinMs === undefined ? {} : { revokeWithinMs: deps.revokeWithinMs }),
     ...(deps.recheckTimeoutMs === undefined ? {} : { recheckTimeoutMs: deps.recheckTimeoutMs }),
