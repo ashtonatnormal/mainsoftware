@@ -71,14 +71,19 @@ jobs:
       - run: npx vitest run packages/access/rules.test.ts --reporter=verbose
       - run: npm run build
       # Node runs the server's .ts source with no build step (T2), so prove that every role
-      # starts, answers /health and /ready against the local Compose stack, and stops cleanly on
-      # SIGTERM: first from the source, then from the production image. The server connects as
-      # hearth_app, which `npm run db:reset` sets up (migrations, seed, a local login).
+      # starts, answers /health and /ready against the local Compose stack (polled, since the
+      # worker is ready once each of its loops has run), logs nothing at error level, and stops
+      # cleanly on SIGTERM: first from the source, then from the production image. The api and
+      # realtime roles connect as hearth_app and the worker as hearth_worker, which
+      # `npm run db:reset` sets up (migrations, seed, local logins).
       - run: docker compose up -d --wait
       - run: npm run db:reset
       # Sign-in, devices and socket revocation against the stack (BUILD-PLAN C0.5's "Done when"),
-      # listed case by case. Each run builds a throwaway database and its own Valkey key prefix,
-      # so it can run again.
+      # and from C0.6 the outbox's events beside every write (each suite sweeps every committed
+      # write for its event), changing flags and their reach to every process, and the worker:
+      # the job queue, the scheduler and the outbox consumers, exactly once in effect through
+      # crashes, zombies, retries and shutdowns (C0.6's "Done when"), listed case by case. Each run
+      # builds a throwaway database and its own Valkey key prefix, so it can run again.
       - run: npm run test:integration
       - run: scripts/check-server.sh
       - run: docker build -f apps/server/Dockerfile -t hearth-server .
@@ -130,8 +135,8 @@ jobs:
         run: scripts/check-migration-order.sh "$BASE"
       # Builds a scratch database from every file in db/migrations/ with the migrator production
       # uses, in one transaction, from a session that can only act as hearth_owner, then checks it
-      # against CLAUDE.md's Database rules (org_id, RLS, views, grants, functions, ownership,
-      # hearth_app's attributes).
+      # against CLAUDE.md's Database rules (org_id, RLS, views, grants, functions, ownership, and
+      # that no runtime role, hearth_app, the worker's login or a job role among them, can skip RLS).
       - run: scripts/check-migrations.sh
       # The migrator itself, against throwaway databases: it refuses a migration that commits or
       # leaves another role in place, rolls a failed batch back, fails fast on a role it can't
@@ -148,8 +153,15 @@ jobs:
       # a device signed out while a session starts; from C0.5, a session, device or passkey for
       # someone leaving, a session lookup during a deactivation, ending someone's sessions or
       # resetting their PIN during a sign-in, a number removed during a sign-in, and an admin
-      # acting while being deactivated), in two connections to a throwaway database.
+      # acting while being deactivated; from C0.6, the queue's fences, leases, claims, schedulers
+      # and consumer rounds against flag changes and each other, and the outbox's horizon), in two
+      # connections to a throwaway database.
       - run: node apps/server/scripts/check-concurrency.ts
+      # The catalogues in code match the database (C0.6): every write grant of every runtime role,
+      # every function one can run and every SECURITY DEFINER and trigger function is covered by
+      # an outbox event or a reasoned exemption (apps/server/src/outbox/coverage.ts), and the
+      # event catalogue, the flag registry and the worker's job roles equal 0007's lists.
+      - run: node apps/server/scripts/check-catalogues.ts
       # The SQL access filter (sqlReadableBy, @hearth/access/sql) selects exactly what the
       # in-memory rule allows, for every person, both assistants and the system principal in the
       # fixture org, on Postgres 17, and still does after membership changes with no row rewritten;
@@ -161,7 +173,10 @@ jobs:
       # Risky migrations also get an upgrade step here, after the DB tests:
       #   UP_TO=NNNN scripts/check-migrations.sh && scripts/check-<name>-upgrade.sh
       # builds the database up to the migration before NNNN, loads production-shaped data, applies
-      # NNNN and checks the data survived.
+      # NNNN and checks the data survived. 0007 (C0.6) has no step of its own: it changes no
+      # existing row and adds no rule to an existing table, and the two 0006 runs below apply it too
+      # (with everything after 0006) on top of the seeded data, giving the seed's org its flags, and
+      # compare the result with the fresh build.
       # 0006 (C0.5) on top of sessions and accounts 0005 allows, in its own scratch database: its
       # two new session rules mustn't fail on older rows, and its schema must match the fresh build
       # above (hearth_check) apart from the rule older rows leave NOT VALID. Once for each rule, so

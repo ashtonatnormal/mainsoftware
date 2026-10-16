@@ -1,16 +1,19 @@
 // Every transaction the server opens goes through withOrg() (apps/server/src/db/database.ts),
-// except the two sign-in lookups that run before the org is known (db/pre-org.ts), and only
-// withOrg() sets the org and user (CLAUDE.md, Database; C0.5). This guard reads the server's
-// runtime source, comments stripped, and finds any other way in: Kysely's transaction(),
-// startTransaction() or connection(), a BEGIN or START TRANSACTION sent by hand, a call to the
-// pre-org functions, an app. setting set outside withOrg() (by a SET, its name quoted or spaced or
-// not, or by a set_config() naming it or whose name isn't a literal), any setting set for the whole
-// connection rather than the transaction (a set_config() whose third argument isn't true, or a SET
-// other than SET LOCAL, SET TRANSACTION and SET CONSTRAINTS), and a query sent to the pool rather
+// except the two sign-in lookups that run before the org is known (db/pre-org.ts) and the worker's
+// org list (listOrgs(), also in database.ts), and only withOrg() sets the org and user (CLAUDE.md,
+// Database; C0.5, C0.6). This guard reads the server's runtime source, comments stripped, and finds
+// any other way in: Kysely's transaction(), startTransaction() or connection(), a BEGIN or START
+// TRANSACTION sent by hand, a call to the pre-org functions or to worker_org_ids(), an app.
+// setting set outside withOrg() (by a SET, its name quoted or spaced or not, or by a set_config()
+// naming it or whose name isn't a literal), a role taken anywhere but database.ts (set_config('role',
+// …), SET [LOCAL] ROLE, RESET ROLE or SESSION AUTHORIZATION; TECH-SPEC T18), any setting set for the
+// whole connection rather than the transaction (a set_config() whose third argument isn't true, or a
+// SET other than SET LOCAL, SET TRANSACTION and SET CONSTRAINTS), and a query sent to the pool rather
 // than a transaction (a query builder or execute() on anything but the transaction, trx; any call
 // on a Database named db but opening a transaction; and query() or connect() on a pg pool or
 // client named pool, pg, postgres or client). It goes by names, not types, so a Database handle
-// named trx would pass. Test-only files are skipped.
+// named trx would pass. Test-only files are skipped, and the outbox's coverage table may name the
+// lookups as data (it makes no query).
 import { describe, expect, it } from 'vitest'
 import { withoutComments } from './imports'
 import { readRepoFile, repoFiles } from './repo-files'
@@ -20,8 +23,12 @@ const DATABASE = 'apps/server/src/db/database.ts'
 const PRE_ORG = 'apps/server/src/db/pre-org.ts'
 // The migrator, on a connection of its own as hearth_owner at deploy, never the app's pool.
 const MIGRATIONS = 'apps/server/src/db/migrations.ts'
-// The readiness check, which reads no table.
+// The readiness checks, which read only the system catalogues.
 const POOL = 'apps/server/src/db/pool.ts'
+// The outbox's coverage table (C0.6, T16 item 7) names every function a runtime transaction can
+// reach, the sign-in lookups and worker_org_ids() among them, as data: it calls none, and every
+// other rule here still applies to it.
+const COVERAGE = 'apps/server/src/outbox/coverage.ts'
 
 // Kysely's own ways to hold a connection or open a transaction.
 const OPENS = /\.(?:startTransaction|transaction|connection)\s*\(/
@@ -31,6 +38,14 @@ const BEGINS = /\b(?:begin|start\s+transaction)\b/i
 // A string or template that is itself a BEGIN, as in client.query('begin').
 const BEGIN_STRING = /['"`]\s*(?:begin|start\s+transaction)\b/i
 const PRE_ORG_FUNCTIONS = /\b(?:session_by_token|person_by_phone)\b/
+// The worker's org list, the one read across orgs besides the sign-in lookups (T18 item 2).
+const ORG_LIST = /\bworker_org_ids\b/
+// Taking a role by hand: SET ROLE, SET LOCAL ROLE, RESET ROLE and the session authorization forms.
+// set_config('role', …) calls are read argument by argument (setConfigCalls).
+const SET_ROLE =
+  /\b(?:set\s+(?:local\s+|session\s+)?(?:role|session\s+authorization)|reset\s+(?:role|session\s+authorization))\b/i
+// A set_config() name that is the role: GUC names ignore case.
+const ROLE_SETTING = /^'(?:role|session_authorization)'$/i
 // SET app.… by hand, the name quoted or spaced or not. set_config() calls are read argument by
 // argument (setConfigCalls).
 const SET_APP = /\bset\s+(?:local\s+|session\s+)?"?app"?\s*\./i
@@ -82,6 +97,8 @@ function entryProblems(code: string): {
   opens: boolean
   begins: boolean
   preOrg: boolean
+  listsOrgs: boolean
+  setsRole: boolean
   setsApp: boolean
   wholeConnection: boolean
   queriesPool: boolean
@@ -92,6 +109,8 @@ function entryProblems(code: string): {
     opens: OPENS.test(code),
     begins: templates.some(text => BEGINS.test(text)) || BEGIN_STRING.test(code),
     preOrg: PRE_ORG_FUNCTIONS.test(code),
+    listsOrgs: ORG_LIST.test(code),
+    setsRole: SET_ROLE.test(code) || setConfigs.some(([name = '']) => ROLE_SETTING.test(name)),
     setsApp: SET_APP.test(code) || setConfigs.some(([name = '']) => !OTHER_SETTING.test(name)),
     // set_config()'s third argument, is_local, must be true, and a SET must be SET LOCAL (or
     // TRANSACTION or CONSTRAINTS): otherwise the setting stays on the pooled connection for
@@ -112,7 +131,7 @@ const sources = repoFiles()
   .filter(path => path.startsWith('apps/server/src/') && /\.ts$/.test(path) && !TEST_ONLY.test(path))
   .map(path => ({ path, code: withoutComments(path, readRepoFile(path)) }))
 
-describe('db entry guard: transactions only through withOrg() and the pre-org lookups (CLAUDE.md, Database)', () => {
+describe('db entry guard: transactions only through withOrg(), the pre-org lookups and listOrgs() (CLAUDE.md, Database)', () => {
   it('finds each way in', () => {
     expect(entryProblems('await db.transaction().execute(work)').opens).toBe(true)
     expect(entryProblems('const trx = await db.startTransaction().execute()').opens).toBe(true)
@@ -123,10 +142,13 @@ describe('db entry guard: transactions only through withOrg() and the pre-org lo
     expect(entryProblems('await sql`select * from public.person_by_phone($1)`.execute(db)').preOrg).toBe(true)
     expect(entryProblems("await sql`select set_config('app.user_id', $1, true)`.execute(trx)").setsApp).toBe(true)
     expect(entryProblems('await sql`set local app.org_id = 1`.execute(trx)').setsApp).toBe(true)
+    expect(entryProblems('await sql`select id from public.worker_org_ids() as id`.execute(trx)').listsOrgs).toBe(true)
     expect(entryProblems('await sql`select 1 as begins`.execute(trx)')).toEqual({
       opens: false,
       begins: false,
       preOrg: false,
+      listsOrgs: false,
+      setsRole: false,
       setsApp: false,
       wholeConnection: false,
       queriesPool: false,
@@ -190,6 +212,31 @@ describe('db entry guard: transactions only through withOrg() and the pre-org lo
     }
   })
 
+  it('C0.6 T18: finds a role taken by set_config() or by SET, however it is written', () => {
+    for (const code of [
+      `await sql\`select set_config('role', \${role}, true), set_config('app.org_id', \${org}, true)\`.execute(trx)`,
+      "await sql`select set_config('ROLE', 'hearth_queue', true)`.execute(trx)",
+      `await sql\`select set_config( 'role' , \${role}, true)\`.execute(trx)`,
+      'await sql`set local role hearth_job_purge`.execute(trx)',
+      'await sql`SET ROLE hearth_owner`.execute(trx)',
+      'await sql`select 1; set session role hearth_app`.execute(trx)',
+      "await client.query('reset role')",
+      'await sql`set session authorization hearth_owner`.execute(trx)',
+      "await sql`select set_config('session_authorization', 'hearth_owner', true)`.execute(trx)",
+    ]) {
+      expect(entryProblems(code).setsRole, code).toBe(true)
+    }
+    for (const code of [
+      "await sql`select rolname from pg_roles where rolname = 'hearth_queue'`.execute(trx)",
+      "await sql`update role_assignments set revoked_at = now() where role = 'admin'`.execute(trx)",
+      "await sql`select set_config('lock_timeout', '1s', true)`.execute(trx)",
+      "await sql`set local lock_timeout = '1s'`.execute(trx)",
+      "const roles = await trx.selectFrom('role_assignments').selectAll().execute()",
+    ]) {
+      expect(entryProblems(code).setsRole, code).toBe(false)
+    }
+  })
+
   it('finds a query sent to the pool rather than a transaction', () => {
     for (const code of [
       'await sql`select id from people`.execute(db)',
@@ -242,7 +289,35 @@ describe('db entry guard: transactions only through withOrg() and the pre-org lo
   })
 
   it('calls the pre-org functions only from pre-org.ts', () => {
-    expect(sources.filter(({ code }) => entryProblems(code).preOrg).map(source => source.path)).toEqual([PRE_ORG])
+    expect(
+      sources.filter(({ path, code }) => path !== COVERAGE && entryProblems(code).preOrg).map(source => source.path),
+    ).toEqual([PRE_ORG])
+  })
+
+  it('C0.6 T18: calls worker_org_ids() only from database.ts (listOrgs)', () => {
+    expect(
+      sources.filter(({ path, code }) => path !== COVERAGE && entryProblems(code).listsOrgs).map(source => source.path),
+    ).toEqual([DATABASE])
+  })
+
+  it('C0.6: lets only the coverage table name the lookups, and the table makes no query at all', () => {
+    const coverage = sources.find(source => source.path === COVERAGE)
+    expect(coverage).toBeDefined()
+    expect(entryProblems(coverage?.code ?? '')).toEqual({
+      opens: false,
+      begins: false,
+      preOrg: true,
+      listsOrgs: true,
+      setsRole: false,
+      setsApp: false,
+      wholeConnection: false,
+      queriesPool: false,
+    })
+    expect(coverage?.code).not.toMatch(/\bsql\s*`|\.execute\s*\(|from '#src\/db\//)
+  })
+
+  it('C0.6 T18: takes a role only in database.ts (withOrg()’s as and listOrgs)', () => {
+    expect(sources.filter(({ code }) => entryProblems(code).setsRole).map(source => source.path)).toEqual([DATABASE])
   })
 
   it('sets app. settings only in database.ts', () => {

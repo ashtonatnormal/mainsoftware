@@ -15,6 +15,9 @@
 //   code, PIN or passkey is checked.
 // - A failure that writes (a wrong PIN's count, a failed passkey's audit row) is returned from the
 //   transaction, so it commits, and only then becomes an error.
+// - A finished sign-in appends signin.started to the outbox in its transaction, and a first one,
+//   which sets the PIN, account.pin_set too (C0.6, T16); a failure writes only counters and audit
+//   rows, which append nothing (outbox/coverage.ts).
 // - Valkey errors fail closed: sign-in answers 503 unavailable while Valkey is down.
 // - Nothing here logs a phone number, code, PIN, token, attempt id, challenge or credential id.
 import { sql } from 'kysely'
@@ -50,6 +53,7 @@ import { AttemptStale, type IssuedSession, issueSession, numberStillTheirs } fro
 import { type InOrg, withOrg } from '#src/db/database.ts'
 import { personByPhone } from '#src/db/pre-org.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
+import { appendOutbox } from '#src/outbox/append.ts'
 
 // --- Shared with account.ts -----------------------------------------------------------------
 
@@ -506,6 +510,16 @@ export async function setPin(
       // Only one request turns an attempt into a session.
       if (!(await fromValkey(info, consumeAttempt(api.valkey, api.names, key)))) throw attemptExpired()
       const issued = await issueSession(trx, sessionInput(attempt, info, 'sms_new_pin'))
+      // As Hearth, before a session exists: the event names the person as its actor (T16 item 10).
+      await appendOutbox(trx, {
+        orgId,
+        type: 'account.pin_set',
+        entity: { type: 'person', id: personId },
+        actor: { id: personId, kind: 'human' },
+        subjects: [personId],
+        purpose: 'accounts',
+        ids: {},
+      })
       await writeAudit(trx, {
         orgId,
         actorId: personId,

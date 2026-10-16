@@ -7,8 +7,8 @@ import { buildApp } from '#src/app.ts'
 import { deriveKeys } from '#src/auth/crypto.ts'
 import type { Database } from '#src/db/database.ts'
 import { createLogger } from '#src/logger.ts'
-import { OffboardingRegistry } from '#src/offboarding.ts'
 import type { Check } from '#src/ready.ts'
+import { staticFlags } from '#src/testing/flags.ts'
 import { MemorySms } from '#src/testing/sms.ts'
 
 const APP_ORIGIN = 'https://hearth.example.com'
@@ -176,7 +176,7 @@ function apiApp(touched: string[]) {
     keys: deriveKeys('unit-test-unit-test-unit-test-unit-test'),
     sms: new MemorySms(),
     keyPrefix: 'it:unit:',
-    offboarding: new OffboardingRegistry(logger),
+    flags: staticFlags(),
   }
   return buildApp({ appOrigin: APP_ORIGIN, logger, checks: {}, api })
 }

@@ -7,8 +7,8 @@ import { ApiError } from '#src/auth/errors.ts'
 import { relyingParty } from '#src/auth/passkeys.ts'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { AfterResponse, type ReqInfo } from '#src/http.ts'
-import { OffboardingRegistry } from '#src/offboarding.ts'
-import { type Statement, scriptedPool } from '#src/testing/pool.ts'
+import { staticFlags } from '#src/testing/flags.ts'
+import { appended, type Statement, scriptedPool } from '#src/testing/pool.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const ADMIN = 'b0000000-0000-4000-8000-000000000001'
@@ -49,17 +49,16 @@ function org(options: {
   })
 }
 
-function context(pool: ReturnType<typeof scriptedPool>) {
+function context(pool: ReturnType<typeof scriptedPool>, options: { publishDeactivated?: boolean } = {}) {
   const published: string[] = []
-  const offboarding = new OffboardingRegistry({ info: vi.fn(), error: vi.fn() })
-  const run = vi.spyOn(offboarding, 'run')
   const api: Api = {
     db: pool.db,
     valkey: { publish: async (_channel: string, message: string) => published.push(message) } as unknown as Redis,
     keys: deriveKeys('unit-test-unit-test-unit-test-unit-test'),
     sms: undefined,
     keyPrefix: 'it:unit:',
-    offboarding,
+    flags: staticFlags(),
+    ...options,
     afterResponse: new AfterResponse(),
     appOrigin: 'https://hearth.example.com',
     names: valkeyKeys('it:unit:'),
@@ -72,7 +71,7 @@ function context(pool: ReturnType<typeof scriptedPool>) {
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as ReqInfo['log'],
     after: () => {},
   }
-  return { api, info, published, run }
+  return { api, info, published }
 }
 
 const audits = (pool: ReturnType<typeof scriptedPool>) =>
@@ -87,16 +86,22 @@ async function refusal(promise: Promise<unknown>): Promise<ApiError> {
   return error
 }
 
-describe('C0.5 ACC-05 deactivating someone', () => {
-  it('deactivates, counts the sessions the trigger ended, audits once, then runs the offboarding handlers', async () => {
+describe('C0.5 ACC-05 C0.6 T16 deactivating someone', () => {
+  // The member's deactivation ended two sessions and two devices.
+  const deactivating = (options: { publishDeactivated?: boolean } = {}) => {
     const pool = org({
       rows: ({ text }) => {
         if (text.startsWith('update "people"')) return [{ id: MEMBER }]
-        if (text.startsWith('select count(*) as n from sessions')) return [{ n: '2' }]
+        if (text.startsWith('select id from sessions')) return ENDED.map(id => ({ id }))
+        if (text.startsWith('select id from devices')) return MEMBER_DEVICES.map(id => ({ id }))
         return undefined
       },
     })
-    const c = context(pool)
+    return { pool, c: context(pool, options) }
+  }
+
+  it('deactivates, appends person.deactivated, signin.ended and acl.changed, audits once, then publishes what ended', async () => {
+    const { pool, c } = deactivating()
     expect(await deactivate(c.api, { person: MEMBER }, session, c.info)).toEqual({
       body: { status: 'deactivated', sessionsEnded: 2 },
     })
@@ -105,21 +110,70 @@ describe('C0.5 ACC-05 deactivating someone', () => {
       'update "people" set "deactivated_at" = now(), "deactivated_by" = $1 where "org_id" = $2 and "id" = $3 and "deactivated_at" is null returning "id"',
     )
     expect(update?.values).toEqual([ADMIN, ORG, MEMBER])
+    // What the deactivation's trigger ended in this transaction (now() is the transaction's start).
+    expect(pool.texts()).toContain(
+      "select id from sessions where org_id = $1 and user_id = $2 and revoke_reason = 'deactivated' and revoked_at = now()",
+    )
+    expect(pool.texts()).toContain(
+      'select id from devices where org_id = $1 and user_id = $2 and signed_out_at = now()',
+    )
+    // The admin is the actor (the transaction's), the leaver the subject, beside the write.
+    expect(appended(pool.statements)).toEqual([
+      { type: 'person.deactivated', entity: MEMBER, subjects: [MEMBER], ids: {}, actor: undefined },
+      {
+        type: 'signin.ended',
+        entity: MEMBER,
+        subjects: [MEMBER],
+        ids: { sessions: ENDED, devices: MEMBER_DEVICES, reason: 'deactivated' },
+        actor: undefined,
+      },
+      {
+        type: 'acl.changed',
+        entity: MEMBER,
+        subjects: [MEMBER],
+        ids: { change: 'keys', reason: 'deactivated' },
+        actor: undefined,
+      },
+    ])
+    const texts = pool.texts()
+    expect(texts.findLastIndex(text => text.startsWith('insert into outbox_events'))).toBeLessThan(
+      texts.findIndex(text => text.startsWith('insert into "audit_events"')),
+    )
     expect(audits(pool)).toHaveLength(1)
     expect(audits(pool)[0]?.values).toContain('person.deactivate')
     expect(audits(pool)[0]?.values).toContainEqual({ sessionsEnded: 2 })
-    expect(c.run).toHaveBeenCalledWith({ orgId: ORG, personId: MEMBER, actorId: ADMIN })
+    // The api still closes their sockets at once, as before C0.6.
+    expect(c.published.flatMap(message => JSON.parse(message).sessions)).toEqual(ENDED)
   })
 
-  it('answers a second deactivation 200 with nothing ended, writing nothing and running no handler', async () => {
+  it('leaves the publish to the worker when told to (A6), and appends the same events', async () => {
+    const { pool, c } = deactivating({ publishDeactivated: false })
+    await deactivate(c.api, { person: MEMBER }, session, c.info)
+    expect(c.published).toEqual([])
+    expect(appended(pool.statements).map(event => event.type)).toEqual([
+      'person.deactivated',
+      'signin.ended',
+      'acl.changed',
+    ])
+  })
+
+  it('appends no signin.ended for someone who had never signed in', async () => {
+    const pool = org({ rows: ({ text }) => (text.startsWith('update "people"') ? [{ id: MEMBER }] : undefined) })
+    const c = context(pool)
+    expect(await deactivate(c.api, { person: MEMBER }, session, c.info)).toEqual({
+      body: { status: 'deactivated', sessionsEnded: 0 },
+    })
+    expect(appended(pool.statements).map(event => event.type)).toEqual(['person.deactivated', 'acl.changed'])
+  })
+
+  it('answers a second deactivation 200 with nothing ended, writing, appending and publishing nothing', async () => {
     const pool = org({ memberLeft: true })
     const c = context(pool)
     expect(await deactivate(c.api, { person: MEMBER }, session, c.info)).toEqual({
       body: { status: 'deactivated', sessionsEnded: 0 },
     })
-    expect(pool.texts().some(text => text.startsWith('update'))).toBe(false)
-    expect(audits(pool)).toEqual([])
-    expect(c.run).not.toHaveBeenCalled()
+    expect(pool.texts().some(text => text.startsWith('update') || text.startsWith('insert'))).toBe(false)
+    expect(c.published).toEqual([])
   })
 
   it('answers 200 with nothing ended when another admin deactivated them a moment ago', async () => {
@@ -129,7 +183,8 @@ describe('C0.5 ACC-05 deactivating someone', () => {
       body: { status: 'deactivated', sessionsEnded: 0 },
     })
     expect(audits(pool)).toEqual([])
-    expect(c.run).not.toHaveBeenCalled()
+    expect(appended(pool.statements)).toEqual([])
+    expect(c.published).toEqual([])
   })
 
   it('still needs can(): 403 reauth_required without a fresh re-authentication, 403 forbidden for the Owner or yourself', async () => {
@@ -175,6 +230,17 @@ describe('C0.5 ACC-06 resetting a PIN', () => {
     ])
     expect(audits(pool)[0]?.values).toContain('Checked on a call')
     expect(audits(pool)[0]?.values).toContainEqual({ identityCheck: 'video_call', sessionsEnded: 2 })
+    // C0.6: the reset and the sessions it ended, with the admin as the actor.
+    expect(appended(pool.statements)).toEqual([
+      { type: 'account.pin_reset', entity: MEMBER, subjects: [MEMBER], ids: {}, actor: undefined },
+      {
+        type: 'signin.ended',
+        entity: MEMBER,
+        subjects: [MEMBER],
+        ids: { sessions: ENDED, devices: [], reason: 'pin_reset' },
+        actor: undefined,
+      },
+    ])
     expect(c.published.flatMap(message => JSON.parse(message).sessions)).toEqual(ENDED)
   })
 
@@ -209,6 +275,15 @@ describe('C0.5 ACC-04 an admin signing devices out and listing them', () => {
     expect(lock).toBeGreaterThan(-1)
     expect(lock).toBeLessThan(texts.findIndex(text => text.startsWith('update "devices"')))
     expect(audits(pool)[0]?.values).toContainEqual({ devices: MEMBER_DEVICES })
+    expect(appended(pool.statements)).toEqual([
+      {
+        type: 'signin.ended',
+        entity: MEMBER,
+        subjects: [MEMBER],
+        ids: { sessions: ENDED, devices: MEMBER_DEVICES, reason: 'device_sign_out' },
+        actor: undefined,
+      },
+    ])
     expect(c.published.flatMap(message => JSON.parse(message).sessions)).toEqual(ENDED)
   })
 

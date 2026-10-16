@@ -1,30 +1,29 @@
 // The realtime role (C0.5): the WebSocket on /ws (realtime/socket.ts), wired to Postgres for the
-// session checks and to Valkey for the revocation channel (revocation.ts). C0.7's gateway grows
-// from it.
+// session checks and to Valkey for the revocation channel (revocation.ts). It keeps the flags of
+// every org it has a socket for (C0.6, flags/cache.ts), so a change reaches it within 10 s. C0.7's
+// gateway grows from it.
 import type { FastifyInstance } from 'fastify'
-import type { Redis } from 'ioredis'
 import { sql } from 'kysely'
 import type { Logger } from 'pino'
 import { SESSION, SOCKET_RECHECK_MS } from '#src/auth/policy.ts'
-import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { type Database, NoSystemPrincipal, withOrg } from '#src/db/database.ts'
 import { type SessionIds, sessionByToken } from '#src/db/pre-org.ts'
+import type { FlagCache } from '#src/flags/cache.ts'
+import type { Subscriptions } from '#src/pubsub.ts'
 import { attachSocketServer, type SocketServer } from '#src/realtime/socket.ts'
-import { subscribeRevoked } from '#src/revocation.ts'
-import { closeValkey } from '#src/valkey.ts'
+import { listenRevoked } from '#src/revocation.ts'
 
 export interface RealtimeDeps {
   db: Database
-  // The revocation channel's own Valkey connection (valkey.ts createSubscriber). Without one,
-  // sockets close only at the re-check.
-  subscriber?: Redis
+  // The process's pub/sub channels (pubsub.ts), on which this listens for ended sessions. Without
+  // them, sockets close only at the re-check. Whoever made them closes them.
+  subscriptions?: Pick<Subscriptions, 'add'>
+  // The process's flags (C0.6): each socket's org is kept from its first upgrade on.
+  flags?: Pick<FlagCache, 'track'>
   keyPrefix: string
   // How often every open socket's session is re-checked; SOCKET_RECHECK_MS unless a test shortens it.
   recheckMs?: number
 }
-
-// How long to wait before subscribing to the revocation channel again after a failed try.
-export const SUBSCRIBE_RETRY_MS = 1000
 
 type LogTo = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
 
@@ -32,28 +31,27 @@ export function registerRealtime(
   app: FastifyInstance,
   deps: RealtimeDeps & { appOrigin: string; logger: LogTo },
 ): SocketServer {
-  const { db, logger } = deps
+  const { db, logger, flags } = deps
   const server = attachSocketServer(app, {
     appOrigin: deps.appOrigin,
     logger,
-    lookup: tokenHash => sessionByToken(db, tokenHash, SESSION.idle),
+    lookup: async tokenHash => {
+      const session = await sessionByToken(db, tokenHash, SESSION.idle)
+      // Starts keeping the org's flags (it never rejects; the cache keeps trying by itself).
+      if (session !== undefined) void flags?.track(session.orgId)
+      return session
+    },
     stillLive: sessions => liveSessions(db, sessions, logger),
     recheckMs: deps.recheckMs ?? SOCKET_RECHECK_MS,
   })
-  const { subscriber } = deps
-  if (subscriber !== undefined) {
-    const stop = keepSubscribed(
-      subscriber,
+  if (deps.subscriptions !== undefined) {
+    // Resolves once subscribed; until then (Valkey down, say) sockets still close at the re-check.
+    void listenRevoked(
+      deps.subscriptions,
       deps.keyPrefix,
       (sessionIds, at) => server.closeSessions(sessionIds, 'revoked', at),
       logger,
     )
-    // After the socket server's own preClose (hooks run in the order they're added), so the
-    // sockets have closed by then; main.ts closing it again afterwards is harmless.
-    app.addHook('preClose', async () => {
-      stop()
-      await closeValkey(subscriber)
-    })
   }
   return server
 }
@@ -97,56 +95,4 @@ export async function liveSessions(
     }
   }
   return live
-}
-
-// Subscribes to the revocation channel, and again on each new connection after a reconnect, since
-// Valkey forgets a subscription with the connection that made it. ioredis would do that itself,
-// but nothing could handle its subscribe failing, which would end the process (main.ts), so
-// valkey.ts turns that off and this does it instead. A subscribe that fails, or one sent while
-// Valkey is down, is tried again every SUBSCRIBE_RETRY_MS until it works; until then sockets still
-// close at the re-check. Returns a function that stops trying.
-export function keepSubscribed(
-  subscriber: Pick<Redis, 'subscribe' | 'on'>,
-  keyPrefix: string,
-  onRevoked: (sessionIds: string[], at: number) => void,
-  logger: Pick<Logger, 'info' | 'warn' | 'error'>,
-): () => void {
-  const channel = valkeyKeys(keyPrefix).revoked
-  let stopped = false
-  let timer: NodeJS.Timeout | undefined
-  // True from a subscribe being sent until one succeeds, retries included.
-  let pending = true
-  const subscribed = () => {
-    pending = false
-    logger.info({ event: 'revocations_subscribed' }, 'listening for ended sessions')
-  }
-  const retry = () => {
-    clearTimeout(timer)
-    if (stopped) return
-    timer = setTimeout(() => {
-      timer = undefined
-      subscribeAgain()
-    }, SUBSCRIBE_RETRY_MS)
-    timer.unref()
-  }
-  // The channel's listener is already on the connection; only the subscribe is repeated.
-  const subscribeAgain = () => {
-    if (stopped) return
-    pending = true
-    subscriber.subscribe(channel).then(subscribed, retry)
-  }
-  // A new connection. The first one finds the first subscribe still pending, as does one that
-  // comes back while a retry waits.
-  subscriber.on('ready', () => {
-    if (!pending) subscribeAgain()
-  })
-  subscribeRevoked(subscriber, keyPrefix, onRevoked, logger).then(subscribed, (error: unknown) => {
-    // Logged once; the connection's own errors are logged by valkey.ts.
-    logger.warn({ err: error, event: 'revocations_subscribe_failed' }, 'could not listen for ended sessions yet')
-    retry()
-  })
-  return () => {
-    stopped = true
-    clearTimeout(timer)
-  }
 }

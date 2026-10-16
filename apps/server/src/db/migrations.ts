@@ -162,6 +162,11 @@ export async function migrate(options: MigrateOptions): Promise<MigrationResultS
     max: 1,
     options: `-c role=${role} -c lock_timeout=10s`,
   })
+  // A connection the server ends (a restart, a forced drop of the database) emits 'error' on its
+  // client, or on the pool while it is idle, which without a listener would crash the process. The
+  // statement in flight rejects either way, so the migration still fails with it.
+  pool.on('connect', client => client.on('error', () => {}))
+  pool.on('error', () => {})
   const db = new Kysely<unknown>({ dialect: new PostgresDialect({ pool }) })
   try {
     const migrator = new Migrator({

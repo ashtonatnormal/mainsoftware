@@ -5,8 +5,10 @@
 -- data_access_events, choosing a log entry's time, any grant on a partition; no DELETE on
 -- passkeys; no UPDATE of a passkey's key or credential id; no write of a session's start,
 -- last-seen or re-authentication time, or of when a PIN last failed, that the database doesn't
--- stamp) fails. Nothing may be granted to PUBLIC at all, and hearth_app can create no schema
--- object or temporary table.
+-- stamp; from 0007, reading the outbox or choosing an event's id, position or time, and any grant
+-- on jobs, schedules, a fence or the clean-up) fails. Nothing may be granted to PUBLIC at all, and
+-- hearth_app can create no schema object or temporary table. 032 pins the worker's roles the same
+-- way.
 \ir fixtures/two_orgs.sql
 
 do $$
@@ -66,54 +68,28 @@ declare
     'data_access_events.object_type: INSERT', 'data_access_events.on_behalf_of_id: INSERT',
     'data_access_events.org_id: INSERT', 'data_access_events.provider: INSERT', 'data_access_events.request_id: INSERT',
     'data_access_events.subject_id: INSERT', 'data_access_events.type: INSERT', 'data_access_events.via: INSERT',
+    -- Feature flags (0007): read, and change only through set_feature_flag().
+    'feature_flags: SELECT',
+    -- The outbox (0007): add events in the transaction that makes the change, never reading them
+    -- or choosing an event's id, position (tx_id) or time.
+    'outbox_events.acl_epoch: INSERT', 'outbox_events.acl_more: INSERT', 'outbox_events.acl_tokens: INSERT',
+    'outbox_events.actor_id: INSERT', 'outbox_events.actor_kind: INSERT', 'outbox_events.container_id: INSERT',
+    'outbox_events.container_type: INSERT', 'outbox_events.entity_id: INSERT', 'outbox_events.entity_type: INSERT',
+    'outbox_events.ids: INSERT', 'outbox_events.index_class: INSERT', 'outbox_events.org_id: INSERT',
+    'outbox_events.purpose: INSERT', 'outbox_events.subject_ids: INSERT', 'outbox_events.tombstone: INSERT',
+    'outbox_events.type: INSERT', 'outbox_events.version: INSERT',
     -- Functions.
     'function is_iana_time_zone(text): EXECUTE',
+    -- The outbox's ids check runs as whoever writes the row (0007).
+    'function is_ids_only(jsonb): EXECUTE',
+    'function set_feature_flag(text,boolean,text,uuid[],text[],text,uuid,inet): EXECUTE',
     -- The two sign-in lookups that run before the org is known (0006).
     'function person_by_phone(text): EXECUTE',
     'function session_by_token(bytea,interval): EXECUTE',
     'function read_audit_events(timestamp with time zone,timestamp with time zone,bigint,integer): EXECUTE'
   ];
-  actual text[];
-  missing text[];
-  extra text[];
 begin
-  with rel as (
-    select c.oid, c.relkind,
-           case n.nspname when 'public' then c.relname::text else format('%I.%I', n.nspname, c.relname) end as name
-    from pg_class c join pg_namespace n on n.oid = c.relnamespace
-    where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema' and c.relkind in ('r', 'p', 'v', 'm', 'f', 'S')
-  ), table_level as (
-    select r.oid, r.name, p.priv
-    from rel r cross join unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) as p (priv)
-    where r.relkind <> 'S' and has_table_privilege('hearth_app', r.oid, p.priv)
-  )
-  select coalesce(array_agg(g order by g), '{}') into actual from (
-    select format('%s: %s', name, priv) as g from table_level
-    union all
-    -- Column privileges it holds only for some columns.
-    select format('%s.%s: %s', r.name, a.attname, p.priv)
-    from rel r
-    join pg_attribute a on a.attrelid = r.oid and a.attnum > 0 and not a.attisdropped
-    cross join unnest(array['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']) as p (priv)
-    where r.relkind <> 'S' and has_column_privilege('hearth_app', r.oid, a.attnum, p.priv)
-      and not exists (select 1 from table_level t where t.oid = r.oid and t.priv = p.priv)
-    union all
-    select format('sequence %s: %s', r.name, p.priv)
-    from rel r cross join unnest(array['USAGE', 'SELECT', 'UPDATE']) as p (priv)
-    where r.relkind = 'S' and has_sequence_privilege('hearth_app', r.oid, p.priv)
-    union all
-    -- Functions it can run, by any route.
-    select format('function %s: EXECUTE', p.oid::regprocedure)
-    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema'
-      and has_function_privilege('hearth_app', p.oid, 'EXECUTE')
-  ) grants;
-
-  select coalesce(array_agg(e order by e), '{}') into missing from unnest(expected) e where e <> all (actual);
-  select coalesce(array_agg(a order by a), '{}') into extra from unnest(actual) a where a <> all (expected);
-  perform pg_temp.check(cardinality(missing) = 0, format('hearth_app lacks grants this test expects: %s', missing));
-  perform pg_temp.check(cardinality(extra) = 0,
-    format('hearth_app holds grants this test does not list (add them here only if they are meant): %s', extra));
+  perform pg_temp.expect_privileges('hearth_app', expected);
 end
 $$;
 

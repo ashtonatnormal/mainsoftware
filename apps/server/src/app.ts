@@ -1,8 +1,9 @@
 // The Fastify app every role serves: the Origin check, the not-found handler and the two probes.
 // On top of that, the api role serves the sign-in, device and admin routes under /api (C0.5,
 // api.ts), and the realtime role the WebSocket on /ws (C0.5's minimal one, realtime/; C0.7's
-// gateway grows from it). The worker adds nothing yet; its jobs come as they're needed. main.ts
-// chooses what a role gets, and scripts/check-server.sh checks each role serves only its own.
+// gateway grows from it). The worker serves no routes of its own: its loops run beside the app
+// (C0.6, worker/index.ts), and /ready asks them too. main.ts chooses what a role gets, and
+// scripts/check-server.sh checks each role serves only its own.
 import { randomUUID } from 'node:crypto'
 import { type FastifyBaseLogger, type FastifyInstance, fastify } from 'fastify'
 import type { LevelWithSilent, Logger } from 'pino'

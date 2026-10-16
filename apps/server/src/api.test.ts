@@ -11,7 +11,7 @@ import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { createDatabase, type Database } from '#src/db/database.ts'
 import { AfterResponse } from '#src/http.ts'
 import { createLogger } from '#src/logger.ts'
-import { OffboardingRegistry } from '#src/offboarding.ts'
+import { staticFlags } from '#src/testing/flags.ts'
 import { pgError, type Statement, scriptedPool } from '#src/testing/pool.ts'
 import { MemorySms } from '#src/testing/sms.ts'
 
@@ -115,7 +115,7 @@ function setup(deps: Partial<ApiDeps> = {}) {
     keys: KEYS,
     sms: new MemorySms(),
     keyPrefix: 'it:unit:',
-    offboarding: new OffboardingRegistry(logger),
+    flags: staticFlags(),
     afterResponse,
     ...deps,
   })

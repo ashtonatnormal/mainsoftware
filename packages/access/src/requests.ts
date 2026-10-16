@@ -77,6 +77,9 @@ export type AdminRequest =
   | { action: 'recording_policy.set' | 'public_creation.set' }
   | { action: 'channel.transfer_ownership'; channel: Id; to: Id }
   | { action: 'privileged_console.open'; console: 'compliance' | 'dpo' }
+  // Turn a feature flag on or off, or change its cohort (T17 item 9). The key is the registry's
+  // (packages/shared FLAGS); whether the flag is locked is the database's to say.
+  | { action: 'flag.set'; key: string }
 
 // Your own devices and passkeys (ACC-02, ACC-04), for any active person. Listing and signing out
 // devices need no re-authentication and are never refused, though a device you name must be yours
@@ -123,6 +126,7 @@ export const ADMIN_ACTIONS = new Set<string>([
   'public_creation.set',
   'channel.transfer_ownership',
   'privileged_console.open',
+  'flag.set',
 ])
 
 export function isAdminRequest(request: Request): request is AdminRequest {

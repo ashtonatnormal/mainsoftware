@@ -1,9 +1,9 @@
 // The Valkey client: ElastiCache for Valkey in AWS, the Compose stack's Valkey locally. It answers
 // the readiness check, and from C0.5 holds the rate limiter's windows and sign-in state between
-// steps (auth/), and carries the revocation channel the realtime role subscribes to on a second
-// connection (createSubscriber); C0.7's realtime fan-out uses it too. Blocking commands, long
-// scripts and any job queue need connections of their own, because every command on this one
-// gives up after a second.
+// steps (auth/), and carries the pub/sub channels each process subscribes to on a second
+// connection (createSubscriber): the revocation channel (C0.5) and the flags channel (C0.6);
+// C0.7's realtime fan-out uses it too. Blocking commands and long scripts need connections of
+// their own, because every command on this one gives up after a second.
 import { Redis } from 'ioredis'
 import type { Logger } from 'pino'
 import type { Check } from '#src/ready.ts'
@@ -31,14 +31,15 @@ export function createValkey(url: string, logger: Logger): Redis {
   return client
 }
 
-// A second connection for the revocation channel: a subscribed connection can run nothing else.
-// Commands queue while it connects (enableOfflineQueue). ioredis's own re-subscribe after a
-// reconnect is off: nothing could handle it failing (it would end the process), so
-// realtime/index.ts keepSubscribed subscribes again itself. The realtime re-check covers any
-// message missed in between (T14).
-export function createSubscriber(client: Redis, logger: Logger): Redis {
+// A second connection for the pub/sub channels (pubsub.ts): a subscribed connection can run
+// nothing else. Commands queue while it connects (enableOfflineQueue). ioredis's own re-subscribe
+// after a reconnect is off: nothing could handle it failing (it would end the process), so
+// pubsub.ts subscribes again itself. Each channel's listener covers what it misses in between (the
+// realtime re-check, the flags poll; T14, T17). The integration harness names each worker
+// instance's connection, so a test can find it.
+export function createSubscriber(client: Redis, logger: Logger, connectionName = 'hearth-subscriber'): Redis {
   const sub = client.duplicate({
-    connectionName: 'hearth-revocations',
+    connectionName,
     enableOfflineQueue: true,
     autoResubscribe: false,
   })

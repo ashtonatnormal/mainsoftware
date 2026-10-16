@@ -31,7 +31,7 @@ function recordingPool(rows: unknown[] = []) {
 
 const TRANSACTION = [
   'start transaction isolation level read committed',
-  "select set_config('lock_timeout', '2s', true), set_config('synchronous_commit', 'off', true)",
+  "select set_config('lock_timeout', '2s', true), set_config('synchronous_commit', 'off', true), set_config('transaction_timeout', '30s', true)",
 ]
 
 describe('C0.5 the pre-org lookups (CLAUDE.md, Database: sign-in before the org is known)', () => {

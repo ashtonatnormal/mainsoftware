@@ -1,99 +1,156 @@
 // What happens when someone leaves (ACC-05), after their deactivation has committed. The
 // deactivation itself ends their sessions and signs their devices out in the same transaction
-// (0006, people_end_sessions); everything else a leaver's departure touches registers a handler
-// here, so the admin service needn't know them all. C0.5 has one, which closes the leaver's live
-// sockets; later steps add theirs (A2 the index, A4 their agents and assistant, C2.2 their rooms,
-// C4.1 and C4.3 their Drive items). This registry runs in the api process; C0.6 makes the run
-// durable through the outbox, with retries.
+// (0006, people_end_sessions), appends person.deactivated to the outbox, and, once committed, the
+// api publishes the sessions it ended, so their sockets close at once (admin/people.ts).
+// Everything else a leaver's departure touches registers a handler here, so the admin service
+// needn't know them all: C0.5's closes the leaver's live sockets; later steps add theirs (A2 the
+// index, A4 their agents and assistant, C2.2 their rooms, C4.1 and C4.3 their Drive items), each
+// with a name in OFFBOARDING_HANDLERS.
+//
+// The registry runs in the worker, durably (TECH-SPEC T14 item 13, T16 item 9):
+//   - the offboarding consumer reads person.deactivated from the outbox and checks that the person
+//     has really left (an event is a claim, never proof: one that names someone still at the org is
+//     logged at error level and passed over), then queues one offboarding.handler job per handler,
+//     keyed by person and handler, so a repeated or replayed event adds nothing while the job's row
+//     lasts;
+//   - each offboarding.handler job reads the person again before it runs, and takes who deactivated
+//     them from their row, never from the payload, then runs its handler, retried with back-off;
+//     one that keeps failing goes dead and logs offboarding_handler_dead (C0.13 alarms on it).
+// Deactivation can't be undone (0002's keep_history on deactivated_at), so a person once read as
+// gone stays gone, and a plain read is enough.
 import type { Redis } from 'ioredis'
+import { sql } from 'kysely'
 import type { Logger } from 'pino'
-import { type Database, withOrg } from '#src/db/database.ts'
+import { z } from 'zod'
+import type { JobContext } from '#src/jobs/context.ts'
+import { enqueue } from '#src/jobs/enqueue.ts'
+import { PermanentJobError } from '#src/jobs/errors.ts'
+import { defineJob, type JobKind } from '#src/jobs/kinds.ts'
+import type { OutboxConsumer } from '#src/outbox/consumers.ts'
 import { publishRevoked } from '#src/revocation.ts'
+
+// Every handler's name: a job's payload names one, and a payload holds codes, never free text.
+export const OFFBOARDING_HANDLERS = ['sockets'] as const
+export type OffboardingHandlerName = (typeof OFFBOARDING_HANDLERS)[number]
+
+export const OffboardingPayload = z.strictObject({ person: z.uuid(), handler: z.enum(OFFBOARDING_HANDLERS) })
+export type OffboardingPayload = z.infer<typeof OffboardingPayload>
 
 export interface OffboardingContext {
   orgId: string
   personId: string
-  // The admin who deactivated them.
+  // The admin who deactivated them, from the person's row.
   actorId: string
 }
 
-// Each handler must be idempotent: the registry may run it again (C0.6 retries through the
-// outbox, and BUILD-PLAN's offboarding test re-runs every handler as more register). So a handler
-// works from the context alone, never from what an earlier run left behind.
+// Each handler must be idempotent: its job may run again (a retry, a replay, BUILD-PLAN's
+// offboarding test). So a handler works from the context and what it reads now, never from what an
+// earlier run left behind, and reads through the job (its read() and commit(), as the job's role).
 export interface OffboardingHandler {
-  name: string
-  run(context: OffboardingContext): Promise<void>
+  name: OffboardingHandlerName
+  run(context: OffboardingContext, job: JobContext<OffboardingPayload>): Promise<void>
 }
 
-// Each handler gets at most this long, so one that hangs can't hold the admin's reply.
-export const HANDLER_TIMEOUT_MS = 5000
-
 export class OffboardingRegistry {
-  readonly #handlers: OffboardingHandler[] = []
-  readonly #logger: Pick<Logger, 'info' | 'error'>
-
-  constructor(logger: Pick<Logger, 'info' | 'error'>) {
-    this.#logger = logger
-  }
+  readonly #handlers = new Map<string, OffboardingHandler>()
 
   register(handler: OffboardingHandler): void {
-    if (this.#handlers.some(h => h.name === handler.name)) {
+    if (!(OFFBOARDING_HANDLERS as readonly string[]).includes(handler.name)) {
+      throw new Error(`an offboarding handler's name must be listed in OFFBOARDING_HANDLERS: ${handler.name}`)
+    }
+    if (this.#handlers.has(handler.name)) {
       throw new Error(`an offboarding handler named ${handler.name} is already registered`)
     }
-    this.#handlers.push(handler)
+    this.#handlers.set(handler.name, handler)
   }
 
-  // Runs every handler in the order they registered. A failure, or a handler still running after
-  // HANDLER_TIMEOUT_MS, is logged and reported, and the rest still run.
-  async run(context: OffboardingContext): Promise<Array<{ name: string; ok: boolean }>> {
-    const results: Array<{ name: string; ok: boolean }> = []
-    for (const handler of this.#handlers) {
-      let timer: NodeJS.Timeout | undefined
-      const timeout = new Promise<'timed out'>(resolve => {
-        timer = setTimeout(() => resolve('timed out'), HANDLER_TIMEOUT_MS)
+  get(name: string): OffboardingHandler | undefined {
+    return this.#handlers.get(name)
+  }
+
+  // In the order they registered.
+  names(): OffboardingHandlerName[] {
+    return [...this.#handlers.keys()] as OffboardingHandlerName[]
+  }
+}
+
+// The job that runs one handler for one leaver.
+export function offboardingJob(registry: OffboardingRegistry): JobKind<OffboardingPayload> {
+  return defineJob({
+    kind: 'offboarding.handler',
+    feature: 'core.system',
+    purpose: 'accounts',
+    role: 'hearth_job_offboarding',
+    payload: OffboardingPayload,
+    maxAttempts: 10,
+    backoff: { baseMs: 5000, capMs: 10 * 60_000 },
+    timeoutMs: 60_000,
+    deadEvent: 'offboarding_handler_dead',
+    async run(ctx) {
+      const { person, handler: name } = ctx.job.payload
+      const gone = await ctx.read(async trx => {
+        const { rows } = await sql<{ deactivated_by: string }>`select deactivated_by from people
+          where org_id = ${ctx.job.orgId} and id = ${person} and deactivated_at is not null`.execute(trx)
+        return rows[0]
       })
-      try {
-        const outcome = await Promise.race([handler.run(context).then(() => 'done' as const), timeout])
-        if (outcome === 'timed out') {
-          this.#logger.error({
-            event: 'offboarding_handler_timed_out',
-            handler: handler.name,
-            personId: context.personId,
-          })
-          results.push({ name: handler.name, ok: false })
-        } else {
-          this.#logger.info({ event: 'offboarding_handler_done', handler: handler.name, personId: context.personId })
-          results.push({ name: handler.name, ok: true })
-        }
-      } catch (error) {
-        this.#logger.error({
-          event: 'offboarding_handler_failed',
-          handler: handler.name,
-          personId: context.personId,
-          err: error,
-        })
-        results.push({ name: handler.name, ok: false })
-      } finally {
-        clearTimeout(timer)
+      if (gone === undefined) throw new PermanentJobError('not_deactivated')
+      const handler = registry.get(name)
+      if (handler === undefined) {
+        // A handler a later version removed: nothing is left to do.
+        ctx.log.warn({ event: 'offboarding_handler_unregistered', handler: name }, 'no such offboarding handler now')
+        return
       }
-    }
-    return results
+      await handler.run({ orgId: ctx.job.orgId, personId: person, actorId: gone.deactivated_by }, ctx)
+    },
+  })
+}
+
+// The outbox consumer that queues the handlers' jobs for each person.deactivated.
+export function offboardingConsumer(registry: OffboardingRegistry, job: JobKind<OffboardingPayload>): OutboxConsumer {
+  return {
+    name: 'offboarding',
+    role: 'hearth_job_offboarding',
+    feature: 'core.system',
+    purpose: 'accounts',
+    types: ['person.deactivated'],
+    start: 'oldest',
+    lagBudgetMs: 10_000,
+    async handle(trx, events, { orgId, log }) {
+      for (const event of events) {
+        const person = event.entity.id
+        const { rows } = await sql<{ id: string }>`select id from people
+          where org_id = ${orgId} and id = ${person} and deactivated_at is not null`.execute(trx)
+        if (rows.length === 0) {
+          log.error(
+            { event: 'offboarding_not_deactivated', eventId: event.id },
+            'an event says someone left who has not: no offboarding handler runs',
+          )
+          continue
+        }
+        for (const handler of registry.names()) {
+          await enqueue(trx, orgId, job, {
+            payload: { person, handler },
+            subjectId: person,
+            idempotencyKey: `${person}:${handler}`,
+          })
+        }
+      }
+    },
   }
 }
 
 // C0.5's one handler: tells the realtime role to close the leaver's sockets (T5's 60 s). It reads
-// the sessions their deactivation ended, so it can run again from the context alone. It acts as
-// the org's system principal: the admin's session has nothing to do with this work.
+// the sessions their deactivation ended, so it can run again from the context alone, and publishing
+// them again closes nothing more.
 export function socketsHandler(deps: {
-  db: Database
   valkey: Pick<Redis, 'publish'>
   keyPrefix: string
   logger: Pick<Logger, 'warn' | 'error'>
 }): OffboardingHandler {
   return {
     name: 'sockets',
-    async run({ orgId, personId }) {
-      const rows = await withOrg(deps.db, { orgId, system: true }, trx =>
+    async run({ orgId, personId }, job) {
+      const rows = await job.read(trx =>
         trx
           .selectFrom('sessions')
           .select('id')
@@ -102,12 +159,21 @@ export function socketsHandler(deps: {
           .where('revoke_reason', '=', 'deactivated')
           .execute(),
       )
+      // A failed publish fails the job, which is tried again (T16 item 9).
       await publishRevoked(
         deps.valkey,
         deps.keyPrefix,
         rows.map(row => row.id),
         deps.logger,
+        { rethrow: true },
       )
     },
   }
+}
+
+// The registry the worker runs, with every handler of this version.
+export function offboardingRegistry(deps: Parameters<typeof socketsHandler>[0]): OffboardingRegistry {
+  const registry = new OffboardingRegistry()
+  registry.register(socketsHandler(deps))
+  return registry
 }

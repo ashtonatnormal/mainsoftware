@@ -159,6 +159,12 @@ export function adminCan(world: World, actor: Id, request: AdminRequest, context
       if (channel.visibility === 'private' && !world.isCurrentMember(request.to, channel.id)) return false
       return isAdmin(world, actor)
     }
+    case 'flag.set':
+      // An Owner or Admin changes a flag (T17 item 9), never an AI one: every ai.* flag is off and
+      // locked until A0, which decides who turns AI on and off (ADM-05, ADM-10). This is the same
+      // rule as packages/shared's isAiFlag. Flags gate features, never an access check, so turning
+      // one on opens nothing to anyone (T17 item 10).
+      return request.key !== 'ai' && !request.key.startsWith('ai.') && isAdmin(world, actor)
     case 'privileged_console.open':
       // Opening the console only: every read through it is a Rule 9 read against a case, in the
       // privileged module (ADM-12, PDPA-13).

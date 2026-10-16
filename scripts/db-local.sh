@@ -1,27 +1,29 @@
 #!/usr/bin/env bash
 # The local stack's database (docker-compose.yml: postgres, database `hearth`), set up the way AWS
-# will be (CLAUDE.md, Database): migrations run as hearth_owner, which owns the database, and the
-# server connects as hearth_app, which owns nothing and is held to row level security.
+# will be (CLAUDE.md, Database): migrations run as hearth_owner, which owns the database; the api
+# and realtime roles connect as hearth_app, which owns nothing and is held to row level security;
+# and the worker connects as hearth_worker, which holds nothing itself and takes one job role per
+# transaction (0007, TECH-SPEC T18).
 #
 #   scripts/db-local.sh reset     drop and rebuild `hearth`: migrations, then the Tembusu seed
 #                                 (db/seed/tembusu.sql). npm run db:reset.
 #   scripts/db-local.sh migrate   apply any new migrations to `hearth`, keeping its data.
 #                                 npm run db:migrate.
 #
-# Both give hearth_app a login with the local password in .env.example's DATABASE_URL, which
-# migrations never do (roles are created without one; in AWS, infra/ sets IAM sign-in). Roles
-# belong to the whole server, so this refuses anything but a local server, as the other DB
-# scripts do. It needs psql and Node 24 with the repo's packages installed (npm ci), and connects
-# as the Compose stack's superuser through the standard PG* variables (defaults: postgres:postgres
-# @127.0.0.1:5432). CI runs `reset` before the server's start-up check.
+# Both give hearth_app and hearth_worker a login with the local password .env.example's database
+# URLs use, which migrations never do (roles are created without one; in AWS, infra/ sets IAM
+# sign-in). Roles belong to the whole server, so this refuses anything but a local server, as the
+# other DB scripts do. It needs psql and Node 24 with the repo's packages installed (npm ci), and
+# connects as the Compose stack's superuser through the standard PG* variables (defaults:
+# postgres:postgres@127.0.0.1:5432). CI runs `reset` before the server's start-up check.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 export PGHOST=${PGHOST:-127.0.0.1} PGPORT=${PGPORT:-5432} PGUSER=${PGUSER:-postgres} PGPASSWORD=${PGPASSWORD:-postgres}
 db=hearth
 owner=hearth_owner
-# The local-only password .env.example's DATABASE_URL uses. Not a secret: the server is bound
-# to 127.0.0.1 and holds only the seed's made-up data.
+# The local-only password .env.example's database URLs use. Not a secret: the server is bound to
+# 127.0.0.1 and holds only the seed's made-up data.
 app_password=hearth-local
 sql() { psql --no-psqlrc -w -v ON_ERROR_STOP=1 -q "$@"; }
 
@@ -74,12 +76,15 @@ sql -d postgres -c "set client_min_messages = warning" \
 PGUSER=$migrator PGPASSWORD=$migrator_pw PGDATABASE=$db MIGRATION_ROLE=$owner \
   env -u MIGRATION_DATABASE_URL node apps/server/src/db/migrate.ts
 
-# The migrations created hearth_app without a login; locally it signs in with a password.
-sql -d postgres -c "alter role hearth_app login password '$app_password'"
+# The migrations created hearth_app and hearth_worker without a login; locally they sign in with a
+# password.
+sql -d postgres -c "alter role hearth_app login password '$app_password'" \
+  -c "alter role hearth_worker login password '$app_password'"
 
+logins="the api and realtime roles connect as hearth_app, the worker as hearth_worker"
 if [ "$command" = reset ]; then
   sql -d "$db" --single-transaction -c "set local role $owner" -f db/seed/tembusu.sql
-  echo "db-local: rebuilt $db with the Tembusu seed; the server connects as hearth_app."
+  echo "db-local: rebuilt $db with the Tembusu seed; $logins."
 else
-  echo "db-local: $db is up to date; the server connects as hearth_app."
+  echo "db-local: $db is up to date; $logins."
 fi

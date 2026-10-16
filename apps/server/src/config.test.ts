@@ -15,6 +15,8 @@ const env = {
   AUTH_SECRET: SECRET,
 }
 
+const WORKER_URL = 'postgres://hearth_worker:a-worker-password@127.0.0.1:5432/hearth'
+
 function problems(load: () => unknown): string {
   try {
     load()
@@ -45,6 +47,7 @@ describe('C0.2 config', () => {
       deployEnv: 'local',
       trustProxy: false,
       auth: { secret: SECRET, smsProvider: undefined },
+      worker: undefined,
     })
   })
 
@@ -52,6 +55,7 @@ describe('C0.2 config', () => {
     const config = loadConfig({
       ...env,
       ROLE: 'worker',
+      WORKER_DATABASE_URL: WORKER_URL,
       PORT: '3002',
       S3_ENDPOINT: 'http://127.0.0.1:9000',
       S3_FORCE_PATH_STYLE: 'true',
@@ -140,8 +144,8 @@ describe('C0.5 T14 sign-in settings', () => {
     expect(problems(() => loadConfig(rest))).toMatch(/AUTH_SECRET: required for the api role/)
     expect(problems(() => loadConfig({ ...rest, ROLE: 'api' }))).toMatch(/AUTH_SECRET:/)
     for (const role of ['realtime', 'worker']) {
-      expect(loadConfig({ ...rest, ROLE: role }).auth).toBeUndefined()
-      expect(loadConfig({ ...env, ROLE: role }).auth).toBeUndefined()
+      expect(loadConfig({ ...rest, ROLE: role, WORKER_DATABASE_URL: WORKER_URL }).auth).toBeUndefined()
+      expect(loadConfig({ ...env, ROLE: role, WORKER_DATABASE_URL: WORKER_URL }).auth).toBeUndefined()
     }
   })
 
@@ -228,6 +232,61 @@ describe('C0.5 T14 sign-in settings', () => {
       expect(config.auth).toBeUndefined()
       expect(config.deployEnv).toBe('local')
       expect(config.trustProxy).toBe(false)
+    }
+  })
+})
+
+describe('C0.6 T18 the worker connects with its own login', () => {
+  const { DATABASE_URL: _unused, ...withoutApp } = env
+
+  it('the worker needs WORKER_DATABASE_URL and connects with it, never with DATABASE_URL', () => {
+    const config = loadConfig({ ...withoutApp, ROLE: 'worker', WORKER_DATABASE_URL: WORKER_URL })
+    expect(config.databaseUrl).toBe(WORKER_URL)
+    expect(config.worker).toEqual({ concurrency: 4 })
+    // With both set, as .env.example has them locally, it still takes its own.
+    expect(loadConfig({ ...env, ROLE: 'worker', WORKER_DATABASE_URL: WORKER_URL }).databaseUrl).toBe(WORKER_URL)
+    expect(problems(() => loadConfig({ ...env, ROLE: 'worker' }))).toMatch(/WORKER_DATABASE_URL:/)
+    expect(problems(() => loadConfig({ ...env, ROLE: 'worker', WORKER_DATABASE_URL: 'mysql://x@y/z' }))).toMatch(
+      /WORKER_DATABASE_URL: must be a postgres:\/\/ URL/,
+    )
+  })
+
+  it('api and realtime need DATABASE_URL and ignore the worker’s variables, invalid or not', () => {
+    for (const role of ['api', 'realtime']) {
+      const config = loadConfig({ ...env, ROLE: role, WORKER_DATABASE_URL: 'not a url', WORKER_CONCURRENCY: '99' })
+      expect(config.databaseUrl).toBe(env.DATABASE_URL)
+      expect(config.worker).toBeUndefined()
+      expect(problems(() => loadConfig({ ...withoutApp, ROLE: role, WORKER_DATABASE_URL: WORKER_URL }))).toMatch(
+        /DATABASE_URL:/,
+      )
+    }
+  })
+
+  it('WORKER_CONCURRENCY is a whole number from 1 to 32', () => {
+    const worker = { ...withoutApp, ROLE: 'worker', WORKER_DATABASE_URL: WORKER_URL }
+    expect(loadConfig({ ...worker, WORKER_CONCURRENCY: '1' }).worker).toEqual({ concurrency: 1 })
+    expect(loadConfig({ ...worker, WORKER_CONCURRENCY: '32' }).worker).toEqual({ concurrency: 32 })
+    for (const value of ['0', '33', '2.5', 'four']) {
+      expect(
+        problems(() => loadConfig({ ...worker, WORKER_CONCURRENCY: value })),
+        value,
+      ).toMatch(/WORKER_CONCURRENCY:/)
+    }
+  })
+
+  it('never echoes the worker’s password in its error', () => {
+    const message = problems(() =>
+      loadConfig({ ...env, ROLE: 'worker', WORKER_DATABASE_URL: 'postgres://w:a-worker-password@not a url' }),
+    )
+    expect(message).toContain('WORKER_DATABASE_URL:')
+    expect(message).not.toContain('a-worker-password')
+  })
+
+  it('.env.example gives the worker hearth_worker and the other roles hearth_app', () => {
+    const example = parseEnv(readFileSync(new URL('../../../.env.example', import.meta.url), 'utf8'))
+    expect(new URL(loadConfig({ ...example, ROLE: 'worker' }).databaseUrl).username).toBe('hearth_worker')
+    for (const role of ['api', 'realtime']) {
+      expect(new URL(loadConfig({ ...example, ROLE: role }).databaseUrl).username).toBe('hearth_app')
     }
   })
 })

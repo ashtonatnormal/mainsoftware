@@ -2,10 +2,13 @@
 # Start-up check for the server (T2, docs/TECH-SPEC.md). Node runs the server's .ts source with
 # no build step, so typecheck and tests passing doesn't prove it starts: an import Node can't
 # resolve, or syntax it can't strip, only shows when Node loads the file. For each role (api,
-# realtime, worker) this starts the server, waits for /health, expects /ready to answer 200,
+# realtime, worker) this starts the server, waits for /health, then for /ready to answer 200
+# (polled for up to 20 s too: the worker is ready once each of its loops has run a round, C0.6),
 # checks the role serves only its own routes (below), sends SIGTERM and expects a clean exit
 # within 15 s, with nothing but JSON log lines written (a Node warning would show up as plain
-# text).
+# text) and none at error level or above (`"level":50` or more), so a worker whose loops fail
+# can't pass. With the stack up, each role must also have logged its subscription to the flags
+# channel (channel_subscribed).
 #
 # The routes (C0.5): a code request (POST /api/auth/otp/request from APP_ORIGIN, for the number
 # "x") and a WebSocket upgrade to /ws from another origin. The api role answers them 400
@@ -102,8 +105,15 @@ for role in api realtime worker; do
   [ -n "$up" ] || { show_log; fail "$role didn't answer /health within 20 s"; }
 
   if [ "$expect_ready" = 1 ]; then
-    status=$(curl -sS --max-time 5 -o "$log.ready" -w '%{http_code}' "http://127.0.0.1:$port/ready" || true)
-    [ "$status" = 200 ] || { show_log; cat "$log.ready" >&2; fail "$role /ready answered $status, not 200"; }
+    status=
+    deadline=$((SECONDS + 20))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+      status=$(curl -sS --max-time 5 -o "$log.ready" -w '%{http_code}' "http://127.0.0.1:$port/ready" || true)
+      [ "$status" = 200 ] && break
+      running || { show_log; fail "$role exited before /ready answered 200"; }
+      sleep 0.2
+    done
+    [ "$status" = 200 ] || { show_log; cat "$log.ready" >&2; fail "$role /ready answered $status, not 200, for 20 s"; }
   fi
 
   # Each role serves only its own routes (see the top of this file).
@@ -146,6 +156,19 @@ for role in api realtime worker; do
     fail "$role wrote something other than JSON log lines (a Node warning?)"
   fi
   grep -q '"msg":"stopped"' "$log" || { show_log; fail "$role didn't log a clean stop"; }
+  # Nothing at error level or above (pino's 50 and 60).
+  if grep -qE '"level":(5|6)[0-9]' "$log"; then
+    show_log
+    fail "$role logged at error level"
+  fi
+
+  # Every role listens on the flags channel (main.ts for the api and realtime, worker/index.ts for
+  # the worker; TECH-SPEC T17 item 6), which only this check proves of main.ts's wiring. Without
+  # the stack (EXPECT_READY=0) Valkey may be down, so it isn't asked for then.
+  if [ "$expect_ready" = 1 ] && ! grep -q '"event":"channel_subscribed","channel":"flags"' "$log"; then
+    show_log
+    fail "$role never logged its subscription to the flags channel"
+  fi
 
   echo "check-server: $role ok${image:+ (image $image)}"
   rm -f "$log" "$log.ready"

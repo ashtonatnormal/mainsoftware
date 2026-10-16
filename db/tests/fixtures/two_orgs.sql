@@ -1,6 +1,7 @@
 -- Test helpers and two small orgs with a row in every table, for the DB tests in db/tests/. The
 -- test runner (scripts/test-db.sh) runs each test in a transaction it rolls back, as a superuser,
--- so this inserts past row level security; each test then switches to hearth_app.
+-- so this inserts past row level security; each test then switches to hearth_app, or to the job
+-- role it tests (0007).
 --
 -- Ids: pg_temp.id(org, suffix) is f<org>000000-0000-4000-8000-0000000000<suffix>. Org 1 and org 2
 -- have the same people under the same suffixes:
@@ -13,6 +14,11 @@
 --   ab an agent                     ac a8's assistant
 --   c1 department    d1 team    d2 archived team    e1 a8's device    e2 a8's session
 --   e3 notice v1     e7 a8's passkey (added on e1)
+--   b1 a review schedule      b2 its run, interrupted (a crash)
+--   b3 a queued job           b4 a running job, under lease token b5 (both on core.system)
+-- Each org also has every feature flag (the orgs trigger, 0007), one outbox event (flag.changed for
+-- core.system, Hearth acting), the offboarding consumer's checkpoint (at the start) and a floor
+-- (nothing purged yet).
 
 -- pg_temp.id('1', 'a1') is org 1's Owner.
 create function pg_temp.id(org text, suffix text) returns uuid language sql immutable as $$
@@ -141,6 +147,26 @@ begin
     values (org, admin, 'role.granted', 'person', pg_temp.id(o, 'a3')::text);
   insert into public.data_access_events (org_id, type, subject_id, actor_id, object_type, object_id)
     values (org, 'export', pg_temp.id(o, 'a8'), pg_temp.id(o, 'a8'), 'file', 'test-file-' || o);
+
+  -- The outbox, the queue and the scheduler, written as the worker writes them, with Hearth acting:
+  -- an event's actor and a job's created_by are the transaction's acting principal (0007).
+  perform set_config('app.user_id', hearth::text, true);
+  insert into public.outbox_events (org_id, type, entity_type, entity_id, actor_id, actor_kind, purpose, ids)
+  select org, 'flag.changed', 'feature_flag', f.id, hearth, 'system', 'service_operation',
+         jsonb_build_object('key', f.key, 'enabled', f.enabled)
+  from public.feature_flags f where f.org_id = org and f.key = 'core.system';
+  insert into public.outbox_checkpoints (org_id, consumer, role_name) values (org, 'offboarding', 'hearth_job_offboarding');
+  insert into public.outbox_floors (org_id, last_tx, last_id) values (org, '0', 0);
+  insert into public.schedules (id, org_id, key, kind, cron, on_interrupt, next_run_at)
+    values (pg_temp.id(o, 'b1'), org, 'fixture.hourly', 'fixture.review_run', '0 * * * *', 'review', now() + interval '1 hour');
+  insert into public.schedule_runs (id, org_id, schedule_id, scheduled_for, on_interrupt, state, reason, started_at, finished_at)
+    values (pg_temp.id(o, 'b2'), org, pg_temp.id(o, 'b1'), date_trunc('hour', now()), 'review', 'interrupted', 'crash', now(), now());
+  insert into public.jobs (id, org_id, kind, feature_key, purpose)
+    values (pg_temp.id(o, 'b3'), org, 'fixture.queued', 'core.system', 'service_operation');
+  insert into public.jobs (id, org_id, kind, feature_key, purpose, state, attempts, lease_token, lease_expires_at, claimed_by, started_at)
+    values (pg_temp.id(o, 'b4'), org, 'fixture.running', 'core.system', 'service_operation', 'running', 1,
+            pg_temp.id(o, 'b5'), now() + interval '30 seconds', 'fixture', now());
+  perform set_config('app.user_id', '', true);
 end
 $$;
 
@@ -155,5 +181,90 @@ begin
   perform set_config('app.org_id', pg_temp.id(o, '00')::text, true);
   perform set_config('app.user_id', pg_temp.id(o, suffix)::text, true);
   perform set_config('role', 'hearth_app', true);
+end
+$$;
+
+-- A worker transaction in an org (0007): Hearth's system principal acting, as one of the worker's
+-- job roles (withOrg's `as`).
+create function pg_temp.act_as_job(o text, job_role text) returns void language plpgsql as $$
+begin
+  perform set_config('app.org_id', pg_temp.id(o, '00')::text, true);
+  perform set_config('app.user_id', pg_temp.id(o, 'a0')::text, true);
+  perform set_config('role', job_role, true);
+end
+$$;
+
+-- The roles the server's transactions run as: every role granted something on a table, a column or
+-- a function in this database (the owner aside), as scripts/check-migrations.sh finds them. A new
+-- runtime role is then checked by 010 and 020 the day it lands.
+create function pg_temp.runtime_roles() returns text[] language sql stable as $$
+  select coalesce(array_agg(distinct a.grantee::regrole::text order by a.grantee::regrole::text), '{}')
+  from (
+    select (aclexplode(c.relacl)).grantee, c.relowner as owner
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema'
+    union all
+    select (aclexplode(att.attacl)).grantee, c.relowner
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace join pg_attribute att on att.attrelid = c.oid and att.attnum > 0
+    where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema'
+    union all
+    select (aclexplode(p.proacl)).grantee, p.proowner
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema'
+  ) a
+  where a.grantee not in (0, a.owner)
+$$;
+
+-- Every privilege a role can use on every table, column, sequence and function outside Postgres's
+-- own schemas, however it got it (a grant to it, to PUBLIC, or through a role it inherits), one
+-- line each: '<table>: <PRIVILEGE>' for the whole table, '<table>.<column>: <PRIVILEGE>' for some
+-- columns only, 'sequence <name>: ...' and 'function <signature>: EXECUTE'.
+create function pg_temp.privileges_of(who text) returns text[] language sql stable as $$
+  with rel as (
+    select c.oid, c.relkind,
+           case n.nspname when 'public' then c.relname::text else format('%I.%I', n.nspname, c.relname) end as name
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema' and c.relkind in ('r', 'p', 'v', 'm', 'f', 'S')
+  ), table_level as (
+    select r.oid, r.name, p.priv
+    from rel r cross join unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) as p (priv)
+    where r.relkind <> 'S' and has_table_privilege(who, r.oid, p.priv)
+  )
+  select coalesce(array_agg(g order by g), '{}') from (
+    select format('%s: %s', name, priv) as g from table_level
+    union all
+    -- Column privileges it holds only for some columns.
+    select format('%s.%s: %s', r.name, a.attname, p.priv)
+    from rel r
+    join pg_attribute a on a.attrelid = r.oid and a.attnum > 0 and not a.attisdropped
+    cross join unnest(array['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']) as p (priv)
+    where r.relkind <> 'S' and has_column_privilege(who, r.oid, a.attnum, p.priv)
+      and not exists (select 1 from table_level t where t.oid = r.oid and t.priv = p.priv)
+    union all
+    select format('sequence %s: %s', r.name, p.priv)
+    from rel r cross join unnest(array['USAGE', 'SELECT', 'UPDATE']) as p (priv)
+    where r.relkind = 'S' and has_sequence_privilege(who, r.oid, p.priv)
+    union all
+    -- Functions it can run, by any route.
+    select format('function %s: EXECUTE', p.oid::regprocedure)
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema'
+      and has_function_privilege(who, p.oid, 'EXECUTE')
+  ) grants
+$$;
+
+-- Fails the test unless the role's privileges (privileges_of) are exactly the expected ones,
+-- naming what is missing and what is extra.
+create function pg_temp.expect_privileges(who text, expected text[]) returns void language plpgsql as $$
+declare
+  actual text[] := pg_temp.privileges_of(who);
+  missing text[];
+  extra text[];
+begin
+  select coalesce(array_agg(e order by e), '{}') into missing from unnest(expected) e where e <> all (actual);
+  select coalesce(array_agg(a order by a), '{}') into extra from unnest(actual) a where a <> all (expected);
+  perform pg_temp.check(cardinality(missing) = 0, format('%s lacks grants this test expects: %s', who, missing));
+  perform pg_temp.check(cardinality(extra) = 0,
+    format('%s holds grants this test does not list (add them here only if they are meant): %s', who, extra));
 end
 $$;
