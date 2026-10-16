@@ -1,9 +1,11 @@
 // Every number of the realtime gateway (TECH-SPEC T19), in one place, so a change is a reviewed
 // commit with its tests, as T14's are in auth/policy.ts and T15's in jobs/policy.ts. T14's own
 // three stay in auth/policy.ts: SOCKET_REVOKE_MS (a session's sockets close within 60 s),
-// SOCKET_RECHECK_MS (every socket is re-checked each 15 s) and SOCKETS_PER_SESSION (8). The limits
-// a client must keep are also in packages/shared (GATEWAY_LIMITS), which policy.test.ts pins equal
-// to these. None of them is configuration: realtime reads no new variable (T19 item 16).
+// SOCKET_RECHECK_MS (every socket is re-checked each 15 s) and SOCKETS_PER_SESSION (8). The
+// revocation registry's, its channels' and the latency metric's numbers are beside their code in
+// revocation/, as T19's intro lists. The limits a client must keep are also in packages/shared
+// (GATEWAY_LIMITS), which policy.test.ts pins equal to these. None of them is configuration:
+// realtime reads no new variable (T19).
 
 export interface GatewayPolicy {
   // The heartbeat (T19 item 12). The server pings a socket heartbeatMs after its last ping, looking
@@ -17,7 +19,7 @@ export interface GatewayPolicy {
   // A socket that hasn't said hello by then closes with 1008 hello_timeout.
   helloTimeoutMs: number
 
-  // What a client may send (T19 item 10): a frame of at most maxFrameBytes (ws closes a larger one
+  // What a client may send (T19 item 11): a frame of at most maxFrameBytes (ws closes a larger one
   // with 1009), at most maxTopicsPerFrame topics a sub and maxTopicsPerSocket held, deciding and
   // replaying ones included, and an inbound token bucket of frameBurst, full when a socket opens,
   // refilled at framesPerSecond.
@@ -27,7 +29,7 @@ export interface GatewayPolicy {
   frameBurst: number
   framesPerSecond: number
 
-  // Backpressure (T19 item 10). Above softBufferBytes buffered, droppable frames are shed, and a
+  // Backpressure (T19 item 11). Above softBufferBytes buffered, droppable frames are shed, and a
   // socket that stays there for softBufferMs closes with 4408, as one above hardBufferBytes does.
   softBufferBytes: number
   hardBufferBytes: number

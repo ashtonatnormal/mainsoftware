@@ -1,9 +1,9 @@
 // The realtime gateway on /ws (BUILD-PLAN C0.7, TECH-SPEC T19; grown from C0.5's minimal socket). A
 // socket opens only for a live session, from the app's own origin (CLAUDE.md, Security and
-// privacy), then speaks the versioned, ids-only protocol of packages/shared gateway.ts
-// (realtime/frames.ts): hello, then topics (person, org and team), each decided by can() once the
-// subscriber's session is confirmed live, with events fanned out from the org's Valkey stream
-// (realtime/stream.ts).
+// privacy), then speaks the versioned JSON protocol of packages/shared gateway.ts, whose frames
+// hold ids, codes and whole numbers only (realtime/frames.ts): hello, then topics (person, org and
+// team), each decided by can() once the subscriber's session is confirmed live, with events fanned
+// out from the org's Valkey stream (realtime/stream.ts).
 //
 // Revocation (Rule 6, ACC-05): a session's sockets close with 4401, and a topic is dropped with a
 // dropped frame, within 60 s of the access ending. Three paths get them there: the api's push
@@ -14,8 +14,8 @@
 // unconfirmed past 60 s if the next failed too closes with 1013, never 4401. Each revocation
 // applied is logged with its latency (revocation/latency.ts). The races (T19 item 6): a session
 // named on either channel is refused at upgrade for 60 s, every gate after the lookup runs in the
-// same tick as handleUpgrade, and a people signal during an accept or a subscribe decision re-checks
-// the person at once.
+// same tick as handleUpgrade, and a people signal during an accept or a subscribe decision is
+// followed by a targeted re-check of the person (coalesced for 100 ms, in the decision lane).
 //
 // Limits (T19 item 11): 8 sockets a session, 40 a person and 25,000 a process; 5 session lookups at
 // once and 1,000 waiting, each slot held until its lookup settles (M1); an inbound token bucket and
@@ -30,8 +30,9 @@
 // have no listener, so Node answers an upgrade there as an ordinary request, which their 404 handler
 // refuses.
 //
-// Logs carry counts and an org id, never a person's or session's id, a token or content (T19 items
-// 13 and 14): the per-socket open and error lines are at debug.
+// Lines at info and above carry counts and an org id, never a person's or session's id, a token or
+// content (T19 items 13 and 14); the per-socket lines (open, with its session id, error and dead,
+// with the socket's random id) are at debug.
 import { type IncomingMessage, STATUS_CODES } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -1021,9 +1022,15 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   }
 
   let gaugesSkipped = false
+  // The longest revocation latency since the last gauges line. It is read before summarise(), which
+  // starts a new window, and carried over a skipped line, so a revocation that closed the last
+  // socket still reaches the next one.
+  let longestLatency: number | undefined
   // Every metricsMs: the latency summary, and the gauges while there are sockets (once every other
   // time otherwise, so once a minute).
   function metrics(): void {
+    const windowLongest = latency?.oldest()
+    if (windowLongest !== undefined) longestLatency = Math.max(longestLatency ?? 0, windowLongest)
     latency?.summarise()
     if (conns.size === 0 && !gaugesSkipped) {
       gaugesSkipped = true
@@ -1066,10 +1073,11 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
         resume: { ...resume },
         closes: { ...closes },
         dropped: { ...dropped },
-        longestLatencyMs: latency?.oldest() ?? null,
+        longestLatencyMs: longestLatency ?? null,
       },
       'gateway gauges',
     )
+    longestLatency = undefined
   }
 
   const timers = [

@@ -39,7 +39,7 @@ export const FLAG_READ_WAIT_MS = 2500
 export const FLAG_STALE_MS = 8000
 // How many reads may be in flight at once, those the process stopped waiting for included: few
 // enough that most of the pool they share stays free (the worker's control pool has 8 connections,
-// the api's and realtime's 10), however long silent connections hold them.
+// the api's 10 and realtime's 12, TECH-SPEC T19 item 11), however long silent connections hold them.
 export const FLAG_READS_IN_FLIGHT = 3
 
 // What verdict() says about a feature for someone.

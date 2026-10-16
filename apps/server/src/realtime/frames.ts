@@ -405,7 +405,7 @@ export class Frames {
           }
         }
         eras = result.eras.get(person) ?? new Map()
-        // A removal whose signal arrived while this was decided (§8.2): re-check at once.
+        // A removal whose signal arrived while this was decided (§8.2): a targeted re-check follows.
         ctx.recheckIfChanged(conn, askedAt)
       }
     }

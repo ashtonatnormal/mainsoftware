@@ -587,6 +587,38 @@ describe('C0.5 T5 ACC-05 C0.7 T19 item 8: closing a session’s sockets', () => 
     expect(server.counts()).toMatchObject({ closedRevoked: 1, closedDurable: 1 })
   })
 
+  it('REG-04 T19 item 13: gateway_gauges carries the longest revocation latency since its last line, the summary’s exact max, a skipped line’s included', async () => {
+    // Only the intervals are fake, so each metrics tick lands when the test says.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const { logger, ...capture } = captureLogger('realtime')
+    const { url, server, events } = await start({
+      latency: new RevocationLatency({ logger, summaryMs: 0 }),
+      policy: { metricsMs: 1000 },
+    })
+    const gauges = () => events('gateway_gauges').map(line => line.longestLatencyMs)
+    await connected(url)
+    await connected(url, B.token)
+    server.closeSessions([A.session.sessionId], { path: 'push', cause: 'sessions_ended', at: Date.now() - 45_000 })
+    // The tick reads the window's longest before its summary starts a new window.
+    await vi.advanceTimersByTimeAsync(1000)
+    const pushed = capture.events('revocation_latency')[0]?.max
+    expect(pushed).toBeGreaterThanOrEqual(45_000)
+    expect(gauges()).toEqual([pushed])
+    // The next window recorded nothing.
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(gauges()).toEqual([pushed, null])
+    // A revocation that closes the last socket: the tick after it writes no gauges, there being no
+    // sockets, and the line one tick later still carries its latency.
+    server.closeSessions([B.session.sessionId], { path: 'durable', cause: 'sessions_ended', at: Date.now() - 20_000 })
+    await until(() => server.counts().open === 0)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(gauges()).toHaveLength(2)
+    const durable = capture.events('revocation_latency')[1]?.max
+    expect(durable).toBeGreaterThanOrEqual(20_000)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(gauges()).toEqual([pushed, null, durable])
+  })
+
   it('the re-check closes a socket whose session has ended, counted as closedRecheck', async () => {
     const { url, server, checks } = await start({ recheckMs: 50 })
     const ending = await connected(url)

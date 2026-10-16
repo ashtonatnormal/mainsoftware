@@ -14,9 +14,9 @@
 // by the realtime role's re-check of every open socket (every 15 s, and with Postgres down too:
 // realtime/socket.ts closes what it can't confirm within T5's 60 s), so a failure is logged and
 // swallowed, never turned into an error for the person who signed out; a job's publish rethrows,
-// so the job is tried again. Messages hold ids and codes only, never a token. The same commits
-// append signin.ended and acl.changed to the outbox (T16), which the worker's revocation consumer
-// reads without missing any.
+// so the job is tried again. Messages hold ids, codes and numbers (v and at) only, never a token.
+// The same commits append signin.ended and acl.changed to the outbox (T16), which the worker's
+// revocation consumer reads without missing any.
 import { Code } from '@hearth/shared'
 import type { Redis } from 'ioredis'
 import type { Logger } from 'pino'

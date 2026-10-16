@@ -490,7 +490,7 @@ describe('C0.7 T19 items 6 and 8: what the gateway does with what the checks fin
     expect(client.all('dropped')).toHaveLength(1)
   })
 
-  it('T19 items 5 and 6: a people signal re-checks that person’s sockets in the lane, labelled with its path, and a subscribe decided before the signal arrived is re-checked at once', async () => {
+  it('T19 items 5 and 6: a people signal re-checks that person’s sockets in the lane, labelled with its path, and a subscribe decided before the signal arrived is followed by a targeted re-check', async () => {
     const { logger, events } = captureLogger('realtime')
     const { url, server, checks } = await start({ latency: new RevocationLatency({ logger, summaryMs: 0 }) })
     checks.allow(ME, teamTopic())
@@ -510,7 +510,7 @@ describe('C0.7 T19 items 6 and 8: what the gateway does with what the checks fin
     }
     checks.release()
     expect((await sub).ok).toEqual([teamTopic()])
-    // At once, the re-check drops it, labelled push.
+    // The targeted re-check drops it, labelled push.
     expect(await client.next('dropped')).toMatchObject({ topics: [teamTopic()] })
     expect(server.counts().dropped).toEqual({ push: 1, durable: 0, recheck: 0 })
     expect(events('revocation_applied')).toEqual([expect.objectContaining({ handler: 'topics', path: 'push' })])

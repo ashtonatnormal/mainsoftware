@@ -15,7 +15,7 @@
 //                 path (m4). The event is a claim; the realtime re-check is the guarantee.
 //   the jobs      ids only, naming no subject (the role can't read people, and a subject's switch
 //                 must never hold back a revocation). Each tries 20 times, from 1 s doubling to 15 s,
-//                 so about six tries fall inside Rule 6's minute; one that dies logs
+//                 so about seven tries start inside Rule 6's minute; one that dies logs
 //                 revocation_handler_dead at error level (C0.13 alarms on it).
 //   the handlers  sockets (sessions_ended): re-reads which of the sessions have ended, and when, and
 //                 publishes those on the access channel (revocation/channels.ts) with the earliest

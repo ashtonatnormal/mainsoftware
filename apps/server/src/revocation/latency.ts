@@ -163,7 +163,8 @@ export class RevocationLatency {
   }
 
   // The longest latency recorded in the current window (ms), or undefined when none has a known
-  // start: what the gateway's gauges line can carry beside its oldest unconfirmed age.
+  // start: what the gateway's gauges line can carry beside its oldest unconfirmed age. Read it
+  // before summarise(), which starts a new window.
   oldest(): number | undefined {
     let longest: number | undefined
     for (const window of this.#windows.values()) {

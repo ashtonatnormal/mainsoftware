@@ -24,9 +24,9 @@
 //     that began before since (so a team left and rejoined while away replays nothing from the gap;
 //     GW-09). Otherwise those topics answer reset and the client refetches them over REST.
 //     ReplayQueue bounds how many replays run at once (S5).
-// Every entry and frame holds ids and codes only (T19 item 9): clients read content over REST,
-// which checks access. A topic is decided by can() before anything of it is replayed or sent.
-// Stream ids compare as (ms, seq) pairs of 64-bit numbers, never as strings (compareIds).
+// Every entry and frame holds ids, codes and whole numbers only (T19 item 9): clients read content
+// over REST, which checks access. A topic is decided by can() before anything of it is replayed or
+// sent. Stream ids compare as (ms, seq) pairs of 64-bit numbers, never as strings (compareIds).
 import { randomUUID } from 'node:crypto'
 import { Code, IdsValues, LowerUuid, type Position, parseTopic, Topic, UUID_PATTERN } from '@hearth/shared'
 import type { Redis } from 'ioredis'
