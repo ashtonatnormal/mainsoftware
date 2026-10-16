@@ -20,7 +20,7 @@ import type { InOrg } from '#src/db/database.ts'
 import { endDevices, hasLiveSession } from '#src/devices/routes.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
 import { appendOutbox } from '#src/outbox/append.ts'
-import { publishRevoked } from '#src/revocation.ts'
+import { publishRevoked } from '#src/revocation/channels.ts'
 
 const audit = (session: SessionIds, info: ReqInfo, target: string) =>
   ({
@@ -113,7 +113,7 @@ export async function deactivate(
     })
     return ended
   })
-  if (api.publishDeactivated !== false) await publishRevoked(api.valkey, api.keyPrefix, ended.sessions, info.log)
+  if (api.publishRevoked !== false) await publishRevoked(api.valkey, api.keyPrefix, ended.sessions, info.log)
   return { body: { status: 'deactivated', sessionsEnded: ended.sessions.length } }
 }
 
@@ -165,7 +165,7 @@ export async function resetPin(
     })
     return ids
   })
-  await publishRevoked(api.valkey, api.keyPrefix, ended, info.log)
+  if (api.publishRevoked !== false) await publishRevoked(api.valkey, api.keyPrefix, ended, info.log)
   return { body: { status: 'pin_reset', sessionsEnded: ended.length } }
 }
 
@@ -197,7 +197,7 @@ export async function signOutDevices(
     })
     return ended
   })
-  await publishRevoked(api.valkey, api.keyPrefix, ended.sessions, info.log)
+  if (api.publishRevoked !== false) await publishRevoked(api.valkey, api.keyPrefix, ended.sessions, info.log)
   return { body: { signedOut: ended.devices.length }, cookies: self ? [clearedCookie('session')] : [] }
 }
 

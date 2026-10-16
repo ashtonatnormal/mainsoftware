@@ -1,7 +1,10 @@
 // The realtime role (C0.5): the WebSocket on /ws (realtime/socket.ts), wired to Postgres for the
-// session checks and to Valkey for the revocation channel (revocation.ts). It keeps the flags of
-// every org it has a socket for (C0.6, flags/cache.ts), so a change reaches it within 10 s. C0.7's
-// gateway grows from it.
+// session checks and to Valkey for the revocation channels (revocation/channels.ts): revoked, the
+// api's push, and from C0.7 access, on which the worker's revocation jobs publish the sessions
+// they found ended (closed at once, as on revoked) and the people whose keys changed (left to the
+// re-check of every socket until the gateway's targeted re-checks). It keeps the flags of every org
+// it has a socket for (C0.6, flags/cache.ts), so a change reaches it within 10 s. C0.7's gateway
+// grows from it.
 import type { FastifyInstance } from 'fastify'
 import { sql } from 'kysely'
 import type { Logger } from 'pino'
@@ -11,7 +14,7 @@ import { type SessionIds, sessionByToken } from '#src/db/pre-org.ts'
 import type { FlagCache } from '#src/flags/cache.ts'
 import type { Subscriptions } from '#src/pubsub.ts'
 import { attachSocketServer, type SocketServer } from '#src/realtime/socket.ts'
-import { listenRevoked } from '#src/revocation.ts'
+import { listenAccess, listenRevoked } from '#src/revocation/channels.ts'
 
 export interface RealtimeDeps {
   db: Database
@@ -45,11 +48,26 @@ export function registerRealtime(
     recheckMs: deps.recheckMs ?? SOCKET_RECHECK_MS,
   })
   if (deps.subscriptions !== undefined) {
-    // Resolves once subscribed; until then (Valkey down, say) sockets still close at the re-check.
+    // Each resolves once subscribed; until then (Valkey down, say) sockets still close at the
+    // re-check.
     void listenRevoked(
       deps.subscriptions,
       deps.keyPrefix,
       (sessionIds, at) => server.closeSessions(sessionIds, 'revoked', at),
+      logger,
+    )
+    void listenAccess(
+      deps.subscriptions,
+      deps.keyPrefix,
+      message => {
+        // Publishers name only sessions that have ended (the api after its commit, the worker after
+        // its re-read), so they close at once, with no database read.
+        if (message.sessions !== undefined) server.closeSessions(message.sessions, 'revoked', message.at)
+        // People whose keys changed: the next re-check of every socket finds what they lost.
+        if (message.people !== undefined) {
+          logger.debug({ event: 'access_people_signal', path: message.path, people: message.people.length })
+        }
+      },
       logger,
     )
   }

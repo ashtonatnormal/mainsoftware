@@ -2,8 +2,8 @@
 // with your passkeys, and signing one out, or all but this one. Signing a device out ends its
 // sessions in the same transaction (0003's devices_end_sessions), which appends signin.ended to the
 // outbox (C0.6, T16), and after the commit the realtime role is told to close their sockets
-// (revocation.ts). Your own list shows exact times;
-// an admin's view of it shows dates only (admin/people.ts).
+// (revocation/channels.ts), as the worker's revocation consumer also does from the outbox (C0.7).
+// Your own list shows exact times; an admin's view of it shows dates only (admin/people.ts).
 import type { FastifyInstance } from 'fastify'
 import { sql } from 'kysely'
 import { z } from 'zod'
@@ -17,7 +17,7 @@ import { inSession, requireSession, type SessionIds } from '#src/auth/sessions.t
 import type { InOrg } from '#src/db/database.ts'
 import { type Answer, parse, type ReqInfo, requestInfo, send, Uuid } from '#src/http.ts'
 import { appendOutbox } from '#src/outbox/append.ts'
-import { publishRevoked } from '#src/revocation.ts'
+import { publishRevoked } from '#src/revocation/channels.ts'
 
 // Signs out the person's devices that are still signed in: one (only), all but one (except), or
 // all of them, as the acting session's person, and returns the devices this statement ended and the
@@ -144,7 +144,7 @@ export async function signOutOwn(
     }
     return ended
   })
-  await publishRevoked(api.valkey, api.keyPrefix, ended.sessions, info.log)
+  if (api.publishRevoked !== false) await publishRevoked(api.valkey, api.keyPrefix, ended.sessions, info.log)
   const current = named === session.deviceId
   return { body: { signedOut: ended.devices.length, current }, cookies: current ? [clearedCookie('session')] : [] }
 }

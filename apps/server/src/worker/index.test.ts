@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { FLAG_READS_IN_FLIGHT } from '#src/flags/cache.ts'
+import { C06_GATE } from '#src/jobs/gate.ts'
 import { defineJob } from '#src/jobs/kinds.ts'
 import { WORKER_POLICY } from '#src/jobs/policy.ts'
 import { captureLogger } from '#src/testing/logs.ts'
 import { type Statement, scriptedPool } from '#src/testing/pool.ts'
-import { CONTROL_POOL_SIZE, productionRegistries, startWorker, workPoolSize } from '#src/worker/index.ts'
+import { CONTROL_POOL_SIZE, productionRegistries, startWorker, WORKER_GATE, workPoolSize } from '#src/worker/index.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const OTHER_ORG = 'a0000000-0000-4000-8000-000000000002'
@@ -101,7 +102,19 @@ describe('C0.6 T18 the worker role', () => {
     // Qodo-18 round 4 #1: with every flag read and renewal stuck, 3 connections stay for claims and
     // outcomes (T18 item 8).
     expect(CONTROL_POOL_SIZE - FLAG_READS_IN_FLIGHT - WORKER_POLICY.jobs.renewalsInFlight).toBeGreaterThanOrEqual(3)
-    expect(workPoolSize(4, registries())).toBe(5)
+    // C0.7: a connection for each of the offboarding and revocation consumers.
+    expect(workPoolSize(4, registries())).toBe(6)
+  })
+
+  it('C0.7 T19 item 4: runs the revocation consumer and its handler jobs beside offboarding, with C0.6’s gate by default', () => {
+    const r = registries()
+    expect(r.kinds.map(kind => kind.kind)).toContain('revocation.handler')
+    expect(r.consumers.map(consumer => consumer.name)).toEqual(['offboarding', 'revocation'])
+    expect(r.consumers.find(consumer => consumer.name === 'revocation')).toMatchObject({
+      role: 'hearth_job_revocation',
+      protective: true,
+    })
+    expect(WORKER_GATE).toBe(C06_GATE)
   })
 
   it('refuses to start with registries that break the rules', () => {
@@ -178,7 +191,11 @@ describe('C0.6 T18 the worker role', () => {
     await expect(worker.check(new AbortController().signal)).rejects.toThrow(
       `the outbox consumer offboarding is blocked in org ${ORG}: behind_floor`,
     )
-    expect(log.events('outbox_consumer_fell_behind')).toHaveLength(1)
+    // One line for each consumer blocked there (offboarding, and C0.7's revocation).
+    expect(log.events('outbox_consumer_fell_behind').map(line => line.consumer)).toEqual(
+      expect.arrayContaining(['offboarding', 'revocation']),
+    )
+    expect(log.events('outbox_consumer_fell_behind')).toHaveLength(2)
     // A reset or a rebuild: the next round reads, and the worker is ready.
     state.behind = false
     await vi.advanceTimersByTimeAsync(WORKER_POLICY.consumerPollMs * 2)

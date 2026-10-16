@@ -15,7 +15,7 @@ import {
   isAiFlag,
   isFlagKey,
 } from './flags.ts'
-import { idsLeaves, idsProblems } from './ids.ts'
+import { idsLeaves, idsProblems, LowerUuid, UUID_PATTERN } from './ids.ts'
 import { isAiPurpose, isPurposeKey, PURPOSES } from './purposes.ts'
 
 // BUILD-PLAN's order: every C stage, then every A stage.
@@ -143,6 +143,17 @@ describe('T15 item 8 T16 item 15: ids only', () => {
       ),
     ).toEqual([])
     expect(idsProblems(z.strictObject({}))).toEqual([])
+  })
+
+  it('C0.7 m4: accepts LowerUuid itself as an id, alone, optional or in a bounded list, and no other pattern', () => {
+    expect(
+      idsProblems(z.strictObject({ a: LowerUuid, b: LowerUuid.optional(), c: z.array(LowerUuid).max(100).optional() })),
+    ).toEqual([])
+    // The same pattern written again is another schema, refused as any pattern on a string is.
+    expect(idsProblems(z.strictObject({ x: z.string().regex(UUID_PATTERN) }))).toHaveLength(1)
+    expect(idsProblems(z.strictObject({ x: LowerUuid.max(10) }))).toHaveLength(1)
+    expect(idsProblems(z.strictObject({ x: z.array(LowerUuid) }))).toHaveLength(1)
+    expect(idsProblems(z.strictObject({ x: z.array(LowerUuid).max(101) }))).toHaveLength(1)
   })
 
   it('refuses anything that could carry someone’s details', () => {

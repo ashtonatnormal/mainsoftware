@@ -49,7 +49,7 @@ function org(options: {
   })
 }
 
-function context(pool: ReturnType<typeof scriptedPool>, options: { publishDeactivated?: boolean } = {}) {
+function context(pool: ReturnType<typeof scriptedPool>, options: { publishRevoked?: boolean } = {}) {
   const published: string[] = []
   const api: Api = {
     db: pool.db,
@@ -88,7 +88,7 @@ async function refusal(promise: Promise<unknown>): Promise<ApiError> {
 
 describe('C0.5 ACC-05 C0.6 T16 deactivating someone', () => {
   // The member's deactivation ended two sessions and two devices.
-  const deactivating = (options: { publishDeactivated?: boolean } = {}) => {
+  const deactivating = (options: { publishRevoked?: boolean } = {}) => {
     const pool = org({
       rows: ({ text }) => {
         if (text.startsWith('update "people"')) return [{ id: MEMBER }]
@@ -146,8 +146,8 @@ describe('C0.5 ACC-05 C0.6 T16 deactivating someone', () => {
     expect(c.published.flatMap(message => JSON.parse(message).sessions)).toEqual(ENDED)
   })
 
-  it('leaves the publish to the worker when told to (A6), and appends the same events', async () => {
-    const { pool, c } = deactivating({ publishDeactivated: false })
+  it('C0.7 T19 item 4: leaves the publish to the worker when told to (A6), and appends the same events', async () => {
+    const { pool, c } = deactivating({ publishRevoked: false })
     await deactivate(c.api, { person: MEMBER }, session, c.info)
     expect(c.published).toEqual([])
     expect(appended(pool.statements).map(event => event.type)).toEqual([
@@ -244,6 +244,20 @@ describe('C0.5 ACC-06 resetting a PIN', () => {
     expect(c.published.flatMap(message => JSON.parse(message).sessions)).toEqual(ENDED)
   })
 
+  it('C0.7 T19 item 4: leaves the publish to the worker when told to, and still appends signin.ended', async () => {
+    const pool = org({
+      rows: ({ text }) => {
+        if (text.startsWith('select id from users')) return [{ id: MEMBER }]
+        if (text.startsWith('update sessions')) return ENDED.map(id => ({ id }))
+        return undefined
+      },
+    })
+    const c = context(pool, { publishRevoked: false })
+    await resetPin(c.api, { person: MEMBER, identityCheck: 'in_person' }, session, c.info)
+    expect(c.published).toEqual([])
+    expect(appended(pool.statements).map(event => event.type)).toEqual(['account.pin_reset', 'signin.ended'])
+  })
+
   it('answers 409 no_account for someone who has never signed in', async () => {
     const c = context(org({}))
     expect(
@@ -285,6 +299,23 @@ describe('C0.5 ACC-04 an admin signing devices out and listing them', () => {
       },
     ])
     expect(c.published.flatMap(message => JSON.parse(message).sessions)).toEqual(ENDED)
+  })
+
+  it('C0.7 T19 item 4: leaves the publish to the worker when told to, and still appends signin.ended', async () => {
+    const pool = org({
+      rows: ({ text }) => {
+        if (text.startsWith('update "devices"')) return MEMBER_DEVICES.map(id => ({ id }))
+        if (text.startsWith('select id from sessions')) return ENDED.map(id => ({ id }))
+        return undefined
+      },
+    })
+    const c = context(pool, { publishRevoked: false })
+    expect(await signOutDevices(c.api, { person: MEMBER }, session, c.info)).toEqual({
+      body: { signedOut: 2 },
+      cookies: [],
+    })
+    expect(c.published).toEqual([])
+    expect(appended(pool.statements).map(event => event.type)).toEqual(['signin.ended'])
   })
 
   it('signs out your own devices with your own row taken FOR NO KEY UPDATE, and clears your cookie', async () => {

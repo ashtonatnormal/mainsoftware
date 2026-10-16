@@ -117,7 +117,8 @@ export interface WorkerInstanceOptions {
   schedules?: readonly (ScheduleDef | RetiredSchedule)[]
   // Whether the production schedules (03:17 partitions, 03:47 clean-up) are written too.
   productionSchedules?: boolean
-  // Whether the production consumers (offboarding) run too: true unless a test turns them off.
+  // Whether the production consumers (offboarding and revocation) run too: true unless a test turns
+  // them off.
   productionConsumers?: boolean
   policy?: WorkerPolicy
   // The worker's flag cache's poll and staleness.
@@ -250,12 +251,18 @@ export interface Stack {
   settled(): Promise<void>
   openSocket(client: Client, options?: { origin?: string; url?: string; cookie?: string }): Promise<Opened>
   // Another api app on the same database, with its own Valkey URL (an unreachable one, say), and
-  // optionally without its after-commit publish of a deactivation's sessions (A6).
-  startApi(options: { valkeyUrl?: string; publishDeactivated?: boolean }): Promise<FastifyInstance>
+  // optionally without its after-commit publish of the sessions a commit ended (A6), so only the
+  // worker's revocation consumer (C0.7) or the re-check closes their sockets.
+  startApi(options: { valkeyUrl?: string; publishRevoked?: boolean }): Promise<FastifyInstance>
   // Another realtime app: a shorter re-check, and optionally no revocation subscriber.
   startRealtime(options: { recheckMs: number; subscribe: boolean }): Promise<RealtimeApp>
   // A worker instance (worker/index.ts), stopped when the stack stops.
   startWorker(options?: WorkerInstanceOptions): Promise<WorkerInstance>
+  // Waits, polling as the superuser, until the outbox consumer has its checkpoint in the org. A
+  // consumer that starts at 'now' (C0.7's revocation) skips whatever committed before its checkpoint
+  // was made, and a worker can be ready before then, so a test waits for it before its first
+  // revocation (m6).
+  waitForCheckpoint(consumer: string, orgId: string, ms?: number): Promise<void>
   track(resource: { close(): Promise<unknown> }): void
   stop(): Promise<void>
 }
@@ -458,7 +465,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     async function startApiOn(
       apiValkey: Redis,
       apiLogger: Logger,
-      o: { publishDeactivated?: boolean } = {},
+      o: { publishRevoked?: boolean } = {},
     ): Promise<{ app: FastifyInstance; flags: FlagCache }> {
       const afterResponse = new AfterResponse()
       const flags = flagCache({ logger: apiLogger })
@@ -476,7 +483,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
           keyPrefix: prefix,
           flags,
           afterResponse,
-          ...(o.publishDeactivated === undefined ? {} : { publishDeactivated: o.publishDeactivated }),
+          ...(o.publishRevoked === undefined ? {} : { publishRevoked: o.publishRevoked }),
         },
       })
       closers.push(() => app.close())
@@ -592,12 +599,12 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
 
     const { app: api, flags: apiFlags } = await startApiOn(valkey, logger)
     const realtime = await startRealtimeApp(options.recheckMs ?? SOCKET_RECHECK_MS, true)
-    // The realtime app subscribes in the background; a revocation published before it has would
-    // be caught only by the re-check.
+    // The realtime app subscribes to both revocation channels in the background; a revocation
+    // published before it has would be caught only by the re-check.
     for (let tries = 0; ; tries++) {
-      const reply = (await valkey.call('PUBSUB', 'NUMSUB', names.revoked)) as [string, number]
-      if (Number(reply[1]) >= 1) break
-      if (tries > 250) throw new Error('the realtime app never subscribed to the revocation channel')
+      const reply = (await valkey.call('PUBSUB', 'NUMSUB', names.revoked, names.access)) as (string | number)[]
+      if (Number(reply[1]) >= 1 && Number(reply[3]) >= 1) break
+      if (tries > 250) throw new Error('the realtime app never subscribed to the revocation channels')
       await new Promise(resolve => setTimeout(resolve, 20))
     }
 
@@ -904,18 +911,30 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       query,
       settled,
       openSocket,
-      startApi: async ({ valkeyUrl, publishDeactivated }) => {
+      startApi: async ({ valkeyUrl, publishRevoked }) => {
         let apiValkey = valkey
         if (valkeyUrl !== undefined) {
           const other = createValkey(valkeyUrl, logger)
           closers.push(() => closeValkey(other))
           apiValkey = other
         }
-        const o = publishDeactivated === undefined ? {} : { publishDeactivated }
+        const o = publishRevoked === undefined ? {} : { publishRevoked }
         return (await startApiOn(apiValkey, logger, o)).app
       },
       startRealtime: ({ recheckMs, subscribe }) => startRealtimeApp(recheckMs, subscribe),
       startWorker: startWorkerInstance,
+      waitForCheckpoint: async (consumer, orgId, ms = 10_000) => {
+        const deadline = Date.now() + ms
+        for (;;) {
+          const rows = await query('select 1 from outbox_checkpoints where consumer = $1 and org_id = $2', [
+            consumer,
+            orgId,
+          ])
+          if (rows.length > 0) return
+          if (Date.now() > deadline) throw new Error(`the ${consumer} consumer made no checkpoint in ${ms} ms`)
+          await new Promise(resolve => setTimeout(resolve, 20))
+        }
+      },
       track,
       stop: stopAll,
     }

@@ -1,7 +1,10 @@
-// Every Valkey key and channel the server uses: sign-in's (C0.5) and the flags channel (C0.6). No
-// key or channel holds a phone number, an IP address, a code, a token or an attempt id: only tag()
-// and keyName() outputs (crypto.ts), uuids and the fixed subject `all`. All limiter keys share the
-// hash tag {auth}, so one script can touch them all even on a clustered Valkey.
+// Every Valkey key and channel the server uses: sign-in's (C0.5), the flags channel (C0.6), and the
+// realtime gateway's (C0.7, TECH-SPEC T19): the access channel, and each org's event stream and its
+// epoch. No key, channel or entry holds a phone number, an IP address, a code, a token, an attempt
+// id or content: only tag() and keyName() outputs (crypto.ts), uuids and the fixed subject `all`.
+// All limiter keys share the hash tag {auth}, so one script can touch them all even on a clustered
+// Valkey; an org's stream and its epoch share the hash tag {<org id>}, so the producer's one script
+// (realtime/stream.ts) writes both on a cluster too.
 
 // h:<DEPLOY_ENV>: so two environments that ever share a Valkey keep their limits, sign-in state and
 // channels apart. Tests use it:<random>:.
@@ -19,8 +22,18 @@ export function valkeyKeys(prefix: string) {
     challenge: (kind: 'signin' | 'reauth' | 'register', id: string) => `${prefix}pk:${kind}:${id}`,
     // A sliding window (limiter.ts).
     limit: (name: string, subject: string) => `${prefix}rl:{auth}:${name}:${subject}`,
-    // The pub/sub channel that tells the realtime role which sessions ended.
+    // The pub/sub channel on which the api tells the realtime role which sessions ended (v1, C0.5;
+    // revocation/channels.ts).
     revoked: `${prefix}revoked`,
+    // The pub/sub channel for everything newer about lost access (v1, C0.7): the worker's
+    // revocation jobs' ended sessions and people whose keys changed (revocation/channels.ts).
+    access: `${prefix}access`,
+    // An org's capped stream of topic events, read by every realtime process, and the resume buffer
+    // (T19 item 9).
+    stream: (orgId: string) => `${prefix}rt:{${orgId}}`,
+    // A random uuid that changes when the stream is lost (a Valkey restart or failover), so a resume
+    // from a position in the old stream answers reset.
+    epoch: (orgId: string) => `${prefix}rt:{${orgId}}:epoch`,
     // The pub/sub channel that tells every process an org's flags changed (flags/channel.ts; T17).
     flags: `${prefix}flags`,
   }

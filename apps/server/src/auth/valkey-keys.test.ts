@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { valkeyKeys, valkeyPrefix } from '#src/auth/valkey-keys.ts'
 
-describe('T14 C0.6 T17 the Valkey keys and channels the server uses', () => {
+describe('T14 C0.6 T17 C0.7 T19 the Valkey keys and channels the server uses', () => {
   it('prefixes every key and channel with the environment', () => {
     expect(valkeyPrefix('local')).toBe('h:local:')
     expect(valkeyPrefix('prod')).toBe('h:prod:')
@@ -12,6 +12,11 @@ describe('T14 C0.6 T17 the Valkey keys and channels the server uses', () => {
     expect(keys.challenge('reauth', 'S')).toBe('h:prod:pk:reauth:S')
     expect(keys.revoked).toBe('h:prod:revoked')
     expect(keys.flags).toBe('h:prod:flags')
+    expect(keys.access).toBe('h:prod:access')
+    expect(keys.stream('a0000000-0000-4000-8000-000000000001')).toBe('h:prod:rt:{a0000000-0000-4000-8000-000000000001}')
+    expect(keys.epoch('a0000000-0000-4000-8000-000000000001')).toBe(
+      'h:prod:rt:{a0000000-0000-4000-8000-000000000001}:epoch',
+    )
   })
 
   it('puts every limiter key in one hash slot, so one script can touch them all on a cluster', () => {
@@ -21,5 +26,11 @@ describe('T14 C0.6 T17 the Valkey keys and channels the server uses', () => {
     )
     expect(slots).toEqual(['auth', 'auth', 'auth'])
     expect(keys.limit('otp-n10m', 'TAG')).toBe('h:local:rl:{auth}:otp-n10m:TAG')
+  })
+
+  it('T19 item 9: puts an org’s stream and its epoch in one hash slot, so the producer’s script runs on a cluster', () => {
+    const keys = valkeyKeys('h:local:')
+    const org = 'a0000000-0000-4000-8000-000000000001'
+    expect([keys.stream(org), keys.epoch(org)].map(key => /\{([^}]*)\}/.exec(key)?.[1])).toEqual([org, org])
   })
 })

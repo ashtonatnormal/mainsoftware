@@ -3,13 +3,13 @@ import { type InOrg, withOrg } from '#src/db/database.ts'
 import type { JobContext } from '#src/jobs/context.ts'
 import { PermanentJobError } from '#src/jobs/errors.ts'
 import {
+  OFFBOARDING_HANDLERS,
   type OffboardingHandler,
   type OffboardingPayload,
   OffboardingRegistry,
   offboardingConsumer,
   offboardingJob,
   offboardingRegistry,
-  socketsHandler,
 } from '#src/offboarding.ts'
 import type { OutboxRow } from '#src/outbox/positions.ts'
 import { captureLogger } from '#src/testing/logs.ts'
@@ -20,10 +20,6 @@ const PERSON = 'b0000000-0000-4000-8000-000000000001'
 const ADMIN = 'b0000000-0000-4000-8000-000000000002'
 const SYSTEM = 'c0000000-0000-4000-8000-000000000001'
 const JOB = 'd0000000-0000-4000-8000-000000000009'
-const SESSIONS = ['d0000000-0000-4000-8000-000000000001', 'd0000000-0000-4000-8000-000000000002']
-
-const logger = () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn() })
-
 // A job's context whose reads run as hearth_job_offboarding on a scripted pool.
 function jobContext(
   answer: (statement: Statement) => unknown[],
@@ -82,15 +78,20 @@ describe('C0.5 ACC-05 the offboarding registry (the seam A2, A4, C2.2, C4.1 and 
     )
   })
 
-  it('the worker’s registry holds this version’s handlers', () => {
-    expect(offboardingRegistry({ valkey: { publish: vi.fn() }, keyPrefix: 'it:', logger: logger() }).names()).toEqual([
-      'sockets',
-    ])
+  it('C0.7 T19 item 2: the worker’s registry holds no handler, since the revocation registry closes a leaver’s sockets', () => {
+    expect(offboardingRegistry().names()).toEqual([])
+    // The retired name stays listed, so a job queued before C0.7 still parses.
+    expect(OFFBOARDING_HANDLERS).toEqual(['sockets'])
   })
 })
 
 describe('C0.6 T16 item 9 the offboarding consumer: the event is a claim, the row is the proof', () => {
-  const registry = () => offboardingRegistry({ valkey: { publish: vi.fn() }, keyPrefix: 'it:', logger: logger() })
+  // A registry with one handler, as C2.2's will have; 'sockets' is the one name listed today.
+  const registry = () => {
+    const reg = new OffboardingRegistry()
+    reg.register({ name: 'sockets', run: async () => {} })
+    return reg
+  }
 
   it('queues one offboarding.handler job per handler for a person who has left, keyed by person and handler', async () => {
     const reg = registry()
@@ -131,6 +132,19 @@ describe('C0.6 T16 item 9 the offboarding consumer: the event is a claim, the ro
     expect(inserts[0]?.text).toContain('on conflict do nothing')
     // A producer may not name a schedule run.
     expect(inserts[0]?.text).not.toContain('schedule_run_id')
+  })
+
+  it('C0.7: queues nothing with the production registry, which has no handler, for a person who has left', async () => {
+    const reg = offboardingRegistry()
+    const p = scriptedPool(statement =>
+      statement.text.startsWith('select id from people') ? [{ id: PERSON }] : systemPrincipal(SYSTEM)(statement),
+    )
+    const log = captureLogger()
+    await withOrg(p.db, { orgId: ORG, system: true, as: 'hearth_job_offboarding' }, (trx: InOrg) =>
+      offboardingConsumer(reg, offboardingJob(reg)).handle(trx, [event(9)], { orgId: ORG, log: log.logger }),
+    )
+    expect(p.statements.filter(s => s.text.startsWith('insert into jobs'))).toEqual([])
+    expect(log.events('offboarding_not_deactivated')).toEqual([])
   })
 
   it('queues nothing for a person still at the org, and logs it at error level by the event’s id', async () => {
@@ -190,58 +204,14 @@ describe('C0.6 T16 item 9 the offboarding.handler job', () => {
     expect(run).not.toHaveBeenCalled()
   })
 
-  it('finishes with a warning when its handler is no longer registered', async () => {
+  it('C0.7 T19 item 2: finishes a sockets job queued before C0.7 with a warning, not an error, since the handler is retired', async () => {
     const { ctx, log } = jobContext(s =>
       s.text.startsWith('select deactivated_by from people') ? [{ deactivated_by: ADMIN }] : [],
     )
-    await offboardingJob(new OffboardingRegistry()).run(ctx)
-    expect(log.events('offboarding_handler_unregistered')).toEqual([expect.objectContaining({ handler: 'sockets' })])
-  })
-})
-
-describe('C0.5 T5 ACC-05 the sockets handler', () => {
-  it('publishes the sessions the deactivation ended, read through the job as its role', async () => {
-    const { p, ctx } = jobContext(s => (s.text.includes('from "sessions"') ? SESSIONS.map(id => ({ id })) : []))
-    const published: [string, string][] = []
-    const valkey = { publish: async (channel: string, message: string) => published.push([channel, message]) }
-    await socketsHandler({ valkey, keyPrefix: 'it:unit:', logger: logger() }).run(
-      { orgId: ORG, personId: PERSON, actorId: ADMIN },
-      ctx,
-    )
-    expect(p.texts()).toContain(
-      'select "id" from "sessions" where "org_id" = $1 and "user_id" = $2 and "revoke_reason" = $3',
-    )
-    expect(p.statements.find(s => s.text.includes('from "sessions"'))?.values).toEqual([ORG, PERSON, 'deactivated'])
-    expect(p.statements.find(s => s.text.startsWith("select set_config('role'"))?.values[0]).toBe(
-      'hearth_job_offboarding',
-    )
-    expect(published).toHaveLength(1)
-    const [channel, message] = published[0] ?? []
-    expect(channel).toBe('it:unit:revoked')
-    expect(JSON.parse(message ?? '')).toEqual({ v: 1, at: expect.any(Number), sessions: SESSIONS })
-  })
-
-  it('publishes nothing when the deactivation ended no session, so it can run again safely', async () => {
-    const { ctx } = jobContext(() => [])
-    const valkey = { publish: vi.fn() }
-    await socketsHandler({ valkey, keyPrefix: 'it:unit:', logger: logger() }).run(
-      { orgId: ORG, personId: PERSON, actorId: ADMIN },
-      ctx,
-    )
-    expect(valkey.publish).not.toHaveBeenCalled()
-  })
-
-  it('OUTBOX-2: fails when the publish fails, so the job is tried again rather than finishing', async () => {
-    const { ctx } = jobContext(s => (s.text.includes('from "sessions"') ? SESSIONS.map(id => ({ id })) : []))
-    const log = logger()
-    const failure = new Error('Connection is closed.')
-    const valkey = { publish: vi.fn().mockRejectedValue(failure) }
-    await expect(
-      socketsHandler({ valkey, keyPrefix: 'it:unit:', logger: log }).run(
-        { orgId: ORG, personId: PERSON, actorId: ADMIN },
-        ctx,
-      ),
-    ).rejects.toBe(failure)
-    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ event: 'revocation_publish_failed' }))
+    await expect(offboardingJob(offboardingRegistry()).run(ctx)).resolves.toBeUndefined()
+    expect(log.events('offboarding_handler_unregistered')).toEqual([
+      expect.objectContaining({ level: 40, handler: 'sockets' }),
+    ])
+    expect(log.lines.filter(line => Number(line.level) >= 50)).toEqual([])
   })
 })

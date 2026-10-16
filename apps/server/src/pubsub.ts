@@ -1,6 +1,7 @@
 // The pub/sub channels a process listens on, all on one Valkey connection of its own (valkey.ts
 // createSubscriber), since a subscribed connection can run nothing else: the realtime role's
-// revocation channel (C0.5, revocation.ts) and the flags channel (C0.6, flags/channel.ts).
+// revocation channels (C0.5's revoked and C0.7's access, revocation/channels.ts) and the flags
+// channel (C0.6, flags/channel.ts).
 //
 // Valkey forgets a subscription with the connection that made it, so each channel is subscribed
 // again on every new connection after a reconnect. ioredis would do that itself, but nothing could

@@ -24,7 +24,6 @@
 // (T15 item 12).
 import { performance } from 'node:perf_hooks'
 import { FLAGS, type FlagSpec } from '@hearth/shared'
-import type { Redis } from 'ioredis'
 import type { Logger } from 'pino'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { type Database, listOrgs } from '#src/db/database.ts'
@@ -42,6 +41,7 @@ import { ConsumerRunner } from '#src/outbox/consumers.ts'
 import { logOutboxLag, logQueueDepth, readOutboxLag, readQueueDepth } from '#src/outbox/lag.ts'
 import type { Subscriptions } from '#src/pubsub.ts'
 import type { Check } from '#src/ready.ts'
+import { type PublishDeps, revocationConsumer, revocationJob, revocationRegistry } from '#src/revocation/registry.ts'
 
 // The control pool's size (T18 item 8): when every flag read (3) and heartbeat renewal (2) is stuck
 // on a silent connection, 3 are left, which claims (a slow claim's renewal included), outcomes (up to
@@ -62,19 +62,23 @@ const ORGS_RETRY_MS = 1000
 // A loop that has failed this many times in a row logs at error level.
 const FAILURES_BEFORE_ERROR = 3
 
-// What this version of the worker runs: Hearth's maintenance (partitions and the clean-up) and
-// durable offboarding (its consumer and handler jobs).
-export function productionRegistries(deps: {
-  valkey: Pick<Redis, 'publish'>
-  keyPrefix: string
-  logger: Pick<Logger, 'warn' | 'error'>
-}): Registries {
-  const offboarding = offboardingRegistry(deps)
-  const handler = offboardingJob(offboarding)
+// The gate the worker runs with unless told otherwise: C0.6's stand-ins until C0.9's registers.
+// C0.9's must keep accounts non-consent and active from notice v0, because the revocation
+// consumer's purpose gate still applies (TECH-SPEC T19 item 4; revocation/registry.test.ts pins it).
+export const WORKER_GATE: Gate = C06_GATE
+
+// What this version of the worker runs: Hearth's maintenance (partitions and the clean-up), durable
+// offboarding (its consumer and handler jobs, with no handler from C0.7) and durable revocation
+// (C0.7: its protective consumer and handler jobs, which publish on the access channel).
+export function productionRegistries(deps: PublishDeps): Registries {
+  const offboarding = offboardingRegistry()
+  const offboardingKind = offboardingJob(offboarding)
+  const revocations = revocationRegistry(deps)
+  const revocationKind = revocationJob(revocations)
   return {
-    kinds: [...MAINTENANCE_KINDS, handler],
+    kinds: [...MAINTENANCE_KINDS, offboardingKind, revocationKind],
     schedules: SCHEDULES,
-    consumers: [offboardingConsumer(offboarding, handler)],
+    consumers: [offboardingConsumer(offboarding, offboardingKind), revocationConsumer(revocations, revocationKind)],
   }
 }
 
@@ -121,7 +125,7 @@ export function startWorker(options: WorkerOptions): Worker {
   const policy = options.policy ?? WORKER_POLICY
   const now = options.now ?? (() => performance.now())
   const { control, work, logger } = options
-  const gate = options.gate ?? C06_GATE
+  const gate = options.gate ?? WORKER_GATE
 
   const flags = new FlagCache({
     db: control,

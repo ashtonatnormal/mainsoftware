@@ -17,7 +17,10 @@
 //   4. the floor and the batch in one statement; a floor above the checkpoint means the clean-up
 //      deleted events this consumer never saw, so it stops and logs an error until it is rebuilt;
 //   5. handle the events of its types, passing over (and logging) any whose subject's processing
-//      switch refuses its purpose; move the checkpoint by compare-and-set from the position read
+//      switch refuses its purpose, unless the consumer is protective (it only takes access away,
+//      as C0.7's revocation consumer does: no one's switch may hold back the revocation of their
+//      access, or of anyone else's in the same event; TECH-SPEC T19 item 4, PDPA-04), whose events
+//      are never withheld per subject; move the checkpoint by compare-and-set from the position read
 //      (no row: a reset slipped in, so the round rolls back); end with feature_fence(), with the
 //      flag revisions the round was admitted under, so nothing commits after its flag changed.
 // A full batch runs the next round at once; otherwise the next comes after the poll (500 ms).
@@ -68,6 +71,10 @@ export interface OutboxConsumer {
   batch?: number
   // outbox_lag warns when the consumer is further behind than this (lag.ts).
   lagBudgetMs: number
+  // It only takes access away (C0.7's revocation consumer), so no subject's processing switch
+  // withholds one of its events; the purpose gate still applies. validateRegistries (jobs/kinds.ts)
+  // allows it only under core.system with purpose accounts.
+  protective?: true
   // Applies the events' effects in the round's transaction, which then moves the checkpoint.
   handle(trx: InOrg, events: readonly OutboxRow[], context: { orgId: string; log: Logger }): Promise<void>
 }
@@ -398,8 +405,9 @@ export class ConsumerRunner {
   }
 
   // Whether every subject's processing switch allows the consumer's purpose (PDPA-04); an event
-  // whose subject refuses it is passed over, and logged by id.
+  // whose subject refuses it is passed over, and logged by id. A protective consumer's never is.
   #processingAllowed(consumer: OutboxConsumer, orgId: string, row: OutboxRow, log: Logger): boolean {
+    if (consumer.protective === true) return true
     if (row.subjects.every(subject => this.#gate.processingAllowed(orgId, subject, consumer.purpose))) return true
     log.info({ event: 'outbox_event_withheld', eventId: row.id }, 'an event was passed over for its subject')
     return false

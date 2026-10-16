@@ -3,8 +3,8 @@
 // own pools as hearth_worker, at the test policy's short intervals (leases of 2 s, the sweep every
 // 0.5 s, polls every 100 ms). The test kinds run as hearth_job_offboarding and write to the
 // harness's test tables (testing/jobs.ts), which never deduplicate, so a job's effect committed
-// twice shows as two rows. Durable offboarding (T16 item 9) runs through the real api, the production
-// consumer and the production handler job.
+// twice shows as two rows. Durable revocation (T16 item 9, T19 item 4) runs through the real api, the
+// production consumers and the production handler jobs.
 //
 // Each case starts and stops its own instances, which know only the kinds the case gives them (and
 // the production ones), so no instance runs another case's jobs. Waits poll every 20 ms up to a
@@ -17,7 +17,8 @@ import { withOrg } from '#src/db/database.ts'
 import type { JobContext } from '#src/jobs/context.ts'
 import { enqueue } from '#src/jobs/enqueue.ts'
 import { defineJob, type JobKind, type ScheduleDef } from '#src/jobs/kinds.ts'
-import { OffboardingRegistry, offboardingJob } from '#src/offboarding.ts'
+import { offboardingJob, offboardingRegistry } from '#src/offboarding.ts'
+import { RevocationPayload, revocationJob, revocationRegistry } from '#src/revocation/registry.ts'
 import { installJobTables } from '#src/testing/jobs.ts'
 import { type Opened, type Person, type Stack, startStack, type WorkerInstance } from '#src/testing/stack.ts'
 import { everyTestPassed, expectEveryWriteCovered } from '#src/testing/writes.ts'
@@ -415,25 +416,63 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
     }
   })
 
-  it('T16 item 9 T14 item 13: a deactivation offboards through the worker’s job when the api’s own publish is off, and a re-run publishes again harmlessly', async () => {
+  it('T16 item 9 T19 item 2: a deactivation’s sockets close through the revocation consumer when the api’s publish is off; offboarding’s retired sockets handler finishes as unregistered', async () => {
     await withWorker({}, async () => {
-      // With the api's publish (C0.5's path): the socket closes at once, and the worker's job runs too.
+      // The consumer starts at 'now': a deactivation committed before its checkpoint is made is the
+      // re-check's alone (m6).
+      await s.waitForCheckpoint('revocation', s.org.id)
+      const sessionsOf = async (person: Person) =>
+        (await s.query<{ id: string }>('select id from sessions where user_id = $1', [person.id])).map(row => row.id)
+      const revocationJobs = (person: Person) =>
+        s.query<{
+          id: string
+          state: string
+          idempotency_key: string | null
+          subject_id: string | null
+          payload: { handler: string; cause: string; person?: string; people?: string[]; sessions?: string[] }
+        }>(
+          `select id, state, idempotency_key, subject_id, payload from jobs
+           where kind = 'revocation.handler' and (payload->>'person' = $1 or payload->'people' ? $1)
+           order by payload->>'handler'`,
+          [person.id],
+        )
+
+      // With the api's publish (the push): the socket closes at once, and the worker's revocation
+      // jobs run too; offboarding queues nothing, since its sockets handler is retired.
       const first = await s.person({ pin: s.newPin() })
       const firstSocket = opened(await s.openSocket(await s.signIn(first)))
       const adminClient = await s.signIn(admin)
       expect((await adminClient.post('/api/admin/people/deactivate', { person: first.id })).status).toBe(200)
       const closedFirst = await Promise.race([firstSocket.closed, sleep(2000).then(() => undefined)])
       expect(closedFirst).toMatchObject({ code: 4401 })
+      expect(
+        (
+          await eventually(
+            () => revocationJobs(first),
+            rows => rows.length === 2 && rows.every(row => row.state === 'succeeded'),
+          )
+        ).map(row => row.payload.handler),
+      ).toEqual(['sockets', 'topics'])
+      const [deactivated] = await s.query<{ id: string }>(
+        "select id::text from outbox_events where type = 'person.deactivated' and entity_id = $1",
+        [first.id],
+      )
+      // The offboarding consumer has read past the event, and queued no job for it.
       await eventually(
         () =>
-          s.query<{ state: string }>("select state from jobs where kind = 'offboarding.handler' and subject_id = $1", [
-            first.id,
-          ]),
-        rows => rows[0]?.state === 'succeeded',
+          s.query<{ last_id: string }>(
+            "select last_id::text from outbox_checkpoints where consumer = 'offboarding' and org_id = $1",
+            [s.org.id],
+          ),
+        rows => BigInt(rows[0]?.last_id ?? '0') >= BigInt(deactivated?.id ?? '1'),
       )
+      expect(
+        await s.query("select id from jobs where kind = 'offboarding.handler' and subject_id = $1", [first.id]),
+      ).toEqual([])
 
-      // Without it (A6): only the worker can close the socket now.
-      const quiet = await s.startApi({ publishDeactivated: false })
+      // Without it (A6): only the worker's revocation jobs can close the socket now (the re-check
+      // comes every 15 s).
+      const quiet = await s.startApi({ publishRevoked: false })
       const quietAdmin = s.client({ app: quiet })
       quietAdmin.setCookie('__Host-hearth_session', adminClient.cookie('__Host-hearth_session') ?? '')
       const leaver = await s.person({ pin: s.newPin() })
@@ -443,44 +482,75 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
       expect((await quietAdmin.post('/api/admin/people/deactivate', { person: leaver.id })).status).toBe(200)
       const closed = await Promise.race([socket.closed, sleep(10_000).then(() => undefined)])
       expect(closed, 'the socket stayed open for 10 s').toMatchObject({ code: 4401 })
-      console.info(`deactivation to socket closed through the worker: ${(closed?.at ?? 0) - started} ms`)
+      console.info(`deactivation to socket closed through the revocation consumer: ${(closed?.at ?? 0) - started} ms`)
       expect(s.realtime.server.counts().closedRevoked).toBe(before + 1)
-      // The handler published, then its job finished in a transaction of its own.
-      const [job] = await eventually(
-        () =>
-          s.query<{ id: string; state: string; idempotency_key: string; payload: unknown }>(
-            "select id, state, idempotency_key, payload from jobs where kind = 'offboarding.handler' and subject_id = $1",
-            [leaver.id],
-          ),
-        rows => rows[0]?.state === 'succeeded',
+      // The sockets job re-read the ended sessions and published them, then finished in a
+      // transaction of its own; it names no subject, and is keyed by its first session.
+      const ended = await sessionsOf(leaver)
+      const [sockets, topics] = await eventually(
+        () => revocationJobs(leaver),
+        rows => rows.length === 2 && rows.every(row => row.state === 'succeeded'),
       )
-      expect(job).toMatchObject({
-        state: 'succeeded',
-        idempotency_key: `${leaver.id}:sockets`,
-        payload: { person: leaver.id, handler: 'sockets' },
+      expect(sockets).toMatchObject({
+        subject_id: null,
+        payload: { handler: 'sockets', cause: 'sessions_ended', person: leaver.id },
+      })
+      expect(new Set(sockets?.payload.sessions)).toEqual(new Set(ended))
+      expect(sockets?.idempotency_key).toBe(`sockets:${sockets?.payload.sessions?.[0]}`)
+      expect(topics).toMatchObject({
+        subject_id: null,
+        idempotency_key: null,
+        payload: { handler: 'topics', cause: 'keys_changed', people: [leaver.id] },
       })
 
-      // A re-run publishes the ended sessions again; nothing more closes, nothing fails.
+      // A job queued for offboarding's sockets handler before C0.7 finds it retired, and finishes
+      // with a warning, not an error.
+      const retired = await queue(offboardingJob(offboardingRegistry()), {
+        payload: { person: leaver.id, handler: 'sockets' },
+        subjectId: leaver.id,
+        idempotencyKey: `${leaver.id}:sockets`,
+      })
+      await eventually(
+        () => jobOf(retired),
+        row => row?.state === 'succeeded',
+      )
+      expect(linesOf('offboarding_handler_unregistered', retired)).toEqual([
+        expect.objectContaining({ level: 40, handler: 'sockets' }),
+      ])
+
+      // A re-run of the sockets job publishes the ended sessions again on the access channel;
+      // nothing more closes, nothing fails.
       const listener = createSubscriber(s.valkey, s.realtime.app.log as never)
       const messages: string[] = []
       listener.on('message', (_channel: string, text: string) => messages.push(text))
-      await listener.subscribe(s.names.revoked)
+      await listener.subscribe(s.names.access)
       try {
-        const handler = offboardingJob(new OffboardingRegistry())
-        const again = await queue(handler, {
-          payload: { person: leaver.id, handler: 'sockets' },
-          subjectId: leaver.id,
-          idempotencyKey: `${leaver.id}:sockets:again`,
+        // Only the kind is used here, to queue the job; the worker runs it with its own registry.
+        const registry = revocationRegistry({
+          valkey: s.valkey,
+          keyPrefix: s.prefix,
+          logger: { warn: () => {}, error: () => {} },
+        })
+        const again = await queue(revocationJob(registry), {
+          payload: RevocationPayload.parse(sockets?.payload),
+          idempotencyKey: `${sockets?.idempotency_key}:again`,
         })
         await eventually(
           () => jobOf(again),
           row => row?.state === 'succeeded',
         )
-        const sessions = await s.query<{ id: string }>('select id from sessions where user_id = $1', [leaver.id])
-        await eventually(
-          async () => messages,
-          list => list.some(text => sessions.every(row => text.includes(row.id))),
+        const published = await eventually(
+          async () => messages.map(text => JSON.parse(text) as Record<string, unknown>),
+          list => list.some(m => Array.isArray(m.sessions) && ended.every(id => (m.sessions as string[]).includes(id))),
         )
+        expect(published.find(m => Array.isArray(m.sessions))).toMatchObject({
+          v: 1,
+          org: s.org.id,
+          path: 'durable',
+          cause: 'sessions_ended',
+          at: expect.any(Number),
+        })
+        expect(s.realtime.server.counts().closedRevoked).toBe(before + 1)
       } finally {
         listener.disconnect()
       }

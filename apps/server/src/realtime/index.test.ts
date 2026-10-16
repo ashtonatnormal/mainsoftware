@@ -139,6 +139,65 @@ describe('C0.5 T5 ACC-05 the realtime role, wired', () => {
     }
   })
 
+  it('C0.7 T19 item 5 P11: closes the sessions an access message names at once, and leaves the people it names to the re-check', async () => {
+    const pool = scriptedPool(statement =>
+      statement.text.includes('public.session_by_token') && sha256(TOKEN).equals(statement.values[0] as Buffer)
+        ? [
+            {
+              session_id: session(1).sessionId,
+              org_id: ORG,
+              user_id: session(1).userId,
+              device_id: session(1).deviceId,
+            },
+          ]
+        : [],
+    )
+    const sub = fakeSubscriber()
+    const subscriptions = new Subscriptions(sub.asRedis, pino({ level: 'silent' }))
+    const app = buildApp({ appOrigin: APP_ORIGIN, logger: pino({ level: 'silent' }), checks: {} })
+    const server = registerRealtime(app, {
+      appOrigin: APP_ORIGIN,
+      logger: pino({ level: 'silent' }),
+      db: pool.db,
+      subscriptions,
+      keyPrefix: 'it:unit:',
+    })
+    await app.listen({ host: '127.0.0.1', port: 0 })
+    try {
+      const { port } = app.server.address() as AddressInfo
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+        headers: { origin: APP_ORIGIN, cookie: `__Host-hearth_session=${TOKEN}` },
+      })
+      const closed = new Promise<number>(resolve => ws.once('close', code => resolve(code)))
+      await new Promise((resolve, reject) => {
+        ws.once('open', resolve)
+        ws.once('error', reject)
+      })
+      expect(sub.subscribe.mock.calls.map(([channel]) => channel)).toEqual(['it:unit:revoked', 'it:unit:access'])
+      const access = (message: object) => sub.events.emit('message', 'it:unit:access', JSON.stringify(message))
+      // People whose keys changed, another version's message, and another session: nothing closes.
+      access({ v: 1, org: ORG, path: 'durable', cause: 'keys_changed', people: [session(1).userId] })
+      access({ v: 2, org: ORG, path: 'durable', cause: 'sessions_ended', sessions: [session(1).sessionId] })
+      access({ v: 1, org: ORG, path: 'durable', cause: 'sessions_ended', sessions: [session(2).sessionId] })
+      await new Promise(resolve => setTimeout(resolve, 50))
+      expect(ws.readyState).toBe(WebSocket.OPEN)
+      // What the worker's sockets job publishes (revocation/registry.ts).
+      access({
+        v: 1,
+        org: ORG,
+        path: 'durable',
+        cause: 'sessions_ended',
+        at: Date.now() - 1000,
+        sessions: [session(1).sessionId],
+      })
+      expect(await closed).toBe(4401)
+      expect(server.counts().closedRevoked).toBe(1)
+    } finally {
+      await app.close()
+      await subscriptions.close()
+    }
+  })
+
   it('only an app built with the realtime role listens for upgrades; elsewhere Node treats one as a request', async () => {
     const plain = buildApp({ appOrigin: APP_ORIGIN, logger: pino({ level: 'silent' }), checks: {} })
     expect(plain.server.listenerCount('upgrade')).toBe(0)
