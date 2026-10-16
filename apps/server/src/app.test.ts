@@ -62,6 +62,41 @@ describe('C0.2 probes', () => {
   })
 })
 
+describe('C0.7 T19 item 12 P2: the local readiness, for the load balancer', () => {
+  it('P2: /ready/local runs only the local checks, so a shared dependency’s outage fails /ready but not it', async () => {
+    const instance = buildApp({
+      appOrigin: APP_ORIGIN,
+      logger: pino({ level: 'silent' }),
+      checks: { postgres: down, valkey: down },
+      localChecks: { local: ok },
+    })
+    const local = await instance.inject('/ready/local')
+    expect(local.statusCode).toBe(200)
+    expect(local.json()).toEqual({ status: 'ready', checks: { local: 'ok' } })
+    expect((await instance.inject('/ready')).statusCode).toBe(503)
+    const failing = buildApp({
+      appOrigin: APP_ORIGIN,
+      logger: pino({ level: 'silent' }),
+      checks: {},
+      localChecks: { local: down },
+    })
+    expect((await failing.inject('/ready/local')).json()).toEqual({ status: 'not ready', checks: { local: 'failed' } })
+  })
+
+  it('P2: /ready/local exists only when local checks are given; the realtime role gets the gateway’s in both, and no storage check of its own (main.ts)', async () => {
+    expect((await app().inject('/ready/local')).statusCode).toBe(404)
+    const realtime = buildApp({
+      appOrigin: APP_ORIGIN,
+      logger: pino({ level: 'silent' }),
+      checks: { postgres: ok, valkey: ok },
+      realtime: { db: {} as Database, keyPrefix: 'it:unit:' },
+    })
+    expect(Object.keys((await realtime.inject('/ready')).json().checks)).toEqual(['postgres', 'valkey', 'gateway'])
+    expect(Object.keys((await realtime.inject('/ready/local')).json().checks)).toEqual(['gateway_local'])
+    await realtime.close()
+  })
+})
+
 describe('C0.2 request logs', () => {
   it('never write a query string, which can carry a token or a phone number', async () => {
     const lines: string[] = []

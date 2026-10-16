@@ -49,11 +49,10 @@ import { JOB_POLICY, SCHEDULER_POLICY, WORKER_POLICY, type WorkerPolicy } from '
 import { createLogger } from '#src/logger.ts'
 import type { OutboxConsumer } from '#src/outbox/consumers.ts'
 import { Subscriptions } from '#src/pubsub.ts'
-import { registerRealtime } from '#src/realtime/index.ts'
-import type { SocketServer } from '#src/realtime/socket.ts'
+import { type Gateway, registerRealtime } from '#src/realtime/index.ts'
 import { MemorySms } from '#src/testing/sms.ts'
 import { installWriteTracking } from '#src/testing/writes.ts'
-import { closeValkey, createSubscriber, createValkey } from '#src/valkey.ts'
+import { closeValkey, createBlockingReader, createSubscriber, createValkey } from '#src/valkey.ts'
 import { CONTROL_POOL_SIZE, productionRegistries, startWorker, type Worker, workPoolSize } from '#src/worker/index.ts'
 
 // The app's origin in every test. Passkeys are bound to its host name, hearth.test.
@@ -189,7 +188,8 @@ export type Opened = { status: 101; ws: WebSocket; closed: Promise<Closed> } | {
 export interface RealtimeApp {
   app: FastifyInstance
   url: string
-  server: SocketServer
+  // The gateway: its counts and its readiness.
+  server: Gateway
 }
 
 // What every reply to a client looked like, for the sweeps.
@@ -499,10 +499,16 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       const app = buildApp({ appOrigin: APP_ORIGIN, logger: realtimeLogger, checks: {} })
       const flags = flagCache({ logger: realtimeLogger })
       const subscriptions = subscribe ? subscribed(valkey, flags, realtimeLogger) : undefined
+      // Its own blocking reader connection for the org streams, as main.ts makes one per process.
+      // Cut rather than quit when the app has stopped: a QUIT would wait behind the reader's XREAD.
+      const reader = createBlockingReader(valkey, realtimeLogger)
+      closers.push(async () => reader.disconnect())
       const server = registerRealtime(app, {
         appOrigin: APP_ORIGIN,
         logger: realtimeLogger,
         db,
+        valkey,
+        reader,
         keyPrefix: prefix,
         recheckMs,
         flags,
@@ -600,11 +606,15 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     const { app: api, flags: apiFlags } = await startApiOn(valkey, logger)
     const realtime = await startRealtimeApp(options.recheckMs ?? SOCKET_RECHECK_MS, true)
     // The realtime app subscribes to both revocation channels in the background; a revocation
-    // published before it has would be caught only by the re-check.
+    // published before it has would be caught only by the re-check. Its full readiness says when it
+    // listens on both (T19 item 12).
     for (let tries = 0; ; tries++) {
-      const reply = (await valkey.call('PUBSUB', 'NUMSUB', names.revoked, names.access)) as (string | number)[]
-      if (Number(reply[1]) >= 1 && Number(reply[3]) >= 1) break
-      if (tries > 250) throw new Error('the realtime app never subscribed to the revocation channels')
+      try {
+        await realtime.server.check(new AbortController().signal)
+        break
+      } catch (error) {
+        if (tries > 250) throw new Error('the realtime app never became ready', { cause: error })
+      }
       await new Promise(resolve => setTimeout(resolve, 20))
     }
 

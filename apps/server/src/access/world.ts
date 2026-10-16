@@ -1,7 +1,7 @@
 // How the server asks packages/access (Principle 1: every access check goes through can()). An
 // action re-reads the acting session in its own transaction, loads the facts C0.5's requests need
 // into a World, and lets can() decide, with the session's re-authentication as context.
-import { can, type Facts, type Request, World } from '@hearth/access'
+import { can, type Facts, type Request, type RoleFact, World } from '@hearth/access'
 import { sql } from 'kysely'
 import { ApiError } from '#src/auth/errors.ts'
 import { REAUTH, SESSION } from '#src/auth/policy.ts'
@@ -91,15 +91,61 @@ export async function loadWorld(trx: InOrg, orgId: string, options: { credential
           .where('org_id', '=', orgId)
           .where('user_id', '=', owner)
           .execute()
-  const facts: Facts = {
-    org: { id: orgId },
-    // Not stored until C0.16; the stricter value, which no C0.5 request reads.
-    settings: { publicCreation: 'admins' },
+  return worldOf(orgId, {
     people: people.map(p => ({ id: p.id, deactivatedAt: ms(p.deactivated_at) })),
     roles: roles.map(r => ({ personId: r.person_id, role: r.role, teamId: r.team_id, revokedAt: ms(r.revoked_at) })),
-    roleProposals: [],
     teams: teams.map(t => ({ id: t.id, archivedAt: ms(t.archived_at) })),
-    teamMembers: [],
+    devices: devices.map(d => ({ id: d.id, userId: d.user_id, signedOutAt: ms(d.signed_out_at) })),
+    passkeys: passkeys.map(k => ({ id: k.id, userId: k.user_id, removedAt: ms(k.removed_at) })),
+  })
+}
+
+// The facts the gateway's topic decisions need (TECH-SPEC T19 item 8, T13's loader obligations),
+// read in the caller's read-only transaction: for every person listed, their person row, every team
+// membership not removed and every role row not revoked, and every team of the org, so keysOf() is
+// exact for each of them. Nothing else is loaded, and can() is asked only about those people, and
+// only topic requests (realtime/topics.ts). No row is locked: teams and memberships are never
+// locked, so the lock order (CLAUDE.md, Database) is unchanged.
+export async function loadTopicWorld(trx: InOrg, orgId: string, people: readonly string[]): Promise<World> {
+  const ids = [...new Set(people)]
+  const { rows: persons } = await sql<{ id: string; deactivated_at: Date | null }>`
+    select id, deactivated_at from people where org_id = ${orgId} and id = any(${ids}::uuid[])`.execute(trx)
+  const { rows: members } = await sql<{ team_id: string; person_id: string; removed_at: Date | null }>`
+    select team_id, person_id, removed_at from team_memberships
+    where org_id = ${orgId} and person_id = any(${ids}::uuid[]) and removed_at is null`.execute(trx)
+  const { rows: roles } = await sql<{
+    person_id: string
+    role: RoleFact['role']
+    team_id: string | null
+    revoked_at: Date | null
+  }>`
+    select person_id, role, team_id, revoked_at from role_assignments
+    where org_id = ${orgId} and person_id = any(${ids}::uuid[]) and revoked_at is null`.execute(trx)
+  const { rows: teams } = await sql<{ id: string; archived_at: Date | null }>`
+    select id, archived_at from teams where org_id = ${orgId}`.execute(trx)
+  return worldOf(orgId, {
+    people: persons.map(p => ({ id: p.id, deactivatedAt: ms(p.deactivated_at) })),
+    roles: roles.map(r => ({ personId: r.person_id, role: r.role, teamId: r.team_id, revokedAt: ms(r.revoked_at) })),
+    teams: teams.map(t => ({ id: t.id, archivedAt: ms(t.archived_at) })),
+    teamMembers: members.map(m => ({ teamId: m.team_id, personId: m.person_id, removedAt: ms(m.removed_at) })),
+  })
+}
+
+// A World of these facts, every other one empty, and the settings the strictest, so a request the
+// loader didn't load for is refused, never wrongly allowed.
+function worldOf(
+  orgId: string,
+  facts: Pick<Facts, 'people' | 'roles' | 'teams'> & Partial<Pick<Facts, 'teamMembers' | 'devices' | 'passkeys'>>,
+): World {
+  return new World({
+    org: { id: orgId },
+    // Not stored until C0.16; the stricter value, which no C0.5 or C0.7 request reads.
+    settings: { publicCreation: 'admins' },
+    people: facts.people,
+    roles: facts.roles,
+    roleProposals: [],
+    teams: facts.teams,
+    teamMembers: facts.teamMembers ?? [],
     auditLogReaders: [],
     agents: [],
     assistants: [],
@@ -118,10 +164,9 @@ export async function loadWorld(trx: InOrg, orgId: string, options: { credential
     files: [],
     comments: [],
     derived: [],
-    devices: devices.map(d => ({ id: d.id, userId: d.user_id, signedOutAt: ms(d.signed_out_at) })),
-    passkeys: passkeys.map(k => ({ id: k.id, userId: k.user_id, removedAt: ms(k.removed_at) })),
-  }
-  return new World(facts)
+    devices: facts.devices ?? [],
+    passkeys: facts.passkeys ?? [],
+  })
 }
 
 export type Verdict = 'allowed' | 'reauth_required' | 'refused'

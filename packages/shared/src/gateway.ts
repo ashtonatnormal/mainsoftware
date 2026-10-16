@@ -87,6 +87,36 @@ export const GATEWAY_DROP_REASONS = ['access'] as const
 export const GATEWAY_NUDGES = ['flags'] as const
 export type GatewayNudge = (typeof GATEWAY_NUDGES)[number]
 
+// Every close the server sends (T19 item 10), and what the client does on it (the header's item 7).
+// A reason is at most 123 bytes, and every code is one ws sends and accepts. 1009 (a frame over
+// 4 KiB) and 1002 or 1007 (a protocol error) are ws's own, and 1006 is what a client sees for any
+// close it got no frame for, so a client never relies on seeing a particular code.
+export const GATEWAY_CLOSE = {
+  // The session ended, for any reason: go to sign-in, and never reconnect.
+  signedOut: { code: 4401, reason: 'signed_out' },
+  // The admission hook (C0.9) no longer admits the person: show the notice, and reconnect once it
+  // is acknowledged. Not a sign-out: nothing is wiped.
+  noticeRequired: { code: 4403, reason: 'notice_required' },
+  // The client's newest version is older than the server's: reload.
+  clientOutdated: { code: 4426, reason: 'client_outdated' },
+  // The session or a topic couldn't be confirmed in time, the org has no system principal, or the
+  // client is newer than this server (a deploy in progress): reconnect within the spread.
+  tryAgain: { code: 1013, reason: 'try again later' },
+  // The server is stopping (drain at SIGTERM): reconnect within the spread.
+  stopping: { code: 1001, reason: 'server stopping' },
+  // The send buffer stayed too full: reconnect within the spread, and resume with since.
+  tooSlow: { code: 4408, reason: 'too_slow' },
+  // No hello in time: reconnect within the spread, then back off as usual.
+  helloTimeout: { code: 1008, reason: 'hello_timeout' },
+  // Abuse or a bug in the client: back off from 30 s, and report.
+  badFrame: { code: 1008, reason: 'bad_frame' },
+  tooManyFrames: { code: 1008, reason: 'too_many_frames' },
+  tooManyTopics: { code: 1008, reason: 'too_many_topics' },
+  // A frame handler threw: reconnect within the spread, then back off.
+  internalError: { code: 1011, reason: 'internal_error' },
+} as const
+export type GatewayClose = keyof typeof GATEWAY_CLOSE
+
 // Client to server.
 
 const id = z.int().min(1).max(1_000_000)

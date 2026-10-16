@@ -477,13 +477,14 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
       quietAdmin.setCookie('__Host-hearth_session', adminClient.cookie('__Host-hearth_session') ?? '')
       const leaver = await s.person({ pin: s.newPin() })
       const socket = opened(await s.openSocket(await s.signIn(leaver)))
-      const before = s.realtime.server.counts().closedRevoked
+      const before = s.realtime.server.counts().closedDurable
       const started = Date.now()
       expect((await quietAdmin.post('/api/admin/people/deactivate', { person: leaver.id })).status).toBe(200)
       const closed = await Promise.race([socket.closed, sleep(10_000).then(() => undefined)])
       expect(closed, 'the socket stayed open for 10 s').toMatchObject({ code: 4401 })
       console.info(`deactivation to socket closed through the revocation consumer: ${(closed?.at ?? 0) - started} ms`)
-      expect(s.realtime.server.counts().closedRevoked).toBe(before + 1)
+      // Closed by the durable path, not the push (which is off) or the re-check (every 15 s).
+      expect(s.realtime.server.counts()).toMatchObject({ closedDurable: before + 1 })
       // The sockets job re-read the ended sessions and published them, then finished in a
       // transaction of its own; it names no subject, and is keyed by its first session.
       const ended = await sessionsOf(leaver)
@@ -550,7 +551,7 @@ describe('C0.6 T15 the job queue on the Compose stack: exactly once in effect', 
           cause: 'sessions_ended',
           at: expect.any(Number),
         })
-        expect(s.realtime.server.counts().closedRevoked).toBe(before + 1)
+        expect(s.realtime.server.counts().closedDurable).toBe(before + 1)
       } finally {
         listener.disconnect()
       }

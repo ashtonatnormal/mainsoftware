@@ -7,6 +7,7 @@ import {
   ClientFrame,
   Code,
   chooseVersion,
+  GATEWAY_CLOSE,
   GATEWAY_LIMITS,
   GATEWAY_TOPIC_KINDS,
   GATEWAY_VERSIONS,
@@ -373,5 +374,25 @@ describe('S7 T19 item 11: frames fit the limits', () => {
       expect(accepts(ClientFrame, sub)).toBe(true)
       expect(bytes(JSON.stringify(sub))).toBeLessThan(GATEWAY_LIMITS.maxFrameBytes)
     }
+  })
+})
+
+describe('GW-12 T19 item 10: close codes', () => {
+  it('GW-12: every close reason fits a close frame (123 bytes), and every code is one ws sends', () => {
+    // ws's isValidStatusCode (ws/lib/validation.js), RFC 6455 §7.4: 1000-1014 but for the three a
+    // close frame may never carry, and the 3000-4999 range for applications.
+    const sendable = (code: number) =>
+      (code >= 1000 && code <= 1014 && ![1004, 1005, 1006].includes(code)) || (code >= 3000 && code <= 4999)
+    for (const [name, { code, reason }] of Object.entries(GATEWAY_CLOSE)) {
+      expect(sendable(code), name).toBe(true)
+      expect(bytes(reason), name).toBeLessThanOrEqual(123)
+    }
+    // A sign-out, a notice and an outdated client each have a code of their own, so the client can
+    // act on them; the 1008 closes differ by reason only.
+    expect(GATEWAY_CLOSE.signedOut).toEqual({ code: 4401, reason: 'signed_out' })
+    const own = Object.values(GATEWAY_CLOSE)
+      .map(close => close.code)
+      .filter(code => code >= 4000)
+    expect(new Set(own)).toEqual(new Set([4401, 4403, 4408, 4426]))
   })
 })

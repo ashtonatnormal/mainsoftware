@@ -5,6 +5,7 @@ import { SOCKET_RECHECK_MS, SOCKET_REVOKE_MS } from '#src/auth/policy.ts'
 import { FLAG_READS_IN_FLIGHT } from '#src/flags/cache.ts'
 import { GATEWAY_POLICY, gatewayPolicy, reconnectSpreadMs } from '#src/realtime/policy.ts'
 import { CLOSE_GRACE_MS, LOOKUP_TIMEOUT_MS, MAX_FRAME_BYTES, RECHECK_TIMEOUT_MS } from '#src/realtime/socket.ts'
+import { TOPIC_KIND_SPECS } from '#src/realtime/topics.ts'
 import { LATENCY_ERROR_MS, LATENCY_SUMMARY_MS, LATENCY_WARN_MS } from '#src/revocation/latency.ts'
 
 const P = GATEWAY_POLICY
@@ -67,8 +68,11 @@ describe('C0.7 T19 the gateway’s numbers', () => {
     expect(Math.ceil(P.maxTopicsPerSocket / P.maxTopicsPerFrame) + 2).toBeLessThanOrEqual(P.frameBurst)
   })
 
-  it('T19 item 7: the topic kinds the protocol names are the ones packages/access decides', () => {
+  it('T19 item 7: the topic kinds the protocol names are the ones packages/access decides, and the gateway’s registry', () => {
     expect([...GATEWAY_TOPIC_KINDS]).toEqual([...TOPIC_KINDS])
+    expect(Object.keys(TOPIC_KIND_SPECS)).toEqual([...GATEWAY_TOPIC_KINDS])
+    // No kind needs a per-item check yet: the gateway runs none, so C1.1 adds it with its first.
+    expect(Object.values(TOPIC_KIND_SPECS).map(spec => spec.perItem)).toEqual([false, false, false])
   })
 
   it('T19 items 9 and 13: the stream, resume and latency numbers agree with each other and with revocation/latency.ts', () => {
