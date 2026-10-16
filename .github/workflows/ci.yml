@@ -160,7 +160,9 @@ jobs:
       # The catalogues in code match the database (C0.6): every write grant of every runtime role,
       # every function one can run and every SECURITY DEFINER and trigger function is covered by
       # an outbox event or a reasoned exemption (apps/server/src/outbox/coverage.ts), and the
-      # event catalogue, the flag registry and the worker's job roles equal 0007's lists.
+      # event catalogue, the flag registry and the worker's job roles equal 0007's and 0008's
+      # lists; from C0.7, every consumer the worker runs is bound in outbox_checkpoints_own_row()
+      # to exactly its role, and every bound name is one of them (0008).
       - run: node apps/server/scripts/check-catalogues.ts
       # The SQL access filter (sqlReadableBy, @hearth/access/sql) selects exactly what the
       # in-memory rule allows, for every person, both assistants and the system principal in the
@@ -176,8 +178,13 @@ jobs:
       # NNNN and checks the data survived. 0007 (C0.6) has no step of its own: it changes no
       # existing row and adds no rule to an existing table, and the two 0006 runs below apply it too
       # (with everything after 0006) on top of the seeded data, giving the seed's org its flags, and
-      # compare the result with the fresh build. 0008 (C0.7) adds a role and grants only, and the
-      # 0006 runs apply it over the seed too.
+      # compare the result with the fresh build. 0008 (C0.7) adds a role and its grants, replaces
+      # outbox_checkpoints_own_row() (the checkpoint trigger on an existing table) so it binds each
+      # consumer to its role, and checks the checkpoints already there against that binding; it
+      # changes no row. It has no step of its own either: the 0006 runs apply it over the seed too,
+      # which holds no checkpoint, so that check finds nothing there (and in production none can
+      # break the binding: before 0008 only the offboarding role could start a checkpoint, and
+      # C0.6's worker starts only its own).
       # 0006 (C0.5) on top of sessions and accounts 0005 allows, in its own scratch database: its
       # two new session rules mustn't fail on older rows, and its schema must match the fresh build
       # above (hearth_check) apart from the rule older rows leave NOT VALID. Once for each rule, so

@@ -35,7 +35,7 @@ import { SOCKET_RECHECK_MS } from '#src/auth/policy.ts'
 import { createLogger } from '#src/logger.ts'
 import type { CheckOrg } from '#src/realtime/checks.ts'
 import { GATEWAY_POLICY } from '#src/realtime/policy.ts'
-import { compareIds, grainOf, publishTopicEvent } from '#src/realtime/stream.ts'
+import { compareIds, grainStart, publishTopicEvent, TICK_ENTRY } from '#src/realtime/stream.ts'
 import { publishAccess } from '#src/revocation/channels.ts'
 import {
   type Client,
@@ -62,8 +62,21 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 // Long enough for the re-check a revocation message queues for the person's other sessions (100 ms
 // of coalescing, then the lane) to have run.
 const RECHECK_SETTLE_MS = GATEWAY_POLICY.targetedDelayMs + 400
-// A position as ack, pong and reset carry it: rounded down to its 25 s grain (T19 item 9).
-const grain = (pos: string) => grainOf({ epoch: '', pos }, GATEWAY_POLICY.positionGrainMs).pos
+// A position as ack, pong and reset carry it (T19 item 9): the start of the grain before the one the
+// reader set it in, so one grain (two, if a grain began since) before the current grain's start, in
+// the epoch given, and at or below the reader's position (an entry it had dispatched, if given).
+// Answers its pos.
+function reported(position: Position | null, epoch: string | undefined, dispatched?: string): string {
+  const grain = GATEWAY_POLICY.positionGrainMs
+  expect(position?.epoch).toBe(epoch)
+  const pos = String(position?.pos)
+  expect(pos).toMatch(/^\d+-0$/)
+  const ms = Number(pos.replace(/-0$/, ''))
+  expect(ms % grain).toBe(0)
+  expect([grain, 2 * grain]).toContain(grainStart(Date.now(), grain) - ms)
+  if (dispatched !== undefined) expect(compareIds(pos, dispatched)).toBeLessThanOrEqual(0)
+  return pos
+}
 // The ids after a position, in the order given.
 const after = (pos: string, ids: readonly string[]) => ids.filter(id => compareIds(id, pos) > 0)
 
@@ -745,7 +758,7 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     expect(bystander.all('ev')).toEqual([])
   })
 
-  it('GW-09 T19 item 9 P1: a client that reconnects to the other realtime process with since gets the missed events in order, then the ack, then live ones; a client that subscribed while the stream was empty (ack.pos 0-0) resumes after a publish from that pos; a quiet client resumes from its pong’s pos', async () => {
+  it('GW-09 T19 item 9 P1: a client that reconnects to the other realtime process with since gets the missed events in order, then the ack, then live ones; a client that subscribed before the org’s first event resumes after a publish from its ack’s pos; a quiet client resumes from its pong’s pos', async () => {
     const org = await s.newOrg()
     const a = await s.startRealtime({ recheckMs: SOCKET_RECHECK_MS, subscribe: true })
     const b = await s.startRealtime({ recheckMs: SOCKET_RECHECK_MS, subscribe: true })
@@ -772,11 +785,12 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
       return marker
     }
 
-    // The org's stream is empty: the ack's position is 0-0, and what is published after it is
-    // replayed.
+    // No event yet, only the readers' ticks: the ack carries the reported position, the grain
+    // before's start, and what is published after it is replayed.
     const empty = await s.gatewaySocket(browser, { url: a.url })
     const emptyAck = await empty.sub([personTopic(p)])
-    expect(emptyAck.pos).toEqual({ epoch: expect.stringMatching(UUID), pos: '0-0' })
+    expect(emptyAck.pos?.epoch).toMatch(UUID)
+    reported(emptyAck.pos, emptyAck.pos?.epoch)
     empty.ws.close()
     await empty.closed
     const missedFirst = await publish(org.id, personTopic(p))
@@ -784,18 +798,20 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     const afterEmpty = await s.gatewaySocket(browser, { url: b.url })
     const resumedEmpty = await afterEmpty.sub([personTopic(p)], emptyAck.pos as Position)
     expect(resumedEmpty).toMatchObject({ ok: [personTopic(p)], reset: [], refused: [] })
-    expect(afterEmpty.frames.map(frame => [frame.t, frame.pos])).toEqual([
+    expect(afterEmpty.frames.map(frame => [frame.t, frame.t === 'ev' ? frame.pos : undefined])).toEqual([
       ['welcome', undefined],
       ['ev', missedFirst],
-      ['ack', { epoch: emptyAck.pos?.epoch, pos: grain(marker) }],
+      ['ack', undefined],
     ])
+    reported(resumedEmpty.pos, emptyAck.pos?.epoch, marker)
     afterEmpty.ws.close()
     await afterEmpty.closed
 
     // Away on A, back on B: the missed events in order, then the ack, then live ones.
     const away = await s.gatewaySocket(browser, { url: a.url })
     const awayAck = await away.sub(topics)
-    expect(awayAck).toMatchObject({ ok: topics, pos: { epoch: emptyAck.pos?.epoch, pos: grain(marker) } })
+    expect(awayAck).toMatchObject({ ok: topics })
+    reported(awayAck.pos, emptyAck.pos?.epoch)
     away.ws.close()
     await away.closed
     const missed = [
@@ -807,10 +823,11 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     marker = await settle()
     const back = await s.gatewaySocket(browser, { url: b.url })
     const backAck = await back.sub(topics, awayAck.pos as Position)
-    expect(backAck).toMatchObject({ ok: topics, reset: [], refused: [], retry: [], pos: { pos: grain(marker) } })
+    expect(backAck).toMatchObject({ ok: topics, reset: [], refused: [], retry: [] })
+    reported(backAck.pos, emptyAck.pos?.epoch, marker)
     const live = await publish(org.id, personTopic(p))
-    // Its own topics' entries after since, which is in its grain, so an entry already seen in the
-    // same grain comes again (the client drops it as at or below its topic's position).
+    // Its own topics' entries after since, the grain before's start, so an entry already seen after
+    // it comes again (the client drops it as at or below its topic's position).
     const replayed = after(String(awayAck.pos?.pos), [missedFirst, missed[0], missed[2], missed[3]] as string[])
     expect(replayed.slice(-3)).toEqual([missed[0], missed[2], missed[3]])
     for (const id of [...replayed, live]) expect(await back.next('ev')).toMatchObject({ pos: id })
@@ -830,17 +847,52 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     marker = await settle()
     quietClient.send({ v: 1, t: 'ping' })
     const pong = await quietClient.next('pong')
-    expect(pong.pos).toEqual({ epoch: awayAck.pos?.epoch, pos: grain(marker) })
+    const told = reported(pong.pos, awayAck.pos?.epoch, marker)
     quietClient.ws.close()
     await quietClient.closed
     const later = await publish(org.id, personTopic(p))
     await settle()
     const resumed = await s.gatewaySocket(browser, { url: b.url })
     expect(await resumed.sub([personTopic(p)], pong.pos as Position)).toMatchObject({ ok: [personTopic(p)], reset: [] })
-    const mine = after(grain(marker), [missedFirst, missed[2], live, later] as string[])
+    const mine = after(told, [missedFirst, missed[2], live, later] as string[])
     expect(mine.at(-1)).toBe(later)
     expect(resumed.all('ev').map(frame => frame.pos)).toEqual(mine)
     expect(b.server.counts().resume.resumed).toBeGreaterThanOrEqual(4)
+  })
+
+  it('T19 item 9: each realtime process writes a tick at every grain’s start (TICK on Valkey); an event on a person topic the socket was refused, published mid-grain, moves neither pong’s nor an unsub’s ack’s position, which at the next grain’s start move to the grain before’s start, as with no event', async () => {
+    const grain = 1000
+    const org = await s.newOrg()
+    const app = await s.startRealtime({
+      recheckMs: SOCKET_RECHECK_MS,
+      subscribe: false,
+      policy: { positionGrainMs: grain },
+    })
+    const [p, other] = [await s.person({ org, pin: s.newPin() }), await s.person({ org, pin: s.newPin() })]
+    const socket = await s.gatewaySocket(await s.signIn(p), { url: app.url })
+    expect((await socket.sub([personTopic(p)])).ok).toEqual([personTopic(p)])
+    expect((await socket.sub([personTopic(other)])).refused).toEqual([personTopic(other)])
+    const told = async () => {
+      socket.send({ v: 1, t: 'ping' })
+      const pong = (await socket.next('pong')).pos as Position
+      expect((await socket.unsub([orgTopic(org.id)])).pos).toEqual(pong)
+      return pong.pos
+    }
+    // A moment into a grain: the stream holds this grain's tick, at its start, as its last entry.
+    await sleep(grain - (Date.now() % grain) + 150)
+    const begun = grainStart(Date.now(), grain)
+    const [[tickId, fields] = []] = await s.valkey.xrevrange(s.names.stream(org.id), '+', '-', 'COUNT', 1)
+    expect([tickId, fields]).toEqual([`${begun}-0`, ['f', TICK_ENTRY]])
+    expect(await told()).toBe(`${begun - grain}-0`)
+    const id = await publish(org.id, personTopic(other))
+    // Long enough for the reader to have dispatched it, and still the same grain.
+    await sleep(100)
+    expect(await told()).toBe(`${begun - grain}-0`)
+    expect(grainStart(Date.now(), grain)).toBe(begun)
+    await sleep(begun + grain - Date.now() + 150)
+    expect(await told()).toBe(`${begun}-0`)
+    expect(socket.all('ev')).toEqual([])
+    expect(JSON.stringify(socket.frames)).not.toContain(id)
   })
 
   it('GW-09: since beyond the window, after the epoch changed (key deleted) or after trimming (XTRIM MAXLEN 3) answers reset for those topics', async () => {
@@ -943,7 +995,8 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     const backAck = await back.sub(topics, ack.pos as Position)
     expect(backAck).toMatchObject({ ok: [personTopic(p)], refused: [teamTopic(left)], reset: [teamTopic(rejoined)] })
     // Only the person topic's events were replayed, before the ack; nothing of either team's. since
-    // is in its grain, so the event before the sub comes again if it fell in the same grain.
+    // is the reported position, the grain before's start, so the event before the sub comes again
+    // if it fell after that.
     const replayed = after(String(ack.pos?.pos), [earlier, mine] as string[])
     expect(replayed.at(-1)).toBe(mine)
     expect(back.frames.map(frame => [frame.t, frame.t === 'ev' ? frame.topic : undefined])).toEqual([

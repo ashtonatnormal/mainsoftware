@@ -1,7 +1,7 @@
 import { type Position, ServerFrame } from '@hearth/shared'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
-import { GATEWAY_POLICY, gatewayPolicy } from '#src/realtime/policy.ts'
+import { GATEWAY_POLICY, gatewayPolicy, sinceMaxAgeMs } from '#src/realtime/policy.ts'
 import {
   compareIds,
   evFrame,
@@ -11,8 +11,11 @@ import {
   publishTopicEvent,
   ReplayQueue,
   type ResumeRequest,
+  reportedAt,
   StreamReader,
   type StreamTarget,
+  TICK,
+  TICK_ENTRY,
   type TopicHold,
 } from '#src/realtime/stream.ts'
 import { captureLogger } from '#src/testing/logs.ts'
@@ -29,7 +32,12 @@ const PREFIX = 'it:unit:'
 const keys = valkeyKeys(PREFIX)
 const STREAM = keys.stream(ORG)
 const EPOCH_KEY = keys.epoch(ORG)
+// The start of a grain (a whole number of 25 s), so the reader's first read at T0 writes the tick
+// T0-0 and reports the grain before's start.
 const T0 = 1_800_000_000_000
+const GRAIN = GATEWAY_POLICY.positionGrainMs
+const TICK0 = `${T0}-0`
+const BEFORE0 = `${T0 - GRAIN}-0`
 
 const personTopic = `person:${PERSON}`
 const otherPersonTopic = `person:${OTHER_PERSON}`
@@ -236,15 +244,19 @@ describe('C0.7 T19 item 9 the producer, publishTopicEvent()', () => {
 })
 
 describe('C0.7 T19 item 9 the stream reader', () => {
-  it('GW-10: reads an org’s tail at first (SET NX, then XREVRANGE), keeping an epoch that is there, and 0-0 for no stream', async () => {
+  it('GW-10 T19 item 9: at first appends the grain’s tick and reads the tail after it (SET NX, then TICK), keeping an epoch that is there; the reported position is the grain before’s start; with no stream the tick makes one', async () => {
     const { valkey, g, reader } = setup()
     valkey.strings.set(EPOCH_KEY, EPOCH)
     valkey.add(STREAM, entry(personTopic), T0 - 5000)
-    const last = valkey.add(STREAM, entry(personTopic), T0 - 4000)
+    valkey.add(STREAM, entry(personTopic), T0 - 4000)
     g.open(ORG)
     expect(reader.current(ORG)).toBeNull()
-    expect(await reader.position(ORG)).toEqual({ epoch: EPOCH, pos: last })
-    expect(reader.current(ORG)).toEqual({ epoch: EPOCH, pos: last })
+    expect(reader.reported(ORG)).toBeNull()
+    // The tick at the current grain's start goes after the tail, and the reader starts from it.
+    expect(await reader.position(ORG)).toEqual({ epoch: EPOCH, pos: TICK0 })
+    expect(reader.current(ORG)).toEqual({ epoch: EPOCH, pos: TICK0 })
+    expect(reader.reported(ORG)).toEqual({ epoch: EPOCH, pos: BEFORE0 })
+    expect(valkey.streams.get(STREAM)?.entries.at(-1)).toEqual([TICK0, ['f', TICK_ENTRY]])
     expect(valkey.client.set).toHaveBeenCalledWith(
       EPOCH_KEY,
       expect.any(String),
@@ -252,17 +264,41 @@ describe('C0.7 T19 item 9 the stream reader', () => {
       GATEWAY_POLICY.streamTtlMs,
       'NX',
     )
-    expect(valkey.client.xrevrange).toHaveBeenCalledWith(STREAM, '+', '-', 'COUNT', 1)
+    expect(valkey.client.eval).toHaveBeenCalledWith(
+      TICK.lua,
+      2,
+      STREAM,
+      EPOCH_KEY,
+      T0,
+      GATEWAY_POLICY.streamMaxLen,
+      GATEWAY_POLICY.streamTtlMs,
+      expect.any(String),
+      TICK_ENTRY,
+    )
     // Asked again, the tail isn't read again.
+    const scripts = () => valkey.client.evalsha.mock.calls.length + valkey.client.eval.mock.calls.length
+    const before = scripts()
     await reader.position(ORG)
-    expect(valkey.client.xrevrange).toHaveBeenCalledTimes(1)
+    expect(scripts()).toBe(before)
 
-    // An org with no stream and no epoch: one is made, and the position is 0-0.
+    // An org with no stream and no epoch: one is made, the tick makes the stream, and the position
+    // is the tick.
     g.open(OTHER_ORG)
     const position = await reader.position(OTHER_ORG)
-    expect(position?.pos).toBe('0-0')
+    expect(position?.pos).toBe(TICK0)
     expect(position?.epoch).toBe(valkey.strings.get(keys.epoch(OTHER_ORG)))
+    expect(reader.reported(OTHER_ORG)).toEqual({ epoch: position?.epoch, pos: BEFORE0 })
     expect(valkey.ttls.get(keys.epoch(OTHER_ORG))).toBe(GATEWAY_POLICY.streamTtlMs)
+    expect(valkey.ttls.get(keys.stream(OTHER_ORG))).toBe(GATEWAY_POLICY.streamTtlMs)
+
+    // An entry already at or after the grain's start (Valkey's clock a little ahead): no tick, the
+    // reader starts from that entry, and the reported position is the same.
+    const third = 'a0000000-0000-4000-8000-000000000003'
+    const ahead = valkey.add(keys.stream(third), entry(`org:${third}`), T0 + 3000)
+    g.open(third)
+    expect((await reader.position(third))?.pos).toBe(ahead)
+    expect(reader.reported(third)?.pos).toBe(BEFORE0)
+    expect(valkey.streams.get(keys.stream(third))?.entries.map(([id]) => id)).toEqual([ahead])
   })
 
   it('GW-10 §5.5: dispatches each entry to the sockets holding its topic live, holds it for replaying ones (at most 500), and current() follows', async () => {
@@ -275,7 +311,8 @@ describe('C0.7 T19 item 9 the stream reader', () => {
     reader.start()
     await run()
     const start = reader.current(ORG)
-    expect(start?.pos).toBe('0-0')
+    // The first read's tick, which no socket is sent.
+    expect(start?.pos).toBe(TICK0)
 
     const id = valkey.add(STREAM, entry(personTopic, { item: ITEM, count: 2 }))
     await run()
@@ -303,6 +340,69 @@ describe('C0.7 T19 item 9 the stream reader', () => {
     expect(replaying.topics.get(personTopic)).toMatchObject({ state: 'replaying', overflowed: true, held: [] })
     expect(sentEvs(live).map(ev => ev.pos)).toEqual([id, ...ids])
     expect(reader.current(ORG)?.pos).toBe(ids.at(-1))
+  })
+
+  it('T19 item 9: the reported position moves only at a grain’s start, to the grain before’s start, for a busy org and a quiet one alike; each grain’s tick reaches the stream and no socket, and isn’t counted as skipped', async () => {
+    const { valkey, g, reader } = setup()
+    const busy = g.open(ORG, { [personTopic]: 'live', [otherPersonTopic]: 'live' })
+    g.open(OTHER_ORG, { [`org:${OTHER_ORG}`]: 'live' })
+    reader.start()
+    await run()
+    const reported = () => [reader.reported(ORG)?.pos, reader.reported(OTHER_ORG)?.pos]
+    expect(reported()).toEqual([BEFORE0, BEFORE0])
+    // Mid-grain, events on the busy org's stream: its reader's position moves, its reported one
+    // doesn't.
+    await run(10_000)
+    const events = [valkey.add(STREAM, entry(otherPersonTopic)), valkey.add(STREAM, entry(personTopic))]
+    await run()
+    expect(reader.current(ORG)?.pos).toBe(events[1])
+    expect(reported()).toEqual([BEFORE0, BEFORE0])
+    await run(GRAIN - 10_000 - 1)
+    expect(reported()).toEqual([BEFORE0, BEFORE0])
+    // The next grain's start: both move to the start of the grain that just ended, and each stream
+    // gets the new grain's tick, which the reader reads and sends to nobody.
+    await run(1)
+    expect(reported()).toEqual([TICK0, TICK0])
+    const tick1 = `${T0 + GRAIN}-0`
+    for (const org of [ORG, OTHER_ORG]) {
+      expect(valkey.streams.get(keys.stream(org))?.entries.at(-1)).toEqual([tick1, ['f', TICK_ENTRY]])
+      expect(reader.current(org)?.pos).toBe(tick1)
+    }
+    // A grain with no events: the same step.
+    await run(GRAIN)
+    expect(reported()).toEqual([tick1, tick1])
+    expect(sentEvs(busy).map(ev => ev.pos)).toEqual(events)
+    expect(reader.stats().skipped).toBe(0)
+    // The same as reportedAt gives at each start, from what the reader had dispatched.
+    expect(reportedAt(events[1] as string, T0 + GRAIN, GRAIN)).toBe(TICK0)
+    expect(reportedAt(TICK0, T0 + GRAIN, GRAIN)).toBe(TICK0)
+  })
+
+  it('T19 item 9: while no tick can be written, the reported position falls back to the reader’s own in its grain, and still moves only at a grain’s start', async () => {
+    const { valkey, g, reader, log } = setup()
+    g.open(ORG, { [personTopic]: 'live' })
+    reader.start()
+    await run()
+    expect(reader.reported(ORG)?.pos).toBe(BEFORE0)
+    // From here every script call fails (a replica that refuses writes, say).
+    valkey.client.evalsha.mockRejectedValue(new Error('READONLY You can’t write against a read only replica.'))
+    // T0 + 1 grain: the first read's tick is the grain before's entry. Its own tick fails.
+    await run(GRAIN)
+    expect(reader.reported(ORG)?.pos).toBe(TICK0)
+    expect(log.events('stream_reader_failed').map(line => line.step)).toEqual(['tick'])
+    // T0 + 2 grains: nothing dispatched since T0 + 1 grain, so it stays at the reader's own grain.
+    await run(GRAIN)
+    expect(reader.reported(ORG)?.pos).toBe(TICK0)
+    // An event mid-grain doesn't move it; the next grain's start does, to that grain's start.
+    await run(5000)
+    valkey.add(STREAM, entry(otherPersonTopic))
+    await run()
+    expect(reader.reported(ORG)?.pos).toBe(TICK0)
+    await run(GRAIN - 5000)
+    expect(reader.reported(ORG)?.pos).toBe(`${T0 + 2 * GRAIN}-0`)
+    // reportedAt's fallback: the position in its grain, once nothing at or after the grain before's
+    // start has been dispatched.
+    expect(reportedAt(`${T0 + 3000}-4`, T0 + 3 * GRAIN, GRAIN)).toBe(TICK0)
   })
 
   it('§5.3: skips an entry of another version or kind, or one that isn’t JSON, counting it and moving past it', async () => {
@@ -345,8 +445,11 @@ describe('C0.7 T19 item 9 the stream reader', () => {
     expect(orgId).toBe(ORG)
     expect(position?.epoch).not.toBe(before?.epoch)
     expect(position?.epoch).toBe(valkey.strings.get(EPOCH_KEY))
-    expect(position?.pos).toBe('0-0')
-    expect(reader.current(ORG)).toEqual(position)
+    // The reset carries the reported position (T19 item 9); the reader continues from the tick it
+    // wrote into the new stream.
+    expect(position?.pos).toBe(BEFORE0)
+    expect(reader.reported(ORG)).toEqual(position)
+    expect(reader.current(ORG)).toEqual({ epoch: position?.epoch, pos: TICK0 })
     expect(log.events('stream_reset').map(line => [line.org, line.reason])).toEqual([[ORG, 'epoch']])
     // The new stream's entries are read from the start.
     const id = valkey.add(STREAM, entry(personTopic), T0)
@@ -369,7 +472,10 @@ describe('C0.7 T19 item 9 the stream reader', () => {
     await run(GATEWAY_POLICY.readerRetryMs)
     expect(log.events('stream_reset').map(line => line.reason)).toEqual(['trimmed'])
     const last = valkey.streams.get(STREAM)?.entries.at(-1)?.[0]
-    expect(g.resets.map(([, position]) => position.pos)).toEqual([last])
+    // An entry at or after the grain's start is there, so no tick: the reader continues from the
+    // stream's last entry, and the reset carries the reported position.
+    expect(reader.current(ORG)?.pos).toBe(last)
+    expect(g.resets.map(([, position]) => position.pos)).toEqual([BEFORE0])
     expect(compareIds(last as string, at)).toBe(1)
     // Nothing from the trimmed stretch was sent as though it were whole.
     expect(live.sent).toEqual([])
@@ -380,14 +486,15 @@ describe('C0.7 T19 item 9 the stream reader', () => {
     g.open(ORG, { [personTopic]: 'live' })
     reader.start()
     await run()
-    valkey.add(STREAM, entry(personTopic), T0 - 3000)
-    valkey.add(STREAM, entry(personTopic), T0 - 2000)
+    const kept = valkey.add(STREAM, entry(personTopic), T0 + 1000)
+    valkey.add(STREAM, entry(personTopic), T0 + 2000)
     await run()
     // A failover lost the newest entry.
     valkey.loseTail(STREAM, 1)
     await run(GATEWAY_POLICY.readerEpochCheckMs + GATEWAY_POLICY.readerBlockMs)
     expect(log.events('stream_reset').map(line => line.reason)).toEqual(['tail_lost'])
-    expect(g.resets.map(([, position]) => position.pos)).toEqual([`${T0 - 3000}-0`])
+    expect(reader.current(ORG)?.pos).toBe(kept)
+    expect(g.resets.map(([, position]) => position.pos)).toEqual([BEFORE0])
 
     // The stream expired, but its epoch is the same: nothing was written after the reader's
     // position, so it isn't a gap.
@@ -401,8 +508,8 @@ describe('C0.7 T19 item 9 the stream reader', () => {
     g.open(ORG, { [personTopic]: 'live' })
     reader.start()
     await run()
-    valkey.add(STREAM, entry(personTopic), T0 - 3000)
-    valkey.add(STREAM, entry(personTopic), T0 - 2000)
+    const kept = valkey.add(STREAM, entry(personTopic), T0 + 1000)
+    valkey.add(STREAM, entry(personTopic), T0 + 2000)
     await run()
     const before = reader.current(ORG) as Position
     // The failover: the reader's connection drops, the replica lacked the newest entry, and a
@@ -414,13 +521,13 @@ describe('C0.7 T19 item 9 the stream reader', () => {
     await run(GATEWAY_POLICY.readerRetryMs)
     expect(log.events('stream_reset').map(line => line.reason)).toEqual(['tail_lost'])
     const [[, position] = []] = g.resets
-    expect(position?.pos).toBe(appended)
+    expect(position?.pos).toBe(BEFORE0)
     expect(position?.epoch).not.toBe(before.epoch)
     expect(valkey.strings.get(EPOCH_KEY)).toBe(position?.epoch)
-    expect(reader.current(ORG)).toEqual(position)
+    expect(reader.current(ORG)).toEqual({ epoch: position?.epoch, pos: appended })
     // A client away since before the loss now resets, rather than resuming past the lost entry.
     const away: ResumeRequest = {
-      since: { epoch: before.epoch, pos: `${T0 - 3000}-0` },
+      since: { epoch: before.epoch, pos: kept },
       topics: [personTopic],
       eras: new Map(),
     }
@@ -433,8 +540,8 @@ describe('C0.7 T19 item 9 the stream reader', () => {
     const live = g.open(ORG, { [personTopic]: 'live' })
     reader.start()
     await run()
-    valkey.add(STREAM, entry(personTopic), T0 - 3000)
-    valkey.add(STREAM, entry(personTopic), T0 - 2000)
+    valkey.add(STREAM, entry(personTopic), T0 + 1000)
+    valkey.add(STREAM, entry(personTopic), T0 + 2000)
     await run()
     expect(live.sent).toHaveLength(2)
     valkey.fail('xread')
@@ -516,7 +623,8 @@ describe('C0.7 T19 item 9 the stream reader', () => {
     g.open(ORG, { [personTopic]: 'live' })
     valkey.fail('set')
     expect(await reader.position(ORG)).toBeNull()
-    valkey.fail('xrevrange')
+    // The tick's script, which reads the tail.
+    valkey.fail('evalsha')
     expect(await reader.position(ORG)).toBeNull()
     valkey.fail('get')
     expect(await reader.position(ORG)).toBeNull()
@@ -525,7 +633,8 @@ describe('C0.7 T19 item 9 the stream reader', () => {
       [40, 'init', 2],
       [50, 'init', 3],
     ])
-    expect((await reader.position(ORG))?.pos).toBe('0-0')
+    expect((await reader.position(ORG))?.pos).toBe(TICK0)
+    expect(reader.reported(ORG)?.pos).toBe(BEFORE0)
     // No id or value in the lines.
     expect(JSON.stringify(log.lines)).not.toContain(PERSON)
   })
@@ -582,36 +691,34 @@ describe('C0.7 T19 item 9 GW-09 P1 resume decisions, planResume()', () => {
   const plan = (s: ReturnType<typeof stream>, r: ResumeRequest, current: Position | null = s.current) =>
     planResume(s.valkey.asClient, STREAM, r, current, { now: NOW })
 
-  it('an hour-old since on a quiet stream resumes with nothing to replay', async () => {
-    const s = stream([[3_600_000, personTopic]])
-    const result = await plan(s, request(s.ids[0] as string))
-    expect([...result.outcomes]).toEqual([[personTopic, 'resumed']])
-    expect(result.frames).toEqual([])
+  it('T19 item 9: a since within 205 s on a quiet stream resumes with nothing to replay; an older one resets (reset_window) before the stream is read, whatever it holds', async () => {
+    const s = stream([
+      [3_600_000, personTopic],
+      [100_000, otherPersonTopic],
+    ])
+    expect(sinceMaxAgeMs()).toBe(205_000)
+    const recent = await plan(s, request(`${NOW - 205_000}-0`))
+    expect([...recent.outcomes]).toEqual([[personTopic, 'resumed']])
+    expect(recent.frames).toEqual([])
+    const reads = () => s.valkey.client.xrange.mock.calls.length + s.valkey.client.xinfo.mock.calls.length
+    const before = reads()
+    for (const since of [`${NOW - 205_001}-0`, s.ids[0] as string]) {
+      expect([...(await plan(s, request(since))).outcomes]).toEqual([[personTopic, 'reset_window']])
+    }
+    expect(reads()).toBe(before)
   })
 
-  it('0-0 on an absent stream resumes; with untrimmed entries it replays them; after trimming it resets', async () => {
+  it('T19 item 9: 0-0, older than any position a client is told, resets (reset_window) on an absent, a whole or a trimmed stream alike', async () => {
     const absent = stream([])
-    expect([...(await plan(absent, request('0-0'))).outcomes]).toEqual([[personTopic, 'resumed']])
-
+    expect([...(await plan(absent, request('0-0'))).outcomes]).toEqual([[personTopic, 'reset_window']])
     const whole = stream([
       [3000, personTopic],
       [2000, orgTopic],
       [1000, personTopic],
     ])
-    const replayed = await plan(whole, request('0-0'))
-    expect([...replayed.outcomes]).toEqual([[personTopic, 'resumed']])
-    expect(replayed.frames.map(frame => frame.id)).toEqual([whole.ids[0], whole.ids[2]])
-    expect(JSON.parse(replayed.frames[0]?.text as string)).toEqual({
-      v: 1,
-      t: 'ev',
-      topic: personTopic,
-      pos: whole.ids[0],
-      type: 'inbox.changed',
-      ids: { item: ITEM },
-    })
-
+    expect([...(await plan(whole, request('0-0'))).outcomes]).toEqual([[personTopic, 'reset_window']])
     whole.valkey.trim(STREAM, 2)
-    expect([...(await plan(whole, request('0-0'))).outcomes]).toEqual([[personTopic, 'reset_trimmed']])
+    expect([...(await plan(whole, request('0-0'))).outcomes]).toEqual([[personTopic, 'reset_window']])
   })
 
   it('a real id at or above the stream’s first entry resumes, and one below it resets', async () => {
@@ -673,20 +780,90 @@ describe('C0.7 T19 item 9 GW-09 P1 resume decisions, planResume()', () => {
     expect([...(await plan(stream([]), request(below))).outcomes]).toEqual([[personTopic, 'reset_trimmed']])
   })
 
-  it('1,001 entries scanned, or 501 matching, reset (too long); 1,000 and 500 replay', async () => {
-    const scanned = stream(Array.from({ length: 1002 }, (_, n) => [10_000 - n, orgTopic] as [number, string]))
-    const from = scanned.ids[0] as string
-    expect([...(await plan(scanned, request(from))).outcomes]).toEqual([[personTopic, 'reset_long']])
-    const thousand = { ...scanned, current: { epoch: EPOCH, pos: scanned.ids[1000] as string } }
-    expect([...(await plan(thousand, request(from))).outcomes]).toEqual([[personTopic, 'resumed']])
+  it('T19 item 9: other topics’ entries never count: 2,500 of them after since resume, read 1,000 at a time; 501 of the resumed topics’ own reset (too long), and 500 replay', async () => {
+    const others = Array.from({ length: 2500 }, (_, n) => [10_000 - n, otherPersonTopic] as [number, string])
+    const many = stream([...others, [5000, personTopic]])
+    const replayed = await plan(many, request(many.ids[0] as string))
+    expect([...replayed.outcomes]).toEqual([[personTopic, 'resumed']])
+    expect(replayed.frames.map(frame => frame.id)).toEqual([many.ids.at(-1)])
+    const pages = many.valkey.client.xrange.mock.calls.filter(([, start]) => String(start).startsWith('('))
+    expect(pages.map(call => call.at(-1))).toEqual([1000, 1000, 1000])
 
     const matching = stream(Array.from({ length: 502 }, (_, n) => [10_000 - n, personTopic] as [number, string]))
     const first = matching.ids[0] as string
     expect([...(await plan(matching, request(first))).outcomes]).toEqual([[personTopic, 'reset_long']])
     const fiveHundred = { ...matching, current: { epoch: EPOCH, pos: matching.ids[500] as string } }
-    const replayed = await plan(fiveHundred, request(first))
-    expect([...replayed.outcomes]).toEqual([[personTopic, 'resumed']])
-    expect(replayed.frames).toHaveLength(500)
+    const sent = await plan(fiveHundred, request(first))
+    expect([...sent.outcomes]).toEqual([[personTopic, 'resumed']])
+    expect(sent.frames).toHaveLength(500)
+  })
+
+  it('T19 item 9: only a stream far past its cap stops the scan: more than replayScanMax entries after since reset (reset_long), exactly that many resume', async () => {
+    const policy = gatewayPolicy({ streamMaxLen: 10, replayScanMax: 20, replayScanPage: 5 })
+    const entries = (count: number) =>
+      stream([...Array.from({ length: count }, (_, n) => [10_000 - n, orgTopic] as [number, string]), [1, personTopic]])
+    const over = entries(21)
+    const result = await planResume(over.valkey.asClient, STREAM, request(over.ids[0] as string), over.current, {
+      now: NOW,
+      policy,
+    })
+    expect([...result.outcomes]).toEqual([[personTopic, 'reset_long']])
+    // 20 entries in pages of 5 after since, then one more: the 21st.
+    const counts = over.valkey.client.xrange.mock.calls.map(call => call.at(-1))
+    expect(counts.slice(-5)).toEqual([5, 5, 5, 5, 1])
+    const within = entries(20)
+    const kept = await planResume(within.valkey.asClient, STREAM, request(within.ids[0] as string), within.current, {
+      now: NOW,
+      policy,
+    })
+    expect([...kept.outcomes]).toEqual([[personTopic, 'resumed']])
+    expect(kept.frames.map(frame => frame.id)).toEqual([within.ids.at(-1)])
+  })
+
+  it('T19 item 9: a since probe’s outcome doesn’t change when other topics’ entries are added: a replay, a plain resume, reset_long and both kinds of reset_window answer the same, frames and all, with 3,000 of them in between', async () => {
+    // The resumed topics' own entries, at times no other entry shares: the person topic's at whole
+    // seconds, the org topic's 501 at whole 10 ms; the other topics' 3,000 at 3 ms past 80 ms steps.
+    const own: [number, string][] = [
+      [150_000, personTopic],
+      [90_000, personTopic],
+      [30_000, personTopic],
+      ...Array.from({ length: 501 }, (_, n) => [50_000 - n * 10, orgTopic] as [number, string]),
+    ]
+    const others = Array.from(
+      { length: 3000 },
+      (_, n) => [250_003 - n * 80, n % 2 === 0 ? otherPersonTopic : teamTopic] as [number, string],
+    )
+    const byAge = (entries: [number, string][]) => [...entries].sort(([a], [b]) => b - a)
+    const alone = stream(byAge(own))
+    const crowded = stream(byAge([...own, ...others]))
+    const ago = (ms: number) => `${NOW - ms}-0`
+    const probes: [string, ResumeRequest][] = [
+      ['a replay', request(ago(100_000))],
+      ['a plain resume', request(ago(20_000))],
+      ['too long', request(ago(60_000), [orgTopic])],
+      ['an own entry past the window', request(ago(200_000))],
+      ['since past 205 s', request(ago(300_000))],
+    ]
+    const answers = async (s: ReturnType<typeof stream>) =>
+      Promise.all(
+        probes.map(async ([name, r]) => {
+          const result = await planResume(s.valkey.asClient, STREAM, r, s.current, { now: NOW })
+          return [name, [...result.outcomes], result.frames.map(frame => [frame.id, frame.text])]
+        }),
+      )
+    const expected = await answers(alone)
+    expect(expected.map(([name, outcomes]) => [name, outcomes])).toEqual([
+      ['a replay', [[personTopic, 'resumed']]],
+      ['a plain resume', [[personTopic, 'resumed']]],
+      ['too long', [[orgTopic, 'reset_long']]],
+      ['an own entry past the window', [[personTopic, 'reset_window']]],
+      ['since past 205 s', [[personTopic, 'reset_window']]],
+    ])
+    expect(expected[0]?.[2]).toEqual([
+      [ago(90_000), evFrame(personTopic, ago(90_000), 'inbox.changed', { item: ITEM })],
+      [ago(30_000), evFrame(personTopic, ago(30_000), 'inbox.changed', { item: ITEM })],
+    ])
+    expect(await answers(crowded)).toEqual(expected)
   })
 
   it('since past the position (seen on another task) resumes with nothing replayed', async () => {
@@ -738,10 +915,12 @@ describe('C0.7 T19 item 9 GW-09 P1 resume decisions, planResume()', () => {
 
   it('reads Valkey’s XINFO STREAM reply in its list form, and throws what Valkey can’t answer', async () => {
     const s = stream([[1000, personTopic]])
+    // Below the stream's first entry, so XINFO STREAM decides whether it was trimmed.
+    const below = `${NOW - 25_000}-0`
     s.valkey.fail('xinfo')
-    await expect(plan(s, request('0-0'))).rejects.toThrow(/closed/)
+    await expect(plan(s, request(below))).rejects.toThrow(/closed/)
     s.valkey.client.xinfo.mockResolvedValueOnce(['length', 'x'] as never)
-    await expect(plan(s, request('0-0'))).rejects.toThrow(/XINFO/)
+    await expect(plan(s, request(below))).rejects.toThrow(/XINFO/)
   })
 })
 

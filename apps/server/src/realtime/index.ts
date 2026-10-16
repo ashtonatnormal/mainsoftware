@@ -42,9 +42,10 @@ export interface RealtimeDeps {
   // a client flag nudges the org's sockets.
   flags?: Pick<FlagCache, 'track' | 'onChange' | 'registry'>
   // The command client and the blocking reader's connection (valkey.ts createBlockingReader): with
-  // both, the gateway reads each org's event stream (fan-out and resume). Without them, positions are
-  // unknown and every resume answers reset. Whoever made them closes them.
-  valkey?: Pick<Redis, 'get' | 'set' | 'pexpire' | 'xrange' | 'xrevrange' | 'xinfo'>
+  // both, the gateway reads each org's event stream (fan-out and resume) and writes its grains'
+  // ticks. Without them, positions are unknown and every resume answers reset. Whoever made them
+  // closes them.
+  valkey?: Pick<Redis, 'get' | 'set' | 'pexpire' | 'xrange' | 'xrevrange' | 'xinfo' | 'evalsha' | 'eval'>
   reader?: Pick<Redis, 'xread' | 'on'>
   keyPrefix: string
   // How often every open socket is checked; SOCKET_RECHECK_MS unless a test shortens it.

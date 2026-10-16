@@ -3,7 +3,7 @@ import { GATEWAY_LIMITS, GATEWAY_TOPIC_KINDS } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import { SOCKET_RECHECK_MS, SOCKET_REVOKE_MS } from '#src/auth/policy.ts'
 import { FLAG_READS_IN_FLIGHT } from '#src/flags/cache.ts'
-import { GATEWAY_POLICY, gatewayPolicy, reconnectSpreadMs } from '#src/realtime/policy.ts'
+import { GATEWAY_POLICY, gatewayPolicy, reconnectSpreadMs, sinceMaxAgeMs } from '#src/realtime/policy.ts'
 import { CLOSE_GRACE_MS, LOOKUP_TIMEOUT_MS, MAX_FRAME_BYTES, RECHECK_TIMEOUT_MS } from '#src/realtime/socket.ts'
 import { TOPIC_KIND_SPECS } from '#src/realtime/topics.ts'
 import { LATENCY_ERROR_MS, LATENCY_SUMMARY_MS, LATENCY_WARN_MS } from '#src/revocation/latency.ts'
@@ -42,9 +42,17 @@ describe('C0.7 T19 the gateway’s numbers', () => {
     expect(gatewayPolicy({ lookupTimeoutMs: 50, lookupReserveMs: 10 })).toMatchObject({ lookupReserveMs: 10 })
   })
 
-  it('T19 item 9: positions go out in a grain of a heartbeat, well inside the resume window, so a quiet client’s rounded position still resumes', () => {
+  it('T19 item 9: the reported position, a grain of a heartbeat, is at most two grains old when told, and a since a client holds after a window away (205 s) is never refused as too old', () => {
     expect(P.positionGrainMs).toBe(P.heartbeatMs)
-    expect(P.positionGrainMs + P.heartbeatMs).toBeLessThan(P.resumeWindowMs)
+    // A client's position when it goes: its last pong a heartbeat and that pong's wait ago, carrying
+    // the grain before's start.
+    const oldestHeld = P.heartbeatMs + P.pongTimeoutMs + 2 * P.positionGrainMs
+    expect(oldestHeld).toBeLessThan(P.resumeWindowMs)
+    expect(sinceMaxAgeMs()).toBe(P.resumeWindowMs + oldestHeld)
+    expect(sinceMaxAgeMs()).toBe(205_000)
+    expect(sinceMaxAgeMs(gatewayPolicy({ heartbeatMs: 200, deadAfterMs: 550, positionGrainMs: 1000 }))).toBe(
+      P.resumeWindowMs + 200 + P.pongTimeoutMs + 2000,
+    )
     expect(() => gatewayPolicy({ positionGrainMs: 0 })).toThrow(/grain/)
     expect(() => gatewayPolicy({ positionGrainMs: 2.5 })).toThrow(/grain/)
   })
@@ -103,10 +111,16 @@ describe('C0.7 T19 the gateway’s numbers', () => {
     expect(P.readerStuckMs).toBe(3 * P.readerBlockMs + 1000)
     expect(P.readerEpochCheckMs).toBeGreaterThanOrEqual(P.readerBlockMs)
     expect(P.epochRefreshMs).toBeLessThan(P.streamTtlMs)
-    // A replay reads at most replayScanMax + 1 entries of at most entryMaxBytes on the 1 s command
-    // client, and holds at most as many live entries as it may send.
-    expect((P.replayScanMax + 1) * P.entryMaxBytes).toBeLessThanOrEqual(4 * 1024 * 1024)
-    expect(P.replayFramesMax).toBeLessThanOrEqual(P.replayScanMax)
+    // A replay reads at most replayScanPage entries of at most entryMaxBytes a time on the 1 s
+    // command client, and holds at most as many live entries as it may send. Its scan cap is twice
+    // the stream's (MAXLEN ~ overshoots by at most a node), so on a stream within its length only
+    // the resumed topics' own entries decide it; a cap below that is refused at start.
+    expect(P.replayScanPage * P.entryMaxBytes).toBeLessThanOrEqual(4 * 1024 * 1024)
+    expect(P.replayFramesMax).toBeLessThanOrEqual(P.replayScanPage)
+    expect(P.replayScanMax).toBe(2 * P.streamMaxLen)
+    expect(() => gatewayPolicy({ replayScanMax: P.streamMaxLen })).toThrow(/scan cap/)
+    expect(() => gatewayPolicy({ replayScanPage: 0 })).toThrow(/scan cap/)
+    expect(gatewayPolicy({ streamMaxLen: 10, replayScanMax: 20 })).toMatchObject({ replayScanMax: 20 })
     // A replay that can't start in time answers reset well before a client gives up on its socket.
     expect(P.replayStartMs).toBeLessThan(P.pongTimeoutMs)
     // Two minutes: REC-01's and SLIDE-17's reconnect windows.

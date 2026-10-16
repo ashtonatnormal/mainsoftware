@@ -10,12 +10,16 @@
 // entry, so a later sub makes a new generation and nothing pending can bring the old one back. An
 // ack is built from the state after its last await, so a topic dropped meanwhile is in none of its
 // lists: its dropped frame went first. A sub of a topic the socket already holds decides nothing:
-// it is acked ok if live, and retry while an earlier sub is still deciding or resuming it, since
-// an ok then would claim a catch-up that sub's replay hasn't sent yet. A topic counts towards the
-// 100 from the moment it is asked for, deciding and replaying included.
+// it is acked ok if live in the generation the sub found, and otherwise retry (an earlier sub is
+// still deciding or resuming it, or answered it refused or retry meanwhile), since an ok while it
+// replays would claim a catch-up that sub's replay hasn't sent yet; one an unsub or a drop ended
+// meanwhile is in no list (forget()). A topic counts towards the 100 from the moment it is asked
+// for, deciding and replaying included.
 //
-// Positions (T19 item 9): ack and pong carry the org's position rounded down to its grain
-// (stream.ts grainOf), so they tell no member when other topics' events happened.
+// Positions (T19 item 9): ack and pong carry the org's reported position (stream.ts reportedAt),
+// which the reader sets at each grain's start and never when an entry arrives, so they tell no
+// member when other topics' events happened. Only an ev, for a topic the socket holds, carries an
+// exact id.
 //
 // Resume (§7.6, GW-09): a sub with since whose topics are allowed replays each topic's missed
 // entries (realtime/stream.ts planResume), one replay at a time per socket and eight per process
@@ -38,7 +42,6 @@ import type { CheckRequest, CheckResult } from '#src/realtime/checks.ts'
 import type { GatewayPolicy } from '#src/realtime/policy.ts'
 import {
   compareIds,
-  grainOf,
   type HeldEntry,
   type ResumeOutcome,
   type ResumePlan,
@@ -226,11 +229,13 @@ export interface FrameContext {
   notAdmitted(sockets: readonly Conn[]): void
   // A people signal for the socket's person arrived at or after askedAt: re-check them now (§8.2).
   recheckIfChanged(conn: Conn, askedAt: number): void
-  // The org's stream: its position once read (null if Valkey can't be reached), read at once, and
-  // how many times it has been reset (a reset during a replay leaves the replay's position in the
-  // old epoch).
+  // The org's stream: its position once read (null if Valkey can't be reached), and read at once,
+  // exact (the last entry the reader dispatched); the position its sockets are told, read at once
+  // (stream.ts reported(), at or below the exact one read in the same turn); and how many times it
+  // has been reset (a reset during a replay leaves the replay's position in the old epoch).
   position(orgId: string): Promise<Position | null>
   current(orgId: string): Position | null
+  reported(orgId: string): Position | null
   resets(orgId: string): number
   // Runs a replay under the replay caps, or answers 'busy'.
   replay<T>(conn: Conn, work: () => Promise<T>): Promise<T | 'busy'>
@@ -356,8 +361,7 @@ export class Frames {
     )
   }
 
-  // The org's position as the reader last dispatched it (null before it has read the tail), in its
-  // grain, and the spread.
+  // The org's reported position (null before the reader has read the tail), and the spread.
   #pong(conn: Conn): void {
     const ctx = this.#ctx
     ctx.send(
@@ -365,7 +369,7 @@ export class Frames {
       JSON.stringify({
         v: conn.version,
         t: 'pong',
-        pos: grainOf(ctx.current(conn.session.orgId), ctx.policy.positionGrainMs),
+        pos: ctx.reported(conn.session.orgId),
         reconnectSpreadMs: ctx.spreadMs(),
       }),
     )
@@ -389,7 +393,7 @@ export class Frames {
         refused: [],
         reset: [],
         retry: [],
-        pos: grainOf(ctx.current(conn.session.orgId), ctx.policy.positionGrainMs),
+        pos: ctx.reported(conn.session.orgId),
       }),
     )
   }
@@ -491,12 +495,13 @@ export class Frames {
     if (frame.since !== undefined && replaying.size > 0) {
       return this.#resume(conn, frame.id, own, frame.since, replaying, eras, lists)
     }
-    const pos = await ctx.position(orgId)
+    // Waits for the reader's first read of the org, so the first ack carries a position.
+    await ctx.position(orgId)
     if (!isOpen(conn)) return
-    this.#ack(conn, frame.id, own, lists, pos)
+    this.#ack(conn, frame.id, own, lists, ctx.reported(orgId))
   }
 
-  // The ack, built from the state now, with the position in its grain.
+  // The ack, built from the state now, with the reported position given.
   //   - ok: each topic this sub granted (replaying or live) and not reset, and each it found held
   //     that is live now in the same generation.
   //   - retry, besides the lane's: each other topic it found held, unless an unsub or a drop ended
@@ -533,7 +538,7 @@ export class Frames {
         refused: lists.refused,
         reset: lists.reset,
         retry: [...lists.retry, ...pending],
-        pos: grainOf(pos, ctx.policy.positionGrainMs),
+        pos,
       }),
     )
   }
@@ -558,18 +563,22 @@ export class Frames {
     const resetsBefore = ctx.resets(orgId)
     const ran = await ctx.replay(conn, async () => {
       const position = await ctx.position(orgId)
+      // In the same turn, so it is at or below position: the ack's, while position bounds the replay.
+      const reported = ctx.reported(orgId)
       const topics = [...replaying.keys()].filter(topic => still(topic) !== undefined)
-      if (topics.length === 0) return { position, plan: { outcomes: new Map(), frames: [] } as ResumePlan }
+      if (topics.length === 0) return { position, reported, plan: { outcomes: new Map(), frames: [] } as ResumePlan }
       try {
-        return { position, plan: await ctx.plan(orgId, { since, topics, eras }, position) }
+        return { position, reported, plan: await ctx.plan(orgId, { since, topics, eras }, position) }
       } catch {
-        return { position, plan: undefined }
+        return { position, reported, plan: undefined }
       }
     })
     if (!isOpen(conn)) return
     const outcomes = new Map<string, ResumeOutcome>()
     let frames: ResumePlan['frames'] = []
+    // The exact position the replay went up to, and the reported one the ack carries.
     let position: Position | null = null
+    let reported: Position | null = null
     const all = (outcome: ResumeOutcome) => {
       for (const topic of replaying.keys()) outcomes.set(topic, outcome)
     }
@@ -579,10 +588,12 @@ export class Frames {
       // Valkey failed mid-decision: the continuity can't be confirmed.
       all('reset_epoch')
       position = ran.position
+      reported = ran.reported
     } else {
       for (const [topic, outcome] of ran.plan.outcomes) outcomes.set(topic, outcome)
       frames = ran.plan.frames
       position = ran.position
+      reported = ran.reported
     }
     // The org's stream was reset while this replayed: its position is in the old epoch.
     const reset = ctx.resets(orgId) !== resetsBefore
@@ -605,12 +616,14 @@ export class Frames {
       ctx.resumed(outcome, 1)
       flushing.push(entry)
     }
-    const pos = reset || ran === 'busy' ? ctx.current(orgId) : position
-    this.#ack(conn, id, sub, lists, pos)
+    // After a reset or with no replay, both as they are now, read in the same turn.
+    const now = reset || ran === 'busy'
+    const pos = now ? ctx.current(orgId) : position
+    this.#ack(conn, id, sub, lists, now ? ctx.reported(orgId) : reported)
     // What the reader held for these topics meanwhile, after the replay's exact position (the ack
-    // carries it in its grain), in stream order across them all, so the client's per-socket
-    // positions never skip one. Each topic is live from here on, a reset one too: it is held, and
-    // the client refetches it.
+    // carries the reported one, at or below it), in stream order across them all, so the client's
+    // per-socket positions never skip one. Each topic is live from here on, a reset one too: it is
+    // held, and the client refetches it.
     const held: HeldEntry[] = []
     for (const entry of flushing) {
       for (const h of entry.held ?? []) if (pos === null || compareIds(h.id, pos.pos) > 0) held.push(h)

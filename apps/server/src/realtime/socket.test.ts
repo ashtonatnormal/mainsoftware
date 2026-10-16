@@ -1,6 +1,6 @@
 import { connect } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
-import { GATEWAY_CLOSE, GATEWAY_LIMITS } from '@hearth/shared'
+import { GATEWAY_CLOSE, GATEWAY_LIMITS, type Position } from '@hearth/shared'
 import type { FastifyInstance } from 'fastify'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
@@ -9,7 +9,10 @@ import { sha256 } from '#src/auth/crypto.ts'
 import { SOCKET_RECHECK_MS, SOCKET_REVOKE_MS } from '#src/auth/policy.ts'
 import type { SessionIds } from '#src/db/pre-org.ts'
 import { createLogger } from '#src/logger.ts'
+import type { Conn } from '#src/realtime/frames.ts'
+import { gatewayPolicy } from '#src/realtime/policy.ts'
 import { attachSocketServer, MAX_FRAME_BYTES, RECHECK_TIMEOUT_MS } from '#src/realtime/socket.ts'
+import { grainStart, publishTopicEvent, StreamReader } from '#src/realtime/stream.ts'
 import { RevocationLatency } from '#src/revocation/latency.ts'
 import {
   APP_ORIGIN,
@@ -20,6 +23,8 @@ import {
   ORG,
   opened,
   open as openSocket,
+  orgTopic,
+  personTopic,
   refused,
   signedIn,
   startGateway,
@@ -28,6 +33,7 @@ import {
   until,
 } from '#src/testing/gateway.ts'
 import { captureLogger } from '#src/testing/logs.ts'
+import { fakeStreams } from '#src/testing/streams.ts'
 
 const USER_CONTENT_ORIGIN = 'https://content.hearth.example.net'
 const A = known(1)
@@ -277,6 +283,36 @@ describe('C0.7 T19 item 11 S3 S4 M1: the connection budget', () => {
     held.release()
     expect('client' in (await first)).toBe(true)
     expect(held.asked()).toBe(1)
+    expect(server.counts().refused.error).toBe(1)
+  })
+
+  it('M1: a slot handed over with less than the reserve left goes straight back, and its lookup never runs', async () => {
+    const held = heldLookup()
+    const { url, server, events } = await start({
+      lookup: held.lookup,
+      lookupTimeoutMs: 1000,
+      policy: { lookupsRunning: 1, lookupReserveMs: 500 },
+    })
+    const first = openSocket(url)
+    await until(() => held.asked() === 1)
+    const second = refused(url, signedIn(B.token))
+    // The second waits in the queue, its own timer 500 ms away.
+    await delay(50)
+    // The gateway's clock moves 700 ms on before that timer runs, as when a busy event loop runs
+    // the release first: the slot reaches the waiter with about 250 ms left, under the reserve.
+    const real = performance.now.bind(performance)
+    vi.spyOn(performance, 'now').mockImplementation(() => real() + 700)
+    held.release()
+    expect((await second).status).toBe(503)
+    expect('client' in (await first)).toBe(true)
+    // No lookup of its own, and refused as one that queued past its time.
+    expect(held.asked()).toBe(1)
+    expect(events('ws_lookup_timed_out')).toMatchObject([{ queued: true }])
+    // The slot came back: the next upgrade's lookup runs, and it opens.
+    const third = openSocket(url, signedIn(B.token))
+    await until(() => held.asked() === 2)
+    held.release()
+    expect('client' in (await third)).toBe(true)
     expect(server.counts().refused.error).toBe(1)
   })
 
@@ -581,7 +617,7 @@ describe('C0.7 T19 item 12 GW-08: the heartbeat', () => {
     expect(live.ws.readyState).toBe(WebSocket.OPEN)
   })
 
-  it('GW-08 T19 item 9: pong carries the org’s position, rounded down to its 25 s grain, and the spread', async () => {
+  it('GW-08 T19 item 9: pong carries the position the stream reports (null before it has one), never its current one, and the spread', async () => {
     const stream = fakeStream()
     const { url } = await start({ stream: stream.factory })
     const client = await connected(url)
@@ -589,13 +625,68 @@ describe('C0.7 T19 item 12 GW-08: the heartbeat', () => {
     expect(await client.next('pong')).toEqual({ v: 1, t: 'pong', pos: null, reconnectSpreadMs: 5000 })
     const epoch = 'e0000000-0000-4000-8000-000000000001'
     stream.positions.set(ORG, { epoch, pos: '1800000012345-3' })
+    stream.reported.set(ORG, { epoch, pos: '1799999975000-0' })
     client.send({ v: 1, t: 'ping' })
     expect(await client.next('pong')).toEqual({
       v: 1,
       t: 'pong',
-      pos: { epoch, pos: '1800000000000-0' },
+      pos: { epoch, pos: '1799999975000-0' },
       reconnectSpreadMs: 5000,
     })
+  })
+
+  it('T19 item 9: an event on a person topic the socket was refused, published mid-grain, moves neither pong’s nor an unsub’s ack’s position; at the next grain’s start both move to the grain before’s start, as with no event', async () => {
+    // A 1 s grain, so the test waits for at most two of them; the reader runs on the fake Valkey.
+    const grain = 1000
+    const policy = gatewayPolicy({ positionGrainMs: grain })
+    const streams = fakeStreams()
+    const prefix = 'it:unit:'
+    const logger = createLogger({ logLevel: 'silent', role: 'realtime' })
+    let reader: StreamReader<Conn> | undefined
+    const { url } = await start({
+      policy: { positionGrainMs: grain },
+      stream: target => {
+        reader = new StreamReader({
+          valkey: streams.asClient,
+          reader: streams.asReader,
+          keyPrefix: prefix,
+          target,
+          logger,
+          policy,
+        })
+        return reader
+      },
+    })
+    const client = await connected(url)
+    expect((await client.sub([personTopic(1)])).ok).toEqual([personTopic(1)])
+    expect((await client.sub([personTopic(2)])).refused).toEqual([personTopic(2)])
+    const told = async () => {
+      client.send({ v: 1, t: 'ping' })
+      const pong = (await client.next('pong')).pos
+      const ack = (await client.unsub([orgTopic()])).pos
+      expect(ack).toEqual(pong)
+      return (pong as Position).pos
+    }
+    // A moment into a grain.
+    await delay(grain - (Date.now() % grain) + 100)
+    const begun = grainStart(Date.now(), grain)
+    expect(await told()).toBe(`${begun - grain}-0`)
+    const id = await publishTopicEvent(
+      streams.asClient,
+      prefix,
+      ORG,
+      { topic: personTopic(2), type: 'inbox.changed', ids: {} },
+      logger,
+      { rethrow: true },
+    )
+    await until(() => reader?.current(ORG)?.pos === id)
+    expect(await told()).toBe(`${begun - grain}-0`)
+    // Still the same grain, so the event's arrival is the only thing that happened in between.
+    expect(grainStart(Date.now(), grain)).toBe(begun)
+    await delay(begun + grain - Date.now() + 100)
+    expect(await told()).toBe(`${begun}-0`)
+    expect(client.all('ev')).toEqual([])
+    expect(JSON.stringify(client.frames)).not.toContain(String(id))
   })
 
   it('T19 item 11: a protocol ping is answered with its data, and one past the bucket closes the socket with 1008 too_many_frames, so a client that floods pings gets at most the burst’s pongs', async () => {

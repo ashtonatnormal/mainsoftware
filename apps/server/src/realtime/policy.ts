@@ -44,7 +44,8 @@ export interface GatewayPolicy {
   // person (SOCKETS_PER_SESSION is T14's); session lookups running and waiting per process, each
   // slot held until its lookup settles; how long a lookup may take, from the upgrade's arrival. An
   // upgrade stops waiting for a slot lookupReserveMs before that limit, so every lookup that runs
-  // has at least that long to answer, and none runs only to be thrown away (M1).
+  // has at least that long to answer, and one is thrown away only if it takes longer than that (a
+  // database slower than the reserve still wastes lookups; M1).
   maxSocketsPerProcess: number
   maxSocketsPerPerson: number
   lookupsRunning: number
@@ -73,13 +74,18 @@ export interface GatewayPolicy {
   recentlyRevokedMax: number
   keysChangedMs: number
 
-  // Resume (T19 item 9). A replay is valid while the oldest missed entry of the topics it resumes is
-  // at most resumeWindowMs old, it scans at most replayScanMax entries and sends at most
-  // replayFramesMax frames (the same cap holds a replaying topic's live entries). A team topic
-  // whose current membership began after since's time less eraMarginMs resets (Valkey's and
-  // Postgres's clocks may differ by that much). The positions ack, pong and reset carry are the
-  // org's rounded down to positionGrainMs, so they say nothing finer about other topics' events.
+  // Resume (T19 item 9). A since older than sinceMaxAgeMs() (by its id's time) resets, whatever the
+  // stream holds. A replay is valid while the oldest missed entry of the topics it resumes is at
+  // most resumeWindowMs old and it sends at most replayFramesMax frames (the same cap holds a
+  // replaying topic's live entries). It reads the stream replayScanPage entries at a time, and
+  // resets once more than replayScanMax, twice the stream's cap, follow since, so on a stream within
+  // its length only the resumed topics' own entries decide it. A team topic whose current
+  // membership began after since's time less eraMarginMs resets (Valkey's and Postgres's clocks may
+  // differ by that much). The position ack, pong and reset carry is set at the start of each grain
+  // of positionGrainMs, never when an entry arrives: the previous grain's start while each grain's
+  // tick is written (stream.ts reportedAt), so it says nothing about other topics' events.
   resumeWindowMs: number
+  replayScanPage: number
   replayScanMax: number
   replayFramesMax: number
   eraMarginMs: number
@@ -101,8 +107,9 @@ export interface GatewayPolicy {
   // The reader (realtime/stream.ts): XREAD BLOCK readerBlockMs COUNT readerCount on its own
   // connection; with no orgs it looks again after readerIdleMs, and after a failure after
   // readerRetryMs. It checks each org's epoch and gaps every readerEpochCheckMs, and refreshes both
-  // keys every epochRefreshMs while the org has sockets here. A reader with orgs that hasn't read
-  // for readerStuckMs (3 blocks and a second) fails the full readiness.
+  // keys every epochRefreshMs while the org has sockets here; at the start of each positionGrainMs
+  // it sets the org's reported position and appends the grain's tick. A reader with orgs that hasn't
+  // read for readerStuckMs (3 blocks and a second) fails the full readiness.
   readerBlockMs: number
   readerCount: number
   readerIdleMs: number
@@ -165,7 +172,8 @@ export const GATEWAY_POLICY: GatewayPolicy = {
   keysChangedMs: 60_000,
 
   resumeWindowMs: 120_000,
-  replayScanMax: 1000,
+  replayScanPage: 1000,
+  replayScanMax: 20_000,
   replayFramesMax: 500,
   eraMarginMs: 5000,
   positionGrainMs: 25_000,
@@ -198,8 +206,9 @@ export const GATEWAY_POLICY: GatewayPolicy = {
 // The policy with a test's overrides, refused at start if its numbers can't keep the heartbeat's
 // rules (T19 item 12): a socket is declared dead only after two missed pings, and the ping comes
 // before an ALB's default 60 s idle timeout cuts the connection. A test that shortens the heartbeat
-// (200/550 ms) passes both. A lookup's reserve must leave the queue some time to wait (M1), and the
-// positions' grain must be a whole number of ms.
+// (200/550 ms) passes both. A lookup's reserve must leave the queue some time to wait (M1), the
+// positions' grain must be a whole number of ms, and the replay's scan cap must sit above any
+// stream within its length (T19 item 9).
 export function gatewayPolicy(overrides: Partial<GatewayPolicy> = {}): GatewayPolicy {
   const policy = { ...GATEWAY_POLICY, ...overrides }
   if (policy.deadAfterMs <= 2 * policy.heartbeatMs) {
@@ -213,7 +222,18 @@ export function gatewayPolicy(overrides: Partial<GatewayPolicy> = {}): GatewayPo
   if (!Number.isInteger(policy.positionGrainMs) || policy.positionGrainMs < 1) {
     throw new Error('the positions’ grain must be a whole number of ms, at least 1')
   }
+  if (!(policy.replayScanPage >= 1 && policy.replayScanMax >= 2 * policy.streamMaxLen)) {
+    throw new Error('a replay’s scan cap must be at least twice the stream’s cap, read a page of at least 1')
+  }
   return policy
+}
+
+// How old a since may be, by its id's time, and still be replayed (T19 item 9): the window, and how
+// old a connected client's position can be when it goes, a heartbeat since its last pong, that
+// pong's wait, and two grains (the reported position is the previous grain's start). 205 s at these
+// numbers. An older since resets whatever the stream holds, so it can't be used to probe it.
+export function sinceMaxAgeMs(policy: GatewayPolicy = GATEWAY_POLICY): number {
+  return policy.resumeWindowMs + policy.heartbeatMs + policy.pongTimeoutMs + 2 * policy.positionGrainMs
 }
 
 // How widely a client spreads its reconnect (P3; T19 item 11): 1 ms for each socket on this

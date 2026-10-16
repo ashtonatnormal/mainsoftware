@@ -446,3 +446,80 @@ export function roleProblems(code: readonly string[], database: readonly string[
       .map(role => `hearth_worker can SET ${role}, which apps/server/src/db/roles.ts JOB_ROLES doesn't list`),
   ]
 }
+
+// 5. Each outbox consumer the worker runs (productionRegistries) is bound in
+// outbox_checkpoints_own_row() to the role it runs as, and every name bound there is one of them
+// (0008; TECH-SPEC T16 item 3), so a consumer added without its binding, or bound to another role,
+// fails here rather than leaving its checkpoint open to another role. The binding is read from the
+// function's body: one CASE on new.consumer, holding only `when '<consumer>' then '<role>'` pairs.
+// Anything else there (an ELSE, a comment, a pair of another shape, a name twice, a second such
+// CASE) leaves it unread (undefined), which is itself a problem: fail closed.
+const BINDING_CASE = /\bcase\s+new\s*\.\s*consumer\b([\s\S]*?)\bend\b/gi
+const BINDING_PAIR = /\bwhen\s+'([^']*)'\s+then\s+'([^']*)'/gi
+
+export function checkpointBindings(source: string): ReadonlyMap<string, string> | undefined {
+  const cases = [...source.matchAll(BINDING_CASE)]
+  if (cases.length !== 1) return undefined
+  const body = cases[0]?.[1] ?? ''
+  if (body.replace(BINDING_PAIR, '').trim() !== '') return undefined
+  const bound = new Map<string, string>()
+  for (const [, name, role] of body.matchAll(BINDING_PAIR)) {
+    if (name === undefined || role === undefined || bound.has(name)) return undefined
+    bound.set(name, role)
+  }
+  return bound
+}
+
+// What check-catalogues.ts saw when it tried a consumer's checkpoint in a transaction it rolled
+// back: whether a row naming another job role was refused, and one naming its own accepted. This
+// proves the binding the body reads is the one the trigger enforces.
+export interface BindingProbe {
+  consumer: string
+  otherRefused: boolean
+  ownAccepted: boolean
+}
+
+const OWN_ROW = 'outbox_checkpoints_own_row()'
+
+export function bindingProblems(
+  consumers: readonly { name: string; role: string }[],
+  bound: ReadonlyMap<string, string> | undefined,
+  probes: readonly BindingProbe[],
+): string[] {
+  const problems: string[] = []
+  if (bound === undefined) {
+    problems.push(
+      `check-catalogues can't read ${OWN_ROW}'s binding: keep it one CASE on new.consumer holding only when '<consumer>' then '<role>' pairs`,
+    )
+  } else {
+    for (const { name, role } of consumers) {
+      const to = bound.get(name)
+      if (to === undefined) {
+        problems.push(
+          `the worker's consumer ${name} isn't bound in ${OWN_ROW}: the migration that adds it binds it to ${role}`,
+        )
+      } else if (to !== role) {
+        problems.push(`the worker's consumer ${name} runs as ${role}, but ${OWN_ROW} binds it to ${to}`)
+      }
+    }
+    const names = new Set(consumers.map(consumer => consumer.name))
+    for (const [name, role] of bound) {
+      if (!names.has(name)) {
+        problems.push(
+          `${OWN_ROW} binds ${name} to ${role}, but no consumer the worker runs (apps/server/src/worker/index.ts productionRegistries) is called ${name}`,
+        )
+      }
+    }
+  }
+  for (const consumer of consumers) {
+    const probe = probes.find(p => p.consumer === consumer.name)
+    if (probe === undefined) problems.push(`check-catalogues didn't try a checkpoint of ${consumer.name}`)
+    else {
+      if (!probe.otherRefused) {
+        problems.push(`a checkpoint of ${consumer.name} naming a role other than ${consumer.role} was accepted`)
+      }
+      if (!probe.ownAccepted) problems.push(`a checkpoint of ${consumer.name} naming ${consumer.role} was refused`)
+    }
+  }
+  return problems
+}

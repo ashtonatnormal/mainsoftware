@@ -2,8 +2,10 @@ import { FLAGS } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import type { Coverage } from '#src/outbox/coverage.ts'
 import {
+  bindingProblems,
   bodyProblems,
   bodyWrites,
+  checkpointBindings,
   contentProblems,
   coverageProblems,
   eventProblems,
@@ -447,6 +449,92 @@ describe('C0.6 check-catalogues: the catalogues equal the database', () => {
     expect(roleProblems(['hearth_queue', 'hearth_job_x'], ['hearth_queue', 'hearth_job_y'])).toEqual([
       "hearth_job_x is in apps/server/src/db/roles.ts JOB_ROLES, but hearth_worker can't SET it in the database",
       "hearth_worker can SET hearth_job_y, which apps/server/src/db/roles.ts JOB_ROLES doesn't list",
+    ])
+  })
+})
+
+describe('C0.7 T16 item 3 check-catalogues: each consumer is bound to its role in outbox_checkpoints_own_row()', () => {
+  // 0008's body, as pg_proc.prosrc holds it.
+  const BODY = `
+declare
+  owner_role oid := (select r.oid from pg_catalog.pg_roles r where r.rolname = new.role_name);
+  bound text := case new.consumer
+                  when 'offboarding' then 'hearth_job_offboarding'
+                  when 'revocation' then 'hearth_job_revocation'
+                end;
+begin
+  if owner_role is null or not pg_catalog.pg_has_role(current_user, owner_role, 'USAGE')
+     or (bound is not null and new.role_name <> bound) then
+    raise exception 'Only the role that runs a consumer may move its checkpoint.' using errcode = 'insufficient_privilege';
+  end if;
+  return new;
+end
+`
+  const consumers = [
+    { name: 'offboarding', role: 'hearth_job_offboarding' },
+    { name: 'revocation', role: 'hearth_job_revocation' },
+  ]
+  const probes = consumers.map(c => ({ consumer: c.name, otherRefused: true, ownAccepted: true }))
+
+  it('reads the binding from the body, and passes when it equals the consumers both ways and the trigger enforces it', () => {
+    const bound = checkpointBindings(BODY)
+    expect(bound).toEqual(
+      new Map([
+        ['offboarding', 'hearth_job_offboarding'],
+        ['revocation', 'hearth_job_revocation'],
+      ]),
+    )
+    expect(bindingProblems(consumers, bound, probes)).toEqual([])
+  })
+
+  it('names a consumer that isn’t bound, one bound to another role, and a bound name no consumer has', () => {
+    const extra = [...consumers, { name: 'indexer', role: 'hearth_job_indexer' }]
+    expect(
+      bindingProblems(extra, checkpointBindings(BODY), [
+        ...probes,
+        { consumer: 'indexer', otherRefused: true, ownAccepted: true },
+      ]),
+    ).toEqual([
+      "the worker's consumer indexer isn't bound in outbox_checkpoints_own_row(): the migration that adds it binds it to hearth_job_indexer",
+    ])
+    const moved = BODY.replace("then 'hearth_job_revocation'", "then 'hearth_job_offboarding'")
+    expect(bindingProblems(consumers, checkpointBindings(moved), probes)).toEqual([
+      "the worker's consumer revocation runs as hearth_job_revocation, but outbox_checkpoints_own_row() binds it to hearth_job_offboarding",
+    ])
+    expect(bindingProblems(consumers.slice(0, 1), checkpointBindings(BODY), probes.slice(0, 1))).toEqual([
+      'outbox_checkpoints_own_row() binds revocation to hearth_job_revocation, but no consumer the worker runs (apps/server/src/worker/index.ts productionRegistries) is called revocation',
+    ])
+  })
+
+  it('fails closed on a binding it can’t read: none, an ELSE, a comment, a name twice, or a second CASE', () => {
+    expect(checkpointBindings('begin return new; end')).toBeUndefined()
+    expect(
+      checkpointBindings(
+        BODY.replace('                end;', "                  else 'hearth_queue'\n                end;"),
+      ),
+    ).toBeUndefined()
+    expect(
+      checkpointBindings(BODY.replace("when 'revocation'", "-- old\n                  when 'revocation'")),
+    ).toBeUndefined()
+    expect(checkpointBindings(BODY.replace("when 'revocation'", "when 'offboarding'"))).toBeUndefined()
+    expect(checkpointBindings(`${BODY}\n${BODY}`)).toBeUndefined()
+    expect(bindingProblems(consumers, undefined, probes)).toEqual([
+      "check-catalogues can't read outbox_checkpoints_own_row()'s binding: keep it one CASE on new.consumer holding only when '<consumer>' then '<role>' pairs",
+    ])
+  })
+
+  it('names a probe the trigger answered against the binding, and a consumer it didn’t try', () => {
+    expect(
+      bindingProblems(consumers, checkpointBindings(BODY), [
+        { consumer: 'offboarding', otherRefused: false, ownAccepted: true },
+        { consumer: 'revocation', otherRefused: true, ownAccepted: false },
+      ]),
+    ).toEqual([
+      'a checkpoint of offboarding naming a role other than hearth_job_offboarding was accepted',
+      'a checkpoint of revocation naming hearth_job_revocation was refused',
+    ])
+    expect(bindingProblems(consumers, checkpointBindings(BODY), probes.slice(1))).toEqual([
+      "check-catalogues didn't try a checkpoint of offboarding",
     ])
   })
 })

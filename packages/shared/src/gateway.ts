@@ -12,10 +12,13 @@
 // 2. Subscribe, then fetch. sub at most 50 topics a frame and 100 a socket. Fetch over REST only
 //    after the ack, and only topics with no valid since: new ones, or those in ack.reset. An ev that
 //    arrives during the fetch means fetch again. Send ack.retry's topics again after a random 1-5 s,
-//    backing off to 30 s. A sub of a topic whose earlier sub on the socket hasn't been acked yet
-//    gets it in retry (so don't count on a repeat's ack: wait for the first's). A topic asked for
-//    but in none of the ack's lists was dropped (its dropped frame came before the ack) or
-//    unsubscribed after the sub was sent.
+//    backing off to 30 s. A repeated sub, of a topic the socket already holds, decides nothing:
+//    its ack lists the topic ok if it is live in the generation the sub found (the same hold, not
+//    ended and made again since), and otherwise in retry (an earlier sub is still deciding or
+//    resuming it, or answered it refused or retry meanwhile). So a repeat sent before the first
+//    sub's ack may be answered ok or retry: don't count on a repeat's ack, wait for the first's. A
+//    topic ended meanwhile is in no list: one asked for but in none of the ack's lists was dropped
+//    (its dropped frame came before the ack) or unsubscribed after the sub was sent.
 //    Every frame the client sends takes a token from the socket's bucket, protocol pings and pongs
 //    included (only the pong answering the server's own ping is free): GATEWAY_LIMITS.frameBurst
 //    (20), full when the socket opens, refilled at framesPerSecond (5) a second. An empty bucket
@@ -26,11 +29,15 @@
 // 3. Positions. Keep one { epoch, pos } per topic. A topic acked ok takes the ack's pos, and every
 //    later ack, ev, pong and reset advances every topic acked ok on the socket to its pos: the higher
 //    of the two, compared as (ms, seq), and a new epoch replaces the old. That holds because a
-//    socket's frames go out in stream order. Drop an ev whose pos is at or below its topic's. ack,
-//    pong and reset carry the org's position rounded down to a 25 s grain (only an ev carries an
-//    exact one), so a resume may replay an ev already seen: the rule just given drops it.
+//    socket's frames go out in stream order. Drop an ev whose pos is at or below its topic's. Only an
+//    ev carries an exact position. ack, pong and reset carry the org's reported one, <ms>-0: the
+//    start of the 25 s grain before the current one, which the server moves only at a grain's start,
+//    never when an event arrives (TECH-SPEC T19 item 9). So a resume may replay an ev already seen:
+//    the rule just given drops it.
 // 4. Reconnect and resume. Resubscribe every topic with since set to the lowest position among them
-//    (topics in another epoch go without since), in ⌈topics/50⌉ sub frames.
+//    (topics in another epoch go without since), in ⌈topics/50⌉ sub frames. A since more than 205 s
+//    old by its own time answers reset whatever was missed; one kept up to date by item 6's pings
+//    never is after up to 2 minutes away.
 // 5. dropped: forget the topic and wipe its cached server data; an unknown reason reads as 'access'.
 //    reset: set every topic's position to its pos, and refetch every topic at a random time within
 //    the spread. nudge 'flags': GET /api/flags at a random time within the spread. Neither a drop nor
@@ -186,8 +193,8 @@ export const ServerFrame = z.discriminatedUnion('t', [
   // REST. retry: not decided (the database couldn't be reached in time), or still being decided or
   // resumed for an earlier sub on this socket: send them again after a back-off. A topic dropped
   // before the ack is in none of these (its dropped frame came first), nor is one unsubscribed
-  // after the sub. pos: every topic acked ok on this socket is caught up to here (the org's position
-  // rounded down to its 25 s grain), or null while the stream can't be reached.
+  // after the sub. pos: every topic acked ok on this socket is caught up to here (the org's reported
+  // position, header item 3), or null while the stream can't be reached.
   z.strictObject({
     v: z.literal(1),
     t: z.literal('ack'),
@@ -216,12 +223,13 @@ export const ServerFrame = z.discriminatedUnion('t', [
     reason: z.enum(GATEWAY_DROP_REASONS),
   }),
   // The stream lost continuity (Valkey restarted or failed over, or the reader fell behind):
-  // refetch every topic over REST, within the spread, and continue from pos.
+  // refetch every topic over REST, within the spread, and continue from pos (the reported position
+  // in the new epoch).
   z.strictObject({ v: z.literal(1), t: z.literal('reset'), pos: Position }),
   // Re-read something about the org: 'flags' → GET /api/flags (T17 item 11), within the spread.
   z.strictObject({ v: z.literal(1), t: z.literal('nudge'), what: z.enum(GATEWAY_NUDGES) }),
-  // The answer to ping: the org's position in its 25 s grain (every topic acked ok on this socket
-  // is caught up to it), and the current spread.
+  // The answer to ping: the org's reported position (header item 3; every topic acked ok on this
+  // socket is caught up to it), and the current spread.
   z.strictObject({ v: z.literal(1), t: z.literal('pong'), pos: Position.nullable(), reconnectSpreadMs: count }),
 ])
 export type ServerFrame = z.infer<typeof ServerFrame>

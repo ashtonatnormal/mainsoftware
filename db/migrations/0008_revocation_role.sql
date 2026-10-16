@@ -82,10 +82,14 @@ grant select (id, org_id, user_id, revoked_at) on public.sessions to hearth_job_
 -- the writer may use the role a row names, which held while one role could start checkpoints. With
 -- two, either could start the other's checkpoint under its own name, in an org where that consumer
 -- hasn't made it yet, and the consumer could then never move it (42501 at every round), or would
--- read on from wherever it was planted. Now a row whose consumer is bound must name that role, so
--- only a writer who may use it can start or move the row: anyone else, the superuser included, is
--- refused the same way. A name that isn't bound (the tests' own consumers) may still name any role
--- its writer may use. A migration that adds a consumer replaces this function with its name bound.
+-- read on from wherever it was planted. Now a row whose consumer is bound must name that role, and
+-- only a writer who may use that role can start or move it. What is refused, for every writer, the
+-- superuser included, is pairing a bound name with another role; a writer who may use the bound
+-- role (the superuser may use every role) can still start a correctly named row, so 0007's "A
+-- test's superuser can" now holds for a bound name only with its own role. A name that isn't bound
+-- (the tests' own consumers) may still name any role its writer may use. A migration that adds a
+-- consumer replaces this function with its name bound (check-catalogues.ts compares the binding
+-- with the worker's consumers).
 create or replace function public.outbox_checkpoints_own_row() returns trigger
 language plpgsql set search_path = '' as $$
 declare

@@ -1,14 +1,15 @@
 // An in-memory stand-in for the Valkey commands the gateway's stream code uses, for unit tests
 // (test-only; the image leaves testing/ out). client is the command client (GET, SET with NX and
-// PX, PEXPIRE, XRANGE, XREVRANGE, XINFO STREAM, and the producer's script through EVALSHA, which
-// answers NOSCRIPT until EVAL has run it once, as Valkey after a restart does); reader is the
+// PX, PEXPIRE, XRANGE, XREVRANGE, XINFO STREAM, and the producer's and the tick's scripts through
+// EVALSHA, which answers NOSCRIPT until EVAL has run each once, as Valkey after a restart does);
+// reader is the
 // blocking reader's connection (XREAD BLOCK, which waits for an append or its block, and 'ready').
 // Ids take their time from a clock the test sets. Each command can be made to fail, and a test can
 // trim, delete or lose the tail of a stream as Valkey would.
 import { EventEmitter } from 'node:events'
 import type { Redis } from 'ioredis'
 import { vi } from 'vitest'
-import { compareIds, PUBLISH_TOPIC_EVENT } from '#src/realtime/stream.ts'
+import { compareIds, PUBLISH_TOPIC_EVENT, TICK } from '#src/realtime/stream.ts'
 
 type Entry = [id: string, fields: string[]]
 
@@ -40,7 +41,8 @@ export function fakeStreams(options: { now?: () => number } = {}) {
   const ttls = new Map<string, number>()
   const appended = new EventEmitter()
   const failures = new Map<string, Error[]>()
-  let scriptLoaded = false
+  // The scripts EVAL has run, by SHA-1.
+  const loaded = new Set<string>()
 
   function failIfAsked(command: string): void {
     const error = failures.get(command)?.shift()
@@ -61,6 +63,26 @@ export function fakeStreams(options: { now?: () => number } = {}) {
     s.lastSeq = seq
     s.added++
     const id = `${ms}-${seq}`
+    s.entries.push([id, ['f', value]])
+    appended.emit('added', stream)
+    return id
+  }
+
+  // Appends an entry with the id given, as XADD <id> does: refused unless it is past the stream's
+  // last id.
+  function addAt(stream: string, id: string, value: string): string {
+    let s = streams.get(stream)
+    if (s === undefined) {
+      s = { entries: [], added: 0, lastMs: 0, lastSeq: 0 }
+      streams.set(stream, s)
+    }
+    const [ms, seq] = id.split('-').map(Number) as [number, number]
+    if (s.added > 0 && compareIds(id, `${s.lastMs}-${s.lastSeq}`) <= 0) {
+      throw new Error('ERR The ID specified in XADD is equal or smaller than the target stream top item')
+    }
+    s.lastMs = ms
+    s.lastSeq = seq
+    s.added++
     s.entries.push([id, ['f', value]])
     appended.emit('added', stream)
     return id
@@ -107,14 +129,17 @@ export function fakeStreams(options: { now?: () => number } = {}) {
     }),
     evalsha: vi.fn(async (sha: string, _keys: number, ...args: (string | number)[]) => {
       failIfAsked('evalsha')
-      if (!scriptLoaded || sha !== PUBLISH_TOPIC_EVENT.sha) throw new Error('NOSCRIPT No matching script.')
-      return runPublish(args)
+      const run = scripts.get(sha)
+      if (!loaded.has(sha) || run === undefined) throw new Error('NOSCRIPT No matching script.')
+      return run(args)
     }),
     eval: vi.fn(async (lua: string, _keys: number, ...args: (string | number)[]) => {
       failIfAsked('eval')
-      if (lua !== PUBLISH_TOPIC_EVENT.lua) throw new Error('ERR unknown script')
-      scriptLoaded = true
-      return runPublish(args)
+      const script = [PUBLISH_TOPIC_EVENT, TICK].find(known => known.lua === lua)
+      const run = script === undefined ? undefined : scripts.get(script.sha)
+      if (script === undefined || run === undefined) throw new Error('ERR unknown script')
+      loaded.add(script.sha)
+      return run(args)
     }),
   }
 
@@ -129,6 +154,34 @@ export function fakeStreams(options: { now?: () => number } = {}) {
     ttls.set(e, Number(ttl))
     return id
   }
+
+  // The tick's script: SET NX PX the epoch, append the tick at <boundary>-0 unless the last entry is
+  // at or after it (an append refused is left out), trim, PEXPIRE both, and answer the last id.
+  function runTick([stream, epoch, boundary, maxLen, ttl, newEpoch, entry]: (string | number)[]): string | null {
+    const [s, e] = [String(stream), String(epoch)]
+    if (!strings.has(e)) {
+      strings.set(e, String(newEpoch))
+      ttls.set(e, Number(ttl))
+    }
+    const last = streams.get(s)?.entries.at(-1)?.[0]
+    if (last === undefined || Number(last.split('-')[0]) < Number(boundary)) {
+      try {
+        addAt(s, `${boundary}-0`, String(entry))
+      } catch {
+        // As redis.pcall leaves it.
+      }
+      const kept = streams.get(s)
+      while (kept !== undefined && kept.entries.length > Number(maxLen)) kept.entries.shift()
+    }
+    if (streams.has(s)) ttls.set(s, Number(ttl))
+    if (strings.has(e)) ttls.set(e, Number(ttl))
+    return streams.get(s)?.entries.at(-1)?.[0] ?? null
+  }
+
+  const scripts = new Map<string, (args: (string | number)[]) => string | null>([
+    [PUBLISH_TOPIC_EVENT.sha, runPublish],
+    [TICK.sha, runTick],
+  ])
 
   const readerEvents = new EventEmitter()
   const reader = {
@@ -184,6 +237,7 @@ export function fakeStreams(options: { now?: () => number } = {}) {
     strings,
     ttls,
     add,
+    addAt,
     // The next call of a command fails with this error (once per call to fail()).
     fail(command: keyof typeof client | 'xread', error = new Error('Connection is closed.')): void {
       const queue = failures.get(command) ?? []

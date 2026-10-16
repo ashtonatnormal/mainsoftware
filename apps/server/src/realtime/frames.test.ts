@@ -10,6 +10,7 @@ import { GATEWAY_POLICY } from '#src/realtime/policy.ts'
 import type { SocketServerOptions } from '#src/realtime/socket.ts'
 import {
   evFrame,
+  grainStart,
   planResume,
   publishTopicEvent,
   type ResumePlan,
@@ -45,10 +46,11 @@ afterEach(async () => {
   vi.useRealTimers()
   for (const app of running.splice(0)) await app.close()
 })
-// The positions here are small ids ('100-0'), so the gateway's 25 s grain is 1 ms unless a test
-// sets it: they come through exactly. The grain has a test of its own.
+// The positions here are small ids ('100-0'). The fake stream reports each org's position as it is
+// unless a test sets a reported one of its own, as the reader sets it at a grain's start (T19 item
+// 9); the frames carry whatever it reports.
 async function start(options: Partial<SocketServerOptions> = {}) {
-  const gateway = await startGateway({ ...options, policy: { positionGrainMs: 1, ...options.policy } })
+  const gateway = await startGateway(options)
   running.push(gateway.app)
   return gateway
 }
@@ -332,33 +334,88 @@ describe('S2 T19 item 8: generations', () => {
     for (const ack of later) expect(ack).toMatchObject({ ok: [], refused: [], reset: [], retry: [] })
     expect(client.frames.indexOf(dropped)).toBeLessThan(Math.min(...later.map(ack => client.frames.indexOf(ack))))
   })
+
+  it('S2: a repeated sub of a topic unsubscribed while it waited lists it in none of its ack’s lists, after the unsub’s ack', async () => {
+    const stream = fakeStream()
+    stream.positions.set(ORG, at('100-0'))
+    const { url, checks } = await start({ stream: stream.factory })
+    checks.allow(ME, teamTopic())
+    const client = await connected(url)
+    expect((await client.sub([teamTopic()])).ok).toEqual([teamTopic()])
+    stream.hold()
+    client.send({ v: 1, t: 'sub', id: 10, topics: [teamTopic()] })
+    // The repeat reaches the server, finds the topic held and live, and waits for the position;
+    // then the client lets the topic go.
+    await delay(50)
+    const unsub = await client.unsub([teamTopic()])
+    expect(unsub.ok).toEqual([teamTopic()])
+    stream.release()
+    await until(() => client.all('ack').length === 3)
+    const repeat = client.frames.findIndex(frame => frame.t === 'ack' && frame.id === 10)
+    // The client heard of the topic's end from the unsub's ack: a retry would have it subscribe
+    // again to a topic it let go.
+    expect(client.frames[repeat]).toMatchObject({ ok: [], refused: [], reset: [], retry: [] })
+    expect(client.frames.indexOf(unsub)).toBeLessThan(repeat)
+    expect(checks.calls).toHaveLength(1)
+  })
 })
 
-describe('T19 item 9: positions in their grain', () => {
-  it('T19 item 9: ack, pong and an unsub’s ack carry the org’s position rounded down to its 25 s grain, so another topic’s event moves them only into a new grain; an ev of the socket’s own topic carries its exact id', async () => {
+describe('T19 item 9: the reported position', () => {
+  it('T19 item 9: ack, pong and an unsub’s ack carry the position the stream reports, never its current one, so another topic’s event moves none of them; an ev of the socket’s own topic carries its exact id; a reset carries what the reader gives it', async () => {
     const stream = fakeStream()
     const T = 1_800_000_000_000
     stream.positions.set(ORG, at(`${T + 3000}-0`))
-    const { url, server } = await start({ stream: stream.factory, policy: { positionGrainMs: 25_000 } })
+    stream.reported.set(ORG, at(`${T - 25_000}-0`))
+    const { url, server } = await start({ stream: stream.factory })
     const client = await connected(url)
-    expect((await client.sub([personTopic(1)])).pos).toEqual(at(`${T}-0`))
+    expect((await client.sub([personTopic(1)])).pos).toEqual(at(`${T - 25_000}-0`))
     const pong = async () => {
       client.send({ v: 1, t: 'ping' })
       return (await client.next('pong')).pos
     }
-    // Someone else's person topic, which this socket can't hold.
+    // Someone else's person topic, which this socket can't hold: the reader's position moves.
     stream.dispatch(ORG, personTopic(2), `${T + 7000}-2`)
-    expect(await pong()).toEqual(at(`${T}-0`))
-    expect((await client.unsub([orgTopic()])).pos).toEqual(at(`${T}-0`))
+    expect(await pong()).toEqual(at(`${T - 25_000}-0`))
+    expect((await client.unsub([orgTopic()])).pos).toEqual(at(`${T - 25_000}-0`))
     stream.dispatch(ORG, personTopic(1), `${T + 8000}-0`)
     expect((await client.next('ev')).pos).toBe(`${T + 8000}-0`)
-    stream.dispatch(ORG, personTopic(2), `${T + 25_001}-0`)
-    expect(await pong()).toEqual(at(`${T + 25_000}-0`))
-    // A reset's position too.
-    stream.target().resetOrg(ORG, at(`${T + 31_234}-5`))
-    expect((await client.next('reset')).pos).toEqual(at(`${T + 25_000}-0`))
-    expect(JSON.stringify(client.frames)).not.toContain(`${T + 7000}`)
+    // At a grain's start the reader moves its reported position: the frames carry the new one.
+    stream.reported.set(ORG, at(`${T}-0`))
+    expect(await pong()).toEqual(at(`${T}-0`))
+    expect((await client.unsub([orgTopic()])).pos).toEqual(at(`${T}-0`))
+    // A reset carries the position the reader gives it, as it is.
+    stream.target().resetOrg(ORG, at(`${T}-0`))
+    expect((await client.next('reset')).pos).toEqual(at(`${T}-0`))
+    for (const exact of [T + 3000, T + 7000]) expect(JSON.stringify(client.frames)).not.toContain(`${exact}`)
     expect(server.counts().open).toBe(1)
+  })
+
+  it('T19 item 9: a resume’s ack carries the reported position read with the replay’s exact one; what the reader held meanwhile follows from the exact one', async () => {
+    const stream = fakeStream()
+    const T = 1_800_000_000_000
+    stream.positions.set(ORG, at(`${T + 5000}-0`))
+    stream.reported.set(ORG, at(`${T - 25_000}-0`))
+    const missed = `${T + 4000}-0`
+    const held = heldResume(request =>
+      resumedAll(request, [
+        { id: missed, topic: personTopic(1), text: evFrame(personTopic(1), missed, 'inbox.changed', {}) },
+      ]),
+    )
+    const { url } = await start({ stream: stream.factory, resume: held.resume })
+    const client = await connected(url)
+    const acked = client.sub([personTopic(1)], at(`${T}-0`))
+    await until(() => held.asked.length === 1)
+    // While the replay is planned, the reader holds an entry past the exact position it read.
+    stream.dispatch(ORG, personTopic(1), `${T + 6000}-0`)
+    held.release()
+    expect((await acked).pos).toEqual(at(`${T - 25_000}-0`))
+    await until(() => client.all('ev').length === 2)
+    expect(client.frames.map(frame => [frame.t, frame.t === 'ev' ? frame.pos : undefined])).toEqual([
+      ['welcome', undefined],
+      ['ev', missed],
+      ['ack', undefined],
+      ['ev', `${T + 6000}-0`],
+    ])
   })
 })
 
@@ -383,8 +440,14 @@ describe('GW-09 T19 item 9 P1 S5: resume', () => {
     const first = await connected(url)
     const ack = await first.sub([teamTopic(), personTopic(1)])
     expect(ack.ok).toEqual([teamTopic(), personTopic(1)])
-    // The stream is empty: its position is 0-0 in its epoch.
-    expect(ack.pos).toEqual({ epoch: expect.any(String), pos: '0-0' })
+    // The stream was empty: the reader's first read wrote this grain's tick, and the ack carries the
+    // grain before's start (T19 item 9).
+    const grain = GATEWAY_POLICY.positionGrainMs
+    const reported = Number(String(ack.pos?.pos).replace(/-0$/, ''))
+    expect(ack.pos).toEqual({ epoch: expect.any(String), pos: `${reported}-0` })
+    expect(reported % grain).toBe(0)
+    expect(grainStart(Date.now(), grain) - reported).toBeGreaterThanOrEqual(grain)
+    expect(grainStart(Date.now(), grain) - reported).toBeLessThanOrEqual(2 * grain)
     await publish(teamTopic(), item(1))
     const seen = await first.next('ev')
     expect(seen).toMatchObject({ topic: teamTopic(), ids: { item: item(1) } })

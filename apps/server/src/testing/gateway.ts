@@ -306,12 +306,14 @@ export async function until(condition: () => boolean, ms = 2000): Promise<void> 
 
 export type GatewayUnderTest = Awaited<ReturnType<typeof startGateway>>
 
-// A stand-in for the stream reader: positions a test sets (none until it does), and a dispatch that
-// does what the reader's does with an entry: sends it to the sockets holding its topic live, and
-// holds it for those still replaying. The gateway hands it its target.
+// A stand-in for the stream reader: positions a test sets (none until it does), the reported ones
+// (each org's position unless a test sets one of its own, as the real reader's at a grain's start),
+// and a dispatch that does what the reader's does with an entry: sends it to the sockets holding its
+// topic live, and holds it for those still replaying. The gateway hands it its target.
 export function fakeStream() {
   let target: StreamTarget<Conn> | undefined
   const positions = new Map<string, Position>()
+  const reported = new Map<string, Position>()
   const watched: string[] = []
   // A test can hold position() until it releases it.
   let held: Promise<void> | undefined
@@ -327,6 +329,7 @@ export function fakeStream() {
       return positions.get(orgId) ?? null
     },
     current: orgId => positions.get(orgId) ?? null,
+    reported: orgId => reported.get(orgId) ?? positions.get(orgId) ?? null,
     lagMs: () => 0,
     stuck: () => false,
   }
@@ -340,6 +343,7 @@ export function fakeStream() {
       return target
     },
     positions,
+    reported,
     watched,
     hold(): void {
       held = new Promise(resolve => {

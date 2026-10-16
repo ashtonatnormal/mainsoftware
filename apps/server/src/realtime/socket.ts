@@ -74,7 +74,6 @@ import {
 } from '#src/realtime/frames.ts'
 import { GATEWAY_POLICY, type GatewayPolicy, gatewayPolicy, reconnectSpreadMs } from '#src/realtime/policy.ts'
 import {
-  grainOf,
   RESUME_OUTCOMES,
   ReplayQueue,
   type ResumeOutcome,
@@ -179,13 +178,15 @@ interface Label {
   cause?: string | undefined
 }
 
-// The org's event stream as the gateway uses it (realtime/stream.ts StreamReader).
+// The org's event stream as the gateway uses it (realtime/stream.ts StreamReader): the exact
+// position, once read and at once, and the reported one its sockets are told (T19 item 9).
 export interface GatewayStream {
   start(): void
   stop(): Promise<void>
   watch(orgId: string): void
   position(orgId: string): Promise<Position | null>
   current(orgId: string): Position | null
+  reported(orgId: string): Position | null
   lagMs(): number
   stuck(): boolean
 }
@@ -197,6 +198,7 @@ const NO_STREAM: GatewayStream = {
   watch: () => {},
   position: async () => null,
   current: () => null,
+  reported: () => null,
   lagMs: () => 0,
   stuck: () => false,
 }
@@ -916,10 +918,10 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   )
 
   // The stream lost continuity (§5.5): every socket of the org that has said hello is told at once,
-  // with the position the reader continues from in its grain (T19 item 9).
+  // with the reported position in the epoch the reader continues in (T19 item 9).
   function resetOrg(orgId: string, position: Position): void {
     resets.set(orgId, (resets.get(orgId) ?? 0) + 1)
-    const text = (v: number) => JSON.stringify({ v, t: 'reset', pos: grainOf(position, policy.positionGrainMs) })
+    const text = (v: number) => JSON.stringify({ v, t: 'reset', pos: position })
     for (const conn of liveOf(byOrg.get(orgId))) {
       if (conn.version === undefined) continue
       send(conn, text(conn.version))
@@ -965,6 +967,7 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     },
     position: orgId => stream.position(orgId),
     current: orgId => stream.current(orgId),
+    reported: orgId => stream.reported(orgId),
     resets: orgId => resets.get(orgId) ?? 0,
     replay: (conn, work) => replays.run(conn, work),
     plan: (orgId, request, current) => {
