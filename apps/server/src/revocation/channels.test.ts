@@ -57,7 +57,7 @@ describe('C0.5 T5 C0.7 T19 item 5 listening for ended sessions', () => {
     const sub = fakeSubscriber()
     const seen: [string[], number][] = []
     await listenRevoked(
-      new Subscriptions(sub.asRedis, { info: vi.fn(), warn: vi.fn() }),
+      new Subscriptions(sub.asRedis, { debug: vi.fn(), info: vi.fn(), warn: vi.fn() }),
       'it:unit:',
       (ids, at) => seen.push([ids, at]),
       logger(),
@@ -72,7 +72,7 @@ describe('C0.5 T5 C0.7 T19 item 5 listening for ended sessions', () => {
     const seen: string[][] = []
     const log = logger()
     await listenRevoked(
-      new Subscriptions(sub.asRedis, { info: vi.fn(), warn: vi.fn() }),
+      new Subscriptions(sub.asRedis, { debug: vi.fn(), info: vi.fn(), warn: vi.fn() }),
       'it:unit:',
       ids => seen.push(ids),
       log,
@@ -90,7 +90,12 @@ describe('C0.5 T5 C0.7 T19 item 5 listening for ended sessions', () => {
     const sub = fakeSubscriber()
     const log = logger()
     const onRevoked = vi.fn()
-    await listenRevoked(new Subscriptions(sub.asRedis, { info: vi.fn(), warn: vi.fn() }), 'it:unit:', onRevoked, log)
+    await listenRevoked(
+      new Subscriptions(sub.asRedis, { debug: vi.fn(), info: vi.fn(), warn: vi.fn() }),
+      'it:unit:',
+      onRevoked,
+      log,
+    )
     sub.events.emit('message', 'h:prod:revoked', JSON.stringify({ v: 1, at: 1, sessions: [id(1)] }))
     for (const bad of [
       'not json',
@@ -187,7 +192,7 @@ describe('C0.7 T19 item 5 the access channel', () => {
     const log = logger()
     const seen: AccessMessage[] = []
     await listenAccess(
-      new Subscriptions(sub.asRedis, { info: vi.fn(), warn: vi.fn() }),
+      new Subscriptions(sub.asRedis, { debug: vi.fn(), info: vi.fn(), warn: vi.fn() }),
       'it:unit:',
       m => seen.push(m),
       log,

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SUBSCRIBE_RETRY_MS, Subscriptions } from '#src/pubsub.ts'
+import { SUBSCRIBE_RETRY_MS, SUBSCRIBER_PING_MS, Subscriptions } from '#src/pubsub.ts'
 import { fakeSubscriber } from '#src/testing/subscriber.ts'
 
-const logger = () => ({ info: vi.fn(), warn: vi.fn() })
+const logger = () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn() })
 
 describe('C0.5 C0.6 T14 the pub/sub channels on one subscriber connection', () => {
   afterEach(() => {
@@ -100,5 +100,78 @@ describe('C0.5 C0.6 T14 the pub/sub channels on one subscriber connection', () =
     await subscriptions.close()
     await vi.advanceTimersByTimeAsync(SUBSCRIBE_RETRY_MS * 5)
     expect(subscribe).toHaveBeenCalledTimes(calls)
+  })
+
+  it('OD-30 T19 item 12: sends PING every 5 s while the connection is ready, one at a time, and a failed one is harmless', async () => {
+    vi.useFakeTimers()
+    const { asRedis, client, ping } = fakeSubscriber()
+    const log = logger()
+    const subscriptions = new Subscriptions(asRedis, log)
+    await subscriptions.add('it:unit:revoked', 'revoked', () => {})
+    expect(SUBSCRIBER_PING_MS).toBe(5000)
+    await vi.advanceTimersByTimeAsync(SUBSCRIBER_PING_MS - 1)
+    expect(ping).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(ping).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(SUBSCRIBER_PING_MS * 2)
+    expect(ping).toHaveBeenCalledTimes(3)
+
+    // A failed PING is logged at debug and changes nothing: the connection's own handling (its
+    // socket timeout, the reconnect, the subscribe again on 'ready') does the rest.
+    ping.mockRejectedValueOnce(new Error('Command timed out'))
+    await vi.advanceTimersByTimeAsync(SUBSCRIBER_PING_MS)
+    expect(log.debug).toHaveBeenCalledWith(expect.objectContaining({ event: 'subscriber_ping_failed' }))
+    expect(log.warn).not.toHaveBeenCalled()
+    expect(subscriptions.isLive('revoked')).toBe(true)
+
+    // One awaiting its reply holds back the next.
+    let answer: (value: string) => void = () => {}
+    ping.mockImplementationOnce(() => new Promise<string>(resolve => (answer = resolve)))
+    await vi.advanceTimersByTimeAsync(SUBSCRIBER_PING_MS * 3)
+    expect(ping).toHaveBeenCalledTimes(5)
+    answer('PONG')
+    await vi.advanceTimersByTimeAsync(SUBSCRIBER_PING_MS)
+    expect(ping).toHaveBeenCalledTimes(6)
+
+    // Nothing while the connection isn't ready (it would wait in the offline queue), or once closed.
+    client.status = 'reconnecting'
+    await vi.advanceTimersByTimeAsync(SUBSCRIBER_PING_MS * 2)
+    expect(ping).toHaveBeenCalledTimes(6)
+    client.status = 'ready'
+    await subscriptions.close()
+    await vi.advanceTimersByTimeAsync(SUBSCRIBER_PING_MS * 2)
+    expect(ping).toHaveBeenCalledTimes(6)
+  })
+
+  it('OD-22 T19 item 12: a channel is live from its subscribe until the connection closes, and again once subscribed on the next', async () => {
+    vi.useFakeTimers()
+    const { asRedis, events, subscribe } = fakeSubscriber()
+    const subscriptions = new Subscriptions(asRedis, logger())
+    expect(subscriptions.isLive('revoked')).toBe(false)
+    let answer: () => void = () => {}
+    subscribe.mockImplementationOnce(() => new Promise<number>(resolve => (answer = () => resolve(1))))
+    const added = subscriptions.add('it:unit:revoked', 'revoked', () => {})
+    await subscriptions.add('it:unit:access', 'access', () => {})
+    // Sent, not yet answered: not live.
+    expect(subscriptions.isLive('revoked')).toBe(false)
+    expect(subscriptions.isLive('access')).toBe(true)
+    answer()
+    await added
+    expect(subscriptions.isLive('revoked')).toBe(true)
+    // A channel never asked for is never live.
+    expect(subscriptions.isLive('flags')).toBe(false)
+
+    events.emit('close')
+    expect(subscriptions.isLive('revoked')).toBe(false)
+    expect(subscriptions.isLive('access')).toBe(false)
+    // The next connection: subscribing again fails once for one channel, which stays down until
+    // its retry works.
+    subscribe.mockRejectedValueOnce(new Error('Command timed out'))
+    events.emit('ready')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(subscriptions.isLive('revoked')).toBe(false)
+    expect(subscriptions.isLive('access')).toBe(true)
+    await vi.advanceTimersByTimeAsync(SUBSCRIBE_RETRY_MS)
+    expect(subscriptions.isLive('revoked')).toBe(true)
   })
 })

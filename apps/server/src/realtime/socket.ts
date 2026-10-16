@@ -26,22 +26,24 @@ import { SIGNED_OUT_CLOSE, SOCKET_REVOKE_MS, SOCKETS_PER_SESSION } from '#src/au
 import type { SessionIds } from '#src/db/pre-org.ts'
 import { pathOf } from '#src/logger.ts'
 import { isAppOrigin } from '#src/origin.ts'
+import { GATEWAY_POLICY } from '#src/realtime/policy.ts'
 
 export const SOCKET_PATH = '/ws'
 
-// A frame from a client may be at most 4 KiB; a larger one closes that socket.
-export const MAX_FRAME_BYTES = 4096
+// A frame from a client may be at most 4 KiB; a larger one closes that socket. The numbers here are
+// realtime/policy.ts's (T19).
+export const MAX_FRAME_BYTES = GATEWAY_POLICY.maxFrameBytes
 
 // How long a session lookup may take before the upgrade is refused 503.
-export const LOOKUP_TIMEOUT_MS = 5000
+export const LOOKUP_TIMEOUT_MS = GATEWAY_POLICY.lookupTimeoutMs
 
 // How long one re-check may take, at most, before it counts as failed (never longer than the
 // re-check interval), so a query on a connection that has stopped answering can't hold up every
 // later re-check and keep ended sessions' sockets open past T5's 60 s.
-export const RECHECK_TIMEOUT_MS = 10_000
+export const RECHECK_TIMEOUT_MS = GATEWAY_POLICY.recheckTimeoutMs
 
 // How long a client gets to finish the closing handshake before its socket is cut.
-export const CLOSE_GRACE_MS = 1000
+export const CLOSE_GRACE_MS = GATEWAY_POLICY.closeGraceMs
 
 // The close every socket gets when the server stops: the client reconnects (to another task).
 export const STOPPING_CLOSE = { code: 1001, reason: 'server stopping' } as const
