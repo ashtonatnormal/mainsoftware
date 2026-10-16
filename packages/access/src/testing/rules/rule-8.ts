@@ -13,6 +13,7 @@ import {
   listAccessible,
   type SelfRequest,
   type Subject,
+  type TopicRequest,
   World,
 } from '../../index.ts'
 import { sqlReadableBy } from '../../sql.ts'
@@ -28,6 +29,7 @@ import {
   fixtureFacts,
   human,
   M,
+  ORG,
   P,
   PK,
   PROPOSAL,
@@ -109,6 +111,16 @@ const SELF_REQUESTS: readonly SelfRequest[] = [
   { action: 'passkeys.remove_own', passkey: PK.marcus },
   { action: 'passkeys.remove_own', passkey: PK.formerDpo },
 ]
+// Live topics (T19 item 7): three people's own (one of them has left), the org's, four of the
+// fixture's teams (the archived Night shift among them) and a team that doesn't exist.
+const TOPIC_REQUESTS: readonly TopicRequest[] = [
+  { kind: 'person' as const, id: P.marcus },
+  { kind: 'person' as const, id: P.nadia },
+  { kind: 'person' as const, id: P.formerDpo },
+  { kind: 'org' as const, id: ORG },
+  ...[T.operations, T.nightShift, T.q4, T.people].map(id => ({ kind: 'team' as const, id })),
+  { kind: 'team' as const, id: 'd0000000-0000-4000-8000-0000000000ff' },
+].map(topic => ({ action: 'topic.subscribe', topic }))
 
 // Every id in a set of facts: the org's, and each row's own.
 function idsOf(f: Facts): Set<Id> {
@@ -234,9 +246,17 @@ export const RULE_8: readonly RuleCase[] = [
         const ownBefore = SELF_REQUESTS.map(r => can(world, s, r, reauthenticated))
         const ownAfter = SELF_REQUESTS.map(r => can(injected, as(s), as(r), reauthenticated))
         expect(ownAfter, `${p} own devices and passkeys`).toEqual(ownBefore)
+        const topicsBefore = TOPIC_REQUESTS.map(r => can(world, s, r))
+        const topicsAfter = TOPIC_REQUESTS.map(r => can(injected, as(s), as(r)))
+        expect(topicsAfter, `${p} live topics`).toEqual(topicsBefore)
       }
-      // The admin decisions, and those about a named device or passkey, include both answers.
-      for (const requests of [ADMIN_REQUESTS, SELF_REQUESTS.filter(r => 'device' in r || 'passkey' in r)]) {
+      // The admin decisions, those about a named device or passkey, and the live topics include both
+      // answers.
+      for (const requests of [
+        ADMIN_REQUESTS,
+        SELF_REQUESTS.filter(r => 'device' in r || 'passkey' in r),
+        TOPIC_REQUESTS,
+      ]) {
         const decisions = everyone.flatMap(p => requests.map(r => can(world, human(p), r, reauthenticated)))
         expect(decisions).toContain(true)
         expect(decisions).toContain(false)

@@ -2,7 +2,8 @@
 // (Principle 1): can() for anything a subject asks to do, the read rule behind it (readersOf and
 // keysOf), the audience functions for Rule 2 and Rule 3, the index class for search and the
 // Org Brain, and the row shape the SQL filter (@hearth/access/sql) reads. No role reads content
-// here: privileged access (Rule 9) lives only in the server's Rule 9 module.
+// here: privileged access (Rule 9) lives only in the server's Rule 9 module. From C0.7 it also
+// decides the realtime gateway's live topics (topic.subscribe; canTopics for the re-checks).
 export { isAdmin, isOwner } from './admin.ts'
 export {
   type Audience,
@@ -33,5 +34,9 @@ export type {
   Request,
   RequestContext,
   SelfRequest,
+  Topic,
+  TopicKind,
+  TopicRequest,
 } from './requests.ts'
+export { canTopics, TOPIC_KINDS, topicToken } from './topics.ts'
 export { World } from './world.ts'

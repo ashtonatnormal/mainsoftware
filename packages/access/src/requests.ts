@@ -92,7 +92,16 @@ export type SelfRequest =
   | { action: 'passkeys.add_own' }
   | { action: 'passkeys.remove_own'; passkey: Id }
 
-export type Request = ContentRequest | CreateRequest | AdminRequest | SelfRequest
+// A live topic on the realtime gateway (BUILD-PLAN C0.7, TECH-SPEC T19 item 7): a person's own,
+// their org's, or a team's. C1.1 adds spaces, decided by canRead or by membership (OD-05).
+export type TopicKind = 'person' | 'org' | 'team'
+export interface Topic {
+  kind: TopicKind
+  id: Id
+}
+export type TopicRequest = { action: 'topic.subscribe'; topic: Topic }
+
+export type Request = ContentRequest | CreateRequest | AdminRequest | SelfRequest | TopicRequest
 
 // What the server knows about the session making the request. Every admin request, and adding or
 // removing your own passkey, needs a recent re-authentication (§9.4, T14); the server decides how
@@ -142,4 +151,10 @@ export const SELF_ACTIONS = new Set<string>([
 
 export function isSelfRequest(request: Request): request is SelfRequest {
   return SELF_ACTIONS.has(request.action)
+}
+
+export const TOPIC_ACTIONS = new Set<string>(['topic.subscribe'])
+
+export function isTopicRequest(request: Request): request is TopicRequest {
+  return TOPIC_ACTIONS.has(request.action)
 }

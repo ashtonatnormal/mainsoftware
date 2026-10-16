@@ -10,7 +10,15 @@
 //   z.array(z.uuid()).max(n), n ≤ 100          a list of ids
 // So a free string (a pattern included), an unbounded or negative number and a nested object are
 // refused. is_ids_only() is the database's backstop for the same rule.
-import type { z } from 'zod'
+import { z } from 'zod'
+
+// A uuid in the database's text form, lower case: what uuid columns print, and the only form
+// is_ids_only()'s uuid regex (migration 0007) and enqueue() accept. z.uuid() takes upper case too,
+// so a value read from a frame or an event that goes on to the database, or is compared with its
+// ids, is read with LowerUuid (C0.7: the gateway's topics and positions, the revocation consumer).
+export const UUID_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+export const UUID_PATTERN = new RegExp(`^${UUID_SOURCE}$`)
+export const LowerUuid = z.string().regex(UUID_PATTERN)
 
 // A code as is_ids_only() accepts one.
 export const CODE = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/
