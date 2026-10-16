@@ -180,6 +180,12 @@ export const WRITES: Readonly<Record<string, Coverage>> = {
   'hearth_job_offboarding outbox_checkpoints.last_id:UPDATE': checkpoint,
   'hearth_job_offboarding outbox_checkpoints.processed:UPDATE': checkpoint,
   'hearth_job_offboarding outbox_checkpoints.updated_at:UPDATE': checkpoint,
+  'hearth_job_revocation jobs:INSERT': queue,
+  'hearth_job_revocation outbox_checkpoints:INSERT': checkpoint,
+  'hearth_job_revocation outbox_checkpoints.last_tx:UPDATE': checkpoint,
+  'hearth_job_revocation outbox_checkpoints.last_id:UPDATE': checkpoint,
+  'hearth_job_revocation outbox_checkpoints.processed:UPDATE': checkpoint,
+  'hearth_job_revocation outbox_checkpoints.updated_at:UPDATE': checkpoint,
 
   // --- Functions -----------------------------------------------------------------------------
 

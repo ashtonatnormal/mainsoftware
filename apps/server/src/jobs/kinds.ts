@@ -98,10 +98,16 @@ export interface Registries {
 const KIND = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/
 const SCHEDULE_KEY = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/
 const CONSUMER = /^[a-z][a-z0-9_]{0,62}$/
-// The roles that may fence and finish a job (0007's grants); hearth_queue runs the queue itself.
-const JOB_RUN_ROLES: readonly JobRole[] = ['hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge']
-// The roles that may move an outbox checkpoint (0007's grants).
-const CONSUMER_ROLES: readonly JobRole[] = ['hearth_job_offboarding']
+// The roles that may fence and finish a job (0007's and 0008's grants); hearth_queue runs the queue
+// itself.
+const JOB_RUN_ROLES: readonly JobRole[] = [
+  'hearth_job_offboarding',
+  'hearth_job_partitions',
+  'hearth_job_purge',
+  'hearth_job_revocation',
+]
+// The roles that may move an outbox checkpoint (0007's and 0008's grants).
+const CONSUMER_ROLES: readonly JobRole[] = ['hearth_job_offboarding', 'hearth_job_revocation']
 
 export const isRetired = (schedule: ScheduleDef | RetiredSchedule): schedule is RetiredSchedule => 'retired' in schedule
 

@@ -149,6 +149,20 @@ select pg_temp.check((select count(*) from public.outbox_events where subject_id
 select pg_temp.expect_error($$delete from public.outbox_events$$, '42501');
 select pg_temp.expect_error($$update public.outbox_events set purpose = 'accounts'$$, '42501');
 reset role;
+-- So does the revocation consumer's role (0008), which reads the same envelope (its sessions and
+-- subjects) and can't change or remove an event either.
+select pg_temp.act_as_job('1', 'hearth_job_revocation');
+select pg_temp.check((select count(*) from public.outbox_events) = current_setting('test.org1_events')::bigint
+                     and (select count(*) from public.outbox_events where org_id <> pg_temp.id('1', '00')) = 0,
+                     'hearth_job_revocation did not see exactly its org''s events');
+select pg_temp.check((select count(*) from public.outbox_events where subject_ids @> array[pg_temp.id('1', 'a8')]) > 0,
+                     'hearth_job_revocation could not read the envelope');
+select pg_temp.expect_error($$delete from public.outbox_events$$, '42501');
+select pg_temp.expect_error($$update public.outbox_events set purpose = 'accounts'$$, '42501');
+select pg_temp.expect_error($$insert into public.outbox_events (org_id, type, entity_type, entity_id, actor_id, actor_kind, purpose)
+  values ('f1000000-0000-4000-8000-000000000000', 'signin.ended', 'person', 'f1000000-0000-4000-8000-0000000000a8',
+          'f1000000-0000-4000-8000-0000000000a0', 'system', 'accounts')$$, '42501');
+reset role;
 
 -- 6. hearth_queue sees positions and times, for the lag metric and the restore check, never the
 -- envelope; and it deletes nothing.
@@ -198,6 +212,30 @@ select pg_temp.act_as_job('1', 'hearth_worker');
 select pg_temp.expect_error($$select count(*) from public.outbox_checkpoints$$, '42501');
 select pg_temp.expect_error($$select count(*) from public.outbox_events$$, '42501');
 reset role;
+
+-- 7b. The revocation consumer's role (0008) starts and moves its own checkpoint, and no other: not
+-- offboarding's, whether named or reached by an update that names no consumer (42501); nor may
+-- offboarding's role move the revocation checkpoint. After 7, so hearth_queue's count there holds.
+select pg_temp.act_as_job('1', 'hearth_job_revocation');
+select pg_temp.expect_rows($$insert into public.outbox_checkpoints (org_id, consumer, role_name)
+  values ('f1000000-0000-4000-8000-000000000000', 'revocation', 'hearth_job_revocation')$$, 1);
+select pg_temp.expect_rows($$update public.outbox_checkpoints set last_tx = '5', last_id = 7, processed = processed + 2, updated_at = now()
+  where consumer = 'revocation'$$, 1);
+select pg_temp.expect_error($$update public.outbox_checkpoints set last_id = 9 where consumer = 'offboarding'$$, '42501',
+                            '%Only the role that runs a consumer%');
+select pg_temp.expect_error($$update public.outbox_checkpoints set last_id = 9$$, '42501', '%Only the role that runs a consumer%');
+select pg_temp.expect_error($$insert into public.outbox_checkpoints (org_id, consumer, role_name)
+  values ('f1000000-0000-4000-8000-000000000000', 'planted', 'hearth_job_offboarding')$$, '42501', '%Only the role that runs a consumer%');
+select pg_temp.expect_error($$delete from public.outbox_checkpoints$$, '42501');
+reset role;
+select pg_temp.act_as_job('1', 'hearth_job_offboarding');
+select pg_temp.expect_error($$update public.outbox_checkpoints set last_id = 9 where consumer = 'revocation'$$, '42501',
+                            '%Only the role that runs a consumer%');
+reset role;
+select pg_temp.check(last_tx = '5' and last_id = 7 and processed = 2, 'the revocation checkpoint did not hold its own move alone')
+from public.outbox_checkpoints where org_id = pg_temp.id('1', '00') and consumer = 'revocation';
+select pg_temp.check(last_id <> 9, 'another role moved the offboarding checkpoint')
+from public.outbox_checkpoints where org_id = pg_temp.id('1', '00') and consumer = 'offboarding';
 
 -- 8. Nobody deletes an event directly, the purge job's role included (42501): rows leave only
 -- through purge_outbox().
@@ -258,7 +296,8 @@ do $$
 declare
   r text;
 begin
-  foreach r in array array['hearth_app', 'hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_worker'] loop
+  foreach r in array array['hearth_app', 'hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_revocation',
+                           'hearth_worker'] loop
     perform set_config('role', r, true);
     perform pg_temp.expect_error('select public.purge_outbox(10)', '42501');
     perform set_config('role', 'none', true);

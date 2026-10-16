@@ -198,6 +198,11 @@ describe('C0.6 T15 the job registries', () => {
     ).toMatch(/not a registered flag/)
   })
 
+  it('C0.7 T19: hearth_job_revocation (0008) may run jobs and move a checkpoint, as its grants allow', () => {
+    expect(problemsOf({ ...valid(), kinds: [kind({ role: 'hearth_job_revocation' })] })).toBe('')
+    expect(problemsOf({ ...valid(), consumers: [consumer({ role: 'hearth_job_revocation' })] })).toBe('')
+  })
+
   it('names every problem at once', () => {
     const message = problemsOf({
       kinds: [kind({ maxAttempts: 0 }), kind({ kind: 'it.other', feature: 'it.nothing' })],

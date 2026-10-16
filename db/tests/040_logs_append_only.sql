@@ -114,7 +114,7 @@ do $$
 declare
   r text;
 begin
-  foreach r in array array['hearth_queue', 'hearth_job_offboarding', 'hearth_job_purge', 'hearth_worker'] loop
+  foreach r in array array['hearth_queue', 'hearth_job_offboarding', 'hearth_job_purge', 'hearth_job_revocation', 'hearth_worker'] loop
     perform set_config('role', r, true);
     perform pg_temp.expect_error('select public.create_data_access_partitions(1)', '42501');
     perform set_config('role', 'none', true);
