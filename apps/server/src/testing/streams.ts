@@ -1,15 +1,17 @@
 // An in-memory stand-in for the Valkey commands the gateway's stream code uses, for unit tests
 // (test-only; the image leaves testing/ out). client is the command client (GET, SET with NX and
-// PX, PEXPIRE, XRANGE, XREVRANGE, XINFO STREAM, and the producer's and the tick's scripts through
-// EVALSHA, which answers NOSCRIPT until EVAL has run each once, as Valkey after a restart does);
-// reader is the
-// blocking reader's connection (XREAD BLOCK, which waits for an append or its block, and 'ready').
-// Ids take their time from a clock the test sets. Each command can be made to fail, and a test can
-// trim, delete or lose the tail of a stream as Valkey would.
+// PX, PEXPIRE, XRANGE, XREVRANGE, a MULTI of XRANGE and XREVRANGE, run at once at its EXEC as Valkey
+// runs one, and the producer's script through EVALSHA, which answers NOSCRIPT until EVAL has run it
+// once, as Valkey after a restart does); reader is the blocking reader's connection (XREAD BLOCK,
+// which waits for an append or its block, and 'ready'). Ids, and the script's age trim, take their
+// time from a clock the test sets, and every entry is numbered as the script numbers it (the
+// stream's count of entries ever added). Each command can be made to fail, a test can trim, delete
+// or lose the tail of a stream as Valkey would, and a test's hook (between) can land a write between
+// two of the reader's commands.
 import { EventEmitter } from 'node:events'
 import type { Redis } from 'ioredis'
 import { vi } from 'vitest'
-import { compareIds, PUBLISH_TOPIC_EVENT, TICK } from '#src/realtime/stream.ts'
+import { compareIds, PUBLISH_TOPIC_EVENT } from '#src/realtime/stream.ts'
 
 type Entry = [id: string, fields: string[]]
 
@@ -43,15 +45,26 @@ export function fakeStreams(options: { now?: () => number } = {}) {
   const failures = new Map<string, Error[]>()
   // The scripts EVAL has run, by SHA-1.
   const loaded = new Set<string>()
+  // A test's hook, awaited after each command of the command client but the producer's script has
+  // run and before its reply goes back (a MULTI counts as one command, at its EXEC), so a test can
+  // land a write, through the producer's script, between two of the reader's commands.
+  let hook: ((command: string, args: readonly unknown[]) => Promise<void> | void) | undefined
+
+  async function afterCommand(command: string, args: readonly unknown[]): Promise<void> {
+    await hook?.(command, args)
+  }
 
   function failIfAsked(command: string): void {
     const error = failures.get(command)?.shift()
     if (error !== undefined) throw error
   }
 
-  // Appends an entry with the next id from the clock (or one ms later than the last, if the clock
-  // stands still or went back), as XADD * does.
-  function add(stream: string, value: string, at = now()): string {
+  // Appends an entry with the next id from the clock (or the next sequence number, if the clock
+  // stands still or went back), as XADD * does, numbered as the producer's script numbers it (n: the
+  // stream's entries-added once it is in) unless unnumbered, as something other than the script
+  // would write it. With quiet, a blocked XREAD isn't woken, so a test can write several entries
+  // (and trim) before one read sees them, as one MULTI would.
+  function add(stream: string, value: string, at = now(), o: { unnumbered?: boolean; quiet?: boolean } = {}): string {
     let s = streams.get(stream)
     if (s === undefined) {
       s = { entries: [], added: 0, lastMs: 0, lastSeq: 0 }
@@ -63,70 +76,90 @@ export function fakeStreams(options: { now?: () => number } = {}) {
     s.lastSeq = seq
     s.added++
     const id = `${ms}-${seq}`
-    s.entries.push([id, ['f', value]])
-    appended.emit('added', stream)
+    s.entries.push([id, o.unnumbered === true ? ['f', value] : ['n', String(s.added), 'f', value]])
+    if (o.quiet !== true) appended.emit('added', stream)
     return id
   }
 
-  // Appends an entry with the id given, as XADD <id> does: refused unless it is past the stream's
-  // last id.
-  function addAt(stream: string, id: string, value: string): string {
-    let s = streams.get(stream)
-    if (s === undefined) {
-      s = { entries: [], added: 0, lastMs: 0, lastSeq: 0 }
-      streams.set(stream, s)
+  function xrange(stream: string, start: string, end: string, ...args: unknown[]): Entry[] {
+    const entries = streams.get(stream)?.entries ?? []
+    return entries.filter(([id]) => inRange(id, start, end)).slice(0, countOf(args))
+  }
+
+  function xrevrange(stream: string, end: string, start: string, ...args: unknown[]): Entry[] {
+    const entries = streams.get(stream)?.entries ?? []
+    return entries
+      .filter(([id]) => inRange(id, start, end))
+      .reverse()
+      .slice(0, countOf(args))
+  }
+
+  // A MULTI of reads: the commands queued, then all run at once at EXEC, so nothing lands between
+  // them. EXEC answers each command's [error, reply], as ioredis's does.
+  function multi() {
+    const queued: (() => Entry[])[] = []
+    const transaction = {
+      xrange: (stream: string, start: string, end: string, ...args: unknown[]) => {
+        queued.push(() => xrange(stream, start, end, ...args))
+        return transaction
+      },
+      xrevrange: (stream: string, end: string, start: string, ...args: unknown[]) => {
+        queued.push(() => xrevrange(stream, end, start, ...args))
+        return transaction
+      },
+      exec: async (): Promise<[Error | null, unknown][]> => {
+        failIfAsked('multi')
+        const replies = queued.map((read): [Error | null, unknown] => [null, read()])
+        await afterCommand('multi', [])
+        return replies
+      },
     }
-    const [ms, seq] = id.split('-').map(Number) as [number, number]
-    if (s.added > 0 && compareIds(id, `${s.lastMs}-${s.lastSeq}`) <= 0) {
-      throw new Error('ERR The ID specified in XADD is equal or smaller than the target stream top item')
-    }
-    s.lastMs = ms
-    s.lastSeq = seq
-    s.added++
-    s.entries.push([id, ['f', value]])
-    appended.emit('added', stream)
-    return id
+    return transaction
   }
 
   const client = {
     get: vi.fn(async (key: string) => {
       failIfAsked('get')
-      return strings.get(key) ?? null
+      const value = strings.get(key) ?? null
+      await afterCommand('get', [key])
+      return value
     }),
     set: vi.fn(async (key: string, value: string, ...args: (string | number)[]) => {
       failIfAsked('set')
       const tokens = args.map(arg => String(arg).toUpperCase())
-      if (tokens.includes('NX') && strings.has(key)) return null
-      strings.set(key, value)
-      const px = tokens.indexOf('PX')
-      if (px >= 0) ttls.set(key, Number(args[px + 1]))
-      return 'OK'
+      let reply: 'OK' | null = null
+      if (!(tokens.includes('NX') && strings.has(key))) {
+        strings.set(key, value)
+        const px = tokens.indexOf('PX')
+        if (px >= 0) ttls.set(key, Number(args[px + 1]))
+        reply = 'OK'
+      }
+      await afterCommand('set', [key, value, ...args])
+      return reply
     }),
     pexpire: vi.fn(async (key: string, ms: number) => {
       failIfAsked('pexpire')
-      if (!strings.has(key) && !streams.has(key)) return 0
-      ttls.set(key, Number(ms))
-      return 1
+      let reply = 0
+      if (strings.has(key) || streams.has(key)) {
+        ttls.set(key, Number(ms))
+        reply = 1
+      }
+      await afterCommand('pexpire', [key, ms])
+      return reply
     }),
     xrange: vi.fn(async (stream: string, start: string, end: string, ...args: unknown[]) => {
       failIfAsked('xrange')
-      const entries = streams.get(stream)?.entries ?? []
-      return entries.filter(([id]) => inRange(id, start, end)).slice(0, countOf(args))
+      const reply = xrange(stream, start, end, ...args)
+      await afterCommand('xrange', [stream, start, end, ...args])
+      return reply
     }),
     xrevrange: vi.fn(async (stream: string, end: string, start: string, ...args: unknown[]) => {
       failIfAsked('xrevrange')
-      const entries = streams.get(stream)?.entries ?? []
-      return entries
-        .filter(([id]) => inRange(id, start, end))
-        .reverse()
-        .slice(0, countOf(args))
+      const reply = xrevrange(stream, end, start, ...args)
+      await afterCommand('xrevrange', [stream, end, start, ...args])
+      return reply
     }),
-    xinfo: vi.fn(async (_subcommand: 'STREAM', stream: string) => {
-      failIfAsked('xinfo')
-      const s = streams.get(stream)
-      if (s === undefined) throw new Error('ERR no such key')
-      return ['length', s.entries.length, 'entries-added', s.added, 'max-deleted-entry-id', '0-0']
-    }),
+    multi: vi.fn(multi),
     evalsha: vi.fn(async (sha: string, _keys: number, ...args: (string | number)[]) => {
       failIfAsked('evalsha')
       const run = scripts.get(sha)
@@ -135,7 +168,7 @@ export function fakeStreams(options: { now?: () => number } = {}) {
     }),
     eval: vi.fn(async (lua: string, _keys: number, ...args: (string | number)[]) => {
       failIfAsked('eval')
-      const script = [PUBLISH_TOPIC_EVENT, TICK].find(known => known.lua === lua)
+      const script = [PUBLISH_TOPIC_EVENT].find(known => known.lua === lua)
       const run = script === undefined ? undefined : scripts.get(script.sha)
       if (script === undefined || run === undefined) throw new Error('ERR unknown script')
       loaded.add(script.sha)
@@ -143,45 +176,24 @@ export function fakeStreams(options: { now?: () => number } = {}) {
     }),
   }
 
-  // The producer's script: SET NX PX the epoch, XADD with MAXLEN (trimmed exactly here), PEXPIRE both.
-  function runPublish([stream, epoch, maxLen, ttl, newEpoch, entry]: (string | number)[]): string {
+  // The producer's script: SET NX PX the epoch, XADD of the numbered entry with MINID (entries older
+  // than the age by the clock) and then MAXLEN (both trimmed exactly here, where Valkey's ~ trims
+  // whole nodes), PEXPIRE both.
+  function runPublish([stream, epoch, maxAge, maxLen, ttl, newEpoch, entry]: (string | number)[]): string {
     const [s, e] = [String(stream), String(epoch)]
     if (!strings.has(e)) strings.set(e, String(newEpoch))
+    const oldest = Math.max(0, Math.floor(now()) - Number(maxAge))
     const id = add(s, String(entry))
     const kept = streams.get(s) as Stream
+    const head = () => kept.entries[0]?.[0]
+    for (let at = head(); at !== undefined && compareIds(at, `${oldest}-0`) < 0; at = head()) kept.entries.shift()
     while (kept.entries.length > Number(maxLen)) kept.entries.shift()
     ttls.set(s, Number(ttl))
     ttls.set(e, Number(ttl))
     return id
   }
 
-  // The tick's script: SET NX PX the epoch, append the tick at <boundary>-0 unless the last entry is
-  // at or after it (an append refused is left out), trim, PEXPIRE both, and answer the last id.
-  function runTick([stream, epoch, boundary, maxLen, ttl, newEpoch, entry]: (string | number)[]): string | null {
-    const [s, e] = [String(stream), String(epoch)]
-    if (!strings.has(e)) {
-      strings.set(e, String(newEpoch))
-      ttls.set(e, Number(ttl))
-    }
-    const last = streams.get(s)?.entries.at(-1)?.[0]
-    if (last === undefined || Number(last.split('-')[0]) < Number(boundary)) {
-      try {
-        addAt(s, `${boundary}-0`, String(entry))
-      } catch {
-        // As redis.pcall leaves it.
-      }
-      const kept = streams.get(s)
-      while (kept !== undefined && kept.entries.length > Number(maxLen)) kept.entries.shift()
-    }
-    if (streams.has(s)) ttls.set(s, Number(ttl))
-    if (strings.has(e)) ttls.set(e, Number(ttl))
-    return streams.get(s)?.entries.at(-1)?.[0] ?? null
-  }
-
-  const scripts = new Map<string, (args: (string | number)[]) => string | null>([
-    [PUBLISH_TOPIC_EVENT.sha, runPublish],
-    [TICK.sha, runTick],
-  ])
+  const scripts = new Map<string, (args: (string | number)[]) => string>([[PUBLISH_TOPIC_EVENT.sha, runPublish]])
 
   const readerEvents = new EventEmitter()
   const reader = {
@@ -237,21 +249,30 @@ export function fakeStreams(options: { now?: () => number } = {}) {
     strings,
     ttls,
     add,
-    addAt,
-    // The next call of a command fails with this error (once per call to fail()).
+    // The hook awaited between the command client's commands (undefined to remove it).
+    between(next: typeof hook): void {
+      hook = next
+    },
+    // The next call of a command fails with this error (once per call to fail()); for multi, its
+    // EXEC.
     fail(command: keyof typeof client | 'xread', error = new Error('Connection is closed.')): void {
       const queue = failures.get(command) ?? []
       queue.push(error)
       failures.set(command, queue)
     },
-    // Trims the stream to its newest n entries, as MAXLEN does.
+    // Trims the stream to its newest n entries, as MAXLEN does (its count of entries added stays).
     trim(stream: string, n: number): void {
       const s = streams.get(stream)
       if (s !== undefined) s.entries.splice(0, Math.max(0, s.entries.length - n))
     },
-    // Loses the stream's newest n entries, as a failover can (the stream keeps its last id).
+    // Loses the stream's newest n entries, as a failover to a replica that lacked them does: its
+    // count of entries added goes back with them, so the new primary numbers its next entry as the
+    // first it lost. The stream keeps its last id, so the new primary's ids come above the lost ones
+    // (the harder case: a read from the reader's position returns them).
     loseTail(stream: string, n: number): void {
-      streams.get(stream)?.entries.splice(-n, n)
+      const s = streams.get(stream)
+      if (s === undefined) return
+      s.added -= s.entries.splice(-n, n).length
     },
     // Deletes keys, as a restart without persistence does.
     del(...keys: string[]): void {

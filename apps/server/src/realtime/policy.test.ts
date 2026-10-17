@@ -3,7 +3,7 @@ import { GATEWAY_LIMITS, GATEWAY_TOPIC_KINDS } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import { SOCKET_RECHECK_MS, SOCKET_REVOKE_MS } from '#src/auth/policy.ts'
 import { FLAG_READS_IN_FLIGHT } from '#src/flags/cache.ts'
-import { GATEWAY_POLICY, gatewayPolicy, reconnectSpreadMs, sinceMaxAgeMs } from '#src/realtime/policy.ts'
+import { GATEWAY_POLICY, gatewayPolicy, reconnectSpreadMs } from '#src/realtime/policy.ts'
 import { CLOSE_GRACE_MS, LOOKUP_TIMEOUT_MS, MAX_FRAME_BYTES, RECHECK_TIMEOUT_MS } from '#src/realtime/socket.ts'
 import { TOPIC_KIND_SPECS } from '#src/realtime/topics.ts'
 import { LATENCY_ERROR_MS, LATENCY_SUMMARY_MS, LATENCY_WARN_MS } from '#src/revocation/latency.ts'
@@ -42,19 +42,16 @@ describe('C0.7 T19 the gateway’s numbers', () => {
     expect(gatewayPolicy({ lookupTimeoutMs: 50, lookupReserveMs: 10 })).toMatchObject({ lookupReserveMs: 10 })
   })
 
-  it('T19 item 9: the reported position, a grain of a heartbeat, is at most two grains old when told, and a since a client holds after a window away (205 s) is never refused as too old', () => {
-    expect(P.positionGrainMs).toBe(P.heartbeatMs)
-    // A client's position when it goes: its last pong a heartbeat and that pong's wait ago, carrying
-    // the grain before's start.
-    const oldestHeld = P.heartbeatMs + P.pongTimeoutMs + 2 * P.positionGrainMs
-    expect(oldestHeld).toBeLessThan(P.resumeWindowMs)
-    expect(sinceMaxAgeMs()).toBe(P.resumeWindowMs + oldestHeld)
-    expect(sinceMaxAgeMs()).toBe(205_000)
-    expect(sinceMaxAgeMs(gatewayPolicy({ heartbeatMs: 200, deadAfterMs: 550, positionGrainMs: 1000 }))).toBe(
-      P.resumeWindowMs + 200 + P.pongTimeoutMs + 2000,
-    )
-    expect(() => gatewayPolicy({ positionGrainMs: 0 })).toThrow(/grain/)
-    expect(() => gatewayPolicy({ positionGrainMs: 2.5 })).toThrow(/grain/)
+  it('T19 item 9 GW-09: no number of a replay, a resume window or a reported position is left: a client resubscribes and refetches', () => {
+    // The owner's decision: re-authorise and refetch. The policy keeps the stream's own numbers for
+    // fan-out and none of the numbers that only served resume.
+    const names = Object.keys(P)
+    for (const gone of ['resume', 'replay', 'grain', 'since', 'era', 'position']) {
+      expect(
+        names.filter(name => name.toLowerCase().includes(gone)),
+        gone,
+      ).toEqual([])
+    }
   })
 
   it('M1 T19 item 11: the realtime pool keeps a connection for the lane, the check, the flag reads and /ready besides the lookups', () => {
@@ -87,7 +84,7 @@ describe('C0.7 T19 the gateway’s numbers', () => {
       P.recheckTimeoutMs,
       P.closeGraceMs,
     ])
-    // A 100-topic resume is two subs of 50, well inside the bucket with hello and a ping (S7).
+    // A 100-topic reconnect is two subs of 50, well inside the bucket with hello and a ping (S7).
     expect(Math.ceil(P.maxTopicsPerSocket / P.maxTopicsPerFrame) + 2).toBeLessThanOrEqual(P.frameBurst)
   })
 
@@ -98,7 +95,7 @@ describe('C0.7 T19 the gateway’s numbers', () => {
     expect(Object.values(TOPIC_KIND_SPECS).map(spec => spec.perItem)).toEqual([false, false, false])
   })
 
-  it('T19 items 9 and 13: the stream, resume and latency numbers agree with each other and with revocation/latency.ts', () => {
+  it('T19 items 9 and 13: the stream and latency numbers agree with each other and with revocation/latency.ts', () => {
     expect([P.latencyWarnMs, P.latencyErrorMs, P.metricsMs]).toEqual([
       LATENCY_WARN_MS,
       LATENCY_ERROR_MS,
@@ -111,21 +108,30 @@ describe('C0.7 T19 the gateway’s numbers', () => {
     expect(P.readerStuckMs).toBe(3 * P.readerBlockMs + 1000)
     expect(P.readerEpochCheckMs).toBeGreaterThanOrEqual(P.readerBlockMs)
     expect(P.epochRefreshMs).toBeLessThan(P.streamTtlMs)
-    // A replay reads at most replayScanPage entries of at most entryMaxBytes a time on the 1 s
-    // command client, and holds at most as many live entries as it may send. Its scan cap is twice
-    // the stream's (MAXLEN ~ overshoots by at most a node), so on a stream within its length only
-    // the resumed topics' own entries decide it; a cap below that is refused at start.
-    expect(P.replayScanPage * P.entryMaxBytes).toBeLessThanOrEqual(4 * 1024 * 1024)
-    expect(P.replayFramesMax).toBeLessThanOrEqual(P.replayScanPage)
-    expect(P.replayScanMax).toBe(2 * P.streamMaxLen)
-    expect(() => gatewayPolicy({ replayScanMax: P.streamMaxLen })).toThrow(/scan cap/)
-    expect(() => gatewayPolicy({ replayScanPage: 0 })).toThrow(/scan cap/)
-    expect(gatewayPolicy({ streamMaxLen: 10, replayScanMax: 20 })).toMatchObject({ replayScanMax: 20 })
-    // A replay that can't start in time answers reset well before a client gives up on its socket.
-    expect(P.replayStartMs).toBeLessThan(P.pongTimeoutMs)
-    // Two minutes: REC-01's and SLIDE-17's reconnect windows.
-    expect(P.resumeWindowMs).toBe(120_000)
+    // A full page of the reader's (readerCount entries of at most entryMaxBytes) stays a few MB.
+    expect(P.readerCount * P.entryMaxBytes).toBeLessThanOrEqual(4 * 1024 * 1024)
     // A revoked session is remembered for longer than a lookup may take.
     expect(P.recentlyRevokedMs).toBeGreaterThan(P.lookupTimeoutMs)
+  })
+
+  it('T19 item 9: the stream is trimmed by age, well past the reader’s stuck limit, so a trim past a reader means it was stuck, not that the org was busy; the count cap is a backstop far above the old 10,000, and a policy that breaks either is refused at start', () => {
+    expect(P.streamMaxAgeMs).toBe(60_000)
+    expect(P.streamMaxAgeMs).toBeGreaterThanOrEqual(8 * P.readerStuckMs)
+    // The backstop: 200 pages of the reader's, and at most about 200 MB at 2 KiB an entry.
+    expect(P.streamMaxLen).toBe(100_000)
+    expect(P.streamMaxLen).toBeGreaterThanOrEqual(200 * P.readerCount)
+    expect(P.streamMaxLen * P.entryMaxBytes).toBeLessThanOrEqual(200 * 1024 * 1024)
+    expect(() => gatewayPolicy({ streamMaxAgeMs: P.readerStuckMs })).toThrow(/age limit/)
+    expect(() => gatewayPolicy({ streamMaxLen: 0 })).toThrow(/cap/)
+    expect(gatewayPolicy({ streamMaxAgeMs: 300, readerStuckMs: 200, streamMaxLen: 20 })).toMatchObject({
+      streamMaxAgeMs: 300,
+      streamMaxLen: 20,
+    })
+  })
+
+  it('T19 item 9 P4: an org’s resets are coalesced on the trailing edge to one each spread’s minimum, no more often than the flags nudge, so an overload of other topics’ events shows only how long it lasted, to within 5 s', () => {
+    expect(P.resetCoalesceMs).toBe(5000)
+    expect(P.resetCoalesceMs).toBe(P.spreadMinMs)
+    expect(P.resetCoalesceMs).toBeGreaterThanOrEqual(P.nudgeCoalesceMs)
   })
 })

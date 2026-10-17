@@ -1,6 +1,6 @@
 import { connect } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
-import { GATEWAY_CLOSE, GATEWAY_LIMITS, type Position } from '@hearth/shared'
+import { GATEWAY_CLOSE, GATEWAY_LIMITS, ServerFrame } from '@hearth/shared'
 import type { FastifyInstance } from 'fastify'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
@@ -10,9 +10,8 @@ import { SOCKET_RECHECK_MS, SOCKET_REVOKE_MS } from '#src/auth/policy.ts'
 import type { SessionIds } from '#src/db/pre-org.ts'
 import { createLogger } from '#src/logger.ts'
 import type { Conn } from '#src/realtime/frames.ts'
-import { gatewayPolicy } from '#src/realtime/policy.ts'
 import { attachSocketServer, MAX_FRAME_BYTES, RECHECK_TIMEOUT_MS } from '#src/realtime/socket.ts'
-import { grainStart, publishTopicEvent, StreamReader } from '#src/realtime/stream.ts'
+import { publishTopicEvent, StreamReader } from '#src/realtime/stream.ts'
 import { RevocationLatency } from '#src/revocation/latency.ts'
 import {
   APP_ORIGIN,
@@ -524,6 +523,21 @@ describe('C0.7 T19 item 11 P9: sending, backpressure and the idempotent close', 
     expect(server.counts().closedSlow).toBe(2)
   })
 
+  it('T19 items 9 and 11: past the soft mark an ev and a reset still go, never shed: a client must not miss an event or a refetch', async () => {
+    const stream = fakeStream()
+    const { url, server, checks } = await start({ stream: stream.factory })
+    checks.allow(A.session.userId, teamTopic())
+    const buffered = vi.spyOn(WebSocket.prototype, 'bufferedAmount', 'get')
+    const client = await connected(url)
+    expect((await client.sub([teamTopic()])).ok).toEqual([teamTopic()])
+    buffered.mockReturnValue(300 * 1024)
+    stream.dispatch(ORG, teamTopic())
+    stream.target().resetOrg(ORG)
+    expect(await client.next('ev')).toMatchObject({ topic: teamTopic() })
+    expect(await client.next('reset')).toMatchObject({ topics: [teamTopic()], reason: 'gap' })
+    expect(server.counts().shed).toBe(0)
+  })
+
   it('P9: 600 sends to a socket past 1 MiB close it once, count it once, and add no listener', async () => {
     const stream = fakeStream()
     const { url, server, checks } = await start({ stream: stream.factory })
@@ -617,34 +631,25 @@ describe('C0.7 T19 item 12 GW-08: the heartbeat', () => {
     expect(live.ws.readyState).toBe(WebSocket.OPEN)
   })
 
-  it('GW-08 T19 item 9: pong carries the position the stream reports (null before it has one), never its current one, and the spread', async () => {
+  it('GW-08 T19 item 9: pong carries the spread and nothing about the org’s stream', async () => {
     const stream = fakeStream()
     const { url } = await start({ stream: stream.factory })
     const client = await connected(url)
     client.send({ v: 1, t: 'ping' })
-    expect(await client.next('pong')).toEqual({ v: 1, t: 'pong', pos: null, reconnectSpreadMs: 5000 })
-    const epoch = 'e0000000-0000-4000-8000-000000000001'
-    stream.positions.set(ORG, { epoch, pos: '1800000012345-3' })
-    stream.reported.set(ORG, { epoch, pos: '1799999975000-0' })
+    expect(await client.next('pong')).toEqual({ v: 1, t: 'pong', reconnectSpreadMs: 5000 })
+    // An event dispatched in the org, on a topic the socket doesn't hold, changes nothing in it.
+    stream.dispatch(ORG, personTopic(2))
     client.send({ v: 1, t: 'ping' })
-    expect(await client.next('pong')).toEqual({
-      v: 1,
-      t: 'pong',
-      pos: { epoch, pos: '1799999975000-0' },
-      reconnectSpreadMs: 5000,
-    })
+    expect(await client.next('pong')).toEqual({ v: 1, t: 'pong', reconnectSpreadMs: 5000 })
   })
 
-  it('T19 item 9: an event on a person topic the socket was refused, published mid-grain, moves neither pong’s nor an unsub’s ack’s position; at the next grain’s start both move to the grain before’s start, as with no event', async () => {
-    // A 1 s grain, so the test waits for at most two of them; the reader runs on the fake Valkey.
-    const grain = 1000
-    const policy = gatewayPolicy({ positionGrainMs: grain })
+  it('T19 item 9: an event on a person topic the socket was refused reaches it in no frame: pong and an unsub’s ack read the same before and after it, and no frame carries its stream id or time', async () => {
+    // The reader runs on the fake Valkey, as in production.
     const streams = fakeStreams()
     const prefix = 'it:unit:'
     const logger = createLogger({ logLevel: 'silent', role: 'realtime' })
     let reader: StreamReader<Conn> | undefined
     const { url } = await start({
-      policy: { positionGrainMs: grain },
       stream: target => {
         reader = new StreamReader({
           valkey: streams.asClient,
@@ -652,25 +657,23 @@ describe('C0.7 T19 item 12 GW-08: the heartbeat', () => {
           keyPrefix: prefix,
           target,
           logger,
-          policy,
         })
         return reader
       },
     })
     const client = await connected(url)
+    // Every frame as sent, to read strictly.
+    const raw: string[] = []
+    client.ws.on('message', data => raw.push(String(data)))
     expect((await client.sub([personTopic(1)])).ok).toEqual([personTopic(1)])
     expect((await client.sub([personTopic(2)])).refused).toEqual([personTopic(2)])
     const told = async () => {
       client.send({ v: 1, t: 'ping' })
-      const pong = (await client.next('pong')).pos
-      const ack = (await client.unsub([orgTopic()])).pos
-      expect(ack).toEqual(pong)
-      return (pong as Position).pos
+      const pong = await client.next('pong')
+      const ack = await client.unsub([orgTopic()])
+      return { pong, ack: { ...ack, id: 0 } }
     }
-    // A moment into a grain.
-    await delay(grain - (Date.now() % grain) + 100)
-    const begun = grainStart(Date.now(), grain)
-    expect(await told()).toBe(`${begun - grain}-0`)
+    const before = await told()
     const id = await publishTopicEvent(
       streams.asClient,
       prefix,
@@ -679,14 +682,27 @@ describe('C0.7 T19 item 12 GW-08: the heartbeat', () => {
       logger,
       { rethrow: true },
     )
-    await until(() => reader?.current(ORG)?.pos === id)
-    expect(await told()).toBe(`${begun - grain}-0`)
-    // Still the same grain, so the event's arrival is the only thing that happened in between.
-    expect(grainStart(Date.now(), grain)).toBe(begun)
-    await delay(begun + grain - Date.now() + 100)
-    expect(await told()).toBe(`${begun}-0`)
-    expect(client.all('ev')).toEqual([])
-    expect(JSON.stringify(client.frames)).not.toContain(String(id))
+    // The reader has read it (it would have sent it by now to a socket holding the topic).
+    const own = await publishTopicEvent(
+      streams.asClient,
+      prefix,
+      ORG,
+      { topic: personTopic(1), type: 'inbox.changed', ids: {} },
+      logger,
+      { rethrow: true },
+    )
+    await client.next('ev')
+    expect(await told()).toEqual(before)
+    expect(client.all('ev')).toEqual([{ v: 1, t: 'ev', topic: personTopic(1), type: 'inbox.changed', ids: {} }])
+    const text = raw.join('\n')
+    for (const streamId of [String(id), String(own)]) {
+      expect(text).not.toContain(streamId)
+      expect(text).not.toContain(streamId.split('-')[0])
+    }
+    // Each parses strictly: no field beyond its schema, which has none for a position.
+    expect(raw.length).toBeGreaterThanOrEqual(7)
+    for (const frame of raw) expect(ServerFrame.safeParse(JSON.parse(frame)).success, frame).toBe(true)
+    expect(reader).toBeDefined()
   })
 
   it('T19 item 11: a protocol ping is answered with its data, and one past the bucket closes the socket with 1008 too_many_frames, so a client that floods pings gets at most the burst’s pongs', async () => {

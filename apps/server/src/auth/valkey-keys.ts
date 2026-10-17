@@ -28,11 +28,13 @@ export function valkeyKeys(prefix: string) {
     // The pub/sub channel for everything newer about lost access (v1, C0.7): the worker's
     // revocation jobs' ended sessions and people whose keys changed (revocation/channels.ts).
     access: `${prefix}access`,
-    // An org's capped stream of topic events, read by every realtime process, and the resume buffer
-    // (T19 item 9).
+    // An org's stream of topic events, trimmed by age with a count cap as a memory backstop, read by
+    // every realtime process for fan-out (T19 item 9). It is never replayed to a client, and neither
+    // its ids nor its entries' numbers ever reach one (the producer answers the id to its api or
+    // worker caller only).
     stream: (orgId: string) => `${prefix}rt:{${orgId}}`,
-    // A random uuid that changes when the stream is lost (a Valkey restart or failover), so a resume
-    // from a position in the old stream answers reset.
+    // A random uuid that changes when the stream is lost (a Valkey restart or failover), so every
+    // reader of the org finds the gap and tells its sockets to refetch.
     epoch: (orgId: string) => `${prefix}rt:{${orgId}}:epoch`,
     // The pub/sub channel that tells every process an org's flags changed (flags/channel.ts; T17).
     flags: `${prefix}flags`,

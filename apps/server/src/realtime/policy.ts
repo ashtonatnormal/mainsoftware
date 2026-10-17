@@ -20,8 +20,8 @@ export interface GatewayPolicy {
   helloTimeoutMs: number
 
   // What a client may send (T19 item 11): a frame of at most maxFrameBytes (ws closes a larger one
-  // with 1009), at most maxTopicsPerFrame topics a sub and maxTopicsPerSocket held, deciding and
-  // replaying ones included, and an inbound token bucket of frameBurst, full when a socket opens,
+  // with 1009), at most maxTopicsPerFrame topics a sub and maxTopicsPerSocket held, deciding ones
+  // included, and an inbound token bucket of frameBurst, full when a socket opens,
   // refilled at framesPerSecond. Every frame takes a token, protocol pings and unasked-for pongs
   // included; only the pong answering the server's own ping is free.
   maxFrameBytes: number
@@ -74,42 +74,25 @@ export interface GatewayPolicy {
   recentlyRevokedMax: number
   keysChangedMs: number
 
-  // Resume (T19 item 9). A since older than sinceMaxAgeMs() (by its id's time) resets, whatever the
-  // stream holds. A replay is valid while the oldest missed entry of the topics it resumes is at
-  // most resumeWindowMs old and it sends at most replayFramesMax frames (the same cap holds a
-  // replaying topic's live entries). It reads the stream replayScanPage entries at a time, and
-  // resets once more than replayScanMax, twice the stream's cap, follow since, so on a stream within
-  // its length only the resumed topics' own entries decide it. A team topic whose current
-  // membership began after since's time less eraMarginMs resets (Valkey's and Postgres's clocks may
-  // differ by that much). The position ack, pong and reset carry is set at the start of each grain
-  // of positionGrainMs, never when an entry arrives: the previous grain's start while each grain's
-  // tick is written (stream.ts reportedAt), so it says nothing about other topics' events.
-  resumeWindowMs: number
-  replayScanPage: number
-  replayScanMax: number
-  replayFramesMax: number
-  eraMarginMs: number
-  positionGrainMs: number
-  // Replay caps (S5): replaysRunning at once per process and replaysWaiting queued; one at a time
-  // per socket, with replaysWaitingPerSocket queued; one that can't start within replayStartMs
-  // answers reset.
-  replaysRunning: number
-  replaysWaiting: number
-  replaysWaitingPerSocket: number
-  replayStartMs: number
-
-  // Each org's stream (T19 item 9): capped at about streamMaxLen entries (MAXLEN ~ trims whole
-  // nodes), each at most entryMaxBytes, with the stream and its epoch expiring streamTtlMs after
-  // their last write or refresh.
+  // Each org's stream (T19 item 9), for fan-out between realtime processes only (a client is never
+  // replayed from it: it resubscribes and refetches over REST). Each append trims the entries older
+  // than streamMaxAgeMs by Valkey's clock (MINID ~ trims whole nodes), which must be longer than
+  // readerStuckMs, so a trim past a reader means it was stuck, a fact about the server and not about
+  // the org's volume; the cap of about streamMaxLen entries (MAXLEN ~) is only a memory backstop.
+  // Each entry is at most entryMaxBytes, and the stream and its epoch expire streamTtlMs after their
+  // last write or refresh.
+  streamMaxAgeMs: number
   streamMaxLen: number
   streamTtlMs: number
   entryMaxBytes: number
   // The reader (realtime/stream.ts): XREAD BLOCK readerBlockMs COUNT readerCount on its own
   // connection; with no orgs it looks again after readerIdleMs, and after a failure after
-  // readerRetryMs. It checks each org's epoch and gaps every readerEpochCheckMs, and refreshes both
-  // keys every epochRefreshMs while the org has sockets here; at the start of each positionGrainMs
-  // it sets the org's reported position and appends the grain's tick. A reader with orgs that hasn't
-  // read for readerStuckMs (3 blocks and a second) fails the full readiness.
+  // readerRetryMs. Every entry a read returns is checked against the number of the one before it,
+  // which finds a trim past the reader. It checks each org's epoch and tail every
+  // readerEpochCheckMs, and before the next read after a reconnect, a failure, or a read that found
+  // a lost tail; and it refreshes both keys every epochRefreshMs while the org has sockets here. A
+  // reader with orgs that hasn't read for readerStuckMs (3 blocks and a second) fails the full
+  // readiness.
   readerBlockMs: number
   readerCount: number
   readerIdleMs: number
@@ -120,6 +103,13 @@ export interface GatewayPolicy {
 
   // The flags nudge goes out at most once per org each nudgeCoalesceMs, on the trailing edge (P4).
   nudgeCoalesceMs: number
+  // A reset goes to an org's sockets at most once each resetCoalesceMs, on the trailing edge (T19
+  // item 9): the reconnect spread's minimum, the shortest time over which a client spreads the
+  // refetch a reset asks for, so a reset sooner after the last would mostly ask again for a refetch
+  // the client hasn't made yet. A reader outrun for seconds finds a gap at every read, so this also
+  // bounds what the resets' count and spacing can say about other topics' volume: one for each
+  // resetCoalesceMs the overload lasts.
+  resetCoalesceMs: number
   // How often the revocation_latency summary and the gateway_gauges line are written (T19 item 13).
   metricsMs: number
   // The reconnect spread welcome and pong carry (P3): spreadMsPerSocket for each socket on the
@@ -171,18 +161,8 @@ export const GATEWAY_POLICY: GatewayPolicy = {
   recentlyRevokedMax: 100_000,
   keysChangedMs: 60_000,
 
-  resumeWindowMs: 120_000,
-  replayScanPage: 1000,
-  replayScanMax: 20_000,
-  replayFramesMax: 500,
-  eraMarginMs: 5000,
-  positionGrainMs: 25_000,
-  replaysRunning: 8,
-  replaysWaiting: 1000,
-  replaysWaitingPerSocket: 2,
-  replayStartMs: 2000,
-
-  streamMaxLen: 10_000,
+  streamMaxAgeMs: 60_000,
+  streamMaxLen: 100_000,
   streamTtlMs: 86_400_000,
   entryMaxBytes: 2048,
   readerBlockMs: 2000,
@@ -194,6 +174,7 @@ export const GATEWAY_POLICY: GatewayPolicy = {
   readerStuckMs: 7000,
 
   nudgeCoalesceMs: 1000,
+  resetCoalesceMs: 5000,
   metricsMs: 30_000,
   spreadMsPerSocket: 1,
   spreadMinMs: 5000,
@@ -206,34 +187,24 @@ export const GATEWAY_POLICY: GatewayPolicy = {
 // The policy with a test's overrides, refused at start if its numbers can't keep the heartbeat's
 // rules (T19 item 12): a socket is declared dead only after two missed pings, and the ping comes
 // before an ALB's default 60 s idle timeout cuts the connection. A test that shortens the heartbeat
-// (200/550 ms) passes both. A lookup's reserve must leave the queue some time to wait (M1), the
-// positions' grain must be a whole number of ms, and the replay's scan cap must sit above any
-// stream within its length (T19 item 9).
+// (200/550 ms) passes both. A lookup's reserve must leave the queue some time to wait (M1). The
+// stream's age limit must be longer than a reader may go without reading before readiness fails, so
+// that only a stuck reader is ever trimmed past by age (T19 item 9).
 export function gatewayPolicy(overrides: Partial<GatewayPolicy> = {}): GatewayPolicy {
   const policy = { ...GATEWAY_POLICY, ...overrides }
   if (policy.deadAfterMs <= 2 * policy.heartbeatMs) {
     throw new Error('the gateway’s dead limit must be longer than two heartbeats')
   }
+  if (policy.streamMaxAgeMs <= policy.readerStuckMs) {
+    throw new Error('the stream’s age limit must be longer than the reader’s stuck limit')
+  }
+  if (!(policy.streamMaxLen >= 1)) throw new Error('the stream’s cap must keep at least one entry')
   if (policy.heartbeatMs >= 60_000) throw new Error('the gateway’s heartbeat must be shorter than 60 s')
   if (policy.spreadMinMs > policy.spreadMaxMs) throw new Error('the reconnect spread’s minimum is above its maximum')
   if (!(policy.lookupReserveMs > 0 && policy.lookupReserveMs < policy.lookupTimeoutMs)) {
     throw new Error('the session lookup’s reserve must be above 0 and below its time limit')
   }
-  if (!Number.isInteger(policy.positionGrainMs) || policy.positionGrainMs < 1) {
-    throw new Error('the positions’ grain must be a whole number of ms, at least 1')
-  }
-  if (!(policy.replayScanPage >= 1 && policy.replayScanMax >= 2 * policy.streamMaxLen)) {
-    throw new Error('a replay’s scan cap must be at least twice the stream’s cap, read a page of at least 1')
-  }
   return policy
-}
-
-// How old a since may be, by its id's time, and still be replayed (T19 item 9): the window, and how
-// old a connected client's position can be when it goes, a heartbeat since its last pong, that
-// pong's wait, and two grains (the reported position is the previous grain's start). 205 s at these
-// numbers. An older since resets whatever the stream holds, so it can't be used to probe it.
-export function sinceMaxAgeMs(policy: GatewayPolicy = GATEWAY_POLICY): number {
-  return policy.resumeWindowMs + policy.heartbeatMs + policy.pongTimeoutMs + 2 * policy.positionGrainMs
 }
 
 // How widely a client spreads its reconnect (P3; T19 item 11): 1 ms for each socket on this

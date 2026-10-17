@@ -310,9 +310,9 @@ export class GatewaySocket {
     return this.#client.next(t, ms)
   }
 
-  // Sends a sub (or an unsub) and answers its ack.
-  sub(topics: string[], since?: { epoch: string; pos: string }): Promise<Frame & { t: 'ack' }> {
-    return this.#client.sub(topics, since)
+  // Sends a sub and answers its ack.
+  sub(topics: string[]): Promise<Frame & { t: 'ack' }> {
+    return this.#client.sub(topics)
   }
 
   unsub(topics: string[]): Promise<Frame & { t: 'ack' }> {
@@ -402,10 +402,9 @@ export interface Stack {
   ): Promise<GatewaySocket>
   // Every frame any gateway socket of the run was sent, as sent, for the gateway suite's sweep.
   gatewayFrames: string[]
-  // A team in the org (the stack's unless given), and memberships of it, written as the superuser. A
-  // membership begins now, or `ago` (an interval) before now.
+  // A team in the org (the stack's unless given), and memberships of it, written as the superuser.
   team(options?: { org?: Org }): Promise<string>
-  addMember(team: string, person: Person, options?: { ago?: string }): Promise<void>
+  addMember(team: string, person: Person): Promise<void>
   removeMember(team: string, person: Person): Promise<void>
   // Appends an outbox event as the superuser, Hearth acting, about the first subject (or entity).
   appendEvent(
@@ -1150,11 +1149,11 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       return made.id
     }
 
-    async function addMember(teamId: string, member: Person, o: { ago?: string } = {}): Promise<void> {
+    async function addMember(teamId: string, member: Person): Promise<void> {
       await query(
-        `insert into team_memberships (org_id, team_id, person_id, created_by, created_at)
-         values ($1, $2, $3, $4, now() - $5::interval)`,
-        [member.orgId, teamId, member.id, orgOf(member.orgId).system, o.ago ?? '0 seconds'],
+        `insert into team_memberships (org_id, team_id, person_id, created_by)
+         values ($1, $2, $3, $4)`,
+        [member.orgId, teamId, member.id, orgOf(member.orgId).system],
       )
     }
 

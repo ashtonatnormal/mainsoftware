@@ -4,7 +4,7 @@
 import type { IncomingHttpHeaders } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
-import { type Position, readServerFrame, type ServerFrameForClient } from '@hearth/shared'
+import { readServerFrame, type ServerFrameForClient } from '@hearth/shared'
 import { vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { buildApp } from '#src/app.ts'
@@ -14,7 +14,7 @@ import type { SessionIds } from '#src/db/pre-org.ts'
 import type { CheckOrg, CheckRequest, CheckResult, SessionCheck } from '#src/realtime/checks.ts'
 import type { Conn } from '#src/realtime/frames.ts'
 import { attachSocketServer, type GatewayStream, type SocketServerOptions } from '#src/realtime/socket.ts'
-import { evFrame, holdEntry, type StreamTarget } from '#src/realtime/stream.ts'
+import { evFrame, type StreamTarget } from '#src/realtime/stream.ts'
 import { captureLogger } from '#src/testing/logs.ts'
 
 export const APP_ORIGIN = 'https://hearth.example.com'
@@ -52,7 +52,6 @@ export class FakeChecks {
   readonly ended = new Map<string, number | undefined>()
   readonly notAdmitted = new Set<string>()
   readonly allowed = new Map<string, Set<string>>()
-  readonly eras = new Map<string, Map<string, number>>()
   readonly lostAt = new Map<string, Map<string, number>>()
   readonly calls: { orgId: string; request: CheckRequest }[] = []
   // The session ids' people, for the live ones (every known session's is registered).
@@ -118,7 +117,6 @@ export class FakeChecks {
     const notAdmitted = new Set([...live].filter(person => this.notAdmitted.has(person)))
     const topics = new Map<string, Map<string, boolean>>()
     const lostAt = new Map<string, Map<string, number | undefined>>()
-    const eras = new Map<string, Map<string, number>>()
     for (const [person, asked] of request.topics ?? []) {
       if (!live.has(person) || notAdmitted.has(person)) continue
       const own = new Set([`person:${person}`, `org:${orgId}`, ...(this.allowed.get(person) ?? [])])
@@ -130,15 +128,8 @@ export class FakeChecks {
         map.set(topic, this.lostAt.get(person)?.get(topic))
         lostAt.set(person, map)
       }
-      for (const topic of request.eras?.get(person) ?? []) {
-        const began = this.eras.get(person)?.get(topic)
-        if (began === undefined || decided.get(topic) !== true) continue
-        const map = eras.get(person) ?? new Map()
-        map.set(topic, began)
-        eras.set(person, map)
-      }
     }
-    return { sessions, notAdmitted, topics, lostAt, eras }
+    return { sessions, notAdmitted, topics, lostAt }
   }
 }
 
@@ -156,14 +147,16 @@ export class TestClient {
   readonly frames: Frame[] = []
   readonly closed: Promise<Closed>
   #consumed = new Set<number>()
-  #wake: (() => void) | undefined
+  // Every next() waiting, woken by each frame and by the close (several may wait at once, as a sub
+  // waiting for its ack and a test waiting for an ev).
+  readonly #wakers = new Set<() => void>()
   #id = 0
 
   constructor(ws: WebSocket) {
     this.ws = ws
     this.closed = new Promise(resolve => {
       ws.once('close', (code, reason) => {
-        this.#wake?.()
+        for (const wake of [...this.#wakers]) wake()
         resolve({ code, reason: reason.toString() })
       })
     })
@@ -171,7 +164,7 @@ export class TestClient {
       const frame = readServerFrame(String(data))
       // Every frame the server sends parses (P6); anything else is a bug, kept to fail the test.
       this.frames.push((frame ?? { t: 'unreadable', text: String(data) }) as Frame)
-      this.#wake?.()
+      for (const wake of [...this.#wakers]) wake()
     })
   }
 
@@ -192,11 +185,13 @@ export class TestClient {
       const left = deadline - Date.now()
       if (left <= 0) throw new Error(`no ${t ?? 'frame'} within ${ms} ms; got ${JSON.stringify(this.frames)}`)
       await new Promise<void>(resolve => {
-        const timer = setTimeout(resolve, left)
-        this.#wake = () => {
+        const wake = () => {
           clearTimeout(timer)
+          this.#wakers.delete(wake)
           resolve()
         }
+        const timer = setTimeout(wake, left)
+        this.#wakers.add(wake)
       })
     }
   }
@@ -206,10 +201,10 @@ export class TestClient {
     return this.next('welcome')
   }
 
-  // Sends a sub and answers its ack.
-  async sub(topics: string[], since?: { epoch: string; pos: string }): Promise<Frame & { t: 'ack' }> {
+  // Sends a sub (topics only: the protocol has nothing else to send, T19 item 9) and answers its ack.
+  async sub(topics: string[]): Promise<Frame & { t: 'ack' }> {
     const id = ++this.#id
-    this.send({ v: 1, t: 'sub', id, topics, ...(since === undefined ? {} : { since }) })
+    this.send({ v: 1, t: 'sub', id, topics })
     for (;;) {
       const ack = await this.next('ack')
       if (ack.id === id) return ack
@@ -306,16 +301,15 @@ export async function until(condition: () => boolean, ms = 2000): Promise<void> 
 
 export type GatewayUnderTest = Awaited<ReturnType<typeof startGateway>>
 
-// A stand-in for the stream reader: positions a test sets (none until it does), the reported ones
-// (each org's position unless a test sets one of its own, as the real reader's at a grain's start),
-// and a dispatch that does what the reader's does with an entry: sends it to the sockets holding its
-// topic live, and holds it for those still replaying. The gateway hands it its target.
+// A stand-in for the stream reader: whether it follows each org's stream (every org unless a test
+// says otherwise, or holds ready() until it releases it), and a dispatch that does what the reader's
+// does with an entry: sends it to the sockets holding its topic live. The gateway hands it its
+// target, through which a test can also reset an org as the reader does on a gap.
 export function fakeStream() {
   let target: StreamTarget<Conn> | undefined
-  const positions = new Map<string, Position>()
-  const reported = new Map<string, Position>()
+  const unready = new Set<string>()
   const watched: string[] = []
-  // A test can hold position() until it releases it.
+  // A test can hold ready() until it releases it.
   let held: Promise<void> | undefined
   let release: (() => void) | undefined
   const stream: GatewayStream = {
@@ -324,26 +318,25 @@ export function fakeStream() {
     watch: orgId => {
       watched.push(orgId)
     },
-    position: async orgId => {
+    ready: async orgId => {
       if (held !== undefined) await held
-      return positions.get(orgId) ?? null
+      return !unready.has(orgId)
     },
-    current: orgId => positions.get(orgId) ?? null,
-    reported: orgId => reported.get(orgId) ?? positions.get(orgId) ?? null,
     lagMs: () => 0,
     stuck: () => false,
+  }
+  const targetOf = (): StreamTarget<Conn> => {
+    if (target === undefined) throw new Error('the gateway has no stream yet')
+    return target
   }
   return {
     factory: (given: StreamTarget<Conn>) => {
       target = given
       return stream
     },
-    target: (): StreamTarget<Conn> => {
-      if (target === undefined) throw new Error('the gateway has no stream yet')
-      return target
-    },
-    positions,
-    reported,
+    target: targetOf,
+    // Orgs whose stream the reader can't read (Valkey down): ready() answers false.
+    unready,
     watched,
     hold(): void {
       held = new Promise(resolve => {
@@ -354,21 +347,13 @@ export function fakeStream() {
       release?.()
       held = undefined
     },
-    // The reader dispatching an entry at id (and moving the org's position to it).
-    dispatch(orgId: string, topic: string, id: string, ids: Record<string, string> = {}): void {
-      const t = target
-      if (t === undefined) throw new Error('the gateway has no stream yet')
-      const epoch = positions.get(orgId)?.epoch ?? 'e0000000-0000-4000-8000-000000000001'
-      positions.set(orgId, { epoch, pos: id })
-      const text = evFrame(topic, id, 'inbox.changed', ids)
-      for (const socket of t.byTopic(orgId, topic)) {
-        const hold = t.holdOf(socket, topic)
-        if (hold === undefined || hold.state === 'deciding') continue
-        if (hold.state === 'live') t.send(socket, text)
-        else holdEntry(hold, { id, text }, 500)
-      }
+    // The reader dispatching an entry, as stream.ts does: to every socket in the topic's index.
+    dispatch(orgId: string, topic: string, ids: Record<string, string> = {}): void {
+      const t = targetOf()
+      const text = evFrame(topic, 'inbox.changed', ids)
+      for (const socket of t.byTopic(orgId, topic)) t.send(socket, text)
     },
-    // The sockets holding the topic, replaying or live (the index dispatch reads).
+    // The sockets holding the topic live (the index dispatch reads).
     holders(orgId: string, topic: string): Conn[] {
       return [...(target?.byTopic(orgId, topic) ?? [])]
     },

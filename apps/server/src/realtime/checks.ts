@@ -3,10 +3,9 @@
 //   - checkOrg() answers, for one org in one read-only transaction acting as the org's system
 //     principal, whether each socket's session is still live (and if not, when it ended), whether
 //     the admission hook (C0.9) still admits each person with a live session, whether each person may
-//     hold each topic now (packages/access, through loadTopicWorld and canTopics), when the change
-//     that took each lost topic's token was made (for the latency metric), and when each current
-//     team membership began (for a resume's era test). It takes no row lock and writes nothing, so
-//     it never holds the outbox's horizon and never joins the lock order.
+//     hold each topic now (packages/access, through loadTopicWorld and canTopics), and when the
+//     change that took each lost topic's token was made (for the latency metric). It takes no row
+//     lock and writes nothing, so it never holds the outbox's horizon and never joins the lock order.
 //   - The periodic check (realtime/socket.ts, every 15 s, with its own connection) asks it of every
 //     open socket. The decision lane (DecisionLane) asks it for subscribe decisions, accept-time
 //     checks and targeted re-checks, batched per org every 20 ms, one transaction at a time. A lane
@@ -43,9 +42,6 @@ export interface CheckRequest {
   // Of those, the ones already held (granted earlier): a refusal of one is a loss, whose start
   // time is read (lostAt).
   held?: ReadonlyMap<string, ReadonlySet<string>>
-  // Of those, the team topics of a sub with since: if allowed, when the person's current
-  // membership began is read (eras), for the resume's era test (§7.6 step 3.1).
-  eras?: ReadonlyMap<string, ReadonlySet<string>>
 }
 
 // A session that is live, with its person; or one that has ended, and when (epoch ms) if known, by
@@ -64,8 +60,6 @@ export interface CheckResult {
   // change that took its token (epoch ms; the revoking transaction's now(), its start), or undefined
   // if unknown.
   lostAt: ReadonlyMap<string, ReadonlyMap<string, number | undefined>>
-  // For each person: each allowed team topic of eras, and when the current membership began.
-  eras: ReadonlyMap<string, ReadonlyMap<string, number>>
 }
 
 // One org's check, in a transaction of its own (orgChecker in production; a fake in unit tests).
@@ -169,32 +163,7 @@ export async function checkOrg(
     for (const row of rows) inner(lostAt, row.person).set(row.topic, ms(row.lost_at))
   }
 
-  const eras = new Map<string, Map<string, number>>()
-  const wanted: { person: string; team: string }[] = []
-  for (const person of people) {
-    for (const topic of request.eras?.get(person) ?? []) {
-      const parsed = parseTopic(topic)
-      if (parsed?.kind === 'team' && topics.get(person)?.get(topic) === true) wanted.push({ person, team: parsed.id })
-    }
-  }
-  if (wanted.length > 0) {
-    // When each person's current membership of each team began (GW-09): a replay may cover only a
-    // span in which they were a member.
-    const { rows } = await sql<{ person_id: string; team_id: string; created_at: Date }>`
-      select person_id, team_id, created_at from team_memberships
-      where org_id = ${orgId} and removed_at is null
-        and person_id = any(${[...new Set(wanted.map(w => w.person))]}::uuid[])
-        and team_id = any(${[...new Set(wanted.map(w => w.team))]}::uuid[])`.execute(trx)
-    const asked = new Set(wanted.map(w => `${w.person} ${w.team}`))
-    for (const row of rows) {
-      if (!asked.has(`${row.person_id} ${row.team_id}`)) continue
-      const topic = `team:${row.team_id}`
-      const map = inner(eras, row.person_id)
-      // The latest, should there be two: a later start resets rather than replays.
-      map.set(topic, Math.max(map.get(topic) ?? 0, row.created_at.getTime()))
-    }
-  }
-  return { sessions, notAdmitted, topics, lostAt, eras }
+  return { sessions, notAdmitted, topics, lostAt }
 }
 
 // checkOrg in a transaction of its own for the org: read only, acting as the org's system principal,
@@ -224,13 +193,11 @@ function union(into: Map<string, Set<string>>, from: ReadonlyMap<string, Readonl
 export function mergeRequests(requests: readonly CheckRequest[]): CheckRequest {
   const topics = new Map<string, Set<string>>()
   const held = new Map<string, Set<string>>()
-  const eras = new Map<string, Set<string>>()
   for (const request of requests) {
     union(topics, request.topics)
     union(held, request.held)
-    union(eras, request.eras)
   }
-  return { sessions: [...new Set(requests.flatMap(request => request.sessions))], topics, held, eras }
+  return { sessions: [...new Set(requests.flatMap(request => request.sessions))], topics, held }
 }
 
 // The work, or a rejection once ms have passed. Work that settles later is still handled here, so

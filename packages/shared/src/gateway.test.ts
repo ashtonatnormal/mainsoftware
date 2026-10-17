@@ -1,6 +1,7 @@
 // The realtime gateway's protocol (BUILD-PLAN C0.7, TECH-SPEC T19 item 10): the strict client
 // frames and their limits, version negotiation, topics, the ids-only rule for what the server sends,
-// and the lenient reading clients use (P5, P6, S7).
+// that no frame carries a stream position (T19 item 9, the owner's re-authorise-and-refetch
+// decision), and the lenient reading clients use (P5, P6, S7).
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import {
@@ -9,6 +10,7 @@ import {
   chooseVersion,
   GATEWAY_CLOSE,
   GATEWAY_LIMITS,
+  GATEWAY_RESET_REASONS,
   GATEWAY_TOPIC_KINDS,
   GATEWAY_VERSIONS,
   Hello,
@@ -17,16 +19,16 @@ import {
   readServerFrame,
   ServerFrame,
   ServerFrameForClient,
-  StreamPosition,
   Topic,
 } from './gateway.ts'
-import { CODE, IDS_KEY, LowerUuid } from './ids.ts'
+import { CODE, IDS_KEY, IDS_NUMBER_MAX, LowerUuid } from './ids.ts'
 
 const uuid = (n: number) => `b0000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
 const person = (n: number) => `person:${uuid(n)}`
 const EPOCH = 'e0000000-0000-4000-8000-000000000001'
-const MAX_POS = '18446744073709551615-18446744073709551615'
-const since = { epoch: EPOCH, pos: '1718000000000-0' }
+// Stream ids, as the org's Valkey stream makes them (<ms>-<seq>), the smallest and the largest.
+const STREAM_IDS = ['0-0', '1800000000000-0', '1800000000000-7', '18446744073709551615-18446744073709551615']
+const since = { epoch: EPOCH, pos: '1800000000000-0' }
 const people = (n: number) => Array.from({ length: n }, (_, i) => person(i + 1))
 const accepts = (schema: z.ZodType, value: unknown) => schema.safeParse(value).success
 // Frames are ASCII JSON, so their length in characters is their size in bytes.
@@ -56,18 +58,20 @@ describe('GW-14 T19 item 11: client frames and their limits', () => {
     expect(accepts(ClientFrame, { v: 1 })).toBe(false)
   })
 
-  it('GW-14 T19 item 9: since is a position from an earlier frame, strictly', () => {
-    const sub = (s: unknown) => ({ v: 1, t: 'sub', id: 7, topics: people(2), since: s })
-    expect(accepts(ClientFrame, sub(since))).toBe(true)
-    expect(accepts(ClientFrame, sub({ epoch: EPOCH, pos: '0-0' }))).toBe(true)
-    expect(accepts(ClientFrame, sub({ epoch: EPOCH, pos: MAX_POS }))).toBe(true)
-    expect(accepts(ClientFrame, sub({ epoch: EPOCH, pos: `1${MAX_POS}` }))).toBe(false)
-    expect(accepts(ClientFrame, sub({ epoch: EPOCH, pos: '1718000000000' }))).toBe(false)
-    expect(accepts(ClientFrame, sub({ epoch: EPOCH, pos: '$' }))).toBe(false)
-    expect(accepts(ClientFrame, sub({ epoch: EPOCH.toUpperCase(), pos: '0-0' }))).toBe(false)
-    expect(accepts(ClientFrame, sub({ ...since, extra: 1 }))).toBe(false)
-    // unsub has no since.
-    expect(accepts(ClientFrame, { v: 1, t: 'unsub', id: 7, topics: people(2), since })).toBe(false)
+  it('GW-14 T19 item 9: sub takes topics only: a since, a position or an epoch is refused, so a client can name no point in the stream', () => {
+    for (const t of ['sub', 'unsub'] as const) {
+      const frame = { v: 1, t, id: 7, topics: people(2) }
+      expect(accepts(ClientFrame, frame), t).toBe(true)
+      for (const extra of [
+        { since },
+        { since: undefined },
+        { pos: STREAM_IDS[1] },
+        { epoch: EPOCH },
+        { position: since },
+      ]) {
+        expect(accepts(ClientFrame, { ...frame, ...extra }), `${t} ${JSON.stringify(extra)}`).toBe(false)
+      }
+    }
   })
 
   it('GW-04 T19 item 7: a bad topic is refused', () => {
@@ -204,8 +208,8 @@ interface Schema {
   _zod: { def: Def; values?: ReadonlySet<unknown> }
 }
 const asSchema = (schema: z.ZodType) => schema as unknown as Schema
-// The patterned strings a frame may hold: topics, stream positions, codes and lower-case uuids.
-const NAMED_STRINGS = new Set<unknown>([Topic, StreamPosition, Code, LowerUuid].map(asSchema))
+// The patterned strings a frame may hold: topics, codes and lower-case uuids.
+const NAMED_STRINGS = new Set<unknown>([Topic, Code, LowerUuid].map(asSchema))
 
 // Every way a server frame's schema could carry something other than ids, codes and whole numbers
 // (ids.ts's rule): a free or other patterned string, a fractional number, a loose object or record.
@@ -265,15 +269,63 @@ const SERVER_FRAMES = [
     maxFrameBytes: GATEWAY_LIMITS.maxFrameBytes,
     reconnectSpreadMs: 30_000,
   },
-  { v: 1, t: 'ack', id: 3, ok: [person(1)], refused: [person(2)], reset: [], retry: [person(3)], pos: since },
-  { v: 1, t: 'ack', id: 4, ok: [], refused: [], reset: [], retry: [person(1)], pos: null },
-  { v: 1, t: 'ev', topic: `team:${uuid(5)}`, pos: '1718000000001-0', type: 'team.members', ids: { person: uuid(6) } },
+  { v: 1, t: 'ack', id: 3, ok: [person(1)], refused: [person(2)], retry: [person(3)] },
+  { v: 1, t: 'ack', id: 4, ok: [], refused: [], retry: [person(1)] },
+  { v: 1, t: 'ev', topic: `team:${uuid(5)}`, type: 'team.members', ids: { person: uuid(6) } },
   { v: 1, t: 'dropped', topics: [`team:${uuid(5)}`], reason: 'access' },
-  { v: 1, t: 'reset', pos: { epoch: uuid(8), pos: '0-0' } },
+  { v: 1, t: 'reset', topics: [person(1), `team:${uuid(5)}`], reason: 'gap' },
   { v: 1, t: 'nudge', what: 'flags' },
-  { v: 1, t: 'pong', pos: since, reconnectSpreadMs: 5_000 },
-  { v: 1, t: 'pong', pos: null, reconnectSpreadMs: 5_000 },
+  { v: 1, t: 'pong', reconnectSpreadMs: 5_000 },
 ] as const
+
+// Every field name in a schema, nested ones included (an object's keys, through arrays, unions,
+// records' values, optional and nullable).
+function fieldNames(schema: Schema): string[] {
+  const def = schema._zod.def
+  switch (def.type) {
+    case 'object':
+      return Object.entries(def.shape ?? {}).flatMap(([field, value]) => [field, ...fieldNames(value)])
+    case 'array':
+      return def.element ? fieldNames(def.element) : []
+    case 'nullable':
+    case 'optional':
+      return def.innerType ? fieldNames(def.innerType) : []
+    case 'record':
+      return def.valueType ? fieldNames(def.valueType) : []
+    case 'union':
+      return (def.options ?? []).flatMap(option => fieldNames(option))
+    default:
+      return []
+  }
+}
+
+// Every way a schema could hold a stream position: a string field that takes a stream id, or a
+// number field that takes a stream id's time (Valkey's ms, about 1.8e12 now). The walk follows the
+// same shapes as notIds.
+function holdsPosition(schema: Schema, path: string): string[] {
+  const def = schema._zod.def
+  switch (def.type) {
+    case 'string':
+      return STREAM_IDS.some(id => (schema as unknown as z.ZodType).safeParse(id).success)
+        ? [`${path}: takes a stream id`]
+        : []
+    case 'number':
+      return (schema as unknown as z.ZodType).safeParse(1_800_000_000_000).success ? [`${path}: takes a time`] : []
+    case 'array':
+      return def.element ? holdsPosition(def.element, `${path}[]`) : []
+    case 'nullable':
+    case 'optional':
+      return def.innerType ? holdsPosition(def.innerType, path) : []
+    case 'object':
+      return Object.entries(def.shape ?? {}).flatMap(([field, value]) => holdsPosition(value, `${path}.${field}`))
+    case 'record':
+      return def.valueType ? holdsPosition(def.valueType, `${path}{}`) : []
+    case 'union':
+      return (def.options ?? []).flatMap((option, i) => holdsPosition(option, `${path}|${i}`))
+    default:
+      return []
+  }
+}
 
 describe('T19 item 9 P6: what the server sends', () => {
   it('T19 item 9: every strict server frame is ids, codes and whole numbers only', () => {
@@ -296,6 +348,29 @@ describe('T19 item 9 P6: what the server sends', () => {
     ])
   })
 
+  it('T19 item 9 GW-09: no server frame, strict or as a client reads it, has a field that could carry a stream position, an epoch or a since', () => {
+    for (const union of [ServerFrame, ServerFrameForClient]) {
+      const options = asSchema(union)._zod.def.options ?? []
+      expect(options.length).toBe(7)
+      for (const option of options) {
+        const t = String([...(option._zod.def.shape?.t?._zod.values ?? [])][0])
+        const names = fieldNames(option)
+        for (const name of ['pos', 'position', 'since', 'epoch', 'stream', 'seq', 'cursor', 'offset']) {
+          expect(names, `${t} has ${name}`).not.toContain(name)
+        }
+        // The strict schemas: no field takes a stream id or a stream id's time. Whole numbers stop at
+        // 1,000,000, and topics, codes and uuids can't spell <ms>-<seq>.
+        if (union === ServerFrame) expect(holdsPosition(option, t), t).toEqual([])
+      }
+    }
+    expect(IDS_NUMBER_MAX).toBeLessThan(1_800_000_000_000)
+    // The walk catches each way a schema could carry one.
+    expect(holdsPosition(asSchema(z.strictObject({ pos: z.string().regex(/^\d+-\d+$/) })), 'x')).toEqual([
+      'x.pos: takes a stream id',
+    ])
+    expect(holdsPosition(asSchema(z.strictObject({ at: z.int() })), 'x')).toEqual(['x.at: takes a time'])
+  })
+
   it('P6: each frame the server sends parses strictly, and clients read it as sent', () => {
     for (const frame of SERVER_FRAMES) {
       expect(accepts(ServerFrame, frame), frame.t).toBe(true)
@@ -311,7 +386,6 @@ describe('T19 item 9 P6: what the server sends', () => {
       v: 1,
       t: 'ev',
       topic: person(1),
-      pos: '1718000000002-3',
       type: 'inbox.added',
       ids: { item: uuid(2), title: 'Free text', nested: { a: 1 }, tags: ['A', 'B'] },
     }
@@ -341,29 +415,52 @@ describe('T19 item 9 P6: what the server sends', () => {
     })
   })
 
+  it('P6 T19 item 9: a reset is acted on even with a malformed or missing reason, or extra fields; with no topic it is skipped', () => {
+    const topics = [person(1), `team:${uuid(5)}`]
+    expect(GATEWAY_RESET_REASONS).toEqual(['gap'])
+    for (const reason of [undefined, 'trimmed', 7, { code: 'gap' }]) {
+      expect(readServerFrame(JSON.stringify({ v: 1, t: 'reset', topics, reason })), String(reason)).toEqual({
+        v: 1,
+        t: 'reset',
+        topics,
+        reason: 'gap',
+      })
+    }
+    expect(readServerFrame(JSON.stringify({ v: 1, t: 'reset', topics, reason: 'gap', later: 1 }))).toEqual({
+      v: 1,
+      t: 'reset',
+      topics,
+      reason: 'gap',
+    })
+    expect(readServerFrame(JSON.stringify({ v: 1, t: 'reset', topics: [], reason: 'gap' }))).toBeUndefined()
+    // The strict schema refuses an unknown reason, a topic that isn't one, and no topics.
+    expect(accepts(ServerFrame, { v: 1, t: 'reset', topics, reason: 'trimmed' })).toBe(false)
+    expect(accepts(ServerFrame, { v: 1, t: 'reset', topics: ['everything'], reason: 'gap' })).toBe(false)
+    expect(accepts(ServerFrame, { v: 1, t: 'reset', topics: [], reason: 'gap' })).toBe(false)
+  })
+
   it('P6: anything that isn’t a frame is skipped', () => {
     for (const text of ['', 'not json', '[]', 'null', '{"t":"ack"}', '{"v":2,"t":"nudge","what":"flags"}']) {
       expect(readServerFrame(text), text).toBeUndefined()
     }
-    expect(ServerFrameForClient.safeParse({ v: 1, t: 'pong', reconnectSpreadMs: 5_000 }).success).toBe(false)
+    expect(ServerFrameForClient.safeParse({ v: 1, t: 'pong' }).success).toBe(false)
   })
 })
 
 describe('S7 T19 item 11: frames fit the limits', () => {
-  it('S7: a 50-topic sub with since is under 4096 bytes', () => {
-    const frame = { v: 1, t: 'sub', id: 1_000_000, topics: people(50), since: { epoch: EPOCH, pos: MAX_POS } }
+  it('S7: a 50-topic sub is under 4096 bytes', () => {
+    const frame = { v: 1, t: 'sub', id: 1_000_000, topics: people(50) }
     expect(accepts(ClientFrame, frame)).toBe(true)
     expect(bytes(JSON.stringify(frame))).toBeLessThan(GATEWAY_LIMITS.maxFrameBytes)
   })
 
-  it('S7: a 100-topic resume is two sub frames plus hello, within the token bucket', () => {
+  it('S7 T19 item 9: a 100-topic reconnect is two sub frames plus hello, within the token bucket', () => {
     const held = people(GATEWAY_LIMITS.maxTopicsPerSocket)
     const subs = Array.from({ length: Math.ceil(held.length / GATEWAY_LIMITS.maxTopicsPerFrame) }, (_, i) => ({
       v: 1,
       t: 'sub',
       id: i + 1,
       topics: held.slice(i * GATEWAY_LIMITS.maxTopicsPerFrame, (i + 1) * GATEWAY_LIMITS.maxTopicsPerFrame),
-      since,
     }))
     const frames = [{ v: 1, t: 'hello', versions: [...GATEWAY_VERSIONS] }, ...subs]
     expect(subs.length).toBe(2)

@@ -11,9 +11,14 @@
 //     within 60 s by each path on its own: the api's push, the worker's revocation jobs (the api's
 //     publish off, A6, on an app whose periodic check can't fire: NO_PERIODIC_RECHECK) and the
 //     re-check (no subscriptions); and the races (T19 item 6);
-//   - fan-out and resume across two realtime processes from the org's Valkey stream (GW-09, GW-10),
-//     the heartbeat (GW-08), the flags nudge (GW-11), readiness (OD-22, P2), and what happens with
-//     Valkey cut or frozen and with Postgres cut (T19 item 12, P8);
+//   - fan-out across two realtime processes from the org's Valkey stream (GW-10); re-authorise and
+//     refetch (GW-09, the owner's decision for T19 item 9): a reconnect decides every topic again,
+//     nothing is replayed, and no frame carries a stream position; the reader's reset of an org's
+//     sockets when its stream loses continuity, or is trimmed past it (found from the entries'
+//     numbers, even mid-read), and none for another topic's burst past the old count cap, since
+//     the stream is trimmed by age; the heartbeat (GW-08), the flags nudge (GW-11),
+//     readiness (OD-22, P2), and what happens with Valkey cut or frozen and with Postgres cut (T19
+//     item 12, P8);
 //   - the latency lines (REG-04, REG-05): each path logs revocation_applied with a latency, and a
 //     summary follows; no log line holds a phone number, a token or a person's id.
 // Tests that need an org of their own (an empty stream, a reader reset, a nudge) make one, so no
@@ -23,19 +28,20 @@
 // person here signs in more than 3 times.
 //
 // afterAll sweeps the run: every frame any socket was sent passes the strict ServerFrame (ids, codes
-// and ints only); no Node warning fired (the harness's stop() also fails on the two P9 guards); no
+// and ints only, and no field for a position), and none holds the id, or the time, of any entry the
+// run appended to an org's stream (T19 item 9); no Node warning fired (the harness's stop() also fails on the two P9 guards); no
 // frame handler or upgrade failed; and every write a runtime role committed is exempt or had its
 // outbox event (testing/writes.ts).
 import { randomUUID } from 'node:crypto'
-import { GATEWAY_CLOSE, type Position, ServerFrame } from '@hearth/shared'
+import { GATEWAY_CLOSE, ServerFrame } from '@hearth/shared'
 import type { FastifyInstance } from 'fastify'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { SESSION_COOKIE } from '#src/auth/cookies.ts'
 import { SOCKET_RECHECK_MS } from '#src/auth/policy.ts'
 import { createLogger } from '#src/logger.ts'
 import type { CheckOrg } from '#src/realtime/checks.ts'
-import { GATEWAY_POLICY } from '#src/realtime/policy.ts'
-import { compareIds, grainStart, publishTopicEvent, TICK_ENTRY } from '#src/realtime/stream.ts'
+import { GATEWAY_POLICY, gatewayPolicy } from '#src/realtime/policy.ts'
+import { PUBLISH_TOPIC_EVENT, publishTopicEvent } from '#src/realtime/stream.ts'
 import { publishAccess } from '#src/revocation/channels.ts'
 import {
   type Client,
@@ -62,23 +68,8 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 // Long enough for the re-check a revocation message queues for the person's other sessions (100 ms
 // of coalescing, then the lane) to have run.
 const RECHECK_SETTLE_MS = GATEWAY_POLICY.targetedDelayMs + 400
-// A position as ack, pong and reset carry it (T19 item 9): the start of the grain before the one the
-// reader set it in, so one grain (two, if a grain began since) before the current grain's start, in
-// the epoch given, and at or below the reader's position (an entry it had dispatched, if given).
-// Answers its pos.
-function reported(position: Position | null, epoch: string | undefined, dispatched?: string): string {
-  const grain = GATEWAY_POLICY.positionGrainMs
-  expect(position?.epoch).toBe(epoch)
-  const pos = String(position?.pos)
-  expect(pos).toMatch(/^\d+-0$/)
-  const ms = Number(pos.replace(/-0$/, ''))
-  expect(ms % grain).toBe(0)
-  expect([grain, 2 * grain]).toContain(grainStart(Date.now(), grain) - ms)
-  if (dispatched !== undefined) expect(compareIds(pos, dispatched)).toBeLessThanOrEqual(0)
-  return pos
-}
-// The ids after a position, in the order given.
-const after = (pos: string, ids: readonly string[]) => ids.filter(id => compareIds(id, pos) > 0)
+// Every stream id publish() was answered, for afterAll's sweep: no frame may carry one (T19 item 9).
+const published: string[] = []
 
 interface Deferred {
   promise: Promise<void>
@@ -159,12 +150,17 @@ async function deactivate(adminBrowser: Client, person: Person): Promise<void> {
   expect([reply.status, reply.error]).toEqual([200, undefined])
 }
 
-// An event on the org's stream, as C0.14's inbox or C0.16's team events will publish one.
+// An event on the org's stream, as C0.14's inbox or C0.16's team events will publish one. An ev
+// carries no stream id, so a test tells its events apart by type. Answers the entry's stream id.
 async function publish(orgId: string, topic: string, type = 'it.changed'): Promise<string> {
   const id = await publishTopicEvent(s.valkey, s.prefix, orgId, { topic, type, ids: {} }, log, { rethrow: true })
   if (id === undefined) throw new Error('the event was not appended')
+  published.push(id)
   return id
 }
+
+// The types of the evs a socket was sent, in order.
+const evTypes = (socket: GatewaySocket) => socket.all('ev').map(frame => frame.type)
 
 // A people signal on the access channel, as C0.16's api will publish after a team or role change.
 async function pushPeople(orgId: string, people: readonly string[]): Promise<void> {
@@ -234,10 +230,19 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
   afterAll(async ({}, suite) => {
     if (s === undefined) return
     try {
-      // Every frame the server sent is a strict ServerFrame: ids, codes and ints only (T19 item 10).
+      // Every frame the server sent is a strict ServerFrame: ids, codes and ints only (T19 item 10),
+      // with no field beyond its schema, which has none for a position.
       expect(s.gatewayFrames.length).toBeGreaterThan(0)
       for (const text of s.gatewayFrames) {
         expect(ServerFrame.safeParse(JSON.parse(text)).success, text).toBe(true)
+      }
+      // No frame holds the stream id, or the time, of an entry the run appended (T19 item 9): the
+      // stream's positions never leave the reader.
+      expect(published.length).toBeGreaterThan(0)
+      const sent = s.gatewayFrames.join('\n')
+      for (const id of published) if (sent.includes(id)) expect(sent, id).not.toContain(id)
+      for (const ms of new Set(published.map(id => id.split('-')[0] ?? id))) {
+        if (sent.includes(ms)) expect(sent, ms).not.toContain(ms)
       }
       // No Node warning fired.
       expect(s.warnings.map(warning => `${warning.name}: ${warning.message}`)).toEqual([])
@@ -306,15 +311,16 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
 
     const allowed = [personTopic(p), orgTopic(s.org.id), teamTopic(mine)]
     const granted = await socket.sub(allowed)
-    expect(granted).toMatchObject({ ok: allowed, refused: [], reset: [], retry: [] })
+    expect(granted).toMatchObject({ ok: allowed, refused: [], retry: [] })
 
     const forbidden = [personTopic(other), orgTopic(elsewhere.orgId), teamTopic(theirs), teamTopic(randomUUID())]
     const refused = await socket.sub(forbidden)
-    expect(refused).toMatchObject({ ok: [], reset: [], retry: [] })
+    expect(refused).toMatchObject({ ok: [], retry: [] })
     expect([...refused.refused].sort()).toEqual([...forbidden].sort())
-    // Missing and forbidden alike: one list, no reason, and the same frame shape as a grant.
+    // Missing and forbidden alike: one list, no reason, and the same frame shape as a grant, which
+    // carries nothing about the org's stream.
     expect(Object.keys(JSON.parse(socket.texts.at(-1) ?? '{}')).sort()).toEqual(
-      ['id', 'ok', 'pos', 'refused', 'reset', 'retry', 't', 'v'].sort(),
+      ['id', 'ok', 'refused', 'retry', 't', 'v'].sort(),
     )
     // Asking again for what is held is acked ok, with no new decision needed.
     expect(await socket.sub([personTopic(p)])).toMatchObject({ ok: [personTopic(p)], refused: [] })
@@ -593,11 +599,11 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     // The socket and its other topics stay: an event on the person topic arrives, one on the team
     // doesn't.
     expect(socket.open()).toBe(true)
-    const kept = await publish(s.org.id, personTopic(p))
-    expect(await socket.next('ev')).toMatchObject({ topic: personTopic(p), pos: kept })
-    await publish(s.org.id, teamTopic(team))
-    const onPerson = await publish(s.org.id, personTopic(p))
-    expect(await socket.next('ev')).toMatchObject({ topic: personTopic(p), pos: onPerson })
+    await publish(s.org.id, personTopic(p), 'it.kept')
+    expect(await socket.next('ev')).toEqual({ v: 1, t: 'ev', topic: personTopic(p), type: 'it.kept', ids: {} })
+    await publish(s.org.id, teamTopic(team), 'it.team')
+    await publish(s.org.id, personTopic(p), 'it.person')
+    expect(await socket.next('ev')).toMatchObject({ topic: personTopic(p), type: 'it.person' })
     expect(socket.all('ev').map(frame => frame.topic)).toEqual([personTopic(p), personTopic(p)])
   })
 
@@ -721,7 +727,7 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     ])
   })
 
-  it('GW-10 T19 item 9 P12: an event published once reaches subscribers of its topic on both realtime processes, with the same pos, and nobody else; with process A’s reader stopped, only B’s subscribers get the next one', async () => {
+  it('GW-10 T19 item 9 P12: an event published once reaches subscribers of its topic on both realtime processes, as the same ev with no stream id, and nobody else; with process A’s reader stopped, only B’s subscribers get the next one', async () => {
     const org = await s.newOrg()
     const a = await s.startRealtime({ recheckMs: SOCKET_RECHECK_MS, subscribe: true })
     const b = await s.startRealtime({ recheckMs: SOCKET_RECHECK_MS, subscribe: true })
@@ -742,8 +748,9 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
 
     const first = await publish(org.id, teamTopic(team), 'team.members_changed')
     const [evA, evB] = [await onA.next('ev'), await onB.next('ev')]
-    expect(evA).toEqual({ v: 1, t: 'ev', topic: teamTopic(team), pos: first, type: 'team.members_changed', ids: {} })
+    expect(evA).toEqual({ v: 1, t: 'ev', topic: teamTopic(team), type: 'team.members_changed', ids: {} })
     expect(evB).toEqual(evA)
+    for (const socket of [onA, onB]) expect(socket.texts.join('\n')).not.toContain(first)
 
     // A's reader stops for good: its sockets get nothing more; B's still do. disconnect() only ends
     // the connection's writing side, so a reply to the XREAD in flight could still arrive until the
@@ -751,261 +758,439 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     const ended = new Promise(resolve => a.reader.once('end', resolve))
     a.reader.disconnect()
     await ended
-    const second = await publish(org.id, teamTopic(team), 'team.members_changed')
-    expect(await onB.next('ev')).toMatchObject({ pos: second })
+    await publish(org.id, teamTopic(team), 'it.second')
+    expect(await onB.next('ev')).toMatchObject({ type: 'it.second' })
     await sleep(500)
     expect(onA.all('ev')).toHaveLength(1)
     expect(bystander.all('ev')).toEqual([])
   })
 
-  it('GW-09 T19 item 9 P1: a client that reconnects to the other realtime process with since gets the missed events in order, then the ack, then live ones; a client that subscribed before the org’s first event resumes after a publish from its ack’s pos; a quiet client resumes from its pong’s pos', async () => {
+  it('GW-09 T19 item 9 P1: a client that reconnects, to the other realtime process or the same one, resubscribes and each topic is decided again; nothing it missed is replayed, though both readers dispatched it, and what follows the ack arrives; a sub naming a since closes with 1008', async () => {
     const org = await s.newOrg()
     const a = await s.startRealtime({ recheckMs: SOCKET_RECHECK_MS, subscribe: true })
     const b = await s.startRealtime({ recheckMs: SOCKET_RECHECK_MS, subscribe: true })
     const p = await s.person({ org, pin: s.newPin() })
     const other = await s.person({ org, pin: s.newPin() })
     const team = await s.team({ org })
-    // A membership older than the era test's margin, so the team topic can resume.
-    await s.addMember(team, p, { ago: '1 hour' })
+    await s.addMember(team, p)
     const browser = await s.signIn(p)
     const topics = [personTopic(p), teamTopic(team)]
     // Someone else's sockets on the org topic, one on each process, keep both readers on the org's
-    // stream. A reader dispatches what it reads a moment after it is appended, and a resume replays
-    // only up to the reader's position (later entries go out live), so each step first publishes a
-    // marker on the org topic and waits until both readers have dispatched it.
+    // stream: each step first publishes a marker there and waits until both have dispatched it, so
+    // every entry before it has been read, and could have been replayed.
     const otherBrowser = await s.signIn(other)
     const watchers = [
       await s.gatewaySocket(otherBrowser, { url: a.url }),
       await s.gatewaySocket(otherBrowser, { url: b.url }),
     ]
     for (const watcher of watchers) await watcher.sub([orgTopic(org.id)])
-    const settle = async (): Promise<string> => {
-      const marker = await publish(org.id, orgTopic(org.id), 'it.marker')
-      for (const watcher of watchers) expect(await watcher.next('ev')).toMatchObject({ pos: marker })
-      return marker
+    const settle = async (): Promise<void> => {
+      await publish(org.id, orgTopic(org.id), 'it.marker')
+      for (const watcher of watchers) expect(await watcher.next('ev')).toMatchObject({ type: 'it.marker' })
     }
 
-    // No event yet, only the readers' ticks: the ack carries the reported position, the grain
-    // before's start, and what is published after it is replayed.
-    const empty = await s.gatewaySocket(browser, { url: a.url })
-    const emptyAck = await empty.sub([personTopic(p)])
-    expect(emptyAck.pos?.epoch).toMatch(UUID)
-    reported(emptyAck.pos, emptyAck.pos?.epoch)
-    empty.ws.close()
-    await empty.closed
-    const missedFirst = await publish(org.id, personTopic(p))
-    let marker = await settle()
-    const afterEmpty = await s.gatewaySocket(browser, { url: b.url })
-    const resumedEmpty = await afterEmpty.sub([personTopic(p)], emptyAck.pos as Position)
-    expect(resumedEmpty).toMatchObject({ ok: [personTopic(p)], reset: [], refused: [] })
-    expect(afterEmpty.frames.map(frame => [frame.t, frame.t === 'ev' ? frame.pos : undefined])).toEqual([
-      ['welcome', undefined],
-      ['ev', missedFirst],
-      ['ack', undefined],
-    ])
-    reported(resumedEmpty.pos, emptyAck.pos?.epoch, marker)
-    afterEmpty.ws.close()
-    await afterEmpty.closed
-
-    // Away on A, back on B: the missed events in order, then the ack, then live ones.
     const away = await s.gatewaySocket(browser, { url: a.url })
-    const awayAck = await away.sub(topics)
-    expect(awayAck).toMatchObject({ ok: topics })
-    reported(awayAck.pos, emptyAck.pos?.epoch)
+    expect(await away.sub(topics)).toEqual({ v: 1, t: 'ack', id: 1, ok: topics, refused: [], retry: [] })
+    await publish(org.id, teamTopic(team), 'it.before')
+    expect(await away.next('ev')).toMatchObject({ topic: teamTopic(team), type: 'it.before' })
     away.ws.close()
     await away.closed
-    const missed = [
-      await publish(org.id, teamTopic(team)),
-      await publish(org.id, personTopic(other)),
-      await publish(org.id, personTopic(p)),
-      await publish(org.id, teamTopic(team)),
-    ]
-    marker = await settle()
-    const back = await s.gatewaySocket(browser, { url: b.url })
-    const backAck = await back.sub(topics, awayAck.pos as Position)
-    expect(backAck).toMatchObject({ ok: topics, reset: [], refused: [], retry: [] })
-    reported(backAck.pos, emptyAck.pos?.epoch, marker)
-    const live = await publish(org.id, personTopic(p))
-    // Its own topics' entries after since, the grain before's start, so an entry already seen after
-    // it comes again (the client drops it as at or below its topic's position).
-    const replayed = after(String(awayAck.pos?.pos), [missedFirst, missed[0], missed[2], missed[3]] as string[])
-    expect(replayed.slice(-3)).toEqual([missed[0], missed[2], missed[3]])
-    for (const id of [...replayed, live]) expect(await back.next('ev')).toMatchObject({ pos: id })
-    // Someone else's event wasn't replayed, and nothing came twice.
-    expect(back.frames.map(frame => [frame.t, frame.t === 'ev' ? frame.pos : undefined])).toEqual([
-      ['welcome', undefined],
-      ...replayed.map(id => ['ev', id]),
-      ['ack', undefined],
-      ['ev', live],
-    ])
-    back.ws.close()
-    await back.closed
-
-    // A quiet client: nothing for it since its sub, so it resumes from its pong's position.
-    const quietClient = await s.gatewaySocket(browser, { url: a.url })
-    await quietClient.sub([personTopic(p)])
-    marker = await settle()
-    quietClient.send({ v: 1, t: 'ping' })
-    const pong = await quietClient.next('pong')
-    const told = reported(pong.pos, awayAck.pos?.epoch, marker)
-    quietClient.ws.close()
-    await quietClient.closed
-    const later = await publish(org.id, personTopic(p))
+    // Missed while away.
+    await publish(org.id, teamTopic(team), 'it.missed')
+    await publish(org.id, personTopic(other), 'it.missed')
+    await publish(org.id, personTopic(p), 'it.missed')
     await settle()
-    const resumed = await s.gatewaySocket(browser, { url: b.url })
-    expect(await resumed.sub([personTopic(p)], pong.pos as Position)).toMatchObject({ ok: [personTopic(p)], reset: [] })
-    const mine = after(told, [missedFirst, missed[2], live, later] as string[])
-    expect(mine.at(-1)).toBe(later)
-    expect(resumed.all('ev').map(frame => frame.pos)).toEqual(mine)
-    expect(b.server.counts().resume.resumed).toBeGreaterThanOrEqual(4)
+
+    for (const [name, app] of [
+      ['the other process', b],
+      ['the same process', a],
+    ] as const) {
+      const back = await s.gatewaySocket(browser, { url: app.url })
+      // A new socket holds nothing: both topics are decided by can() again for its sub.
+      const held = app.server.counts().topics
+      expect(await back.sub(topics), name).toEqual({ v: 1, t: 'ack', id: 1, ok: topics, refused: [], retry: [] })
+      expect(app.server.counts().topics, name).toBe(held + topics.length)
+      await settle()
+      // Nothing missed was replayed: the client refetches each topic acked ok over REST.
+      expect(back.all('ev'), name).toEqual([])
+      await publish(org.id, personTopic(p), 'it.live')
+      expect(await back.next('ev'), name).toEqual({
+        v: 1,
+        t: 'ev',
+        topic: personTopic(p),
+        type: 'it.live',
+        ids: {},
+      })
+      expect(
+        back.frames.map(frame => frame.t),
+        name,
+      ).toEqual(['welcome', 'ack', 'ev'])
+      back.ws.close()
+      await back.closed
+    }
+
+    // An older client's resume, naming a since, is no frame of the protocol: 1008 bad_frame.
+    const old = await s.gatewaySocket(browser, { url: b.url })
+    old.send({
+      v: 1,
+      t: 'sub',
+      id: 1,
+      topics,
+      since: { epoch: 'e0000000-0000-4000-8000-000000000001', pos: '1800000000000-0' },
+    })
+    expect(await closeOf(old, 2000)).toMatchObject(GATEWAY_CLOSE.badFrame)
+    expect(old.all('ack')).toEqual([])
   })
 
-  it('T19 item 9: each realtime process writes a tick at every grain’s start (TICK on Valkey); an event on a person topic the socket was refused, published mid-grain, moves neither pong’s nor an unsub’s ack’s position, which at the next grain’s start move to the grain before’s start, as with no event', async () => {
-    const grain = 1000
+  it('T19 item 9: realtime appends nothing to an org’s stream (no tick, no script), and an event on a person topic the socket was refused reaches it in no frame: pong and an unsub’s ack read the same before and after, and no frame holds its stream id', async () => {
     const org = await s.newOrg()
-    const app = await s.startRealtime({
-      recheckMs: SOCKET_RECHECK_MS,
-      subscribe: false,
-      policy: { positionGrainMs: grain },
-    })
+    const app = await s.startRealtime({ recheckMs: SOCKET_RECHECK_MS, subscribe: false })
     const [p, other] = [await s.person({ org, pin: s.newPin() }), await s.person({ org, pin: s.newPin() })]
     const socket = await s.gatewaySocket(await s.signIn(p), { url: app.url })
     expect((await socket.sub([personTopic(p)])).ok).toEqual([personTopic(p)])
     expect((await socket.sub([personTopic(other)])).refused).toEqual([personTopic(other)])
     const told = async () => {
       socket.send({ v: 1, t: 'ping' })
-      const pong = (await socket.next('pong')).pos as Position
-      expect((await socket.unsub([orgTopic(org.id)])).pos).toEqual(pong)
-      return pong.pos
+      const pong = await socket.next('pong')
+      const ack = await socket.unsub([orgTopic(org.id)])
+      return { pong, ack: { ...ack, id: 0 } }
     }
-    // A moment into a grain: the stream holds this grain's tick, at its start, as its last entry.
-    await sleep(grain - (Date.now() % grain) + 150)
-    const begun = grainStart(Date.now(), grain)
-    const [[tickId, fields] = []] = await s.valkey.xrevrange(s.names.stream(org.id), '+', '-', 'COUNT', 1)
-    expect([tickId, fields]).toEqual([`${begun}-0`, ['f', TICK_ENTRY]])
-    expect(await told()).toBe(`${begun - grain}-0`)
-    const id = await publish(org.id, personTopic(other))
-    // Long enough for the reader to have dispatched it, and still the same grain.
-    await sleep(100)
-    expect(await told()).toBe(`${begun - grain}-0`)
-    expect(grainStart(Date.now(), grain)).toBe(begun)
-    await sleep(begun + grain - Date.now() + 150)
-    expect(await told()).toBe(`${begun}-0`)
-    expect(socket.all('ev')).toEqual([])
-    expect(JSON.stringify(socket.frames)).not.toContain(id)
+    // Several of the reader's blocks later, the org still has no stream: nothing wrote one.
+    await sleep(2500)
+    expect(await s.valkey.exists(s.names.stream(org.id))).toBe(0)
+    const before = await told()
+    const theirs = await publish(org.id, personTopic(other), 'it.theirs')
+    const mine = await publish(org.id, personTopic(p), 'it.mine')
+    // The reader has read past their entry once it sends this socket its own.
+    expect(await socket.next('ev')).toMatchObject({ type: 'it.mine' })
+    expect(await told()).toEqual(before)
+    expect(evTypes(socket)).toEqual(['it.mine'])
+    for (const id of [theirs, mine]) {
+      expect(socket.texts.join('\n')).not.toContain(id)
+      expect(socket.texts.join('\n')).not.toContain(id.split('-')[0])
+    }
+    // The stream holds the two entries published, and nothing realtime added.
+    await sleep(500)
+    expect((await s.valkey.xrange(s.names.stream(org.id), '-', '+')).map(([id]) => id)).toEqual([theirs, mine])
   })
 
-  it('GW-09: since beyond the window, after the epoch changed (key deleted) or after trimming (XTRIM MAXLEN 3) answers reset for those topics', async () => {
+  it('T19 item 9 S6: when the org’s stream loses continuity (its epoch lost; its tail lost after the reader read it), the reader resets every socket of the org that holds a topic, naming that socket’s own topics, and events flow again after', async () => {
     const org = await s.newOrg()
-    // A 0.5 s window, and the reader's gap checks every 0.2 s.
+    // The reader's gap checks every 0.2 s, and the org's resets at most 0.5 s apart (5 s in
+    // production), so the second loss's reset needn't wait out the first's window.
     const app = await s.startRealtime({
       recheckMs: SOCKET_RECHECK_MS,
       subscribe: true,
-      policy: { resumeWindowMs: 500, readerEpochCheckMs: 200, readerBlockMs: 500 },
+      policy: { readerEpochCheckMs: 200, readerBlockMs: 500, resetCoalesceMs: 500 },
     })
-    const p = await s.person({ org, pin: s.newPin() })
-    const browser = await s.signIn(p)
-    const topic = personTopic(p)
-    // A socket that stays, to see the reader's reset.
-    const watcher = await s.gatewaySocket(browser, { url: app.url })
-    await watcher.sub([orgTopic(org.id)])
-    await publish(org.id, orgTopic(org.id))
-    await watcher.next('ev')
+    const [p, q] = [await s.person({ org, pin: s.newPin() }), await s.person({ org, pin: s.newPin() })]
+    const outsider = await s.person({ pin: s.newPin() })
+    const pBrowser = await s.signIn(p)
+    const holding = await s.gatewaySocket(pBrowser, { url: app.url })
+    expect((await holding.sub([personTopic(p), orgTopic(org.id)])).ok).toHaveLength(2)
+    const idle = await s.gatewaySocket(pBrowser, { url: app.url })
+    const qSocket = await s.gatewaySocket(await s.signIn(q), { url: app.url })
+    expect((await qSocket.sub([personTopic(q)])).ok).toEqual([personTopic(q)])
+    const elsewhere = await s.gatewaySocket(await s.signIn(outsider), { url: app.url })
+    expect((await elsewhere.sub([personTopic(outsider)])).ok).toEqual([personTopic(outsider)])
+    await publish(org.id, orgTopic(org.id), 'it.first')
+    await holding.next('ev')
+    const resets = () => linesOf(app, 'stream_reset').filter(line => line.org === org.id)
+    const sentBefore = app.server.counts().resets
 
-    const away = async (): Promise<Position> => {
-      const socket = await s.gatewaySocket(browser, { url: app.url })
-      const ack = await socket.sub([topic])
-      socket.ws.close()
-      await socket.closed
-      if (ack.pos === null) throw new Error('the ack had no position')
-      return ack.pos
-    }
-    const resumeFrom = async (since: Position) => {
-      const socket = await s.gatewaySocket(browser, { url: app.url })
-      const ack = await socket.sub([topic], since)
-      expect(socket.all('ev')).toEqual([])
-      socket.ws.close()
-      await socket.closed
-      return ack
-    }
-
-    // Beyond the window: the oldest missed entry is older than 0.5 s.
-    let since = await away()
-    await publish(org.id, topic)
-    await sleep(700)
-    expect(await resumeFrom(since)).toMatchObject({ ok: [], reset: [topic] })
-    expect(app.server.counts().resume.reset_window).toBe(1)
-
-    // Trimmed past since: the stream's first entry is after it.
-    since = await away()
-    for (let i = 0; i < 5; i++) await publish(org.id, orgTopic(org.id))
-    expect(await s.valkey.xtrim(s.names.stream(org.id), 'MAXLEN', 3)).toBeGreaterThan(0)
-    expect(await resumeFrom(since)).toMatchObject({ ok: [], reset: [topic] })
-    expect(app.server.counts().resume.reset_trimmed).toBe(1)
-
-    // The epoch lost (as a restart without persistence loses it): the reader finds a new one and
-    // resets the org's sockets, and a resume from the old epoch answers reset.
-    since = await away()
-    const resets = watcher.all('reset').length
+    // The epoch lost, as a restart without persistence loses it.
     await s.valkey.del(s.names.epoch(org.id))
-    const reset = await watcher.next('reset', 5000)
-    expect(watcher.all('reset')).toHaveLength(resets + 1)
-    expect(reset.pos.epoch).not.toBe(since.epoch)
-    expect(await resumeFrom(since)).toMatchObject({ ok: [], reset: [topic] })
-    expect(app.server.counts().resume.reset_epoch).toBe(1)
+    expect(await holding.next('reset', 5000)).toEqual({
+      v: 1,
+      t: 'reset',
+      topics: [personTopic(p), orgTopic(org.id)],
+      reason: 'gap',
+    })
+    expect(await qSocket.next('reset', 5000)).toEqual({ v: 1, t: 'reset', topics: [personTopic(q)], reason: 'gap' })
+    expect(resets().map(line => line.reason)).toEqual(['epoch'])
+
+    // The tail lost after the reader read it, as a failover to a replica that lacked it loses it:
+    // the entry, and the count of entries added that numbers the next one. The stream is written
+    // again in one MULTI with only the entries up to it-second, under their own ids, so its count
+    // is back at it-second's number, as on the replica.
+    const second = await publish(org.id, orgTopic(org.id), 'it.second')
+    await publish(org.id, orgTopic(org.id), 'it.lost')
+    expect(await holding.next('ev')).toMatchObject({ type: 'it.second' })
+    expect(await holding.next('ev')).toMatchObject({ type: 'it.lost' })
+    const stream = s.names.stream(org.id)
+    const kept = await s.valkey.xrange(stream, '-', second)
+    expect(kept.map(([, fields]) => fields[fields.indexOf('n') + 1])).toEqual(kept.map((_, i) => String(i + 1)))
+    const rewrite = s.valkey.multi().del(stream)
+    for (const [id, fields] of kept) rewrite.xadd(stream, id, ...fields)
+    rewrite.pexpire(stream, GATEWAY_POLICY.streamTtlMs)
+    expect(((await rewrite.exec()) ?? []).filter(([error]) => error !== null)).toEqual([])
+    expect(await holding.next('reset', 5000)).toMatchObject({ topics: [personTopic(p), orgTopic(org.id)] })
+    expect(await qSocket.next('reset', 5000)).toMatchObject({ topics: [personTopic(q)] })
+    expect(resets().map(line => line.reason)).toEqual(['epoch', 'tail_lost'])
+    expect(app.server.counts().resets).toBe(sentBefore + 4)
+
+    // A socket holding no topic, and another org's, were told nothing.
+    expect(idle.all('reset')).toEqual([])
+    expect(elsewhere.all('reset')).toEqual([])
+    // The reader goes on from the stream's tail.
+    await publish(org.id, personTopic(q), 'it.after')
+    expect(await qSocket.next('ev')).toMatchObject({ type: 'it.after' })
+    for (const socket of [holding, idle, qSocket, elsewhere]) expect(socket.open()).toBe(true)
   })
 
-  it('GW-09 Rule 6: a topic lost while the client was away is refused at resubscribe, and none of its events is replayed; a team left and rejoined while the client was away answers reset, replaying nothing from the gap', async () => {
+  it('T19 item 9 GW-10: a burst of 12,000 events on another member’s topic (past the old 10,000 cap, through the production script, concurrently) reaches a member holding only their own topic in no frame: no reset, since the stream is trimmed by age and nothing was; every entry is numbered by the stream’s own count', async () => {
+    const org = await s.newOrg()
+    const app = await s.startRealtime({
+      recheckMs: SOCKET_RECHECK_MS,
+      subscribe: true,
+      policy: { readerEpochCheckMs: 200, readerBlockMs: 500 },
+    })
+    const [a, b] = [await s.person({ org, pin: s.newPin() }), await s.person({ org })]
+    const socket = await s.gatewaySocket(await s.signIn(a), { url: app.url })
+    expect((await socket.sub([personTopic(a)])).ok).toEqual([personTopic(a)])
+    const ids = await Promise.all(
+      Array.from({ length: 12_000 }, (_, i) =>
+        publishTopicEvent(
+          s.valkey,
+          s.prefix,
+          org.id,
+          { topic: personTopic(b), type: 'it.burst', ids: { count: i } },
+          log,
+          { rethrow: true },
+        ),
+      ),
+    )
+    for (const id of ids) if (id !== undefined) published.push(id)
+    expect(ids.filter(id => id !== undefined)).toHaveLength(12_000)
+    await publish(org.id, personTopic(a), 'it.mine')
+    // The reader has read every entry before its own once it sends this socket its own, and has
+    // checked the org several times meanwhile.
+    expect(await socket.next('ev', 10_000)).toMatchObject({ type: 'it.mine' })
+    await sleep(1000)
+    expect(socket.frames.map(frame => frame.t)).toEqual(['welcome', 'ack', 'ev'])
+    expect(linesOf(app, 'stream_reset').filter(line => line.org === org.id)).toEqual([])
+    // Nothing trimmed, and each entry numbered one more than the one before: the first 1, the last
+    // the stream's entries-added (the script reads it with XINFO STREAM).
+    const stream = s.names.stream(org.id)
+    expect(await s.valkey.xlen(stream)).toBe(12_001)
+    const info = (await s.valkey.xinfo('STREAM', stream)) as unknown[]
+    expect(info[info.indexOf('entries-added') + 1]).toBe(12_001)
+    const [[, firstFields] = ['', []]] = await s.valkey.xrange(stream, '-', '+', 'COUNT', 1)
+    const [[, lastFields] = ['', []]] = await s.valkey.xrevrange(stream, '+', '-', 'COUNT', 1)
+    expect([firstFields.slice(0, 2), lastFields.slice(0, 2)]).toEqual([
+      ['n', '1'],
+      ['n', '12001'],
+    ])
+  })
+
+  it('T19 item 9 S6: a trim that lands while the reader’s XREAD is blocked in flight (one MULTI of the production script, past a backstop of 100) is found by the read from its entries’ numbers: the member whose own event was trimmed gets a reset, never silence', async () => {
+    const org = await s.newOrg()
+    const app = await s.startRealtime({ recheckMs: SOCKET_RECHECK_MS, subscribe: true })
+    const [a, b] = [await s.person({ org, pin: s.newPin() }), await s.person({ org })]
+    const socket = await s.gatewaySocket(await s.signIn(a), { url: app.url })
+    expect((await socket.sub([personTopic(a)])).ok).toEqual([personTopic(a)])
+    // Also loads the script, so the MULTI's EVALSHAs find it.
+    await publish(org.id, personTopic(a), 'it.first')
+    expect(await socket.next('ev')).toMatchObject({ type: 'it.first' })
+    // The reader is back in XREAD BLOCK, its checks long passed.
+    await sleep(500)
+    const keys = [s.names.stream(org.id), s.names.epoch(org.id)]
+    const backstop = gatewayPolicy({ streamMaxLen: 100 })
+    const args = (topic: string, type: string) => [
+      backstop.streamMaxAgeMs,
+      backstop.streamMaxLen,
+      backstop.streamTtlMs,
+      randomUUID(),
+      JSON.stringify({ v: 1, k: 'ev', topic, type, ids: {} }),
+    ]
+    const multi = s.valkey.multi()
+    multi.evalsha(PUBLISH_TOPIC_EVENT.sha, 2, ...keys, ...args(personTopic(a), 'it.lost'))
+    for (let i = 0; i < 1000; i++)
+      multi.evalsha(PUBLISH_TOPIC_EVENT.sha, 2, ...keys, ...args(personTopic(b), 'it.bulk'))
+    const replies = (await multi.exec()) ?? []
+    expect(replies.filter(([error]) => error !== null)).toEqual([])
+    for (const [, id] of replies) published.push(String(id))
+    expect(await socket.next('reset', 5000)).toEqual({ v: 1, t: 'reset', topics: [personTopic(a)], reason: 'gap' })
+    expect(
+      linesOf(app, 'stream_reset')
+        .filter(line => line.org === org.id)
+        .map(line => line.reason),
+    ).toEqual(['trimmed'])
+    // Its own trimmed event never arrives as an ev: the reset covers it.
+    await sleep(500)
+    expect(evTypes(socket)).toEqual(['it.first'])
+  })
+
+  it('T19 item 9 P4: a reader outrun again and again by other topics’ events (MULTIs of the production script past a backstop of 100) finds a gap at each read, but a member holding only their own topic gets one reset at once and one at the end of the 5 s window, not one a read', async () => {
+    const org = await s.newOrg()
+    // The production policy: resets coalesced per org over 5 s.
+    const app = await s.startRealtime({ recheckMs: SOCKET_RECHECK_MS, subscribe: true })
+    const [a, b] = [await s.person({ org, pin: s.newPin() }), await s.person({ org })]
+    const socket = await s.gatewaySocket(await s.signIn(a), { url: app.url })
+    expect((await socket.sub([personTopic(a)])).ok).toEqual([personTopic(a)])
+    const resetAt: number[] = []
+    socket.ws.on('message', data => {
+      if ((JSON.parse(String(data)) as { t: string }).t === 'reset') resetAt.push(Date.now())
+    })
+    // Also loads the script, so the MULTIs' EVALSHAs find it.
+    await publish(org.id, personTopic(a), 'it.first')
+    expect(await socket.next('ev')).toMatchObject({ type: 'it.first' })
+    const keys = [s.names.stream(org.id), s.names.epoch(org.id)]
+    const backstop = gatewayPolicy({ streamMaxLen: 100 })
+    const found = () => linesOf(app, 'stream_reset').filter(line => line.org === org.id)
+    // Four overloads in a row on another member's topic, each trimming entries past the reader's
+    // position before it reads them, each found by the read after it.
+    for (let round = 1; round <= 4; round++) {
+      const multi = s.valkey.multi()
+      for (let i = 0; i < 1000; i++) {
+        multi.evalsha(
+          PUBLISH_TOPIC_EVENT.sha,
+          2,
+          ...keys,
+          backstop.streamMaxAgeMs,
+          backstop.streamMaxLen,
+          backstop.streamTtlMs,
+          randomUUID(),
+          JSON.stringify({ v: 1, k: 'ev', topic: personTopic(b), type: 'it.bulk', ids: {} }),
+        )
+      }
+      const replies = (await multi.exec()) ?? []
+      expect(replies.filter(([error]) => error !== null)).toEqual([])
+      for (const [, id] of replies) published.push(String(id))
+      await eventually(
+        () => found().length,
+        n => n === round,
+        5000,
+      )
+    }
+    expect(found().map(line => line.reason)).toEqual(['trimmed', 'trimmed', 'trimmed', 'trimmed'])
+    // The first gap's reset went at once; the three found within its window go as one at its end.
+    await eventually(
+      () => resetAt.length,
+      n => n === 2,
+      GATEWAY_POLICY.resetCoalesceMs + 3000,
+    )
+    await sleep(1000)
+    expect(resetAt).toHaveLength(2)
+    expect((resetAt[1] ?? 0) - (resetAt[0] ?? 0)).toBeGreaterThanOrEqual(GATEWAY_POLICY.resetCoalesceMs - 100)
+    expect(socket.all('reset')).toEqual([
+      { v: 1, t: 'reset', topics: [personTopic(a)], reason: 'gap' },
+      { v: 1, t: 'reset', topics: [personTopic(a)], reason: 'gap' },
+    ])
+    expect(app.server.counts().resets).toBe(2)
+    // None of the other member's events reached this socket, and its own flow on.
+    expect(evTypes(socket)).toEqual(['it.first'])
+    await publish(org.id, personTopic(a), 'it.after')
+    expect(await socket.next('ev')).toMatchObject({ type: 'it.after' })
+  })
+
+  it('T19 item 9 S6: each append trims entries older than the age limit by Valkey’s clock; a live reader whose own last entry went with them resets nothing, and a reader stalled past the limit (its Valkey frozen) resets with trimmed, a fact about the server', async () => {
+    const org = await s.newOrg()
+    const valkey = await s.proxy('valkey')
+    const fast = {
+      recheckMs: SOCKET_RECHECK_MS,
+      subscribe: true,
+      policy: { readerEpochCheckMs: 200, readerBlockMs: 500 },
+    }
+    const live = await s.startRealtime(fast)
+    const stalled = await s.startRealtime({ ...fast, valkeyUrl: valkey.url })
+    const [a, b] = [await s.person({ org, pin: s.newPin() }), await s.person({ org })]
+    const browser = await s.signIn(a)
+    const onLive = await s.gatewaySocket(browser, { url: live.url })
+    const onStalled = await s.gatewaySocket(browser, { url: stalled.url })
+    for (const socket of [onLive, onStalled]) expect((await socket.sub([personTopic(a)])).ok).toEqual([personTopic(a)])
+    await publish(org.id, personTopic(a), 'it.first')
+    for (const socket of [onLive, onStalled]) expect(await socket.next('ev')).toMatchObject({ type: 'it.first' })
+
+    // A 1 s age limit (a producer's policy; the default is 60 s).
+    const young = gatewayPolicy({ streamMaxAgeMs: 1000, readerStuckMs: 500 })
+    const publishYoung = async (topic: string, type: string) => {
+      const id = await publishTopicEvent(s.valkey, s.prefix, org.id, { topic, type, ids: {} }, log, {
+        rethrow: true,
+        policy: young,
+      })
+      if (id === undefined) throw new Error('the event was not appended')
+      published.push(id)
+      return id
+    }
+    valkey.proxy.freeze({ hold: true })
+    await sleep(300)
+    for (let i = 0; i < 150; i++) await publishYoung(personTopic(b), 'it.other')
+    await sleep(1200)
+    await publishYoung(personTopic(a), 'it.after')
+    // The head went: entries older than a second, the first among them, were trimmed by this append.
+    const stream = s.names.stream(org.id)
+    const [[, headFields] = ['', []]] = await s.valkey.xrange(stream, '-', '+', 'COUNT', 1)
+    expect(Number(headFields[headFields.indexOf('n') + 1])).toBeGreaterThan(2)
+
+    // The live reader had read everything: its last entry trimmed is no gap.
+    expect(await onLive.next('ev')).toMatchObject({ type: 'it.after' })
+    expect(onLive.all('reset')).toEqual([])
+    // The stalled one finds entries after its position gone once it reads again.
+    valkey.proxy.restore()
+    expect(await onStalled.next('reset', 8000)).toEqual({ v: 1, t: 'reset', topics: [personTopic(a)], reason: 'gap' })
+    expect(await onStalled.next('ev', 5000)).toMatchObject({ type: 'it.after' })
+    await sleep(500)
+    expect(linesOf(live, 'stream_reset').filter(line => line.org === org.id)).toEqual([])
+    expect(
+      linesOf(stalled, 'stream_reset')
+        .filter(line => line.org === org.id)
+        .map(line => line.reason),
+    ).toEqual(['trimmed'])
+  })
+
+  it('GW-09 Rule 6: a reconnect re-authorises every topic: one lost while away is refused, one left and rejoined is ok again (decided now), none of the missed events is replayed, and later events reach only the topics held', async () => {
     const org = await s.newOrg()
     const p = await s.person({ org, pin: s.newPin() })
     const watching = await s.person({ org, pin: s.newPin() })
     const [left, rejoined] = [await s.team({ org }), await s.team({ org })]
-    await s.addMember(left, p, { ago: '1 hour' })
-    await s.addMember(rejoined, p, { ago: '1 hour' })
+    await s.addMember(left, p)
+    await s.addMember(rejoined, p)
     const browser = await s.signIn(p)
     const topics = [teamTopic(left), teamTopic(rejoined), personTopic(p)]
     // Someone else's socket keeps the reader on the org's stream; a marker it has seen means the
-    // reader has dispatched everything before it (as in the resume test above).
+    // reader has dispatched everything before it (as in the reconnect test above).
     const watcher = await s.gatewaySocket(await s.signIn(watching))
     await watcher.sub([orgTopic(org.id)])
     const settle = async (): Promise<void> => {
-      const marker = await publish(org.id, orgTopic(org.id), 'it.marker')
-      expect(await watcher.next('ev')).toMatchObject({ pos: marker })
+      await publish(org.id, orgTopic(org.id), 'it.marker')
+      expect(await watcher.next('ev')).toMatchObject({ type: 'it.marker' })
     }
-    const earlier = await publish(org.id, personTopic(p))
-    await settle()
 
     const socket = await s.gatewaySocket(browser)
-    const ack = await socket.sub(topics)
-    expect(ack.ok).toEqual(topics)
+    expect((await socket.sub(topics)).ok).toEqual(topics)
     socket.ws.close()
     await socket.closed
 
     // While away: removed from one team, out of and back into the other, with events on each.
     await s.removeMember(left, p)
-    await publish(org.id, teamTopic(left))
+    await publish(org.id, teamTopic(left), 'it.missed')
     await s.removeMember(rejoined, p)
-    await publish(org.id, teamTopic(rejoined))
+    await publish(org.id, teamTopic(rejoined), 'it.missed')
     await s.addMember(rejoined, p)
-    const mine = await publish(org.id, personTopic(p))
+    await publish(org.id, personTopic(p), 'it.missed')
     await settle()
 
-    const before = s.realtime.server.counts().resume.reset_era
     const back = await s.gatewaySocket(browser)
-    const backAck = await back.sub(topics, ack.pos as Position)
-    expect(backAck).toMatchObject({ ok: [personTopic(p)], refused: [teamTopic(left)], reset: [teamTopic(rejoined)] })
-    // Only the person topic's events were replayed, before the ack; nothing of either team's. since
-    // is the reported position, the grain before's start, so the event before the sub comes again
-    // if it fell after that.
-    const replayed = after(String(ack.pos?.pos), [earlier, mine] as string[])
-    expect(replayed.at(-1)).toBe(mine)
-    expect(back.frames.map(frame => [frame.t, frame.t === 'ev' ? frame.topic : undefined])).toEqual([
-      ['welcome', undefined],
-      ...replayed.map(() => ['ev', personTopic(p)]),
-      ['ack', undefined],
+    expect(await back.sub(topics)).toEqual({
+      v: 1,
+      t: 'ack',
+      id: 1,
+      ok: [teamTopic(rejoined), personTopic(p)],
+      refused: [teamTopic(left)],
+      retry: [],
+    })
+    await settle()
+    expect(back.all('ev')).toEqual([])
+    // Later events: the held topics' arrive, the refused team's doesn't.
+    await publish(org.id, teamTopic(left), 'it.left')
+    await publish(org.id, teamTopic(rejoined), 'it.rejoined')
+    await publish(org.id, personTopic(p), 'it.person')
+    await settle()
+    expect(back.all('ev').map(frame => [frame.topic, frame.type])).toEqual([
+      [teamTopic(rejoined), 'it.rejoined'],
+      [personTopic(p), 'it.person'],
     ])
-    expect(back.all('ev').map(frame => frame.pos)).toEqual(replayed)
-    expect(s.realtime.server.counts().resume.reset_era).toBe(before + 1)
   })
 
   it('GW-08 T19 item 12: the server pings; a client that stops answering pongs is terminated after the dead limit (policy 200/550 ms); an app ping gets pong', async () => {
@@ -1074,7 +1259,7 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     expect(elsewhere.all('nudge')).toEqual([])
   })
 
-  it('T19 item 12 P2, Valkey down: with the realtime app’s Valkey cut, sockets stay open, a deactivation still closes them by the re-check, the full readiness fails and /ready/local stays 200; when Valkey is back the channels are subscribed again, and the reader resets the org if its epoch changed', async () => {
+  it('T19 item 12 P2, Valkey down: with the realtime app’s Valkey cut, sockets stay open, a deactivation still closes them by the re-check, a sub is still acked, the full readiness fails and /ready/local stays 200; when Valkey is back the channels are subscribed again, the reader resets the org if its epoch changed, and resets an org whose stream it couldn’t read when its sub was acked', async () => {
     const org = await s.newOrg()
     const valkey = await s.proxy('valkey')
     const app = await s.startRealtime({
@@ -1089,8 +1274,11 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     const stays = await s.person({ org, pin: s.newPin() })
     const leaving = await s.gatewaySocket(await s.signIn(leaver), { url: app.url })
     const staying = await s.gatewaySocket(await s.signIn(stays), { url: app.url })
-    const ack = await staying.sub([personTopic(stays)])
-    if (ack.pos === null) throw new Error('the ack had no position')
+    expect((await staying.sub([personTopic(stays)])).ok).toEqual([personTopic(stays)])
+    // Someone of another org, whose first socket arrives while Valkey is cut.
+    const lateOrg = await s.newOrg()
+    const late = await s.person({ org: lateOrg, pin: s.newPin() })
+    const lateBrowser = await s.signIn(late)
 
     valkey.proxy.cut()
     const full = await eventually(
@@ -1110,6 +1298,11 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     expect(app.server.counts()).toMatchObject({ closedRecheck: 1, closedRevoked: 0 })
     expect(staying.open()).toBe(true)
 
+    // The reader can't read the late org's stream, but its sub is acked: with Valkey cut, ready()
+    // answers false at once (against a silent Valkey, within the command client's 1 s timeout).
+    const lateSocket = await s.gatewaySocket(lateBrowser, { url: app.url })
+    expect(await lateSocket.sub([personTopic(late)])).toMatchObject({ ok: [personTopic(late)], retry: [] })
+
     // Valkey comes back without the org's epoch, as a restart without persistence would.
     await s.valkey.del(s.names.epoch(org.id))
     valkey.proxy.restore()
@@ -1121,9 +1314,29 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
       r => r.status === 200,
     )
     expect(back.body.checks).toEqual({ postgres: 'ok', valkey: 'ok', gateway: 'ok' })
-    const reset = await staying.next('reset', 10_000)
-    expect(reset.pos.epoch).not.toBe(ack.pos.epoch)
+    expect(await staying.next('reset', 10_000)).toEqual({
+      v: 1,
+      t: 'reset',
+      topics: [personTopic(stays)],
+      reason: 'gap',
+    })
     expect(staying.open()).toBe(true)
+    // The late org's first read of its stream resets its socket, whose sub was acked without one.
+    expect(await lateSocket.next('reset', 10_000)).toEqual({
+      v: 1,
+      t: 'reset',
+      topics: [personTopic(late)],
+      reason: 'gap',
+    })
+    const reasons = (orgId: string) =>
+      linesOf(app, 'stream_reset')
+        .filter(line => line.org === orgId)
+        .map(line => line.reason)
+    expect(reasons(org.id)).toEqual(['epoch'])
+    expect(reasons(lateOrg.id)).toEqual(['late_start'])
+    // Its events reach it from then on.
+    await publish(lateOrg.id, personTopic(late), 'it.late')
+    expect(await lateSocket.next('ev', 5000)).toMatchObject({ type: 'it.late' })
   })
 
   it('OD-30 P12, a half-open Valkey: with one realtime app’s subscriber and reader frozen (proxy.freeze()), within about 7 s isLive turns false and the full readiness fails while /ready/local passes; after restore() both subscribe again, the reader resumes, and a revoked publish closes a socket', async () => {
@@ -1156,8 +1369,8 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     const again = linesOf(app, 'channel_subscribed').slice(subscribedBefore)
     expect(new Set(again.map(line => line.channel))).toEqual(new Set(['revoked', 'access', 'flags']))
     // The reader reads again.
-    const next = await publish(org.id, personTopic(p))
-    expect(await socket.next('ev', 10_000)).toMatchObject({ pos: next })
+    await publish(org.id, personTopic(p), 'it.after_freeze')
+    expect(await socket.next('ev', 10_000)).toMatchObject({ type: 'it.after_freeze' })
     // And the push reaches it again.
     const started = Date.now()
     await deactivate(await s.signIn(admin), p)

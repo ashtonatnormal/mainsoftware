@@ -842,7 +842,7 @@ export const RULE_6: readonly RuleCase[] = [
   core(
     'R6-10b',
     'C1.1',
-    'Rule 6 PRD-80 CHAT-01 PRD-79: a member removed from a channel, DM or room loses its topic within 60 s, and resume never replays from before their era',
+    'Rule 6 PRD-80 CHAT-01 PRD-79: a member removed from a channel, DM or room loses its topic within 60 s, and catching up after a reconnect (over REST, T19 item 9) never returns what was posted outside their era',
   ),
   core('R6-11', 'C1.8', 'Rule 6 PRD-74: offline stores on the device are wiped on revocation'),
   core(

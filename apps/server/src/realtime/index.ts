@@ -1,8 +1,9 @@
 // The realtime role (C0.5; the gateway from C0.7, TECH-SPEC T19): the gateway on /ws
 // (realtime/socket.ts), wired to Postgres for the session lookup and the checks (realtime/checks.ts,
 // read only and acting as each org's system principal), to Valkey for the revocation channels
-// (revocation/channels.ts) and the org event streams (realtime/stream.ts), and to the flags it keeps
-// for every org it has a socket in (C0.6, flags/cache.ts).
+// (revocation/channels.ts) and the org event streams (realtime/stream.ts, for fan-out only: clients
+// resubscribe and refetch over REST, T19 item 9), and to the flags it keeps for every org it has a
+// socket in (C0.6, flags/cache.ts).
 //   - revoked (the api's push) and access (the worker's durable jobs, and from C0.16 the api's push
 //     for team and role changes) name ended sessions, whose sockets close at once with no database
 //     read, and people whose keys changed, whom the decision lane re-checks against Postgres.
@@ -20,7 +21,6 @@ import type { FastifyInstance } from 'fastify'
 import type { Redis } from 'ioredis'
 import type { Logger } from 'pino'
 import { SESSION, SOCKET_RECHECK_MS } from '#src/auth/policy.ts'
-import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import type { Database } from '#src/db/database.ts'
 import { sessionByToken } from '#src/db/pre-org.ts'
 import type { FlagCache } from '#src/flags/cache.ts'
@@ -29,7 +29,7 @@ import type { Check } from '#src/ready.ts'
 import { type Admission, type CheckOrg, orgChecker } from '#src/realtime/checks.ts'
 import { type GatewayPolicy, gatewayPolicy } from '#src/realtime/policy.ts'
 import { attachSocketServer, type SocketServer } from '#src/realtime/socket.ts'
-import { planResume, StreamReader } from '#src/realtime/stream.ts'
+import { StreamReader } from '#src/realtime/stream.ts'
 import { listenAccess, listenRevoked } from '#src/revocation/channels.ts'
 import { RevocationLatency } from '#src/revocation/latency.ts'
 
@@ -42,10 +42,10 @@ export interface RealtimeDeps {
   // a client flag nudges the org's sockets.
   flags?: Pick<FlagCache, 'track' | 'onChange' | 'registry'>
   // The command client and the blocking reader's connection (valkey.ts createBlockingReader): with
-  // both, the gateway reads each org's event stream (fan-out and resume) and writes its grains'
-  // ticks. Without them, positions are unknown and every resume answers reset. Whoever made them
-  // closes them.
-  valkey?: Pick<Redis, 'get' | 'set' | 'pexpire' | 'xrange' | 'xrevrange' | 'xinfo' | 'evalsha' | 'eval'>
+  // both, the gateway reads each org's event stream and fans its events out to its sockets (it runs
+  // no script and appends nothing). Without them, no event reaches a socket, and clients see only
+  // what they fetch over REST. Whoever made them closes them.
+  valkey?: Pick<Redis, 'get' | 'set' | 'pexpire' | 'xrevrange' | 'multi'>
   reader?: Pick<Redis, 'xread' | 'on'>
   keyPrefix: string
   // How often every open socket is checked; SOCKET_RECHECK_MS unless a test shortens it.
@@ -75,7 +75,6 @@ export function registerRealtime(
 ): Gateway {
   const { db, logger, flags, valkey, reader, subscriptions } = deps
   const policy = gatewayPolicy(deps.policy)
-  const keys = valkeyKeys(deps.keyPrefix)
   const latency = new RevocationLatency({ logger, summaryMs: 0 })
   const checker = orgChecker(db, { admission: deps.admission, policy })
   const server = attachSocketServer(app, {
@@ -95,10 +94,7 @@ export function registerRealtime(
     admission: deps.admission !== undefined,
     latency,
     ...(valkey !== undefined && reader !== undefined
-      ? {
-          stream: target => new StreamReader({ valkey, reader, keyPrefix: deps.keyPrefix, target, logger, policy }),
-          resume: (orgId, request, current) => planResume(valkey, keys.stream(orgId), request, current, { policy }),
-        }
+      ? { stream: target => new StreamReader({ valkey, reader, keyPrefix: deps.keyPrefix, target, logger, policy }) }
       : {}),
   })
 

@@ -3,7 +3,10 @@
 // privacy), then speaks the versioned JSON protocol of packages/shared gateway.ts, whose frames
 // hold ids, codes and whole numbers only (realtime/frames.ts): hello, then topics (person, org and
 // team), each decided by can() once the subscriber's session is confirmed live, with events fanned
-// out from the org's Valkey stream (realtime/stream.ts).
+// out from the org's Valkey stream (realtime/stream.ts). A reconnecting client resubscribes, each
+// topic is decided again, and the client refetches over REST: nothing is replayed, and no frame
+// carries a stream position (the owner's decision, T19 item 9). Where the reader can't be sure
+// every event reached a socket, the socket gets a reset naming the topics to refetch.
 //
 // Revocation (Rule 6, ACC-05): a session's sockets close with 4401, and a topic is dropped with a
 // dropped frame, within 60 s of the access ending. Three paths get them there: the api's push
@@ -39,7 +42,7 @@
 import { type IncomingMessage, STATUS_CODES } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
-import { GATEWAY_CLOSE, GATEWAY_VERSIONS, type GatewayClose, type GatewayNudge, type Position } from '@hearth/shared'
+import { GATEWAY_CLOSE, GATEWAY_VERSIONS, type GatewayClose, type GatewayNudge } from '@hearth/shared'
 import type { FastifyInstance } from 'fastify'
 import type { Logger } from 'pino'
 import { type WebSocket, WebSocketServer } from 'ws'
@@ -59,13 +62,13 @@ import {
   TargetedQueue,
 } from '#src/realtime/checks.ts'
 import {
+  Coalescer,
   type Conn,
   type FrameContext,
   Frames,
   forget,
   isOpen,
   marks,
-  Nudger,
   newConn,
   type SendResult,
   sendControl,
@@ -73,14 +76,7 @@ import {
   takeToken,
 } from '#src/realtime/frames.ts'
 import { GATEWAY_POLICY, type GatewayPolicy, gatewayPolicy, reconnectSpreadMs } from '#src/realtime/policy.ts'
-import {
-  RESUME_OUTCOMES,
-  ReplayQueue,
-  type ResumeOutcome,
-  type ResumePlan,
-  type ResumeRequest,
-  type StreamTarget,
-} from '#src/realtime/stream.ts'
+import type { StreamTarget } from '#src/realtime/stream.ts'
 import type { RevocationLatency, RevocationPath, StartSource } from '#src/revocation/latency.ts'
 
 export const SOCKET_PATH = '/ws'
@@ -178,27 +174,23 @@ interface Label {
   cause?: string | undefined
 }
 
-// The org's event stream as the gateway uses it (realtime/stream.ts StreamReader): the exact
-// position, once read and at once, and the reported one its sockets are told (T19 item 9).
+// The org's event stream as the gateway uses it (realtime/stream.ts StreamReader): whether the
+// reader follows an org's stream yet (T19 item 9). Its positions never leave it.
 export interface GatewayStream {
   start(): void
   stop(): Promise<void>
   watch(orgId: string): void
-  position(orgId: string): Promise<Position | null>
-  current(orgId: string): Position | null
-  reported(orgId: string): Position | null
+  ready(orgId: string): Promise<boolean>
   lagMs(): number
   stuck(): boolean
 }
 
-// With no stream (unit tests that don't need one): every position is unknown.
+// With no stream (unit tests that don't need one): nothing is followed, and no sub waits for it.
 const NO_STREAM: GatewayStream = {
   start: () => {},
   stop: async () => {},
   watch: () => {},
-  position: async () => null,
-  current: () => null,
-  reported: () => null,
+  ready: async () => false,
   lagMs: () => 0,
   stuck: () => false,
 }
@@ -227,9 +219,6 @@ export interface SocketServerOptions {
   versions?: readonly number[]
   // The org's event stream, given the gateway as its target (StreamReader in production).
   stream?: (target: StreamTarget<Conn>) => GatewayStream
-  // Plans a resume against the stream (stream.ts planResume on the command client). Without it,
-  // every resume answers reset.
-  resume?: (orgId: string, request: ResumeRequest, current: Position | null) => Promise<ResumePlan>
   // Whether an admission hook is set (C0.9; the check asks it): every accept is then re-checked.
   admission?: boolean
   // Records each revocation applied (revocation/latency.ts).
@@ -259,8 +248,9 @@ export interface SocketCounts {
   closedError: number
   // (socket, topic) pairs dropped, by path.
   dropped: Record<RevocationPath, number>
-  // Resubscribed topics, by how they resumed.
-  resume: Record<ResumeOutcome, number>
+  // Reset frames sent: sockets told to refetch their topics because the reader lost track of their
+  // org's stream.
+  resets: number
   // Droppable frames shed, and topics answered retry.
   shed: number
   retried: number
@@ -407,7 +397,7 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   })
 
   // Every open socket, and the indexes: by session, by `<org>:<person>`, by org, and by org and
-  // topic (replaying and live topics only: the reader's dispatch reads it).
+  // topic (live topics only: the reader's dispatch reads it).
   const conns = new Set<Conn>()
   const bySession = new Map<string, Set<Conn>>()
   const byPerson = new Map<string, Set<Conn>>()
@@ -464,7 +454,7 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   let refusalsLoggedAt = Date.now()
   const closes = zero(CLOSES)
   const dropped = zero<RevocationPath>(['push', 'durable', 'recheck'])
-  const resume = zero(RESUME_OUTCOMES)
+  let resets = 0
   let shed = 0
   let retried = 0
   let stopping = false
@@ -473,14 +463,10 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
 
   const slots = new LookupSlots(policy.lookupsRunning, policy.lookupsWaiting)
   const lane = new DecisionLane({ check: options.check, policy, logger })
-  const replays = new ReplayQueue(policy)
-  // How many times each org's stream has been reset (a replay that spans one answers reset).
-  const resets = new Map<string, number>()
 
   const target: StreamTarget<Conn> = {
     orgsWithSockets: () => byOrg.keys(),
     byTopic: (orgId, topic) => byTopic.get(orgId)?.get(topic) ?? [],
-    holdOf: (conn, topic) => conn.topics.get(topic),
     send: (conn, text) => send(conn, text),
     resetOrg,
   }
@@ -805,7 +791,7 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   }
 
   // Drops these topics from the socket, with one dropped frame (Rule 6). Answers how many had been
-  // granted (replaying or live): a deciding topic was never held, so its drop is no revocation.
+  // granted (live): a deciding topic was never held, so its drop is no revocation.
   function dropTopics(conn: Conn, topics: readonly string[], label: Label): number {
     let granted = 0
     const gone: string[] = []
@@ -917,27 +903,46 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     },
   )
 
-  // The stream lost continuity (§5.5): every socket of the org that has said hello is told at once,
-  // with the reported position in the epoch the reader continues in (T19 item 9).
-  function resetOrg(orgId: string, position: Position): void {
-    resets.set(orgId, (resets.get(orgId) ?? 0) + 1)
-    const text = (v: number) => JSON.stringify({ v, t: 'reset', pos: position })
-    for (const conn of liveOf(byOrg.get(orgId))) {
-      if (conn.version === undefined) continue
-      send(conn, text(conn.version))
-    }
+  // The reader can't be sure every entry of the org reached its sockets (§5.5; T19 item 9): every
+  // socket of the org that has said hello and holds a topic live is told, in one reset naming those
+  // topics, to refetch them over REST. Not droppable. A deciding topic isn't named: its client
+  // fetches it after its ack, which comes after this. The frame names only the socket's own topics,
+  // and every socket of the org gets one at the same moment, so it says nothing about any one
+  // topic's events.
+  //
+  // Coalesced per org on the trailing edge, at most one each resetCoalesceMs: the first goes at once
+  // (before the entries after the gap the reader found), and any asked for in the next
+  // resetCoalesceMs go as one at its end, after the entries that followed them, and the client's
+  // refetch after it covers them all. A reader outrun for seconds finds a gap at every read; without
+  // this, the org's sockets would get a reset at each, whose count and spacing would track how long
+  // and how hard other topics' events ran, and every client would refetch each time. With it, an
+  // overload gives one reset for each resetCoalesceMs it lasts.
+  const resetCoalescer = new Coalescer(policy.resetCoalesceMs, now)
+
+  function resetOrg(orgId: string): void {
+    resetCoalescer.signal(orgId, () => {
+      for (const conn of liveOf(byOrg.get(orgId))) {
+        if (conn.version === undefined) continue
+        const topics = [...conn.topics].filter(([, entry]) => entry.state === 'live').map(([topic]) => topic)
+        if (topics.length === 0) continue
+        resets++
+        send(conn, JSON.stringify({ v: conn.version, t: 'reset', topics, reason: 'gap' }))
+      }
+    })
   }
 
-  const nudger = new Nudger(
-    (orgId, what) => {
+  // The flags nudge, coalesced per org and code on the trailing edge, at most one each
+  // nudgeCoalesceMs (P4).
+  const nudger = new Coalescer(policy.nudgeCoalesceMs, now)
+
+  function nudge(orgId: string, what: GatewayNudge): void {
+    nudger.signal(`${orgId} ${what}`, () => {
       for (const conn of liveOf(byOrg.get(orgId))) {
         if (conn.version === undefined) continue
         send(conn, JSON.stringify({ v: conn.version, t: 'nudge', what }), true)
       }
-    },
-    policy.nudgeCoalesceMs,
-    now,
-  )
+    })
+  }
 
   const spreadMs = () => reconnectSpreadMs(conns.size, policy)
 
@@ -965,23 +970,9 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
         targeted.queue(conn.session.orgId, conn.session.userId, changed.label)
       }
     },
-    position: orgId => stream.position(orgId),
-    current: orgId => stream.current(orgId),
-    reported: orgId => stream.reported(orgId),
-    resets: orgId => resets.get(orgId) ?? 0,
-    replay: (conn, work) => replays.run(conn, work),
-    plan: (orgId, request, current) => {
-      if (options.resume === undefined) {
-        const outcomes = new Map(request.topics.map(topic => [topic, 'reset_epoch' as ResumeOutcome]))
-        return Promise.resolve({ outcomes, frames: [] })
-      }
-      return options.resume(orgId, request, current)
-    },
+    streamReady: orgId => stream.ready(orgId),
     retried: topics => {
       retried += topics
-    },
-    resumed: (outcome, topics) => {
-      resume[outcome] += topics
     },
     failed: (conn, error) => {
       logger.error({ event: 'ws_frame_failed', failure: failureFields(error) }, 'a frame handler failed')
@@ -1138,7 +1129,6 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
         : oldestUnconfirmedMs > policy.unconfirmedWarnMs
           ? 'warn'
           : 'info'
-    const replaysNow = replays.counts()
     logger[level](
       {
         event: 'gateway_gauges',
@@ -1152,12 +1142,10 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
         lookupsRunning: slots.running,
         lookupsWaiting: slots.waiting(),
         decisionsWaiting: lane.waiting() + targeted.size(),
-        replaysRunning: replaysNow.running,
-        replaysWaiting: replaysNow.waiting,
         shed,
         retried,
+        resets,
         refused: { ...refused },
-        resume: { ...resume },
         closes: { ...closes },
         dropped: { ...dropped },
         longestLatencyMs: longestLatency ?? null,
@@ -1196,6 +1184,7 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     targeted.stop()
     lane.stop()
     nudger.stop()
+    resetCoalescer.stop()
     // The reader's loop ends after its current XREAD, at most a block; main.ts closes its connection,
     // which ends that at once.
     void stream.stop()
@@ -1216,7 +1205,7 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
   return {
     closeSessions,
     peopleChanged,
-    nudge: (orgId, what) => nudger.nudge(orgId, what),
+    nudge,
     counts: () => {
       let topics = 0
       for (const conn of conns) topics += conn.topics.size
@@ -1237,7 +1226,7 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
         closedOutdated: closes.outdated,
         closedError: closes.error,
         dropped: { ...dropped },
-        resume: { ...resume },
+        resets,
         shed,
         retried,
       }

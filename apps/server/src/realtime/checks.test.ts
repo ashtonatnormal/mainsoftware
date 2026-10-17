@@ -40,7 +40,6 @@ const ME = A.session.userId
 const YOU = B.session.userId
 const ENDED_AT = new Date('2026-10-16T01:00:00Z')
 const REMOVED_AT = new Date('2026-10-16T00:30:00Z')
-const JOINED_AT = new Date('2026-10-15T00:00:00Z')
 
 const is = (prefix: string) => (statement: Statement) => statement.text.startsWith(prefix)
 const isSessions = is('select s.id, s.user_id,')
@@ -49,6 +48,7 @@ const isMembers = is('select team_id, person_id, removed_at from team_membership
 const isRoles = is('select person_id, role, team_id, revoked_at from role_assignments')
 const isTeams = is('select id, archived_at from teams')
 const isLost = is('select x.person, x.topic,')
+// The membership-start read the old resume's era test made, which no check makes now (GW-09).
 const isEras = is('select person_id, team_id, created_at from team_memberships')
 
 // The org as the checks read it: A's session live, B's ended at ENDED_AT; A in TEAM, B in nothing
@@ -82,7 +82,6 @@ function org(overrides: (statement: Statement) => unknown[] | undefined = () => 
       const [people, topics] = statement.values.filter(Array.isArray) as string[][]
       return (people ?? []).map((person, at) => ({ person, topic: topics?.[at], lost_at: REMOVED_AT }))
     }
-    if (isEras(statement)) return [{ person_id: ME, team_id: TEAM, created_at: JOINED_AT }]
     return systemPrincipal(SYSTEM)(statement)
   })
 }
@@ -227,26 +226,18 @@ describe('C0.7 T19 item 8: checkOrg, one read-only transaction as the org’s sy
     )
   })
 
-  it('GW-09 trace fix: the era read runs only for allowed team topics of a sub with since', async () => {
-    const withSince = org()
-    const result = await withOrg(withSince.db, { orgId: ORG, system: true }, trx =>
+  it('GW-09 T19 item 9: a decision reads no membership’s start: a topic is decided by can() now, whatever the client held before, and nothing is replayed that a start would bound', async () => {
+    const pool = org()
+    const result = await withOrg(pool.db, { orgId: ORG, system: true }, trx =>
       checkOrg(trx, ORG, {
         sessions: [A.session.sessionId],
         topics: asked([[ME, [teamTopic(TEAM), teamTopic(OTHER_TEAM), personTopic(1)]]]),
-        eras: asked([[ME, [teamTopic(TEAM), teamTopic(OTHER_TEAM), personTopic(1)]]]),
       }),
     )
-    const eras = withSince.statements.filter(isEras)
-    expect(eras.map(s => s.values)).toEqual([[ORG, [ME], [TEAM]]])
-    expect(eras[0]?.text).toBe(
-      'select person_id, team_id, created_at from team_memberships where org_id = $1 and removed_at is null and person_id = any($2::uuid[]) and team_id = any($3::uuid[])',
-    )
-    expect(result.eras).toEqual(new Map([[ME, new Map([[teamTopic(TEAM), JOINED_AT.getTime()]])]]))
-    const without = org()
-    await withOrg(without.db, { orgId: ORG, system: true }, trx =>
-      checkOrg(trx, ORG, { sessions: [A.session.sessionId], topics: asked([[ME, [teamTopic(TEAM)]]]) }),
-    )
-    expect(without.statements.filter(isEras)).toEqual([])
+    expect(result.topics.get(ME)?.get(teamTopic(TEAM))).toBe(true)
+    expect(pool.statements.filter(isEras)).toEqual([])
+    expect(pool.statements.filter(s => s.text.includes('created_at'))).toEqual([])
+    expect(Object.keys(result).sort()).toEqual(['lostAt', 'notAdmitted', 'sessions', 'topics'])
   })
 
   it('S9 C0.9: with an admission hook, it is asked about the people with a live session inside the same transaction, and nothing is decided for those refused; with none, nothing is asked', async () => {
@@ -291,7 +282,6 @@ describe('C0.7 T19 item 8: the decision lane and the targeted queue', () => {
     notAdmitted: new Set(),
     topics: new Map(),
     lostAt: new Map(),
-    eras: new Map(),
   })
 
   it('T19 item 8: asks within 20 ms become one check per org, their requests merged', async () => {
@@ -319,7 +309,6 @@ describe('C0.7 T19 item 8: the decision lane and the targeted queue', () => {
         sessions: ['s1', 's2'],
         topics: asked([[ME, [personTopic(1), orgTopic()]]]),
         held: asked([[ME, [orgTopic()]]]),
-        eras: new Map(),
       },
     ])
     expect(lane.waiting()).toBe(0)
@@ -413,14 +402,13 @@ describe('C0.7 T19 item 8: the decision lane and the targeted queue', () => {
   it('merges requests by person, without duplicates', () => {
     expect(
       mergeRequests([
-        { sessions: ['s1'], eras: asked([[ME, [teamTopic()]]]) },
-        { sessions: ['s1', 's2'], topics: asked([[YOU, [orgTopic()]]]), eras: asked([[ME, [teamTopic()]]]) },
+        { sessions: ['s1'], held: asked([[ME, [teamTopic()]]]) },
+        { sessions: ['s1', 's2'], topics: asked([[YOU, [orgTopic()]]]), held: asked([[ME, [teamTopic()]]]) },
       ]),
     ).toEqual({
       sessions: ['s1', 's2'],
       topics: asked([[YOU, [orgTopic()]]]),
-      held: new Map(),
-      eras: asked([[ME, [teamTopic()]]]),
+      held: asked([[ME, [teamTopic()]]]),
     })
   })
 })
@@ -512,7 +500,7 @@ describe('C0.7 T19 items 6 and 8: what the gateway does with what the checks fin
     const client = await connected(url)
     checks.failNext(new Error('connection refused'))
     const ack = await client.sub([personTopic(1), orgTopic()])
-    expect(ack).toMatchObject({ ok: [], refused: [], reset: [], retry: [personTopic(1), orgTopic()] })
+    expect(ack).toEqual({ v: 1, t: 'ack', id: 1, ok: [], refused: [], retry: [personTopic(1), orgTopic()] })
     expect(client.ws.readyState).toBe(WebSocket.OPEN)
     expect(server.counts()).toMatchObject({ retried: 2, topics: 0, closedUnchecked: 0 })
     // Sent again, they are decided.

@@ -1,56 +1,67 @@
 // The realtime gateway's protocol (BUILD-PLAN C0.7, TECH-SPEC T19 item 10): the frames a client and
 // the realtime role's /ws exchange, as zod schemas the server and C0.8's web app both import. Frames
 // are JSON text and each carries v, the protocol version. They hold ids, codes and whole numbers
-// only: an ev is a nudge to refetch over REST, which checks access, never content (T19 item 9). The
-// server reads client frames strictly; clients read server frames leniently, so the server may add
-// to a version without a stale client missing a drop (P5, P6).
+// only: an ev is a nudge to refetch over REST, which checks access, never content (T19 item 9). No
+// frame carries a stream position, an epoch or anything else read from the org's event stream as a
+// whole. A reset comes to every socket of the org at the same moment and names only the socket's
+// own topics, so it never says which topic had events. The org's volume can cause one only by a
+// burst of more than about 100,000 events that outruns a server's reader (the stream is trimmed by
+// age, and its count cap is a memory backstop), and the server coalesces an org's resets to one at
+// once and at most one each 5 s after: an overload that lasts gives one reset for each 5 s it goes
+// on, which says roughly when and for how long the org was that busy, never how many events or on
+// which topic (T19 item 9). The server reads client frames strictly; clients read server frames
+// leniently, so the server may add to a version without a stale client missing a drop or a reset
+// (P5, P6).
 //
 // The client's side (T19 item 10), for C0.8:
 // 1. Open wss://<app host>/ws (same origin, so the cookie goes with it), send hello at once naming
 //    every version it speaks, and wait for welcome. Use welcome's v in every later frame, and keep
 //    its reconnectSpreadMs ("the spread"), which every pong updates.
-// 2. Subscribe, then fetch. sub at most 50 topics a frame and 100 a socket. Fetch over REST only
-//    after the ack, and only topics with no valid since: new ones, or those in ack.reset. An ev that
-//    arrives during the fetch means fetch again. Send ack.retry's topics again after a random 1-5 s,
-//    backing off to 30 s. A repeated sub, of a topic the socket already holds, decides nothing:
-//    its ack lists the topic ok if it is live in the generation the sub found (the same hold, not
-//    ended and made again since), and otherwise in retry (an earlier sub is still deciding or
-//    resuming it, or answered it refused or retry meanwhile). So a repeat sent before the first
-//    sub's ack may be answered ok or retry: don't count on a repeat's ack, wait for the first's. A
-//    topic ended meanwhile is in no list: one asked for but in none of the ack's lists was dropped
-//    (its dropped frame came before the ack) or unsubscribed after the sub was sent.
+// 2. Subscribe, then fetch. sub at most 50 topics a frame and 100 a socket. Fetch a topic's state
+//    over REST only after an ack lists it ok, and fetch every topic each such ack lists ok, a
+//    repeated sub's included. An ev that arrives during the fetch means fetch again; an ev for a
+//    topic whose sub hasn't been acked yet changes nothing, since the fetch after its ack covers it.
+//    Send ack.retry's topics again after a random 1-5 s, backing off to 30 s. A topic in
+//    ack.refused is missing or not allowed, alike: forget it and wipe its cached server data, as
+//    for dropped. A repeated sub, of a topic the socket already holds, decides nothing: its ack
+//    lists the topic ok if it is live in the generation the sub found (the same hold, not ended and
+//    made again since), and otherwise in retry (an earlier sub is still deciding it, or answered it
+//    refused or retry meanwhile). So a repeat sent before the first sub's ack may be answered ok or
+//    retry: don't count on a repeat's ack, wait for the first's. A topic ended meanwhile is in no
+//    list: one asked for but in none of the ack's lists was dropped (its dropped frame came before
+//    the ack) or unsubscribed after the sub was sent.
 //    Every frame the client sends takes a token from the socket's bucket, protocol pings and pongs
 //    included (only the pong answering the server's own ping is free): GATEWAY_LIMITS.frameBurst
 //    (20), full when the socket opens, refilled at framesPerSecond (5) a second. An empty bucket
 //    closes the socket with 1008 too_many_frames, treated as abuse (item 7). So put a navigation's
 //    topic changes into one unsub and one sub, debounce them (keep a topic a moment after its view
 //    closes, so quick back-and-forth sends nothing), and send at most one visibility or online ping
-//    every few seconds. A resume (hello and ⌈topics/50⌉ subs) fits the burst.
-// 3. Positions. Keep one { epoch, pos } per topic. A topic acked ok takes the ack's pos, and every
-//    later ack, ev, pong and reset advances every topic acked ok on the socket to its pos: the higher
-//    of the two, compared as (ms, seq), and a new epoch replaces the old. That holds because a
-//    socket's frames go out in stream order. Drop an ev whose pos is at or below its topic's. Only an
-//    ev carries an exact position. ack, pong and reset carry the org's reported one, <ms>-0: the
-//    start of the 25 s grain before the current one, which the server moves only at a grain's start,
-//    never when an event arrives (TECH-SPEC T19 item 9). So a resume may replay an ev already seen:
-//    the rule just given drops it.
-// 4. Reconnect and resume. Resubscribe every topic with since set to the lowest position among them
-//    (topics in another epoch go without since), in ⌈topics/50⌉ sub frames. A since more than 205 s
-//    old by its own time answers reset whatever was missed; one kept up to date by item 6's pings
-//    never is after up to 2 minutes away.
+//    every few seconds. A reconnect (hello and ⌈topics/50⌉ subs) fits the burst.
+// 3. Reconnect: re-authorise and refetch (the owner's decision, TECH-SPEC T19 item 9). A new socket
+//    holds nothing, and the server replays nothing and keeps no position for a client. After any
+//    (re)connect, sub every topic the view needs, in ⌈topics/50⌉ sub frames, and refetch each topic
+//    acked ok over REST, as in item 2: that fetch is how the client learns what changed while it
+//    was away. Each topic is decided again, so one lost while away is refused (item 2), and its
+//    cached server data goes. C1.1's per-conversation sequences make that catch-up cheap over REST.
+// 4. ev: something changed on its topic: refetch what its ids name (an unknown key is ignored). It
+//    carries the event's own ids for that topic and nothing about the org's other events.
 // 5. dropped: forget the topic and wipe its cached server data; an unknown reason reads as 'access'.
-//    reset: set every topic's position to its pos, and refetch every topic at a random time within
-//    the spread. nudge 'flags': GET /api/flags at a random time within the spread. Neither a drop nor
-//    a sign-out discards unsynced local edits: they are shown and offered as a copy (NFR-04).
+//    reset: events on the topics it names may not have reached this socket (the server lost track
+//    of the org's event stream for a moment): refetch each of them that the client holds over REST
+//    at a random time within the spread; an unknown reason reads as 'gap'. A reset that comes while
+//    the refetch an earlier one asked for still waits to start asks for nothing more; one that
+//    comes after it started means refetch again. nudge 'flags': GET
+//    /api/flags at a random time within the spread. Neither a drop nor a sign-out discards unsynced
+//    local edits: they are shown and offered as a copy (NFR-04).
 // 6. Heartbeat. ping every 25 s, and whenever the page becomes visible or comes online (at most one
 //    every few seconds: item 2's bucket). No frame within 10 s of a ping means the socket is dead:
-//    close it and reconnect.
+//    close it and reconnect (item 3).
 // 7. Closes. 4401: go to sign-in, and never reconnect. 4403: show the notice (C0.9), and reconnect
 //    once it is acknowledged. 4426: reload. 1008 with an abuse reason: back off from 30 s. Any other
 //    close of an open socket, 1006 and 1001 included: wait a random time within the spread, then
-//    retry with full-jitter back-off from 1 s to 30 s. Never rely on seeing a particular code: 1006
-//    is the fallback for all of them. After 30 s of failed reconnects, at a random point in the next
-//    5 s, GET /api/flags: a 401 means go to sign-in.
+//    retry with full-jitter back-off from 1 s to 30 s, and resubscribe and refetch as item 3 says.
+//    Never rely on seeing a particular code: 1006 is the fallback for all of them. After 30 s of
+//    failed reconnects, at a random point in the next 5 s, GET /api/flags: a 401 means go to sign-in.
 import { z } from 'zod'
 import { CODE, CODE_MAX, IDS_KEY, IDS_LIST_MAX, IDS_NUMBER_MAX, LowerUuid, UUID_SOURCE } from './ids.ts'
 
@@ -61,7 +72,7 @@ export const GATEWAY_VERSIONS = [1] as const
 export const GATEWAY_LIMITS = {
   maxFrameBytes: 4096, // a client frame over this closes the socket (1009)
   maxTopicsPerFrame: 50,
-  maxTopicsPerSocket: 100, // counting topics still being decided or replayed
+  maxTopicsPerSocket: 100, // counting topics still being decided
   heartbeatMs: 25_000, // the client pings this often (and the server)
   pongTimeoutMs: 10_000, // a client gives up on a socket silent this long after its ping
   helloTimeoutMs: 10_000, // the server closes a socket that hasn't said hello by then
@@ -83,14 +94,6 @@ export function parseTopic(topic: string): { kind: GatewayTopicKind; id: string 
   return { kind: kind as GatewayTopicKind, id }
 }
 
-// A position in an org's event stream: a Valkey stream id, <ms>-<seq>, each part a 64-bit number.
-// epoch names the stream's continuity; a position from another epoch says nothing about this one.
-export const StreamPosition = z
-  .string()
-  .max(41)
-  .regex(/^\d{1,20}-\d{1,20}$/)
-export const Position = z.strictObject({ epoch: LowerUuid, pos: StreamPosition })
-export type Position = z.infer<typeof Position>
 export const Code = z.string().max(CODE_MAX).regex(CODE)
 // An ev's ids, ids only (ids.ts's rule, by value): uuids, codes, booleans, whole numbers from 0 to
 // 1,000,000, and lists of at most 100 uuids.
@@ -102,6 +105,15 @@ export type IdsValues = z.infer<typeof IdsValues>
 
 // Why a topic was dropped: 'access', it was lost (Rule 6). C1.1 may add 'gone' (deletions).
 export const GATEWAY_DROP_REASONS = ['access'] as const
+// Why the server asks for a refetch (reset): 'gap', events on those topics may not have reached the
+// socket, because the server lost track of the org's event stream. The causes (T19 item 9, Gaps)
+// are: Valkey restarted or failed over, losing the stream's epoch or entries a reader had read
+// (epoch, tail_lost); entries were trimmed before a reader read them, because it stalled for longer
+// than the stream keeps entries or a burst of more than about 100,000 events outran it (trimmed);
+// the stream held an entry the producer's script didn't write (unnumbered); or a reader's read of
+// the stream's tail failed before one succeeded, so a sub may have been acked while it followed
+// nothing (late_start). The client sees only 'gap'.
+export const GATEWAY_RESET_REASONS = ['gap'] as const
 // What a nudge asks the client to re-read: 'flags', GET /api/flags (T17 item 11).
 export const GATEWAY_NUDGES = ['flags'] as const
 export type GatewayNudge = (typeof GATEWAY_NUDGES)[number]
@@ -123,7 +135,7 @@ export const GATEWAY_CLOSE = {
   tryAgain: { code: 1013, reason: 'try again later' },
   // The server is stopping (drain at SIGTERM): reconnect within the spread.
   stopping: { code: 1001, reason: 'server stopping' },
-  // The send buffer stayed too full: reconnect within the spread, and resume with since.
+  // The send buffer stayed too full: reconnect within the spread, then resubscribe and refetch.
   tooSlow: { code: 4408, reason: 'too_slow' },
   // No hello in time: reconnect within the spread, then back off as usual.
   helloTimeout: { code: 1008, reason: 'hello_timeout' },
@@ -150,8 +162,9 @@ export type Hello = z.infer<typeof Hello>
 
 // Every later frame, strictly, in the version welcome chose (1 here).
 export const ClientFrame = z.discriminatedUnion('t', [
-  // since: a position from an earlier ack, ev, pong or reset; replay those topics from there if it can.
-  z.strictObject({ v: z.literal(1), t: z.literal('sub'), id, topics, since: Position.optional() }),
+  // Topics only: nothing about where the client was, so the server decides each one again and the
+  // client refetches it over REST (header item 3).
+  z.strictObject({ v: z.literal(1), t: z.literal('sub'), id, topics }),
   z.strictObject({ v: z.literal(1), t: z.literal('unsub'), id, topics }),
   z.strictObject({ v: z.literal(1), t: z.literal('ping') }),
 ])
@@ -188,30 +201,25 @@ export const ServerFrame = z.discriminatedUnion('t', [
     maxFrameBytes: count,
     reconnectSpreadMs: count,
   }),
-  // The answer to sub or unsub. ok: held now (sub) or no longer held (unsub). refused: missing or
-  // not allowed, alike (PRD-108). reset: held, but since couldn't be honoured: refetch them over
-  // REST. retry: not decided (the database couldn't be reached in time), or still being decided or
-  // resumed for an earlier sub on this socket: send them again after a back-off. A topic dropped
-  // before the ack is in none of these (its dropped frame came first), nor is one unsubscribed
-  // after the sub. pos: every topic acked ok on this socket is caught up to here (the org's reported
-  // position, header item 3), or null while the stream can't be reached.
+  // The answer to sub or unsub. ok: held now (sub: fetch each over REST, header item 2) or no longer
+  // held (unsub). refused: missing or not allowed, alike (PRD-108). retry: not decided (the
+  // database couldn't be reached in time), or still being decided for an earlier sub on this
+  // socket: send them again after a back-off. A topic dropped before the ack is in none of these
+  // (its dropped frame came first), nor is one unsubscribed after the sub.
   z.strictObject({
     v: z.literal(1),
     t: z.literal('ack'),
     id,
     ok: z.array(Topic),
     refused: z.array(Topic),
-    reset: z.array(Topic),
     retry: z.array(Topic),
-    pos: Position.nullable(),
   }),
-  // Something changed on a topic: refetch what these ids name. pos is in the epoch of the socket's
-  // last ack, pong or reset; every topic acked ok on this socket is caught up to it.
+  // Something changed on a topic: refetch what these ids name. It carries the event's own ids for
+  // its topic and nothing org-wide: no stream id, no position.
   z.strictObject({
     v: z.literal(1),
     t: z.literal('ev'),
     topic: Topic,
-    pos: StreamPosition,
     type: Code,
     ids: IdsValues,
   }),
@@ -222,25 +230,29 @@ export const ServerFrame = z.discriminatedUnion('t', [
     topics: z.array(Topic).min(1),
     reason: z.enum(GATEWAY_DROP_REASONS),
   }),
-  // The stream lost continuity (Valkey restarted or failed over, or the reader fell behind):
-  // refetch every topic over REST, within the spread, and continue from pos (the reported position
-  // in the new epoch).
-  z.strictObject({ v: z.literal(1), t: z.literal('reset'), pos: Position }),
+  // Events on these topics, the ones the socket holds live, may not have reached it ('gap'): refetch
+  // them over REST, within the spread. Sent to every socket of the org that holds a topic, so it says
+  // nothing about any one topic's events.
+  z.strictObject({
+    v: z.literal(1),
+    t: z.literal('reset'),
+    topics: z.array(Topic).min(1),
+    reason: z.enum(GATEWAY_RESET_REASONS),
+  }),
   // Re-read something about the org: 'flags' → GET /api/flags (T17 item 11), within the spread.
   z.strictObject({ v: z.literal(1), t: z.literal('nudge'), what: z.enum(GATEWAY_NUDGES) }),
-  // The answer to ping: the org's reported position (header item 3; every topic acked ok on this
-  // socket is caught up to it), and the current spread.
-  z.strictObject({ v: z.literal(1), t: z.literal('pong'), pos: Position.nullable(), reconnectSpreadMs: count }),
+  // The answer to ping: the current spread, and nothing else.
+  z.strictObject({ v: z.literal(1), t: z.literal('pong'), reconnectSpreadMs: count }),
 ])
 export type ServerFrame = z.infer<typeof ServerFrame>
 
 // What a client reads with (C0.8): the same frames, leniently, so a client older than the server
 // still acts on them (P6). Unknown fields are ignored. A dropped frame's topics are any strings and
-// its reason anything, read as 'access' unless known, so a stale client still forgets what it held.
-// A nudge's what is any code: the client acts on the ones it knows. An ev's ids are any record: the
+// its reason anything, read as 'access' unless known, so a stale client still forgets what it held;
+// a reset's the same, its reason read as 'gap' unless known, so a stale client still refetches. A
+// nudge's what is any code: the client acts on the ones it knows. An ev's ids are any record: the
 // client looks up only the keys it knows. A frame with an unknown t doesn't parse, and
 // readServerFrame() skips it.
-const PositionForClient = z.object({ epoch: LowerUuid, pos: StreamPosition })
 export const ServerFrameForClient = z.discriminatedUnion('t', [
   z.object({
     v: z.literal(1),
@@ -258,15 +270,12 @@ export const ServerFrameForClient = z.discriminatedUnion('t', [
     id,
     ok: z.array(Topic),
     refused: z.array(Topic),
-    reset: z.array(Topic),
     retry: z.array(Topic),
-    pos: PositionForClient.nullable(),
   }),
   z.object({
     v: z.literal(1),
     t: z.literal('ev'),
     topic: Topic,
-    pos: StreamPosition,
     type: Code,
     ids: z.record(z.string(), z.unknown()),
   }),
@@ -276,9 +285,14 @@ export const ServerFrameForClient = z.discriminatedUnion('t', [
     topics: z.array(z.string()).min(1),
     reason: z.enum(GATEWAY_DROP_REASONS).catch('access'),
   }),
-  z.object({ v: z.literal(1), t: z.literal('reset'), pos: PositionForClient }),
+  z.object({
+    v: z.literal(1),
+    t: z.literal('reset'),
+    topics: z.array(z.string()).min(1),
+    reason: z.enum(GATEWAY_RESET_REASONS).catch('gap'),
+  }),
   z.object({ v: z.literal(1), t: z.literal('nudge'), what: Code }),
-  z.object({ v: z.literal(1), t: z.literal('pong'), pos: PositionForClient.nullable(), reconnectSpreadMs: z.int() }),
+  z.object({ v: z.literal(1), t: z.literal('pong'), reconnectSpreadMs: z.int() }),
 ])
 export type ServerFrameForClient = z.infer<typeof ServerFrameForClient>
 
