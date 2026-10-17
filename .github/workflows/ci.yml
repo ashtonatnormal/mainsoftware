@@ -178,13 +178,11 @@ jobs:
       # NNNN and checks the data survived. 0007 (C0.6) has no step of its own: it changes no
       # existing row and adds no rule to an existing table, and the two 0006 runs below apply it too
       # (with everything after 0006) on top of the seeded data, giving the seed's org its flags, and
-      # compare the result with the fresh build. 0008 (C0.7) adds a role and its grants, replaces
+      # compare the result with the fresh build. 0008 (C0.7) changes no row either, but it replaces
       # outbox_checkpoints_own_row() (the checkpoint trigger on an existing table) so it binds each
-      # consumer to its role, and checks the checkpoints already there against that binding; it
-      # changes no row. It has no step of its own either: the 0006 runs apply it over the seed too,
-      # which holds no checkpoint, so that check finds nothing there (and in production none can
-      # break the binding: before 0008 only the offboarding role could start a checkpoint, and
-      # C0.6's worker starts only its own).
+      # consumer to its role, and refuses to apply while a checkpoint already there breaks that
+      # binding. The seed holds no checkpoint, and a C0.6 deployment holds the offboarding role's,
+      # so 0008 gets its own step (below).
       # 0006 (C0.5) on top of sessions and accounts 0005 allows, in its own scratch database: its
       # two new session rules mustn't fail on older rows, and its schema must match the fresh build
       # above (hearth_check) apart from the rule older rows leave NOT VALID. Once for each rule, so
@@ -195,3 +193,10 @@ jobs:
       - env:
           CHECK_DB: hearth_upgrade_check
         run: UP_TO=0006 scripts/check-migrations.sh && scripts/check-sign-in-upgrade.sh sessions_at_most_90_days
+      # 0008 (C0.7) on top of the checkpoints 0007 allows: refused while one breaks its binding (a
+      # revocation checkpoint naming the offboarding role, an offboarding one naming another role),
+      # then applied once they're gone, keeping every other checkpoint as it was; the binding holds
+      # afterwards for both job roles, and the schema matches the fresh build.
+      - env:
+          CHECK_DB: hearth_upgrade_check
+        run: UP_TO=0008 scripts/check-migrations.sh && scripts/check-revocation-upgrade.sh
