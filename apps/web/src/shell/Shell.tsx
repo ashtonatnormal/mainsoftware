@@ -5,7 +5,10 @@
 // and the tab bar below; from the rail breakpoint (48rem wide and 30rem tall), the rail on the left
 // and the screen beside it. Inside <main>:
 // - ScreenHeader, the screen's one h1 at every width (the route's title), in flow and never
-//   scrolled away, with the avatar menu beside it on a phone (on the rail it is in the rail's foot);
+//   scrolled away, with the avatar menu beside it on a phone (on the rail it is in the rail's foot).
+//   It is keyed by the screen's path, so each screen gets a new h1: RouteFocus's move to it is then
+//   a real focus change that a screen reader announces, even when the last screen's h1 had focus
+//   (a tab press leaves it there, and Back or Forward comes next; X6, X12);
 // - ConnectionBanner, which renders nothing while the live connection is fine;
 // - #screen, the one scroll container, whose position the router restores within the document
 //   (data-scroll-restoration-id; never across a document, D-02);
@@ -31,8 +34,9 @@ import { TabBar } from './TabBar.tsx'
 
 export function Shell() {
   const runtime = useRuntime()
-  // The deepest match's static data, as two plain values, so the shell renders again only when
-  // one of them changes.
+  // The deepest match's path and static data, as plain values, so the shell renders again only
+  // when one of them changes.
+  const path = useMatches({ select: matches => matches.at(-1)?.pathname })
   const title = useMatches({ select: matches => matches.at(-1)?.staticData.title })
   const immersive = useMatches({ select: matches => matches.at(-1)?.staticData.immersive === true })
   return (
@@ -42,6 +46,7 @@ export function Shell() {
         <Rail />
         <main id="main" tabIndex={-1} className="relative flex min-h-0 min-w-0 flex-col">
           <ScreenHeader
+            key={path}
             title={title ?? SHELL.appName}
             actions={
               <div className="rail:hidden">

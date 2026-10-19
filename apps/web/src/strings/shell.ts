@@ -36,13 +36,13 @@ export const SHELL = {
     retry: 'Try again',
     toChats: 'Go to Chats',
   },
-  // The boot couldn't learn who the page belongs to (GET /api/session failed), or the app itself
-  // failed above every screen.
+  // The boot couldn't learn who the page belongs to (GET /api/session failed).
   bootError: {
     title: "Can't reach Hearth",
     body: 'Check your connection, then try again.',
     retry: 'Try again',
   },
+  // The app failed above every screen (app/App.tsx's RootErrorBoundary).
   crashed: {
     title: 'Something went wrong',
     body: 'Hearth hit a problem. Reload the page to carry on.',

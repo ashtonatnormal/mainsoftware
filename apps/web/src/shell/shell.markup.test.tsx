@@ -82,7 +82,7 @@ function navLinks(markup: string, navClass: string): [string, boolean][] {
 }
 
 describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
-  it('SM-01 D-08 X16 SHL-42: the shell has one h1 naming the screen, the skip link first, main#main, the one scroller #screen, and one "Main" navigation per layout', async () => {
+  it('SHM-01 D-08 X16 SHL-42: the shell has one h1 naming the screen, the skip link first, main#main, the one scroller #screen, and one "Main" navigation per layout', async () => {
     const markup = await appAt('/chats')
     expect(textsOf(markup, 'h1')).toEqual(['Chats'])
     const h1 = tags(markup, 'h1')[0]
@@ -110,7 +110,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     expect(markup.indexOf('aria-label="Notifications"')).toBeGreaterThan(markup.indexOf('id="screen"'))
   })
 
-  it('SM-02 R-32 OD-02 OD-30 WCAG 1.4.1: the tab bar holds Today, Chats, Rooms, Tasks, More and the rail six entries, each current one marked by aria-current, the pill and the heavier label', async () => {
+  it('SHM-02 R-32 OD-02 OD-30 WCAG 1.4.1: the tab bar holds Today, Chats, Rooms, Tasks, More and the rail six entries, each current one marked by aria-current, the pill and the heavier label', async () => {
     const chats = await appAt('/chats')
     expect(navLinks(chats, 'rail:hidden')).toEqual([
       ['Today', false],
@@ -141,7 +141,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     expect(navLinks(calendar, 'overflow-y-auto').filter(([, on]) => on)).toEqual([['Calendar', true]])
   })
 
-  it('SM-03 OD-05 X10 SHL-41: the avatar button is named "Account, {name}" and opens a menu labelled Account holding Sign out, with the name above it hidden from assistive technology; one per layout', async () => {
+  it('SHM-03 OD-05 X10 SHL-41: the avatar button is named "Account, {name}" and opens a menu labelled Account holding Sign out, with the name above it hidden from assistive technology; one per layout', async () => {
     const markup = await appAt('/today')
     const triggers = tags(markup, 'button').filter(button => button.get('aria-haspopup') === 'menu')
     expect(triggers.map(button => button.get('aria-label'))).toEqual(['Account, Marcus Lim', 'Account, Marcus Lim'])
@@ -156,7 +156,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     expect(markup).toMatch(/bottom-full left-0/)
   })
 
-  it('SM-04 R-34 OD-04 R-35 decision 8: no searchbox anywhere in the shell, and no AI copy on any screen', async () => {
+  it('SHM-04 R-34 OD-04 R-35 decision 8: no searchbox anywhere in the shell, and no AI copy on any screen', async () => {
     for (const path of ['/today', '/chats', '/rooms', '/tasks', '/calendar', '/drive', '/more', '/xyz']) {
       const markup = await appAt(path)
       expect(markup, path).not.toMatch(/type="search"|role="search"/)
@@ -167,7 +167,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     }
   })
 
-  it('SM-05 OD-02 X16: each tab is its h1 and an honest empty state (an h2 that claims nothing more)', async () => {
+  it('SHM-05 OD-02 X16: each tab is its h1 and an honest empty state (an h2 that claims nothing more)', async () => {
     const screens = [
       ['/today', 'Today', SHELL.empty.today],
       ['/chats', 'Chats', SHELL.empty.chats],
@@ -183,7 +183,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     }
   })
 
-  it('SM-06 PRD §6.1: More lists Calendar and Drive as 56 px links to their screens', async () => {
+  it('SHM-06 PRD §6.1: More lists Calendar and Drive as 56 px links to their screens', async () => {
     const markup = await appAt('/more')
     expect(textsOf(markup, 'h1')).toEqual(['More'])
     const screen = markup.slice(markup.indexOf('id="screen"'))
@@ -199,7 +199,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     for (const link of links.slice(0, 2)) expect(link.classes).toContain('min-h-14')
   })
 
-  it('SM-07 OD-42 R-37: an unknown path is Page not found inside the shell, with one h1, the navigations and a 44 px way to Chats', async () => {
+  it('SHM-07 OD-42 R-37: an unknown path is Page not found inside the shell, with one h1, the navigations and a 44 px way to Chats', async () => {
     for (const path of ['/xyz', '/chats/abc']) {
       const markup = await appAt(path)
       expect(textsOf(markup, 'h1'), path).toEqual([SHELL.notFound.title])
@@ -218,7 +218,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     }
   })
 
-  it('SM-08 OD-42: the boot error screen stands alone: its own main and h1, the reason, and a 44 px Try again', () => {
+  it('SHM-08 OD-42: the boot error screen stands alone: its own main and h1, the reason, and a 44 px Try again', () => {
     const markup = renderToStaticMarkup(<BootErrorScreen reload={() => {}} />)
     expect(tags(markup, 'main')).toHaveLength(1)
     expect(textsOf(markup, 'h1')).toEqual(['Can&#x27;t reach Hearth'])
@@ -232,7 +232,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     expect(textsOf(crashed, 'button')).toEqual(['Reload'])
   })
 
-  it('SM-10 OD-42 X16: a screen that failed keeps the shell’s h1 and says so in an h2 with Try again and Go to Chats; above the shell it brings its own main and h1', () => {
+  it('SHM-10 OD-42 X16: a screen that failed keeps the shell’s h1 and says so in an h2 with Try again and Go to Chats; above the shell it brings its own main and h1', () => {
     const router = createRouter({
       routeTree: createRootRoute(),
       history: createMemoryHistory({ initialEntries: ['/chats'] }),
@@ -257,12 +257,12 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     expect(textsOf(above, 'button')).toEqual(['Try again'])
   })
 
-  it('SM-11 X6 WCAG 2.4.2: the document title names the screen and Hearth once', () => {
+  it('SHM-11 X6 WCAG 2.4.2: the document title names the screen and Hearth once', () => {
     expect(documentTitle('Chats')).toBe('Chats – Hearth')
     expect(documentTitle(SHELL.bootError.title)).toBe("Can't reach Hearth")
   })
 
-  it('SM-09 D-01: signed out, the sign-in screen stands outside the shell: its own main and h1, no navigation, no avatar', async () => {
+  it('SHM-09 D-01: signed out, the sign-in screen stands outside the shell: its own main and h1, no navigation, no avatar', async () => {
     const markup = await appAt('/sign-in', false)
     expect(textsOf(markup, 'h1')).toEqual(['Sign in to Hearth'])
     expect(tags(markup, 'main')).toHaveLength(1)

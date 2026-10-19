@@ -6,8 +6,11 @@
 //   and a screen outside the router sets its own, screens/PlainScreen.tsx);
 // - when the path changed, focus moves to the new screen's visible h1, or to #main when it has none,
 //   without scrolling, once React has committed (lib/focus.ts). The h1 is focusable and reading it
-//   announces the screen, so nothing else is said. A screen's own changes (a sign-in step) move
-//   focus themselves.
+//   announces the screen, so nothing else is said. Focusing the element that already has focus
+//   fires nothing and is never announced, so the shell gives each path an h1 of its own
+//   (shell/Shell.tsx keys its ScreenHeader by path): after a tab press leaves focus on the h1, Back
+//   or Forward still moves it to a new one. A screen's own changes (a sign-in step) move focus
+//   themselves.
 // The first location of a document moves focus only when the last document asked for it (the
 // one-shot hearth:focus-heading flag that session/document.ts sets on sign-in and sign-out), so a
 // person who signed in lands on the new screen's h1, while a plain load or reload leaves focus where
