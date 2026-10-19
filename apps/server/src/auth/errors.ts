@@ -22,7 +22,8 @@ export { type ErrorCode, MESSAGES }
 // server can't send one the web app doesn't read.
 type Extras = z.input<typeof ErrorExtrasSchema>
 
-// pin_locked's copy when only an Owner can lift the lock (the extra's pin.state is admin_locked).
+// pin_locked's copy when an admin reset is needed (in practice an Owner's): the extra's pin.state
+// is admin_locked.
 export const PIN_ADMIN_LOCKED_MESSAGE = "Your PIN is locked. Ask an Owner to reset it. They'll check it's you first."
 
 export class ApiError extends Error {
@@ -61,8 +62,9 @@ export function reauthRefusal(
   return new ApiError(code === 'reauth_required' ? 403 : 409, code, { method }, [], person)
 }
 
-// The copy to send with an error: MESSAGES, except pin_locked when only an admin can lift it, and
-// reauth_required and reauth_method, which name the method when they carry one.
+// The copy to send with an error: MESSAGES, except pin_locked when an admin reset is needed (in
+// practice an Owner's), and reauth_required and reauth_method, which name the method when they
+// carry one.
 export function messageFor(error: ApiError): string {
   if (error.code === 'pin_locked' && error.extra.pin?.state === 'admin_locked') return PIN_ADMIN_LOCKED_MESSAGE
   const method = error.extra.method
