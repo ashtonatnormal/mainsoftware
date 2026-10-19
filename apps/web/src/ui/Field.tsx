@@ -25,8 +25,16 @@ export interface FieldProps {
   children(control: FieldControlProps): ReactNode
 }
 
-export const CONTROL_CLASS =
-  'min-h-11 w-full rounded-xl border border-line-strong bg-surface px-3 text-base text-fg aria-invalid:border-rec'
+// A control's box: the 44 px height, the 3:1 border, the error's border, and a disabled control
+// on the control ground in muted ink (a TEXT_PAIRS pair, never opacity, X9).
+const CONTROL_BOX =
+  'min-h-11 w-full rounded-xl border border-line-strong bg-surface px-3 text-fg aria-invalid:border-rec disabled:bg-surface-2 disabled:text-muted'
+
+export const CONTROL_CLASS = `${CONTROL_BOX} text-base`
+
+// A code or PIN field's (ui/CodeField.tsx, ui/PinField.tsx): 24 px figures of one width, spaced, so
+// six digits read at a glance.
+export const DIGITS_CONTROL_CLASS = `${CONTROL_BOX} text-2xl tabular-nums tracking-widest`
 
 export function Field({ label, hint, error, children }: FieldProps) {
   const id = useId()

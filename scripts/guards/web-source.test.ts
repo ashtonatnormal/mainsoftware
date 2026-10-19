@@ -442,16 +442,23 @@ describe('T21: the web source guard (apps/web/src)', () => {
     expect(src.filter(misplacedSignInOrSessionFolder)).toEqual([])
 
     // The files the rule reads, pinned so it can't read nothing unnoticed (R2-27): the session code
-    // from the boot step (C0.8 S8), and the sign-in screen's frame and copy from the router step
-    // (S10); S11 adds the steps. A file that lands fails this line until it is named, and a renamed
-    // folder fails it instead of leaving the rule reading nothing.
+    // from the boot step (C0.8 S8), the sign-in screen's frame and copy from the router step (S10),
+    // and its steps, model, store and calls from S11. A file that lands fails this line until it is
+    // named, and a renamed folder fails it instead of leaving the rule reading nothing.
     const guarded = runtime.filter(path => isSignInOrSessionCode(path) && !path.endsWith('.css'))
     const READS: readonly string[] = [
       'boot/load-session.ts',
       'session/document.ts',
       'session/query-client.ts',
       'session/runtime.ts',
+      'sign-in/CodeStep.tsx',
+      'sign-in/PhoneStep.tsx',
+      'sign-in/PinStep.tsx',
       'sign-in/SignInScreen.tsx',
+      'sign-in/StepFrame.tsx',
+      'sign-in/api.ts',
+      'sign-in/controller.ts',
+      'sign-in/sign-in-model.ts',
       'strings/sign-in.ts',
     ]
     expect([...guarded].sort()).toEqual(READS)
@@ -459,10 +466,6 @@ describe('T21: the web source guard (apps/web/src)', () => {
       guarded.flatMap(path => problems(path, sources.get(path) ?? '').map(problem => `${path}: ${problem}`)),
     ).toEqual([])
   })
-
-  it.todo(
-    'WS-11 follow-up (C0.8 S11; R2-27): READS names sign-in/PhoneStep.tsx, CodeStep.tsx, PinStep.tsx, sign-in-model.ts and api.ts as S11 lands them',
-  )
 
   it('WS-12 AUTH-DESIGN §7.3 item 7 OD-01 D46: apps/web/src has no WebAuthn ceremony: no create read from navigator.credentials (directly, through a name bound to it, or destructured), no publicKey name, key or string, no PublicKeyCredential', () => {
     const uses = (source: string) => webAuthnUses('fixture.tsx', source)

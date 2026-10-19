@@ -7,4 +7,6 @@ export const UI = {
   back: 'Back',
   skipToContent: 'Skip to content',
   notifications: 'Notifications',
+  // A PIN field's switch between dots and digits (ui/PinField.tsx).
+  showPin: 'Show PIN',
 } as const

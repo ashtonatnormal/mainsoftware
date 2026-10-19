@@ -10,7 +10,7 @@ export const MESSAGES = {
     'Enter your mobile number starting with + and the country code, or just the 8 digits of a Singapore number.',
   invalid_code: 'Enter the 6-digit code.',
   invalid_pin: 'Your PIN is 6 digits.',
-  pin_too_easy: 'Choose a harder PIN. Avoid repeated digits and runs like 123456.',
+  pin_too_easy: 'Choose a harder PIN. Avoid repeated digits, runs like 123456 and common PINs.',
   too_many_requests: 'Too many tries. Try again later.',
   unavailable: "That isn't available right now. Try again in a few minutes.",
   attempt_expired: 'That sign-in has expired. Start again.',
@@ -39,7 +39,8 @@ export const MESSAGES = {
   purpose_refused: "That feature isn't cleared for use yet.",
   invalid_cohort:
     "That cohort can't be used. Name 1 to 1,000 people still at this organisation and roles, or none for everyone.",
-  try_again: 'Something else changed this at the same moment. Try again.',
+  // Read at sign-in too, where nothing the person sees has changed (AUTH-DESIGN §10.3).
+  try_again: 'Something else happened at the same moment. Try again.',
   internal: 'Something went wrong on our side. Try again.',
 } as const satisfies Record<string, string>
 

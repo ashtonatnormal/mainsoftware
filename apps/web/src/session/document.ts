@@ -198,8 +198,8 @@ export function leaveDocument(reason: LeftReason, env: DocumentEnv): void {
   else env.location.replace('/sign-in')
 }
 
-// The end of a sign-in (C0.8 S11): tells the other tabs, flags the next document's first route to
-// focus its h1, then opens the path a signed-out visit asked for, or Chats (OD-03).
+// The end of a sign-in (sign-in/SignInScreen.tsx): tells the other tabs, flags the next document's
+// first route to focus its h1, then opens the path a signed-out visit asked for, or Chats (OD-03).
 export function enterDocument(env: DocumentEnv): void {
   postIdentity(env)
   remove(env.storage, STORAGE_KEYS.left)

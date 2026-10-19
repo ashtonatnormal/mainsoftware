@@ -10,13 +10,19 @@ import { describe, expect, it } from 'vitest'
 import { usePrefersReducedMotion } from '@/lib/media.ts'
 import { createQueryClient } from '@/session/query-client.ts'
 import { SearchBar } from '@/shell/SearchBar.tsx'
+import type { SignInController } from '@/sign-in/controller.ts'
+import { SignInStep } from '@/sign-in/SignInScreen.tsx'
+import { createSignInRefs } from '@/sign-in/StepFrame.tsx'
+import { initialState, type Step } from '@/sign-in/sign-in-model.ts'
 import { Avatar, initialsOf } from './Avatar.tsx'
 import { AVATAR_BG, avatarHue } from './avatar-hue.ts'
 import { Button, IconButton } from './Button.tsx'
+import { CodeField } from './CodeField.tsx'
 import { Dialog } from './Dialog.tsx'
 import { EmptyState } from './EmptyState.tsx'
-import { CONTROL_CLASS, Field } from './Field.tsx'
+import { CONTROL_CLASS, DIGITS_CONTROL_CLASS, Field } from './Field.tsx'
 import { Menu } from './Menu.tsx'
+import { PinField, PinUsername, ShowPin } from './PinField.tsx'
 import { ScreenHeader } from './ScreenHeader.tsx'
 import { Segmented } from './Segmented.tsx'
 import { Select } from './Select.tsx'
@@ -372,16 +378,94 @@ describe('T21: the kit’s markup', () => {
     expect(markup).not.toMatch(/\bask\b|search &amp; ask/i)
   })
 
-  it('KM-14 SHL-27 WCAG 3.3.1: every form rendered carries novalidate (SearchBar here; the sign-in steps with C0.8 S11)', () => {
-    const forms = tags(withQuery(<SearchBar onSearch={() => {}} />), 'form')
-    expect(forms).toHaveLength(1)
-    for (const form of forms) {
-      expect(form.has('noValidate')).toBe(true)
-      expect(form.get('method')).toBe('post')
+  it('KM-14 SHL-27 WCAG 3.3.1: every form rendered carries novalidate and method post: SearchBar, and the sign-in steps (phone, code, PIN set and enter)', () => {
+    const noop = () => {}
+    const controller: SignInController = {
+      snapshot: initialState,
+      subscribe: () => noop,
+      input: noop,
+      showPin: noop,
+      submit: noop,
+      resend: noop,
+      startAgain: noop,
+      start: noop,
+      stop: noop,
+    }
+    const step = (value: Step) =>
+      html(<SignInStep state={{ ...initialState(), step: value }} controller={controller} refs={createSignInRefs()} />)
+    const pin = { state: 'ok', triesBeforeLock: 5, triesBeforeAdminLock: 10 } as const
+    const rendered = [
+      withQuery(<SearchBar onSearch={() => {}} />),
+      step({ kind: 'phone' }),
+      step({
+        kind: 'code',
+        e164: '+6580000003',
+        codeLength: 6,
+        validMinutes: 5,
+        resend: { at: 0, ready: true, why: 'wait', reason: '' },
+      }),
+      step({ kind: 'set_pin', e164: '+6580000002' }),
+      step({ kind: 'enter_pin', e164: '+6580000002', pin }),
+    ]
+    for (const markup of rendered) {
+      const forms = tags(markup, 'form')
+      expect(forms).toHaveLength(1)
+      for (const form of forms) {
+        expect(form.has('noValidate')).toBe(true)
+        expect(form.get('method')).toBe('post')
+      }
     }
   })
 
-  it.todo('KM-14 follow-up (C0.8 S11): PhoneStep, CodeStep and PinStep (set and enter) carry novalidate')
+  it('KM-15 AUTH-DESIGN §10.1 §10.4 PRD-53 X7: CodeField is one labelled text input for a one-time code on the number pad, 24 px figures and 44 px tall, with no maxlength or pattern', () => {
+    const markup = html(<CodeField label="6-digit code" length={6} value="123" onChange={() => {}} />)
+    const input = one(markup, 'input')
+    expect(input.get('type')).toBe('text')
+    expect(input.get('autoComplete')).toBe('one-time-code')
+    expect(input.get('inputMode')).toBe('numeric')
+    expect(input.get('spellCheck')).toBe('false')
+    expect(input.get('value')).toBe('123')
+    for (const absent of ['maxLength', 'maxlength', 'pattern']) expect(input.has(absent), absent).toBe(false)
+    expect(one(markup, 'label').get('for')).toBe(input.get('id'))
+    expect(DIGITS_CONTROL_CLASS.split(' ')).toEqual(expect.arrayContaining(['min-h-11', 'text-2xl', 'tabular-nums']))
+    expect(DIGITS_CONTROL_CLASS.split(' ')).not.toContain('text-base')
+    expect(classesOf(input)).toEqual(DIGITS_CONTROL_CLASS.split(' '))
+    const disabled = one(html(<CodeField label="Code" length={6} value="" onChange={() => {}} disabled />), 'input')
+    expect(disabled.has('disabled')).toBe(true)
+  })
+
+  it('KM-16 WCAG 3.3.8 SHL-49 AUTH-DESIGN §10.4: PinField is a numeric password field with the autocomplete it is given, no maxlength, no paste handler; ShowPin is a Switch; PinUsername is hidden', () => {
+    const field = (shown: boolean) =>
+      html(
+        <PinField
+          label="PIN"
+          value=""
+          onChange={() => {}}
+          autoComplete="current-password"
+          name="pin"
+          shown={shown}
+          error="That PIN isn't right."
+        />,
+      )
+    const input = one(field(false), 'input')
+    expect(input.get('type')).toBe('password')
+    expect(input.get('autoComplete')).toBe('current-password')
+    expect(input.get('inputMode')).toBe('numeric')
+    expect(input.get('aria-invalid')).toBe('true')
+    for (const absent of ['maxLength', 'maxlength', 'onPaste', 'onpaste']) expect(input.has(absent), absent).toBe(false)
+    expect(one(field(true), 'input').get('type')).toBe('text')
+    const toggle = one(html(<ShowPin shown onChange={() => {}} />), 'input')
+    expect(toggle.get('role')).toBe('switch')
+    expect(toggle.get('aria-checked')).toBe('true')
+    const username = one(html(<PinUsername number="+6580000002" />), 'input')
+    expect(Object.fromEntries(username)).toMatchObject({
+      type: 'text',
+      autoComplete: 'username',
+      value: '+6580000002',
+      hidden: '',
+      readOnly: '',
+    })
+  })
 
   it('SHL-16: the media-query hooks read false where there is no window, so markup renders', () => {
     function Motion() {

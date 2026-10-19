@@ -504,7 +504,7 @@ describe('C0.5 T5 sessions at the api', () => {
     expect(busy.statusCode).toBe(409)
     expect(busy.json()).toEqual({
       error: 'try_again',
-      message: 'Something else changed this at the same moment. Try again.',
+      message: 'Something else happened at the same moment. Try again.',
     })
 
     const broken = setup({
