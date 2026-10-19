@@ -392,6 +392,10 @@ export interface Stack {
   newPin(): string
   client(options?: { ip?: string; userAgent?: string; origin?: string; app?: FastifyInstance }): Client
   signIn(person: Person, options?: { ip?: string; userAgent?: string }): Promise<Client>
+  // Re-authenticates a signed-in client by the method its session was issued under (D46, AQ-01):
+  // the PIN for a privileged holder, a fresh SMS code to their own number for anyone else. Follows
+  // person.privileged, so a role granted or removed since the sign-in needs the routes themselves.
+  reauth(client: Client, person: Person): Promise<void>
   // The client's live session and device, by its cookie's token.
   sessionOf(client: Client): Promise<{ id: string; deviceId: string }>
   // Moves a session's times (and its device's) back together, as though it were that old.
@@ -1028,6 +1032,20 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       return browser
     }
 
+    async function reauth(browser: Client, person: Person): Promise<void> {
+      if (person.privileged) {
+        if (person.pin === undefined) throw new Error('reauth: the person has a PIN the test never gave')
+        const checked = await browser.post('/api/auth/reauth/pin', { pin: person.pin })
+        if (checked.status !== 200) fail('reauth/pin', checked)
+        return
+      }
+      const requested = await browser.post('/api/auth/reauth/code/request', {})
+      if (requested.status !== 200) fail('reauth/code/request', requested)
+      const code = await sms.nextCode(person.e164)
+      const verified = await browser.post('/api/auth/reauth/code/verify', { code })
+      if (verified.status !== 200) fail('reauth/code/verify', verified)
+    }
+
     async function person(
       o: { roles?: PersonRole[]; left?: boolean; pin?: string; org?: 'second' | Org; e164?: string } = {},
     ): Promise<Person> {
@@ -1314,6 +1332,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       newPin,
       client,
       signIn,
+      reauth,
       sessionOf,
       age,
       query,

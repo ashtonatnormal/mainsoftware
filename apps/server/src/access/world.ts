@@ -125,7 +125,7 @@ export async function loadWorld(trx: InOrg, orgId: string, options: { credential
 // exact for each of them. Nothing else is loaded, and can() is asked only about those people, and
 // only topic requests (realtime/topics.ts). No row is locked: teams and memberships are never
 // locked, so the lock order (CLAUDE.md, Database) is unchanged, and a writing transaction may use it
-// too (privilegedNow below).
+// too (privilegedNow and reauthMethodNow below).
 export async function loadTopicWorld(trx: InOrg, orgId: string, people: readonly string[]): Promise<World> {
   const ids = [...new Set(people)]
   const { rows: persons } = await sql<{ id: string; deactivated_at: Date | null }>`
