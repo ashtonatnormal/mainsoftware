@@ -105,7 +105,7 @@ export type Request = ContentRequest | CreateRequest | AdminRequest | SelfReques
 
 // What the server knows about the session making the request. Every admin request, and adding or
 // removing your own passkey, needs a recent re-authentication (§9.4, T14); the server decides how
-// recent and passes the result.
+// recent and passes the result, computed by reauthenticated() (reauth.ts, D46).
 export interface RequestContext {
   reauthenticated?: boolean
 }
