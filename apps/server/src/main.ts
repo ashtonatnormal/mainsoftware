@@ -15,11 +15,14 @@ import type { ApiDeps } from '#src/api.ts'
 import { buildApp } from '#src/app.ts'
 import { deriveKeys } from '#src/auth/crypto.ts'
 import { createFakeVerify } from '#src/auth/sms/fake.ts'
+import type { SmsProvider } from '#src/auth/sms/provider.ts'
+import { createTwilioVerify } from '#src/auth/sms/twilio.ts'
 import { valkeyKeys, valkeyPrefix } from '#src/auth/valkey-keys.ts'
 import { ConfigError, loadConfig } from '#src/config.ts'
 import { createDatabase } from '#src/db/database.ts'
 import { appRoleCheck, createPool, workerRoleCheck, workerRolesCheck } from '#src/db/pool.ts'
 import { FlagCache } from '#src/flags/cache.ts'
+import { C06_GATE } from '#src/jobs/gate.ts'
 import { createLogger } from '#src/logger.ts'
 import { Subscriptions } from '#src/pubsub.ts'
 import type { RealtimeDeps } from '#src/realtime/index.ts'
@@ -91,6 +94,17 @@ if (config.role === 'api' || config.role === 'realtime') {
   flags = new FlagCache({ db, logger })
   void flags.listen(subscriptions, valkeyKeys(keyPrefix).flags)
 }
+// The SMS provider config names (T20). Unset: no code can be sent, so code requests answer 503
+// unavailable. Each factory refuses the wrong machine again, independently of config.ts.
+function smsProvider(auth: NonNullable<typeof config.auth>): SmsProvider | undefined {
+  if (auth.smsProvider === 'fake') return createFakeVerify({ deployEnv: config.deployEnv, appOrigin: config.appOrigin })
+  if (auth.smsProvider === 'twilio') {
+    if (auth.twilio === undefined) throw new Error('SMS_PROVIDER=twilio has no Twilio settings')
+    return createTwilioVerify({ deployEnv: config.deployEnv, appOrigin: config.appOrigin, ...auth.twilio })
+  }
+  return undefined
+}
+
 if (config.role === 'api' && flags !== undefined) {
   // loadConfig refuses the api role without AUTH_SECRET, so this holds.
   if (config.auth === undefined) throw new Error('the api role has no sign-in settings')
@@ -98,11 +112,10 @@ if (config.role === 'api' && flags !== undefined) {
     db,
     valkey,
     keys: deriveKeys(config.auth.secret),
-    // Unset: no code can be sent, so code requests answer 503 unavailable.
-    sms:
-      config.auth.smsProvider === 'fake'
-        ? createFakeVerify({ deployEnv: config.deployEnv, appOrigin: config.appOrigin })
-        : undefined,
+    sms: smsProvider(config.auth),
+    // No provider is cleared in the transfer register until C0.9 passes the real gate here
+    // (PDPA-10), so Twilio sends nothing before then.
+    gate: C06_GATE,
     keyPrefix,
     flags,
   }

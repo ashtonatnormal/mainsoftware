@@ -19,6 +19,7 @@ import type { Database } from '#src/db/database.ts'
 import { deviceRoutes } from '#src/devices/routes.ts'
 import type { FlagCache } from '#src/flags/cache.ts'
 import { AfterResponse, BODY_LIMIT } from '#src/http.ts'
+import type { Gate } from '#src/jobs/gate.ts'
 
 export interface ApiDeps {
   db: Database
@@ -26,6 +27,9 @@ export interface ApiDeps {
   keys: AuthKeys
   // undefined: no code can be sent, so code requests answer 503 unavailable.
   sms: SmsProvider | undefined
+  // Whether the provider may receive a number at all (PDPA-10's transfer register). C06_GATE when
+  // unset, which clears no provider, so nothing reaches one until C0.9 passes the real gate.
+  gate?: Pick<Gate, 'providerCleared'>
   keyPrefix: string
   // The flags this process keeps (flags/cache.ts; T17): every signed-in request keeps its org's,
   // and the flags route takes the keys it accepts and their purposes from the cache's registry,

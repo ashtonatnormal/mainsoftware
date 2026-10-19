@@ -28,6 +28,7 @@ import { keyName, tag } from '#src/auth/crypto.ts'
 import { MESSAGES } from '#src/auth/errors.ts'
 import { limitSubject } from '#src/auth/limiter.ts'
 import { LIMITS, OTP } from '#src/auth/policy.ts'
+import { FakeVerify } from '#src/auth/sms/fake.ts'
 import { withOrg } from '#src/db/database.ts'
 import { FLAG_ERRORS } from '#src/flags/set.ts'
 import { createAuthenticator } from '#src/testing/authenticator.ts'
@@ -739,6 +740,27 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     )
     await s.settled()
     expect(rows.map(row => [row.action, row.details])).toEqual([['auth.code_requested', { send: 'attempted' }]])
+  })
+
+  it('PDPA-10 T20: a provider not cleared in the transfer register is sent nothing, audited skipped_not_cleared, and answers as any request', async () => {
+    // Budgets: N 1 code request, on its own api; an off-roster number 1, for the reply to compare.
+    const n = await s.person()
+    const twilioLike = new FakeVerify({ transfer: 'twilio' })
+    const app = await s.startApi({ sms: twilioLike })
+    const reply = await requestCode(s.client({ app }), n.e164)
+    const offRoster = await requestCode(s.client({ app }), '+6580009999')
+    const rows = await eventually(
+      () => auditOf(n),
+      found => found.length > 0,
+    )
+    await s.settled()
+    expect(reply.status).toBe(200)
+    expect([reply.status, reply.body]).toEqual([offRoster.status, offRoster.body])
+    expect(rows.map(row => [row.action, row.details])).toEqual([
+      ['auth.code_requested', { send: 'skipped_not_cleared' }],
+    ])
+    expect(twilioLike.sent).toEqual([])
+    expect(s.logs.some(line => line.event === 'sms_provider_not_cleared' && line.personId === n.id)).toBe(true)
   })
 
   it('C0.5 Done: the PIN locks after 5 wrong tries for 15 minutes and after 10 until an admin resets it (PRD-53, ACC-02, ACC-06)', async () => {

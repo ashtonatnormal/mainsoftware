@@ -100,9 +100,23 @@ const schema = z.object({
   DEPLOY_ENV: z.enum(DEPLOY_ENVS),
   // The api role's sign-in secret; every sign-in key is derived from it (auth/crypto.ts).
   AUTH_SECRET: z.string().min(32, 'must be at least 32 characters').optional(),
-  // How sign-in codes are sent: fake (this machine only: auth/sms/fake.ts) or unset (none can be
-  // sent). Twilio Verify follows in C0.8 (TECH-SPEC T20).
-  SMS_PROVIDER: z.enum(['fake']).optional(),
+  // How sign-in codes are sent: fake (this machine only: auth/sms/fake.ts), twilio (Twilio Verify,
+  // never on this machine: auth/sms/twilio.ts; TECH-SPEC T7, T20) or unset (none can be sent).
+  SMS_PROVIDER: z.enum(['fake', 'twilio']).optional(),
+  // Twilio Verify's credentials, only with SMS_PROVIDER=twilio: a Restricted API Key scoped to
+  // Verify (its SID and secret) and the Verify Service's SID, from Secrets Manager (C0.12).
+  TWILIO_API_KEY_SID: z
+    .string()
+    .regex(/^SK[0-9a-f]{32}$/, 'must be an API key SID: SK and 32 hex digits')
+    .optional(),
+  TWILIO_API_KEY_SECRET: z
+    .string()
+    .regex(/^[A-Za-z0-9]{32}$/, 'must be 32 letters and digits')
+    .optional(),
+  TWILIO_VERIFY_SERVICE_SID: z
+    .string()
+    .regex(/^VA[0-9a-f]{32}$/, 'must be a Verify Service SID: VA and 32 hex digits')
+    .optional(),
   // IPs or CIDR ranges of the proxies in front of the server, comma-separated; unset or empty: none.
   TRUST_PROXY: z.string().optional(),
 })
@@ -128,10 +142,20 @@ export interface Config {
   // The proxies to trust for X-Forwarded-For; false when there are none (locally).
   trustProxy: string[] | false
   // The api role's sign-in settings; undefined for realtime and worker, which never read the secret.
-  auth: { secret: string; smsProvider: 'fake' | undefined } | undefined
+  auth: { secret: string; smsProvider: SmsProviderName | undefined; twilio?: TwilioSettings } | undefined
   // The worker role's settings; undefined for api and realtime.
   worker: { concurrency: number } | undefined
 }
+
+export type SmsProviderName = 'fake' | 'twilio'
+
+export interface TwilioSettings {
+  apiKeySid: string
+  apiKeySecret: string
+  serviceSid: string
+}
+
+const TWILIO_VARIABLES = ['TWILIO_API_KEY_SID', 'TWILIO_API_KEY_SECRET', 'TWILIO_VERIFY_SERVICE_SID'] as const
 
 export class ConfigError extends Error {
   override name = 'ConfigError'
@@ -161,6 +185,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
           'SMS_PROVIDER',
           'fake prints codes, so it runs only on this machine (DEPLOY_ENV local or test, and a localhost APP_ORIGIN)',
         )
+      }
+      // Twilio sends real texts, so it never runs on this machine, by either condition: DEPLOY_ENV is
+      // only an enum the operator picks, and a localhost APP_ORIGIN can't be a deployment people use.
+      if (e.SMS_PROVIDER === 'twilio' && (localOrTest || onThisMachine)) {
+        problem(
+          'SMS_PROVIDER',
+          'twilio sends real texts, so it never runs on this machine (DEPLOY_ENV nonprod or prod, and an APP_ORIGIN other than localhost)',
+        )
+      }
+      for (const name of TWILIO_VARIABLES) {
+        if (e.SMS_PROVIDER === 'twilio' && e[name] === undefined) problem(name, 'required with SMS_PROVIDER=twilio')
+        if (e.SMS_PROVIDER !== 'twilio' && e[name] !== undefined) problem(name, 'set only with SMS_PROVIDER=twilio')
       }
       if (!proxyList(e.TRUST_PROXY).every(isProxyEntry)) {
         problem('TRUST_PROXY', 'each entry must be an IP address or CIDR range')
@@ -200,7 +236,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     trustProxy: proxies.length > 0 ? proxies : false,
     auth:
       e.ROLE === 'api' && e.AUTH_SECRET !== undefined
-        ? { secret: e.AUTH_SECRET, smsProvider: e.SMS_PROVIDER }
+        ? {
+            secret: e.AUTH_SECRET,
+            smsProvider: e.SMS_PROVIDER,
+            ...(e.SMS_PROVIDER === 'twilio' &&
+            e.TWILIO_API_KEY_SID !== undefined &&
+            e.TWILIO_API_KEY_SECRET !== undefined &&
+            e.TWILIO_VERIFY_SERVICE_SID !== undefined
+              ? {
+                  twilio: {
+                    apiKeySid: e.TWILIO_API_KEY_SID,
+                    apiKeySecret: e.TWILIO_API_KEY_SECRET,
+                    serviceSid: e.TWILIO_VERIFY_SERVICE_SID,
+                  },
+                }
+              : {}),
+          }
         : undefined,
     worker: 'WORKER_CONCURRENCY' in connection ? { concurrency: connection.WORKER_CONCURRENCY } : undefined,
   }

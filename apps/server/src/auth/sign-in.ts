@@ -60,6 +60,7 @@ import { type SmsProvider, SmsProviderError, type Verdict } from '#src/auth/sms/
 import { type InOrg, withOrg } from '#src/db/database.ts'
 import { personByPhone } from '#src/db/pre-org.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
+import { C06_GATE } from '#src/jobs/gate.ts'
 import { appendOutbox } from '#src/outbox/append.ts'
 
 // --- Shared with account.ts -----------------------------------------------------------------
@@ -327,7 +328,9 @@ async function deliverCode(
   }
   const { orgId, personId, phoneNumberId } = match
   const send = await withOrg(api.db, { orgId, system: true }, async trx => {
-    const audit = (send: 'attempted' | 'skipped_left' | 'skipped_number_removed' | 'skipped_cap') =>
+    const audit = (
+      send: 'attempted' | 'skipped_left' | 'skipped_number_removed' | 'skipped_not_cleared' | 'skipped_cap',
+    ) =>
       writeAudit(trx, {
         orgId,
         actorId: null,
@@ -347,6 +350,16 @@ async function deliverCode(
     // moved since gets no code.
     if (!(await numberStillTheirs(trx, orgId, personId, phoneNumberId))) {
       await audit('skipped_number_removed')
+      return false
+    }
+    // An outside provider receives the number only once PDPA-10's transfer register clears it (C0.9):
+    // until then nothing is sent, and the reply stays the same as for any other request.
+    if (sms.transfer !== null && !(api.gate ?? C06_GATE).providerCleared(orgId, sms.transfer)) {
+      await audit('skipped_not_cleared')
+      info.log.error(
+        { event: 'sms_provider_not_cleared', provider: sms.name, personId },
+        'a sign-in code was not sent: the provider is not cleared in the transfer register',
+      )
       return false
     }
     let capped: 'sms_global_cap' | 'sms_cap_unavailable' | undefined

@@ -190,10 +190,63 @@ describe('C0.5 T14 sign-in settings', () => {
     expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'fake', APP_ORIGIN: 'https://hearth.example' }))).toMatch(
       /SMS_PROVIDER:/,
     )
-    // The C0.5 log provider is gone.
+    // The C0.5 log provider is gone, and AWS isn't built yet.
     for (const provider of ['log', 'aws']) {
       expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: provider }))).toMatch(/SMS_PROVIDER:/)
     }
+  })
+
+  // Shapes built at run time, so no file holds a credential's shape; low-entropy values.
+  const twilioEnv = {
+    SMS_PROVIDER: 'twilio',
+    TWILIO_API_KEY_SID: `SK${'0'.repeat(32)}`,
+    TWILIO_API_KEY_SECRET: 'a'.repeat(32),
+    TWILIO_VERIFY_SERVICE_SID: `VA${'0'.repeat(32)}`,
+  }
+
+  it('T7 T20: runs Twilio Verify only off this machine (DEPLOY_ENV nonprod or prod, and an origin other than localhost)', () => {
+    const real = { ...env, ...twilioEnv, APP_ORIGIN: 'https://hearth.example' }
+    for (const deployEnv of ['nonprod', 'prod']) {
+      expect(loadConfig({ ...real, DEPLOY_ENV: deployEnv }).auth).toEqual({
+        secret: SECRET,
+        smsProvider: 'twilio',
+        twilio: {
+          apiKeySid: twilioEnv.TWILIO_API_KEY_SID,
+          apiKeySecret: twilioEnv.TWILIO_API_KEY_SECRET,
+          serviceSid: twilioEnv.TWILIO_VERIFY_SERVICE_SID,
+        },
+      })
+    }
+    for (const deployEnv of ['local', 'test']) {
+      expect(problems(() => loadConfig({ ...real, DEPLOY_ENV: deployEnv }))).toMatch(
+        /SMS_PROVIDER: twilio sends real texts/,
+      )
+    }
+    for (const appOrigin of ['http://localhost:5173', 'http://127.0.0.1:3000']) {
+      expect(problems(() => loadConfig({ ...real, DEPLOY_ENV: 'nonprod', APP_ORIGIN: appOrigin }))).toMatch(
+        /SMS_PROVIDER: twilio sends real texts/,
+      )
+    }
+  })
+
+  it('T20: needs every TWILIO_ variable with twilio, refuses them without it, checks their shapes and never echoes them', () => {
+    const real = { ...env, ...twilioEnv, APP_ORIGIN: 'https://hearth.example', DEPLOY_ENV: 'prod' }
+    for (const name of ['TWILIO_API_KEY_SID', 'TWILIO_API_KEY_SECRET', 'TWILIO_VERIFY_SERVICE_SID'] as const) {
+      expect(problems(() => loadConfig({ ...real, [name]: undefined }))).toContain(
+        `${name}: required with SMS_PROVIDER=twilio`,
+      )
+      expect(problems(() => loadConfig({ ...env, [name]: twilioEnv[name] }))).toContain(
+        `${name}: set only with SMS_PROVIDER=twilio`,
+      )
+    }
+    const bad = { TWILIO_API_KEY_SID: 'SKnot-hex', TWILIO_API_KEY_SECRET: 'short', TWILIO_VERIFY_SERVICE_SID: 'VAx' }
+    const message = problems(() => loadConfig({ ...real, ...bad }))
+    expect(message).toMatch(/TWILIO_API_KEY_SID: must be an API key SID/)
+    expect(message).toMatch(/TWILIO_API_KEY_SECRET: must be 32 letters and digits/)
+    expect(message).toMatch(/TWILIO_VERIFY_SERVICE_SID: must be a Verify Service SID/)
+    for (const value of Object.values(bad)) expect(message).not.toContain(value)
+    const secret = 'b'.repeat(32)
+    expect(problems(() => loadConfig({ ...env, TWILIO_API_KEY_SECRET: secret }))).not.toContain(secret)
   })
 
   it('reads TRUST_PROXY as a list of addresses and CIDR ranges, never a hop count', () => {

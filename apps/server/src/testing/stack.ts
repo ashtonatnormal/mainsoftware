@@ -417,8 +417,9 @@ export interface Stack {
   proxy(to: 'postgres' | 'valkey'): Promise<{ proxy: TcpProxy; url: string }>
   // Another api app on the same database, with its own Valkey URL (an unreachable one, say), and
   // optionally without its after-commit publish of the sessions a commit ended (A6), so only the
-  // worker's revocation consumer (C0.7) or the re-check closes their sockets.
-  startApi(options: { valkeyUrl?: string; publishRevoked?: boolean }): Promise<FastifyInstance>
+  // worker's revocation consumer (C0.7) or the re-check closes their sockets; or with its own SMS
+  // provider (one that needs a transfer-register entry, say).
+  startApi(options: { valkeyUrl?: string; publishRevoked?: boolean; sms?: FakeVerify }): Promise<FastifyInstance>
   // Another realtime app: a shorter re-check, and optionally no revocation subscriber, its own
   // connections, shorter timings or a wrapped check.
   startRealtime(options: RealtimeOptions): Promise<RealtimeApp>
@@ -645,7 +646,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     async function startApiOn(
       apiValkey: Redis,
       apiLogger: Logger,
-      o: { publishRevoked?: boolean } = {},
+      o: { publishRevoked?: boolean; sms?: FakeVerify } = {},
     ): Promise<{ app: FastifyInstance; flags: FlagCache }> {
       const afterResponse = new AfterResponse()
       const flags = flagCache({ logger: apiLogger })
@@ -659,7 +660,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
           db,
           valkey: apiValkey,
           keys,
-          sms,
+          sms: o.sms ?? sms,
           keyPrefix: prefix,
           flags,
           afterResponse,
@@ -1254,14 +1255,17 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       removeMember,
       appendEvent,
       proxy,
-      startApi: async ({ valkeyUrl, publishRevoked }) => {
+      startApi: async ({ valkeyUrl, publishRevoked, sms: otherSms }) => {
         let apiValkey = valkey
         if (valkeyUrl !== undefined) {
           const other = createValkey(valkeyUrl, logger)
           closers.push(() => closeValkey(other))
           apiValkey = other
         }
-        const o = publishRevoked === undefined ? {} : { publishRevoked }
+        const o = {
+          ...(publishRevoked === undefined ? {} : { publishRevoked }),
+          ...(otherSms === undefined ? {} : { sms: otherSms }),
+        }
         return (await startApiOn(apiValkey, logger, o)).app
       },
       startRealtime: startRealtimeApp,
