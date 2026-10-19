@@ -7,7 +7,19 @@ import { GATEWAY_CLOSE } from '@hearth/shared'
 // A sign-in code: 6 digits, valid 5 minutes, dead after 5 wrong tries (PRD-53). Its challenge record
 // (codes.ts) is kept 10 minutes, so a check after the 5 minutes finds it and cancels the provider's
 // code; checks are refused from 5 minutes after the request, on Valkey's clock.
-export const OTP = { length: 6, ttlMs: 300_000, maxTries: 5, recordTtlMs: 600_000 } as const
+// - verifyFloorMs: a refused check (code_wrong, code_dead, code_expired) answers no sooner than this
+//   after the request arrived, so the provider's round trip for a roster number can't be timed
+//   against a number off the roster (T14 item 3, T20). Successes aren't padded.
+// - breaker: after `failures` provider failures within `windowMs`, every check answers 503
+//   unavailable for `openMs` without asking the provider (T20).
+export const OTP = {
+  length: 6,
+  ttlMs: 300_000,
+  maxTries: 5,
+  recordTtlMs: 600_000,
+  verifyFloorMs: 2_000,
+  breaker: { failures: 3, windowMs: 60_000, openMs: 30_000 },
+} as const
 
 // A sign-in attempt (the steps between asking for a code and signing in) lasts 10 minutes from
 // the code request, never extended.
@@ -21,6 +33,11 @@ export const SESSION = {
   idle: '30 days',
   touchEveryMs: 60_000,
 } as const
+
+// A privileged holder's session (D46, AQ-05/06): 7 days, set at issue in expires_at like SESSION's,
+// so every lookup enforces it with no role read. Must stay below SESSION.lifetime: re-authentication
+// tells a session issued under the PIN rule by its shorter lifetime, and policy.test.ts pins that.
+export const PRIVILEGED_SESSION = { lifetime: '168 hours', lifetimeSeconds: 604_800 } as const
 
 // Admin actions, and adding or removing a passkey, need a PIN or passkey check from the last 5
 // minutes (§9.4).

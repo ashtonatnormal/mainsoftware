@@ -1,7 +1,7 @@
 // How the server asks packages/access (Principle 1: every access check goes through can()). An
 // action re-reads the acting session in its own transaction, loads the facts C0.5's requests need
 // into a World, and lets can() decide, with the session's re-authentication as context.
-import { can, type Facts, type Request, type RoleFact, World } from '@hearth/access'
+import { can, type Facts, holdsPinRole, type Request, type RoleFact, World } from '@hearth/access'
 import { sql } from 'kysely'
 import { ApiError } from '#src/auth/errors.ts'
 import { REAUTH, SESSION } from '#src/auth/policy.ts'
@@ -105,7 +105,8 @@ export async function loadWorld(trx: InOrg, orgId: string, options: { credential
 // membership not removed and every role row not revoked, and every team of the org, so keysOf() is
 // exact for each of them. Nothing else is loaded, and can() is asked only about those people, and
 // only topic requests (realtime/topics.ts). No row is locked: teams and memberships are never
-// locked, so the lock order (CLAUDE.md, Database) is unchanged.
+// locked, so the lock order (CLAUDE.md, Database) is unchanged, and a writing transaction may use it
+// too (privilegedNow below).
 export async function loadTopicWorld(trx: InOrg, orgId: string, people: readonly string[]): Promise<World> {
   const ids = [...new Set(people)]
   const { rows: persons } = await sql<{ id: string; deactivated_at: Date | null }>`
@@ -129,6 +130,13 @@ export async function loadTopicWorld(trx: InOrg, orgId: string, people: readonly
     teams: teams.map(t => ({ id: t.id, archivedAt: ms(t.archived_at) })),
     teamMembers: members.map(m => ({ teamId: m.team_id, personId: m.person_id, removedAt: ms(m.removed_at) })),
   })
+}
+
+// Whether the person holds a privileged role now (D46, AQ-02): read in the transaction that acts on
+// it (a sign-in's finish, a PIN step), after the person's row was read FOR SHARE, as its own
+// statement with no lock on role_assignments. The person's row is where a sign-in and a grant meet.
+export async function privilegedNow(trx: InOrg, orgId: string, personId: string): Promise<boolean> {
+  return holdsPinRole(await loadTopicWorld(trx, orgId, [personId]), personId)
 }
 
 // A World of these facts, every other one empty, and the settings the strictest, so a request the

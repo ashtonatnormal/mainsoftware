@@ -346,10 +346,43 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     }
   })
 
-  it('C0.5 Done: a roster member signs in with an SMS code and a new PIN (ACC-01, ACC-02, ACC-03, T5)', async () => {
+  it('D46 AQ-02: a Member signs in on the SMS code alone, making their account with no PIN (ACC-01, ACC-03, T5)', async () => {
+    // Budgets: M 1 code request.
+    const m = await s.person()
+    const browser = s.client()
+    expect((await requestCode(browser, m.e164)).status).toBe(200)
+    const verified = await verifyCode(browser, await s.sms.nextCode(m.e164))
+    expect(verified.status).toBe(200)
+    const token = browser.cookie(SESSION_COOKIE) ?? ''
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(verified.setCookies).toEqual([
+      `${SESSION_COOKIE}=${token}; Path=/; Max-Age=7776000; HttpOnly; Secure; SameSite=Lax`,
+      `${ATTEMPT_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`,
+    ])
+    const { id: sessionId, deviceId } = await s.sessionOf(browser)
+    expect(verified.body).toEqual({ status: 'signed_in', device: { id: deviceId, label: 'iPhone · Safari' } })
+    const user = await userOf(m)
+    expect(user).toBeDefined()
+    expect(user?.pin_hash).toBeNull()
+    const [term] = await s.query<{ full_term: boolean; stamped: boolean }>(
+      `select expires_at - created_at = interval '2160 hours' as full_term, reauthenticated_at = created_at as stamped
+       from sessions where id = $1`,
+      [sessionId],
+    )
+    expect(term).toEqual({ full_term: true, stamped: true })
+    expect((await auditOf(m)).map(row => row.action)).toEqual(['auth.code_requested', 'auth.sign_in'])
+    expect((await auditOf(m))[1]).toMatchObject({ actor_id: m.id, details: { method: 'sms', privileged: false } })
+    expect(await eventsOf(m)).toEqual([
+      about(m, 'signin.started', m, { device: deviceId, session: sessionId, method: 'sms', privileged: false }),
+    ])
+    // The spent attempt can't be used again, with the right code or any other.
+    expect((await verifyCode(browser, '000000')).error).toBe('attempt_expired')
+  })
+
+  it('C0.5 Done D46: a privileged holder signs in with an SMS code and a new PIN, on a 7-day session (ACC-01, ACC-02, ACC-03, T5, AQ-05)', async () => {
     // Budgets: P 1 code request, Q 2.
-    const p = await s.person()
-    const q = await s.person()
+    const p = await s.person({ roles: ['leadership'] })
+    const q = await s.person({ roles: ['dpo'] })
     const browser = s.client()
     const sentBefore = s.sms.sent.length
 
@@ -391,7 +424,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const token = browser.cookie(SESSION_COOKIE) ?? ''
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(set.setCookies).toEqual([
-      `${SESSION_COOKIE}=${token}; Path=/; Max-Age=7776000; HttpOnly; Secure; SameSite=Lax`,
+      `${SESSION_COOKIE}=${token}; Path=/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax`,
       `${ATTEMPT_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`,
     ])
     expect(browser.cookie(ATTEMPT_COOKIE)).toBeUndefined()
@@ -412,7 +445,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const sessionTimes = () =>
       s.query<{ stamped: boolean; full_term: boolean; session_age: string; device_age: string }>(
         `select s.reauthenticated_at = s.created_at as stamped,
-           s.expires_at - s.created_at = interval '2160 hours' as full_term,
+           s.expires_at - s.created_at = interval '168 hours' as full_term,
            extract(epoch from now() - s.last_seen_at)::text as session_age,
            extract(epoch from now() - d.last_seen_at)::text as device_age
          from sessions s join devices d on d.id = s.device_id where s.id = $1`,
@@ -449,13 +482,13 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       actor_id: p.id,
       device_id: deviceId,
       ip: browser.ip,
-      details: { method: 'sms_new_pin' },
+      details: { method: 'sms_new_pin', privileged: true },
     })
     expect(rows[2]).toMatchObject({ actor_id: p.id, device_id: deviceId })
     // C0.6 T16: the outbox events beside the writes. Before a session exists the transaction acts
     // as Hearth, so they name the person as their actor, as the audit rows do.
     expect(await eventsOf(p)).toEqual([
-      about(p, 'signin.started', p, { device: deviceId, session: sessionId, method: 'sms_new_pin' }),
+      about(p, 'signin.started', p, { device: deviceId, session: sessionId, method: 'sms_new_pin', privileged: true }),
       about(p, 'account.pin_set', p),
     ])
 
@@ -485,6 +518,144 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect([badCode.status, badCode.error]).toEqual([400, 'invalid_code'])
     const badPin = await browser.post('/api/auth/reauth/pin', { pin: '12' })
     expect([badPin.status, badPin.error]).toEqual([400, 'invalid_pin'])
+  })
+
+  it('D46 AQ-02: each of the six Owner-only roles sets a PIN after the code; a Member does not', async () => {
+    // Budgets: one code request each.
+    for (const role of ['owner', 'admin', 'ai_admin', 'leadership', 'dpo', 'compliance_officer'] as const) {
+      const holder = await s.person({ roles: [role] })
+      const { reply } = await atStepUp(holder)
+      expect(reply.body, role).toEqual({ status: 'code_verified', next: 'set_pin' })
+    }
+    const member = await s.person({ pin: s.newPin() })
+    const { reply } = await atStepUp(member)
+    expect(reply.body).toMatchObject({ status: 'signed_in' })
+  })
+
+  it("D46 AQ-05/06: a privileged session ends after 168 hours, while a Member's of the same age carries on", async () => {
+    // Budgets: P 1 code request, M 1.
+    const p = await s.person({ roles: ['admin'] })
+    const m = await s.person()
+    const pc = await s.signIn(p)
+    const mc = await s.signIn(m)
+    const [pTerm] = await s.query<{ privileged: boolean }>(
+      "select expires_at - created_at = interval '168 hours' as privileged from sessions where id = $1",
+      [(await s.sessionOf(pc)).id],
+    )
+    expect(pTerm?.privileged).toBe(true)
+    expect((await eventsOf(p)).find(event => event.type === 'signin.started')?.ids).toMatchObject({
+      method: 'sms_new_pin',
+      privileged: true,
+    })
+    await s.age((await s.sessionOf(pc)).id, '168 hours 1 minute')
+    await s.age((await s.sessionOf(mc)).id, '168 hours 1 minute')
+    const ended = await pc.get('/api/devices')
+    expect([ended.status, ended.error]).toEqual([401, 'signed_out'])
+    expect((await mc.get('/api/devices')).status).toBe(200)
+  })
+
+  it('T20 R1: a finish that waits past its lock timeout answers 409 try_again, and a retry with any 6 digits signs in with no second check', async () => {
+    // Budgets: V 1 code request.
+    const v = await s.person()
+    const browser = s.client()
+    expect((await requestCode(browser, v.e164)).status).toBe(200)
+    const code = await s.sms.nextCode(v.e164)
+    const checksBefore = s.sms.checks.length
+    await s.query('begin')
+    let blocked: Awaited<ReturnType<typeof verifyCode>>
+    try {
+      // The superuser holds the person's row, so the finish's FOR SHARE read waits out its 2 s.
+      await s.query('select id from people where id = $1 for no key update', [v.id])
+      blocked = await verifyCode(browser, code)
+    } finally {
+      await s.query('commit')
+    }
+    expect([blocked.status, blocked.error]).toEqual([409, 'try_again'])
+    expect(s.sms.checks.length).toBe(checksBefore + 1)
+    expect(await s.query('select 1 from sessions where user_id = $1', [v.id])).toEqual([])
+    const retried = await verifyCode(browser, '000000')
+    expect(retried.status).toBe(200)
+    expect(retried.body).toMatchObject({ status: 'signed_in' })
+    expect(s.sms.checks.length).toBe(checksBefore + 1)
+    expect(await s.query('select 1 from sessions where user_id = $1', [v.id])).toHaveLength(1)
+  })
+
+  it('T14 item 3 T20 AQ-04: on the real floor, refused checks for a roster number and one off it both take at least 2 s, and a slow cancel runs after the reply', async () => {
+    // Budgets: R 1 code request, N (not on the roster) 1.
+    const app = await s.startApi({ realTiming: true })
+    const r = await s.person()
+    const n = s.number()
+    const rc = s.client({ app })
+    const nc = s.client({ app })
+    expect((await requestCode(rc, r.e164)).status).toBe(200)
+    expect((await requestCode(nc, n)).status).toBe(200)
+    const wrong = another(await s.sms.nextCode(r.e164))
+    const timed = async (client: Client) => {
+      const started = Date.now()
+      const reply = await verifyCode(client, wrong)
+      return { reply, ms: Date.now() - started }
+    }
+    const first = [await timed(rc), await timed(nc)]
+    for (const { reply, ms } of first) {
+      expect(reply.body).toMatchObject({ error: 'code_wrong', triesLeft: 4 })
+      expect(ms).toBeGreaterThanOrEqual(2_000)
+    }
+    // Tries 2 to 4, then the 5th with a cancel that takes 3 s: the reply doesn't wait for it.
+    for (let tries = 2; tries <= 4; tries++) await Promise.all([verifyCode(rc, wrong), verifyCode(nc, wrong)])
+    const cancel = s.sms.cancel.bind(s.sms)
+    const slow = vi.spyOn(s.sms, 'cancel').mockImplementation(async ref => {
+      await new Promise(resolve => setTimeout(resolve, 3_000))
+      return cancel(ref)
+    })
+    try {
+      // Straight through the app, so the time is the reply's alone (the harness's client also waits
+      // for the work after the reply).
+      for (const client of [rc, nc]) {
+        const started = Date.now()
+        const reply = await app.inject({
+          method: 'POST',
+          url: '/api/auth/otp/verify',
+          headers: { origin: APP_ORIGIN, cookie: client.cookieHeader(), 'content-type': 'application/json' },
+          payload: { code: wrong },
+        })
+        const ms = Date.now() - started
+        expect(reply.json()).toMatchObject({ error: 'code_dead' })
+        expect(ms).toBeGreaterThanOrEqual(2_000)
+        expect(ms).toBeLessThan(4_500)
+      }
+      await s.settled()
+      expect(slow).toHaveBeenCalledTimes(1)
+    } finally {
+      slow.mockRestore()
+    }
+  }, 60_000)
+
+  it('T20 AQ-20: three provider failures open the breaker, which refuses every check on that api without asking the provider', async () => {
+    // Budgets: B 1 code request, N (not on the roster) 1.
+    const app = await s.startApi({})
+    const b = await s.person()
+    const bc = s.client({ app })
+    const nc = s.client({ app })
+    expect((await requestCode(bc, b.e164)).status).toBe(200)
+    expect((await requestCode(nc, s.number())).status).toBe(200)
+    const code = await s.sms.nextCode(b.e164)
+    const down = vi.spyOn(s.sms, 'check').mockRejectedValue(new Error('the provider is down'))
+    try {
+      for (let failures = 1; failures <= 3; failures++) {
+        expect((await verifyCode(bc, code)).error).toBe('unavailable')
+      }
+      expect(down).toHaveBeenCalledTimes(3)
+      for (const client of [bc, nc]) {
+        const refused = await verifyCode(client, code)
+        expect([refused.status, refused.error]).toEqual([503, 'unavailable'])
+      }
+      expect(down).toHaveBeenCalledTimes(3)
+    } finally {
+      down.mockRestore()
+    }
+    // The suite's own api has a breaker of its own, still closed.
+    const other = await s.person()
+    expect((await s.signIn(other)).cookie(SESSION_COOKIE)).toBeDefined()
   })
 
   it('C0.5 Done: a number not on the roster gets the identical reply and no SMS (ACC-03, PRD-53)', async () => {
@@ -574,8 +745,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('PRD-53: codes expire, die after 5 tries, and are replaced', async () => {
-    // Budgets: A 2 code requests, B 2, C 1, D 2.
-    const a = await s.person({ pin: s.newPin() })
+    // Budgets: A 2 code requests, B 2, C 1, D 2. A is privileged, for the step-up's body (D46).
+    const a = await s.person({ roles: ['ai_admin'], pin: s.newPin() })
     const b = await s.person({ pin: s.newPin() })
     const c = await s.person({ pin: s.newPin() })
 
@@ -700,11 +871,11 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     await s.settled()
 
     // The newest request still wins: the overtaken check touched nothing of the newer code, which
-    // takes R's newer browser on to the step-up.
+    // signs R in from the newer browser (R is a Member: the code alone, D46).
     const newest = await s.sms.nextCode(r.e164)
     const ahead = await verifyCode(rNewer, newest)
     expect(ahead.status).toBe(200)
-    expect(ahead.body).toMatchObject({ status: 'code_verified', next: 'step_up' })
+    expect(ahead.body).toMatchObject({ status: 'signed_in' })
     const newerRef = s.sms.sent.filter(sent => sent.to === r.e164).at(-1)?.ref
     expect(s.sms.cancels.map(entry => entry.ref)).not.toContain(newerRef)
     // Audited as the replies went.
@@ -764,12 +935,13 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('C0.5 Done: the PIN locks after 5 wrong tries for 15 minutes and after 10 until an admin resets it (PRD-53, ACC-02, ACC-06)', async () => {
-    // Budgets: M 3 code requests, E 1, K 1, U 0, the Admin 1.
-    const m = await s.person({ pin: s.newPin() })
-    const e = await s.person({ pin: s.newPin() })
-    const k = await s.person({ pin: s.newPin() })
+    // Budgets: M 3 code requests, E 1, K 1, U 0, the Owner 1. M, E and K are privileged, so they
+    // have PINs (D46), and only an Owner resets a privileged holder's PIN.
+    const m = await s.person({ roles: ['leadership'], pin: s.newPin() })
+    const e = await s.person({ roles: ['compliance_officer'], pin: s.newPin() })
+    const k = await s.person({ roles: ['ai_admin'], pin: s.newPin() })
     const u = await s.person()
-    const admin = await s.person({ roles: ['admin'], pin: s.newPin() })
+    const admin = await s.person({ roles: ['owner'], pin: s.newPin() })
 
     const mFirst = await s.signIn(m)
     const { client: mc, reply: stepUp } = await atStepUp(m)
@@ -884,8 +1056,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('PRD-53 ACC-02: parallel PIN guesses and parallel finishes stay correct', async () => {
-    // Budgets: G 2 code requests.
-    const g = await s.person({ pin: s.newPin() })
+    // Budgets: G 2 code requests. Privileged, so they step up with the PIN (D46).
+    const g = await s.person({ roles: ['dpo'], pin: s.newPin() })
     const { client: gc } = await atStepUp(g)
     const wrongPin = another(pinOf(g))
     const guesses = await Promise.all(Array.from({ length: 8 }, () => verifyPin(gc, wrongPin)))
@@ -919,9 +1091,9 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('ACC-02: a passkey is added, used at step-up while the PIN is locked, used to re-authenticate, and removed', async () => {
-    // Budgets: P 3 code requests, W 1.
-    const p = await s.person()
-    const w = await s.person({ pin: s.newPin() })
+    // Budgets: P 3 code requests, W 1. Both privileged: a passkey stands in for a set PIN (D46).
+    const p = await s.person({ roles: ['leadership'] })
+    const w = await s.person({ roles: ['leadership'], pin: s.newPin() })
     const authenticator = createAuthenticator(APP_ORIGIN)
     type CreationOptions = { options: PublicKeyCredentialCreationOptionsJSON }
     type RequestOptions = { options: PublicKeyCredentialRequestOptionsJSON }
@@ -1178,9 +1350,10 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
 
   it('C0.5 Done: deactivating a member signs them out everywhere and closes their socket within 2 s through the push (ACC-05, T5)', async () => {
     // Budgets: the Admin 1 code request, D 3, L 1.
-    const admin = await s.person({ roles: ['admin'], pin: s.newPin() })
+    // L is privileged, to reach the step-up (D46), so an Owner deactivates them.
+    const admin = await s.person({ roles: ['owner'], pin: s.newPin() })
     const d = await s.person({ pin: s.newPin() })
-    const l = await s.person({ pin: s.newPin() })
+    const l = await s.person({ roles: ['leadership'], pin: s.newPin() })
 
     const d1 = await s.signIn(d)
     const d2 = await s.signIn(d)
@@ -1489,7 +1662,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
 
     // At the step-up, a PIN for a number removed since is refused right or wrong, uncounted, and
     // the attempt goes.
-    const w = await s.person({ pin: s.newPin() })
+    // W and Y are privileged, to reach the PIN steps (D46).
+    const w = await s.person({ roles: ['admin'], pin: s.newPin() })
     const { client: wc, reply: wStep } = await atStepUp(w)
     expect(wStep.body).toMatchObject({ next: 'step_up' })
     await s.query('update phone_numbers set removed_at = now(), removed_by = $2 where id = $1', [
@@ -1503,7 +1677,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     await s.settled()
     expect((await auditOf(w)).map(row => row.action)).toEqual(['auth.code_requested'])
 
-    const y = await s.person()
+    const y = await s.person({ roles: ['admin'] })
     const { client: yc, reply: step } = await atStepUp(y)
     expect(step.body).toMatchObject({ next: 'set_pin' })
     await s.query('update phone_numbers set removed_at = now(), removed_by = $2 where id = $1', [
@@ -1602,9 +1776,10 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     // Every sign-in request per IP, 100 per 10 minutes: from the address, each step is refused (a
     // code request, a code check, setting a PIN, a PIN check, and a passkey's options and check).
     const authIp = '192.0.2.78'
-    const p7 = await s.person({ pin: s.newPin() })
+    // P7 and P9 are privileged, to reach the PIN steps (D46).
+    const p7 = await s.person({ roles: ['leadership'], pin: s.newPin() })
     const p8 = await s.person()
-    const p9 = await s.person()
+    const p9 = await s.person({ roles: ['leadership'] })
     const atPin = s.client({ ip: authIp })
     expect((await requestCode(atPin, p7.e164)).status).toBe(200)
     expect((await verifyCode(atPin, await s.sms.nextCode(p7.e164))).status).toBe(200)

@@ -162,7 +162,8 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
     const results = await drain(run, spec)
     expect(results.at(-1)).toBe('idle')
     const expected = await eventsInOrder()
-    expect(expected.length).toBeGreaterThanOrEqual(7)
+    // One signin.started per code-only sign-in (D46), and the suite's earlier event.
+    expect(expected.length).toBeGreaterThanOrEqual(4)
     expect(await deliveries('it_projection')).toEqual(expected.map(event => ({ event_id: event.id, type: event.type })))
     const top = await head()
     expect(await checkpoint('it_projection')).toMatchObject({ last_tx: top?.tx_id, last_id: top?.id })
@@ -269,7 +270,8 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
     })
     await s.signIn(await s.person())
     const behind = (await readOutboxLag(s.worker, s.org.id)).find(line => line.consumer === 'it_projection')
-    expect(behind?.eventsBehind).toBe(2)
+    // A Member's sign-in is code-only: signin.started alone (D46).
+    expect(behind?.eventsBehind).toBe(1)
     expect(behind?.secondsBehind).toBeGreaterThanOrEqual(0)
     expect(await readQueueDepth(s.worker, s.org.id)).toEqual({
       org: s.org.id,
@@ -299,8 +301,35 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
     }
   })
 
-  it('C0 exit T16 item 4: a real route whose transaction fails after all its writes leaves no account, session or event; the next sign-in emits each once', async () => {
+  it('C0 exit T16 item 4 D46: a code-only finish that fails at its last write leaves no account, session or event, and the retry with any 6 digits commits signin.started once', async () => {
     const person = await s.person()
+    const browser = s.client()
+    await s.query("insert into it_fail_next (action) values ('auth.sign_in')")
+    try {
+      expect((await browser.post('/api/auth/otp/request', { phone: person.e164 })).status).toBe(200)
+      const failed = await browser.post('/api/auth/otp/verify', { code: await s.sms.nextCode(person.e164) })
+      expect([failed.status, failed.error]).toEqual([500, 'internal'])
+    } finally {
+      await s.query("delete from it_fail_next where action = 'auth.sign_in'")
+    }
+    const about = () =>
+      s.query<{ type: string }>(
+        'select type from outbox_events where entity_id = $1 or $1 = any(subject_ids) order by tx_id, id',
+        [person.id],
+      )
+    expect(await s.query('select 1 from users where id = $1', [person.id])).toEqual([])
+    expect(await s.query('select 1 from sessions where user_id = $1', [person.id])).toEqual([])
+    expect(await s.query('select 1 from devices where user_id = $1', [person.id])).toEqual([])
+    expect(await about()).toEqual([])
+    // The attempt stayed verified (T20 R1): any 6 digits finish it, with no second check.
+    const retried = await browser.post('/api/auth/otp/verify', { code: '000000' })
+    expect(retried.json<{ status: string }>().status).toBe('signed_in')
+    expect((await about()).map(row => row.type)).toEqual(['signin.started'])
+  })
+
+  it('C0 exit T16 item 4: a real route whose transaction fails after all its writes leaves no account, session or event; the next sign-in emits each once', async () => {
+    // Privileged, so the sign-in goes on to set a PIN (D46).
+    const person = await s.person({ roles: ['leadership'] })
     // The set-PIN request writes the account, the PIN, the device, the session and their events,
     // then fails at its last audit row.
     await s.query("insert into it_fail_next (action) values ('auth.pin_set')")
@@ -783,7 +812,7 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
     await drain(second, fresh)
     expect(await checkpoint('it_second')).toBeDefined()
     const remaining = await eventsInOrder()
-    expect(remaining).toHaveLength(2)
+    expect(remaining).toHaveLength(1)
     expect(await deliveries('it_second')).toEqual(remaining.map(event => ({ event_id: event.id, type: event.type })))
     // The first, reset to the oldest kept event, catches up on the same events once.
     await ConsumerRunner.reset(s.worker, spec, s.org.id, 'oldest')

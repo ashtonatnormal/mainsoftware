@@ -565,6 +565,22 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     }
   })
 
+  it('D46 AQ-05/06 T19 item 13: a privileged session that runs out (168 h) closes its socket by the re-check, its latency from expires_at under 60 s', async () => {
+    const lone = await s.startRealtime({ recheckMs: 500, subscribe: false })
+    const p = await s.person({ roles: ['leadership'] })
+    const browser = await s.signIn(p)
+    const socket = await s.gatewaySocket(browser, { url: lone.url })
+    await socket.sub([personTopic(p)])
+    // A few seconds short of 168 hours, so the record's start (expires_at) is recent.
+    await s.age((await s.sessionOf(browser)).id, '167 hours 59 minutes 57 seconds')
+    const closed = await closeOf(socket, 10_000)
+    expect(closed).toMatchObject(GATEWAY_CLOSE.signedOut)
+    const [applied] = linesOf(lone, 'revocation_applied')
+    expect(applied).toMatchObject({ path: 'recheck' })
+    expect(Number(applied?.latencyMs)).toBeLessThan(60_000)
+    expect(s.logs.filter(line => line.instance === lone.instance && Number(line.level) >= 50)).toEqual([])
+  })
+
   it('R6-10 ADM-02: an admin’s sign-out of someone’s devices closes their sockets', async () => {
     const admin = await s.person({ roles: ['admin'], pin: s.newPin() })
     const t = await s.person({ pin: s.newPin() })

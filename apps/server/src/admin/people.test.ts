@@ -2,9 +2,11 @@ import type { Redis } from 'ioredis'
 import { describe, expect, it, vi } from 'vitest'
 import { deactivate, listDevices, resetPin, signOutDevices } from '#src/admin/people.ts'
 import type { Api } from '#src/api.ts'
+import { Breaker } from '#src/auth/breaker.ts'
 import { deriveKeys } from '#src/auth/crypto.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { relyingParty } from '#src/auth/passkeys.ts'
+import { OTP } from '#src/auth/policy.ts'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { AfterResponse, type ReqInfo } from '#src/http.ts'
 import { staticFlags } from '#src/testing/flags.ts'
@@ -63,6 +65,7 @@ function context(pool: ReturnType<typeof scriptedPool>, options: { publishRevoke
     appOrigin: 'https://hearth.example.com',
     names: valkeyKeys('it:unit:'),
     rp: relyingParty('https://hearth.example.com'),
+    otp: { verifyFloorMs: 0, breaker: new Breaker(OTP.breaker) },
   }
   const info: ReqInfo = {
     ip: '198.51.100.7',

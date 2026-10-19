@@ -8,10 +8,12 @@ import { setTimeout as delay } from 'node:timers/promises'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Redis } from 'ioredis'
 import { adminRoutes } from '#src/admin/routes.ts'
+import { Breaker, type BreakerPolicy } from '#src/auth/breaker.ts'
 import { addCookie, clearedCookie } from '#src/auth/cookies.ts'
 import { type AuthKeys, PinSlotsFull } from '#src/auth/crypto.ts'
 import { ApiError, fromDatabase, messageFor } from '#src/auth/errors.ts'
 import { loadWebAuthn, type RelyingParty, relyingParty } from '#src/auth/passkeys.ts'
+import { OTP } from '#src/auth/policy.ts'
 import { authRoutes } from '#src/auth/routes.ts'
 import type { SmsProvider } from '#src/auth/sms/provider.ts'
 import { type ValkeyKeys, valkeyKeys } from '#src/auth/valkey-keys.ts'
@@ -44,6 +46,10 @@ export interface ApiDeps {
   // The after-response queue. registerApi makes one if none is given; the integration harness
   // passes its own, to await its idle() after each request.
   afterResponse?: AfterResponse
+  // The integration harness and unit tests only (scripts/guards/api-test-overrides.test.ts): a
+  // shorter floor on refused code checks, so a suite making dozens of them doesn't wait 2 s each,
+  // and a breaker policy of its own. Production takes OTP's.
+  otpForTests?: { verifyFloorMs?: number; breaker?: Partial<BreakerPolicy> }
 }
 
 // What every service gets: the deps, and what registerApi derives from them.
@@ -53,6 +59,8 @@ export interface Api extends ApiDeps {
   // Every Valkey key and channel name (auth/valkey-keys.ts).
   names: ValkeyKeys
   rp: RelyingParty
+  // The code checks' floor and circuit breaker (T20), built per registerApi from OTP.
+  otp: { verifyFloorMs: number; breaker: Breaker }
 }
 
 // A pending text or audit row gets this long to finish when the server stops.
@@ -64,6 +72,7 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps & { appOrigin: s
     afterResponse: deps.afterResponse ?? new AfterResponse(),
     names: valkeyKeys(deps.keyPrefix),
     rp: relyingParty(deps.appOrigin),
+    otp: otpChecks(deps),
   }
   app.register(
     async scope => {
@@ -95,6 +104,14 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps & { appOrigin: s
     },
     { prefix: '/api' },
   )
+}
+
+// The code checks' floor and breaker: OTP's, unless a test overrides them.
+export function otpChecks(deps: Pick<ApiDeps, 'otpForTests'>): Api['otp'] {
+  return {
+    verifyFloorMs: deps.otpForTests?.verifyFloorMs ?? OTP.verifyFloorMs,
+    breaker: new Breaker({ ...OTP.breaker, ...deps.otpForTests?.breaker }),
+  }
 }
 
 // What a thrown error answers, or undefined for one the client shouldn't learn about (a 500).

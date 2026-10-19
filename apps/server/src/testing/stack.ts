@@ -180,7 +180,8 @@ export interface Person {
   // The digits after the country code, which the sweeps look for in logs and audit rows.
   local: string
   phoneNumberId: string
-  // The PIN they sign in with, once they have one; signIn() sets it when it sets a new PIN.
+  // The PIN they sign in with, once they have one; signIn() sets it when it sets a new PIN. Only a
+  // privileged holder (one of PersonRole's roles) is asked for it (D46).
   pin: string | undefined
 }
 
@@ -419,7 +420,13 @@ export interface Stack {
   // optionally without its after-commit publish of the sessions a commit ended (A6), so only the
   // worker's revocation consumer (C0.7) or the re-check closes their sockets; or with its own SMS
   // provider (one that needs a transfer-register entry, say).
-  startApi(options: { valkeyUrl?: string; publishRevoked?: boolean; sms?: FakeVerify }): Promise<FastifyInstance>
+  // realTiming: production's 2 s floor on refused code checks (the harness's apps answer at once).
+  startApi(options: {
+    valkeyUrl?: string
+    publishRevoked?: boolean
+    sms?: FakeVerify
+    realTiming?: boolean
+  }): Promise<FastifyInstance>
   // Another realtime app: a shorter re-check, and optionally no revocation subscriber, its own
   // connections, shorter timings or a wrapped check.
   startRealtime(options: RealtimeOptions): Promise<RealtimeApp>
@@ -646,7 +653,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     async function startApiOn(
       apiValkey: Redis,
       apiLogger: Logger,
-      o: { publishRevoked?: boolean; sms?: FakeVerify } = {},
+      o: { publishRevoked?: boolean; sms?: FakeVerify; realTiming?: boolean } = {},
     ): Promise<{ app: FastifyInstance; flags: FlagCache }> {
       const afterResponse = new AfterResponse()
       const flags = flagCache({ logger: apiLogger })
@@ -665,6 +672,9 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
           flags,
           afterResponse,
           ...(o.publishRevoked === undefined ? {} : { publishRevoked: o.publishRevoked }),
+          // No floor on refused code checks (the suites make dozens), unless a test asks for the
+          // real one; production's breaker either way, each app its own (T20).
+          ...(o.realTiming ? {} : { otpForTests: { verifyFloorMs: 0 } }),
         },
       })
       closers.push(() => app.close())
@@ -989,8 +999,10 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       const code = await sms.nextCode(person.e164)
       const verified = await browser.post('/api/auth/otp/verify', { code })
       if (verified.status !== 200) fail('otp/verify', verified)
-      const { next } = verified.json<{ next: 'set_pin' | 'step_up' }>()
-      if (next === 'set_pin') {
+      // Someone with no privileged role is signed in on the code alone (D46).
+      const answer = verified.json<{ status: 'signed_in' } | { status: 'code_verified'; next: 'set_pin' | 'step_up' }>()
+      if (answer.status === 'signed_in') return browser
+      if (answer.next === 'set_pin') {
         const pin = newPin()
         const set = await browser.post('/api/auth/pin/set', { pin })
         if (set.status !== 200) fail('pin/set', set)
@@ -1255,7 +1267,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       removeMember,
       appendEvent,
       proxy,
-      startApi: async ({ valkeyUrl, publishRevoked, sms: otherSms }) => {
+      startApi: async ({ valkeyUrl, publishRevoked, sms: otherSms, realTiming }) => {
         let apiValkey = valkey
         if (valkeyUrl !== undefined) {
           const other = createValkey(valkeyUrl, logger)
@@ -1265,6 +1277,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
         const o = {
           ...(publishRevoked === undefined ? {} : { publishRevoked }),
           ...(otherSms === undefined ? {} : { sms: otherSms }),
+          ...(realTiming === undefined ? {} : { realTiming }),
         }
         return (await startApiOn(apiValkey, logger, o)).app
       },

@@ -2,11 +2,13 @@ import type { Redis } from 'ioredis'
 import { describe, expect, it, vi } from 'vitest'
 import type { Api } from '#src/api.ts'
 import type { Attempt } from '#src/auth/attempts.ts'
+import { Breaker } from '#src/auth/breaker.ts'
 import { ATTACH, OPEN, RESERVE, SETTLE } from '#src/auth/codes.ts'
 import { deriveKeys, hashPin, keyName } from '#src/auth/crypto.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { SLIDING_WINDOW } from '#src/auth/limiter.ts'
 import { relyingParty } from '#src/auth/passkeys.ts'
+import { OTP } from '#src/auth/policy.ts'
 import {
   passkeyOptions,
   pinRefusal,
@@ -97,17 +99,31 @@ function checking(verdict: Verdict | Error) {
 
 // The org's rows a code check reads: the person (left or not), the number the code went to (still
 // theirs or not), their account and passkeys. `roster` also answers the roster lookup with them.
-function orgPool(
+function orgPool(person: Parameters<typeof orgAnswer>[0] = {}) {
+  return scriptedPool(orgAnswer(person))
+}
+
+function orgAnswer(
   person: {
     left?: boolean
     numberRemoved?: boolean
     pinHash?: string | null
     passkeys?: number
     roster?: boolean
+    // Roles they hold now (D46): any of the Owner-only roles makes them privileged.
+    roles?: string[]
   } = {},
 ) {
-  return scriptedPool((statement: Statement) => {
+  return (statement: Statement) => {
     const { text } = statement
+    if (text.startsWith('select id, deactivated_at from people')) {
+      return [{ id: PERSON, deactivated_at: person.left ? new Date('2026-10-01T00:00:00Z') : null }]
+    }
+    if (text.startsWith('select person_id, role, team_id, revoked_at from role_assignments')) {
+      return (person.roles ?? []).map(role => ({ person_id: PERSON, role, team_id: null, revoked_at: null }))
+    }
+    if (text.startsWith('insert into "devices"')) return [{ id: 'b0000000-0000-4000-8000-0000000000d1' }]
+    if (text.startsWith('insert into sessions')) return [{ id: 'b0000000-0000-4000-8000-0000000000e1' }]
     if (person.roster && text.includes('from public.person_by_phone(')) {
       return [{ phone_number_id: NUMBER, org_id: ORG, person_id: PERSON }]
     }
@@ -121,7 +137,7 @@ function orgPool(
     }
     if (text.startsWith('select count(*) as n from passkeys')) return [{ n: String(person.passkeys ?? 0) }]
     return systemPrincipal(SYSTEM)(statement)
-  })
+  }
 }
 
 // The provider approves every code unless a test gives another.
@@ -138,6 +154,7 @@ function context(valkey: Redis, pool = scriptedPool(), sms: SmsProvider = checki
     appOrigin: 'https://hearth.example.com',
     names,
     rp: relyingParty('https://hearth.example.com'),
+    otp: { verifyFloorMs: 0, breaker: new Breaker(OTP.breaker) },
   }
   const info: ReqInfo = {
     ip: '198.51.100.7',
@@ -326,9 +343,9 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
     expect(audit?.values).toContainEqual({ result: 'wrong', numberRemoved: true })
   })
 
-  it('moves a first sign-in to set_pin, and someone with a PIN to the step-up with their PIN state', async () => {
+  it("D46 AQ-02: moves a privileged holder's first sign-in to set_pin, and one with a PIN to the step-up with their PIN state", async () => {
     const first = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1])
-    const firstContext = context(first.valkey, orgPool())
+    const firstContext = context(first.valkey, orgPool({ roles: ['admin'] }))
     expect(await verifyCode(firstContext.api, code, ATTEMPT_ID, firstContext.info)).toEqual({
       body: { status: 'code_verified', next: 'set_pin' },
     })
@@ -340,7 +357,7 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
       ['approved', 3],
     )
     const hash = `$argon2id$v=19$m=19456,t=2,p=1$${'A'.repeat(22)}$${'B'.repeat(43)}`
-    const againContext = context(again.valkey, orgPool({ pinHash: hash, passkeys: 1 }))
+    const againContext = context(again.valkey, orgPool({ pinHash: hash, passkeys: 1, roles: ['owner'] }))
     expect(await verifyCode(againContext.api, code, ATTEMPT_ID, againContext.info)).toEqual({
       body: {
         status: 'code_verified',
@@ -350,6 +367,130 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
       },
     })
     expect(JSON.parse(again.store.get(names.attempt(keyName(ATTEMPT_ID))) ?? '{}')).toMatchObject({ step: 'step_up' })
+  })
+})
+
+describe('D46 T20 the code-only finish, the verified step, the floor and the breaker', () => {
+  const attemptKey = names.attempt(keyName(ATTEMPT_ID))
+
+  it('D46 AQ-02: signs someone with no privileged role in on the code alone, making their account, and uses the attempt up last', async () => {
+    const valkey = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1])
+    const pool = orgPool({ roles: [] })
+    const { api, info } = context(valkey.valkey, pool)
+    const answer = await verifyCode(api, code, ATTEMPT_ID, info)
+    expect(answer.body).toEqual({
+      status: 'signed_in',
+      device: { id: 'b0000000-0000-4000-8000-0000000000d1', label: expect.any(String) },
+    })
+    expect(answer.cookies?.[0]).toMatch(/^__Host-hearth_session=.*Max-Age=7776000/)
+    expect(valkey.store.has(attemptKey)).toBe(false)
+    const work = pool
+      .texts()
+      .filter(text => !/^(start transaction|commit|select set_config|select id from principals)/.test(text))
+    // People first, then the roles, then users before phone_numbers (the lock order), and no PIN read.
+    expect(work[0]).toMatch(/^select deactivated_at from people .* for share$/)
+    expect(work.findIndex(t => t.startsWith('insert into users'))).toBeGreaterThan(
+      work.findIndex(t => t.startsWith('select person_id, role')),
+    )
+    expect(work.findIndex(t => t.startsWith('select 1 from phone_numbers'))).toBeGreaterThan(
+      work.findIndex(t => t.startsWith('insert into users')),
+    )
+    expect(work.some(t => t.includes('pin_hash'))).toBe(false)
+    const session = pool.statements.find(st => st.text.startsWith('insert into sessions'))
+    expect(session?.values.at(-1)).toBe('2160 hours')
+  })
+
+  it('T20 R1: a finish that fails before the consume leaves the attempt verified, and a retry with any 6 digits finishes it with no second check', async () => {
+    const valkey = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1])
+    let fail = true
+    const rows = orgAnswer({ roles: [] })
+    const failing = scriptedPool(statement => {
+      if (fail && statement.text.startsWith('insert into users')) return new Error('connection lost')
+      return rows(statement)
+    })
+    const checks: string[] = []
+    const sms: SmsProvider = {
+      ...checking('approved').sms,
+      check: async ref => {
+        checks.push(ref)
+        return 'approved'
+      },
+    }
+    const first = context(valkey.valkey, failing, sms)
+    await expect(verifyCode(first.api, code, ATTEMPT_ID, first.info)).rejects.toThrow('connection lost')
+    expect(JSON.parse(valkey.store.get(attemptKey) ?? '{}')).toMatchObject({ step: 'verified' })
+    fail = false
+    const again = context(valkey.valkey, failing, sms)
+    const answer = await verifyCode(again.api, { code: '000000' }, ATTEMPT_ID, again.info)
+    expect(answer.body).toMatchObject({ status: 'signed_in' })
+    expect(checks).toEqual(['VE1'])
+    expect(valkey.store.has(attemptKey)).toBe(false)
+  })
+
+  it('T20 R2: a stale first pass sends the attempt back to the code; a stale retry drops it', async () => {
+    const first = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1])
+    const left = context(first.valkey, orgPool({ left: true }))
+    expect(await refusal(verifyCode(left.api, code, ATTEMPT_ID, left.info))).toMatchObject({ code: 'code_wrong' })
+    expect(JSON.parse(first.store.get(attemptKey) ?? '{}')).toMatchObject({ step: 'code_sent' })
+
+    const retry = valkeyWith({ v: 1, numberTag: 't', step: 'verified', ...named })
+    const gone = context(retry.valkey, orgPool({ numberRemoved: true }))
+    expect(await refusal(verifyCode(gone.api, code, ATTEMPT_ID, gone.info))).toMatchObject({
+      status: 401,
+      code: 'attempt_expired',
+    })
+    expect(retry.store.has(attemptKey)).toBe(false)
+  })
+
+  it('T20: a verified attempt that names nobody answers attempt_expired', async () => {
+    const valkey = valkeyWith({ v: 1, numberTag: 't', step: 'verified' })
+    const { api, info } = context(valkey.valkey)
+    expect(await refusal(verifyCode(api, code, ATTEMPT_ID, info))).toMatchObject({
+      status: 401,
+      code: 'attempt_expired',
+    })
+  })
+
+  it('T20 AQ-20: after 3 provider failures every check answers 503 without asking the provider', async () => {
+    const down = checking(new Error('cut off'))
+    let calls = 0
+    const sms: SmsProvider = {
+      ...down.sms,
+      check: async (ref, c) => {
+        calls += 1
+        return down.sms.check(ref, c)
+      },
+    }
+    const valkey = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1], ['failed', 0])
+    const { api, info } = context(valkey.valkey, scriptedPool(), sms)
+    for (let i = 0; i < 3; i += 1) {
+      expect(await refusal(verifyCode(api, code, ATTEMPT_ID, info))).toMatchObject({ status: 503, code: 'unavailable' })
+    }
+    expect(calls).toBe(3)
+    const nobody = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent' }, ['wrong', 1])
+    for (const v of [valkey.valkey, nobody.valkey]) {
+      const other = context(v, scriptedPool(), sms)
+      other.api.otp = api.otp
+      expect(await refusal(verifyCode(other.api, code, ATTEMPT_ID, other.info))).toMatchObject({ status: 503 })
+    }
+    expect(calls).toBe(3)
+  })
+
+  it('T14 item 3 T20: a refused check answers no sooner than the floor, and a success is not padded', async () => {
+    const wrong = context(valkeyWith({ v: 1, numberTag: 't', step: 'code_sent' }, ['wrong', 1]).valkey)
+    wrong.api.otp = { ...wrong.api.otp, verifyFloorMs: 150 }
+    const started = Date.now()
+    expect(await refusal(verifyCode(wrong.api, code, ATTEMPT_ID, wrong.info))).toMatchObject({ code: 'code_wrong' })
+    expect(Date.now() - started).toBeGreaterThanOrEqual(149)
+
+    const right = context(
+      valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1]).valkey,
+      orgPool({ roles: [] }),
+    )
+    right.api.otp = { ...right.api.otp, verifyFloorMs: 5_000 }
+    const begun = Date.now()
+    expect((await verifyCode(right.api, code, ATTEMPT_ID, right.info)).body).toMatchObject({ status: 'signed_in' })
+    expect(Date.now() - begun).toBeLessThan(5_000)
   })
 })
 

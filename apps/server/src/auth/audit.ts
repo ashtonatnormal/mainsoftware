@@ -11,7 +11,9 @@
 // - details: never a phone number, code, PIN, token or credential id. auth.code_requested's send
 //   says what became of the code: attempted, or skipped_left, skipped_number_removed,
 //   skipped_not_cleared (the provider isn't yet cleared in PDPA-10's transfer register, C0.9) or
-//   skipped_cap (the global SMS cap).
+//   skipped_cap (the global SMS cap). auth.sign_in's method is sms (the code alone), sms_new_pin or
+//   sms_pin (a privileged holder's code, then the PIN), and privileged says whether the person held
+//   a privileged role when the session was issued (D46).
 import type { InOrg } from '#src/db/database.ts'
 
 export type AuditAction =

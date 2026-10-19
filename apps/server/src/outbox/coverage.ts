@@ -106,8 +106,9 @@ export const WRITES: Readonly<Record<string, Coverage>> = {
   'hearth_app notice_versions:INSERT': { events: ['notice.published'] },
   'hearth_app notice_acknowledgments:INSERT': { events: ['notice.acknowledged'] },
 
-  // Accounts and PINs. W3 and W4: setting a PIN at the first sign-in; W16: an admin's reset.
-  'hearth_app users:INSERT': { events: ['account.pin_set'] },
+  // Accounts and PINs. W3 and W4: setting a PIN at a privileged holder's first sign-in, or a code-only
+  // sign-in making the account beside its signin.started (D46); W16: an admin's reset.
+  'hearth_app users:INSERT': { events: ['account.pin_set', 'signin.started'] },
   'hearth_app users.pin_hash:UPDATE': pinSetOrReset,
   'hearth_app users.pin_key_id:UPDATE': pinSetOrReset,
   'hearth_app users.pin_set_at:UPDATE': pinSetOrReset,
