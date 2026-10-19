@@ -147,13 +147,26 @@ function answerError(error: unknown, request: FastifyRequest, reply: FastifyRepl
     request.log.info({ event: 'db_conflict', code: typeof code === 'string' ? code : undefined }, 'database conflict')
   } else if (error instanceof PinSlotsFull) {
     request.log.warn({ event: 'pin_slots_full' }, 'too many PIN checks are waiting')
-  } else if (known.extra.method === 'sign_in' && known.person !== undefined) {
-    // A session that only a new sign-in mends (D46): a privileged role reached a code-only session,
-    // or a PIN-rule session lost its PIN. The person's id only.
-    request.log.warn(
-      { event: 'privileged_session_mismatch', personId: known.person },
-      'this session must sign in again to re-authenticate',
-    )
+  } else if (known.person !== undefined) {
+    // The re-authentication refusals carry the acting person for these lines only (D46). Each holds
+    // the person's id and, for the wrong method, the route: never the method, a number or a code.
+    if (known.code === 'reauth_method') {
+      // A re-authentication route this session's method isn't (I2, AUTH-DESIGN §8.2). The web app
+      // only calls the route the method names, so this is warn: it points to a non-app client. A
+      // log line only, no audit row.
+      request.log.warn(
+        { event: 'reauth_wrong_method', personId: known.person, route: request.routeOptions.url },
+        'this session re-authenticates another way',
+      )
+    }
+    if (known.extra.method === 'sign_in') {
+      // A session that only a new sign-in mends (D46): a privileged role reached a code-only
+      // session, or a PIN-rule session lost its PIN. The person's id only.
+      request.log.warn(
+        { event: 'privileged_session_mismatch', personId: known.person },
+        'this session must sign in again to re-authenticate',
+      )
+    }
   }
   for (const which of known.clear) addCookie(reply, clearedCookie(which))
   if (known.code === 'too_many_requests' && typeof known.extra.retryAfterSeconds === 'number') {

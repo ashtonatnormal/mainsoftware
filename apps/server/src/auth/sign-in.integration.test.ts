@@ -21,7 +21,7 @@ import type {
   PublicKeyCredentialRequestOptionsJSON,
 } from '@simplewebauthn/server'
 import { sql } from 'kysely'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuditAction } from '#src/auth/audit.ts'
 import { ATTEMPT_COOKIE, SESSION_COOKIE } from '#src/auth/cookies.ts'
 import { keyName, tag } from '#src/auth/crypto.ts'
@@ -274,6 +274,26 @@ async function seedWindow(key: string, count: number, at: number): Promise<void>
   await s.valkey.pexpire(key, 86_400_000)
 }
 
+// The reauth_wrong_method warn lines logged for this person (D46, I2, AUTH-DESIGN §8.2), as
+// [level, route], after checking each holds the person's id and the route and no other personal
+// data: no method, number or code.
+function wrongMethodLines(personId: string): [unknown, unknown][] {
+  const lines = s.logs.filter(line => line.event === 'reauth_wrong_method' && line.personId === personId)
+  for (const line of lines) {
+    expect(line).toEqual({
+      level: 40,
+      time: expect.any(Number),
+      role: 'api',
+      reqId: expect.any(String),
+      msg: expect.any(String),
+      event: 'reauth_wrong_method',
+      personId,
+      route: expect.any(String),
+    })
+  }
+  return lines.map(line => [line.level, line.route])
+}
+
 // The text with every uuid and timestamp taken out, so a 6-digit code or PIN can be looked for
 // as a whole number without matching inside an id or a time.
 function scrub(text: string): string {
@@ -298,6 +318,14 @@ function leaksIn(text: string): string[] {
 describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-01..06, PRD-53, T5, T14)', () => {
   beforeAll(async () => {
     s = await startStack()
+  })
+
+  // Each test starts with the global SMS cap (PRD-53: 100 texts an hour) empty. Every api in the
+  // suite shares the run's key prefix, so otherwise each text the whole file sends counts against
+  // one hour's cap, and a test that came after the 100th would find its sends skipped_cap and its
+  // nextCode waits timing out far from the cause. The cap's own test fills it and clears it.
+  beforeEach(async () => {
+    if (s !== undefined) await s.valkey.del(s.names.limit('sms-global', 'all'))
   })
 
   // Vitest needs the first argument destructured; the second is this suite.
@@ -1313,6 +1341,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       { error: 'reauth_method', message: "Confirm it's you with a code we text you.", method: 'code' },
     ])
     expect((await userOf(m))?.pin_failures).toBe(0)
+    // Logged at warn with the person and the route, and written to no audit row (Q5).
+    expect(wrongMethodLines(m.id)).toEqual([[40, '/api/auth/reauth/pin']])
 
     const sentBefore = s.sms.sent.length
     const asked = await mc.post('/api/auth/reauth/code/request', {})
@@ -1461,6 +1491,14 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect((await auditOf(a)).filter(row => row.action === 'auth.reauth').map(row => row.details)).toEqual([
       { method: 'pin' },
     ])
+    // Each 409 reauth_method left a warn line naming the person and the route, and nothing else of
+    // theirs; none reached the audit log (AUTH-DESIGN §8.2, Q5).
+    expect(wrongMethodLines(a.id)).toEqual([
+      [40, '/api/auth/reauth/code/request'],
+      [40, '/api/auth/reauth/code/verify'],
+      [40, '/api/auth/reauth/code/request'],
+    ])
+    expect((await auditOf(a)).filter(row => row.details.during === 'reauth').map(row => row.action)).toEqual([])
   })
 
   it('D46 AQ-02: a role granted on a code-only session needs a new sign-in through the PIN step, even inside 5 minutes', async () => {
@@ -1490,6 +1528,12 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       const reply = await mc.post(path, body)
       expect([reply.status, reply.error, reply.body], path).toMatchObject([409, 'reauth_method', { method: 'sign_in' }])
     }
+    // Each is a wrong-method refusal too, logged with its route.
+    expect(wrongMethodLines(m.id)).toEqual([
+      [40, '/api/auth/reauth/pin'],
+      [40, '/api/auth/reauth/code/request'],
+      [40, '/api/auth/reauth/code/verify'],
+    ])
     // Healed by signing out and in again, through the PIN step, onto a 7-day session.
     expect((await mc.post('/api/auth/sign-out', {})).status).toBe(200)
     const again = await s.signIn(admin)

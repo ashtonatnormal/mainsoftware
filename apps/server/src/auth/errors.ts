@@ -31,8 +31,9 @@ export class ApiError extends Error {
   readonly code: ErrorCode
   readonly extra: Extras
   readonly clear: readonly ('session' | 'attempt')[]
-  // The acting person, for a refusal whose method is sign_in: the error handler logs
-  // privileged_session_mismatch with this id only (D46). Never sent.
+  // The acting person, on a re-authentication refusal (reauthRefusal): the error handler logs
+  // reauth_wrong_method on a 409 reauth_method, and privileged_session_mismatch when the method is
+  // sign_in, with this id and no other personal data (D46). Never sent.
   readonly person: string | undefined
 
   constructor(
