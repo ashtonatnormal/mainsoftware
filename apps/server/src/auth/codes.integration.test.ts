@@ -136,7 +136,7 @@ describe('T14 T20 PRD-53 the code challenge record on Valkey', () => {
     expect(await valkey.hget(keys.otp(n), 'ref')).toBeNull()
   })
 
-  it("a displaced owner's RESERVE and SETTLE leave the new owner's record, tries and ref untouched", async () => {
+  it("T14 item 3: a displaced owner's RESERVE and SETTLE leave the new owner's record, tries and ref untouched, and SETTLE answers its own try", async () => {
     const n = fresh()
     await openCode(valkey, keys, n, 'a')
     await attachCode(valkey, keys, n, 'a', 'VE1')
@@ -147,7 +147,14 @@ describe('T14 T20 PRD-53 the code challenge record on Valkey', () => {
     await attachCode(valkey, keys, n, 'b', 'VE2')
     const before = await valkey.hgetall(keys.otp(n))
     for (const verdict of ['approved', 'wrong', 'gone', 'failed'] as const) {
-      expect(await settleCode(valkey, keys, n, 'a', { ref: 'VE1', tries: 1 }, verdict)).toEqual({ result: 'displaced' })
+      expect(await settleCode(valkey, keys, n, 'a', { ref: 'VE1', tries: 1 }, verdict)).toEqual({
+        result: 'displaced',
+        tries: 1,
+      })
+      expect(await settleCode(valkey, keys, n, 'a', { ref: 'VE1', tries: 5 }, verdict)).toEqual({
+        result: 'displaced',
+        tries: 5,
+      })
     }
     expect(await reserveCode(valkey, keys, n, 'a')).toEqual({ result: 'expired', ref: undefined })
     expect(await valkey.hgetall(keys.otp(n))).toEqual(before)
@@ -186,7 +193,10 @@ describe('T14 T20 PRD-53 the code challenge record on Valkey', () => {
     await attachCode(valkey, keys, n, 'b', 'VE1')
     await reserveCode(valkey, keys, n, 'b')
     // Same ref, another owner: still displaced.
-    expect(await settleCode(valkey, keys, n, 'a', { ref: 'VE1', tries: 1 }, 'failed')).toEqual({ result: 'displaced' })
+    expect(await settleCode(valkey, keys, n, 'a', { ref: 'VE1', tries: 1 }, 'failed')).toEqual({
+      result: 'displaced',
+      tries: 1,
+    })
     expect(await valkey.hget(keys.otp(n), 'tries')).toBe('1')
   })
 

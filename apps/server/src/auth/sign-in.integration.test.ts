@@ -21,7 +21,7 @@ import type {
   PublicKeyCredentialRequestOptionsJSON,
 } from '@simplewebauthn/server'
 import { sql } from 'kysely'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { AuditAction } from '#src/auth/audit.ts'
 import { ATTEMPT_COOKIE, SESSION_COOKIE } from '#src/auth/cookies.ts'
 import { keyName, tag } from '#src/auth/crypto.ts'
@@ -654,6 +654,61 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(await s.valkey.exists(cKey)).toBe(0)
     const gone = await verifyCode(cc, late)
     expect([gone.status, gone.error]).toEqual([401, 'code_expired'])
+  })
+
+  it('T14 item 3 T20: a code request that lands during a check answers a roster number exactly as one off the roster', async () => {
+    // Budgets: R 2 code requests, N (not on the roster) 2.
+    const r = await s.person({ pin: s.newPin() })
+    const n = s.number()
+    const [rOlder, rNewer, nOlder, nNewer] = [s.client(), s.client(), s.client(), s.client()]
+    expect((await requestCode(rOlder, r.e164)).status).toBe(200)
+    expect((await requestCode(nOlder, n)).status).toBe(200)
+    const wrong = another(await s.sms.nextCode(r.e164))
+
+    // R's check waits on the provider: a newer request for R's number lands during that round
+    // trip, before the check settles.
+    const check = s.sms.check.bind(s.sms)
+    let landed = false
+    const during = vi.spyOn(s.sms, 'check').mockImplementationOnce(async (ref, code) => {
+      landed = (await requestCode(rNewer, r.e164)).status === 200
+      return check(ref, code)
+    })
+    let replyR: Awaited<ReturnType<typeof verifyCode>>
+    try {
+      replyR = await verifyCode(rOlder, wrong)
+    } finally {
+      during.mockRestore()
+    }
+    expect(landed).toBe(true)
+    // N's check asks no provider, so its reply is fixed before anything can land; its newer request
+    // comes straight after.
+    const replyN = await verifyCode(nOlder, wrong)
+    expect((await requestCode(nNewer, n)).status).toBe(200)
+    expect(replyR.status).toBe(401)
+    expect(replyR.body).toMatchObject({ error: 'code_wrong', triesLeft: 4 })
+    expect(replyN.status).toBe(replyR.status)
+    expect(replyN.text).toBe(replyR.text)
+    await s.settled()
+
+    // Each older browser's next check finds another owner's record: code_expired for both.
+    const againR = await verifyCode(rOlder, wrong)
+    const againN = await verifyCode(nOlder, wrong)
+    expect([againR.status, againR.error]).toEqual([401, 'code_expired'])
+    expect(againN.status).toBe(againR.status)
+    expect(againN.text).toBe(againR.text)
+    await s.settled()
+
+    // The newest request still wins: the overtaken check touched nothing of the newer code, which
+    // takes R's newer browser on to the step-up.
+    const newest = await s.sms.nextCode(r.e164)
+    const ahead = await verifyCode(rNewer, newest)
+    expect(ahead.status).toBe(200)
+    expect(ahead.body).toMatchObject({ status: 'code_verified', next: 'step_up' })
+    const newerRef = s.sms.sent.filter(sent => sent.to === r.e164).at(-1)?.ref
+    expect(s.sms.cancels.map(entry => entry.ref)).not.toContain(newerRef)
+    // Audited as the replies went.
+    const failed = (await auditOf(r)).filter(row => row.action === 'auth.code_failed').map(row => row.details)
+    expect(failed).toEqual([{ result: 'wrong' }, { result: 'expired' }])
   })
 
   it('BUILD-PLAN C0.5 ADM-06: a wrong code whose sender hangs up before the reply is counted once and still audited', async () => {

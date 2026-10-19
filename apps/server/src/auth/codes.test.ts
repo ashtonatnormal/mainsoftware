@@ -61,12 +61,14 @@ describe('T14 T20 the code challenge scripts: arguments and replies', () => {
     expect(parseReserve(['check', 'VE1', 3])).toEqual({ result: 'check', ref: 'VE1', tries: 3 })
     expect(parseSettle(['approved', 2])).toEqual({ result: 'approved', tries: 2 })
     expect(parseSettle(['dead', 5])).toEqual({ result: 'dead', tries: 5 })
-    expect(parseSettle(['displaced', 0])).toEqual({ result: 'displaced' })
+    expect(parseSettle(['displaced', 3])).toEqual({ result: 'displaced', tries: 3 })
     expect(parseSettle(['expired', 1])).toEqual({ result: 'expired' })
     for (const bad of [1, null, ['ok', 1], ['check', '', 1], ['wrong', 'x']]) {
       expect(() => parseReserve(bad)).toThrow(/answered unexpectedly/)
     }
-    for (const bad of [null, ['ok', 1], ['wrong']]) expect(() => parseSettle(bad)).toThrow(/answered unexpectedly/)
+    for (const bad of [null, ['ok', 1], ['wrong'], ['displaced']]) {
+      expect(() => parseSettle(bad)).toThrow(/answered unexpectedly/)
+    }
     expect(() => parseOpen(1)).toThrow(/answered unexpectedly/)
     expect(() => parseAttach('ok')).toThrow(/answered unexpectedly/)
   })

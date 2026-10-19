@@ -184,6 +184,10 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
       [['check', 'VE1', 4], ['wrong', 4], { status: 401, code: 'code_wrong', extra: { triesLeft: 1 } }],
       [['check', 'VE1', 5], ['dead', 5], { status: 401, code: 'code_dead' }],
       [['check', 'VE1', 2], ['expired', 2], { status: 401, code: 'code_expired' }],
+      // T14 item 3: a check a newer request overtook answers from its own try, as RESERVE answers
+      // the same try at a number off the roster.
+      [['check', 'VE1', 2], ['displaced', 2], { status: 401, code: 'code_wrong', extra: { triesLeft: 3 } }],
+      [['check', 'VE1', 5], ['displaced', 5], { status: 401, code: 'code_dead' }],
     ] as const) {
       const sms = checking('wrong').sms
       const nobody = context(valkeyWith({ v: 1, numberTag: 't', step: 'code_sent' }, [...reserve], [...settle]).valkey)
@@ -219,18 +223,30 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
     for (const task of fifth.tasks) await task()
     expect(dead.cancels).toEqual(['VE1'])
 
-    // T14 item 4: a newer request replaced the record during the check. The newest request wins:
-    // code_expired even though the provider approved, and nothing is cancelled.
-    const displaced = checking('approved')
-    const stale = context(
-      valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1], ['displaced', 0]).valkey,
-      orgPool(),
-    )
-    stale.api.sms = displaced.sms
-    expect(await refusal(verifyCode(stale.api, code, ATTEMPT_ID, stale.info))).toMatchObject({ code: 'code_expired' })
-    for (const task of stale.tasks) await task()
-    expect(displaced.cancels).toEqual([])
-    expect(stale.pool.texts().some(text => text.includes('pin_hash'))).toBe(false)
+    // T14 items 3 and 4: a newer request replaced the record during the check. The newest request
+    // wins: nobody signs in although the provider approved, and nothing is cancelled, not even at
+    // the 5th try. The reply comes from the check's own try, as at a number off the roster, never
+    // code_expired, which would tell a roster number apart.
+    for (const [tries, answer] of [
+      [1, { status: 401, code: 'code_wrong', extra: { triesLeft: 4 } }],
+      [5, { status: 401, code: 'code_dead' }],
+    ] as const) {
+      const displaced = checking('approved')
+      const stale = context(
+        valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', tries], ['displaced', tries])
+          .valkey,
+        orgPool(),
+      )
+      stale.api.sms = displaced.sms
+      expect(await refusal(verifyCode(stale.api, code, ATTEMPT_ID, stale.info))).toMatchObject(answer)
+      // The audit row only.
+      expect(stale.tasks).toHaveLength(1)
+      for (const task of stale.tasks) await task()
+      expect(displaced.cancels).toEqual([])
+      expect(stale.pool.texts().some(text => text.includes('pin_hash'))).toBe(false)
+      const audit = stale.pool.statements.find(s => s.text.startsWith('insert into "audit_events"'))
+      expect(audit?.values).toContainEqual({ result: tries < 5 ? 'wrong' : 'dead' })
+    }
   })
 
   it('T20: answers 503 when the provider cannot check, giving the try back, and the attempt stays at the code', async () => {

@@ -17,13 +17,20 @@
 //   minutes it deletes the caller's record and answers its ref, the only ref a caller may cancel.
 // - SETTLE applies the provider's verdict only while the record still holds the caller's owner and
 //   ref. Another owner's record answers displaced (a newer request replaced it during the check),
-//   which sign-in answers as code_expired, whatever the provider said.
+//   with the check's own try and nothing changed, so the newest request wins whatever the provider
+//   said.
 // A refusal depends only on the tries counted and the record's owner, never on whether a ref is
-// attached, so parallel guesses at a roster number (which has one) answer exactly as at a number
-// off the roster (which never has one; /otp/verify mustn't tell them apart, T14): a try past the
-// 5th is expired, as once a record without a ref has died, and a SETTLE that finds the record gone
-// (an earlier check killed or used it) answers from its own count, wrong or at the 5th dead,
-// whatever order the provider's verdicts come back in.
+// attached, so guesses at a roster number (which has one) answer exactly as at a number off the
+// roster (which never has one; /otp/verify mustn't tell them apart, T14 item 3). Off the roster
+// RESERVE fixes each reply at once, so nothing that lands after it can change it; on the roster the
+// reply is fixed only at SETTLE, after the provider's round trip, so nothing that lands meanwhile
+// may change it either:
+// - a try past the 5th is expired, as once a record without a ref has died;
+// - a SETTLE that finds the record gone (an earlier check killed or used it) answers from its own
+//   count, wrong or at the 5th dead, whatever order the provider's verdicts come back in;
+// - a displaced SETTLE carries its own count too, which sign-in answers as wrong or at the 5th dead,
+//   as RESERVE answered the same try off the roster before the newer request landed. The attempt's
+//   next check then finds another owner's record: expired, for every number alike.
 import type { Redis } from 'ioredis'
 import { runScript, script } from '#src/auth/limiter.ts'
 import { OTP } from '#src/auth/policy.ts'
@@ -79,6 +86,7 @@ return {'check', c[2], tries}
 // failed), the try RESERVE counted for this check, the tries allowed. A wrong verdict keeps that
 // try; the one counted last kills the record. A record that is gone answers from that try, as
 // RESERVE answers without a ref, whatever the verdict: nothing is left to approve, expire or refund.
+// Another owner's record, or another ref, answers displaced with that try and changes nothing.
 export const SETTLE = script(`
 local c = redis.call('HMGET', KEYS[1], 'owner', 'ref')
 local tries = tonumber(ARGV[4])
@@ -86,7 +94,7 @@ if not c[1] then
   if tries >= tonumber(ARGV[5]) then return {'dead', tries} end
   return {'wrong', tries}
 end
-if c[1] ~= ARGV[1] or c[2] ~= ARGV[2] then return {'displaced', 0} end
+if c[1] ~= ARGV[1] or c[2] ~= ARGV[2] then return {'displaced', tries} end
 if ARGV[3] == 'approved' then redis.call('DEL', KEYS[1]); return {'approved', tries} end
 if ARGV[3] == 'wrong' then
   if tries >= tonumber(ARGV[5]) then redis.call('DEL', KEYS[1]); return {'dead', tries} end
@@ -104,7 +112,8 @@ export type Reserved =
 
 export type Settled =
   | { result: 'approved' | 'wrong' | 'dead'; tries: number }
-  | { result: 'expired' | 'failed' | 'displaced' }
+  | { result: 'displaced'; tries: number }
+  | { result: 'expired' | 'failed' }
 
 const unexpected = (name: string) => new Error(`the ${name} script answered unexpectedly`)
 
@@ -149,10 +158,10 @@ export function parseSettle(reply: unknown): Settled {
     case 'approved':
     case 'wrong':
     case 'dead':
+    case 'displaced':
       return { result, tries: count(tries, 'code settle') }
     case 'expired':
     case 'failed':
-    case 'displaced':
       return { result }
     default:
       throw unexpected('code settle')
@@ -192,7 +201,8 @@ export async function reserveCode(
 }
 
 // `reserved` is RESERVE's check. failed: the provider couldn't be asked, or didn't answer; the
-// reserved try is given back.
+// reserved try is given back. displaced: a newer request replaced the record during the check;
+// nothing changed, and the reply carries the reserved try.
 export async function settleCode(
   valkey: Valkey,
   keys: ValkeyKeys,

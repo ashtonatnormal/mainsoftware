@@ -482,16 +482,25 @@ export async function verifyCode(
     const settled = await fromValkey(info, settleCode(api.valkey, api.names, attempt.numberTag, key, reserved, verdict))
     // The provider couldn't answer: the try was given back, and the attempt stays at the code.
     if (settled.result === 'failed') throw new ApiError(503, 'unavailable')
-    // displaced: a newer request replaced the record during the check. The newest request wins, so
-    // this code has expired whatever the provider said, and nothing of the newer record was
-    // touched. expired: the provider no longer holds the code. A record gone meanwhile (another
-    // check killed or used it) answers wrong or dead from this check's count, as a number off the
-    // roster would (codes.ts).
-    check = 'tries' in settled ? settled : { result: 'expired', tries: 0 }
-    // The 5th try is dead: this attempt's own code is cancelled after the reply.
-    if (settled.result === 'dead' && sms !== undefined) {
-      const ref = reserved.ref
-      info.after(() => cancelQuietly(sms, info, ref))
+    if (settled.result === 'displaced') {
+      // A newer request replaced the record during the check. The newest request wins: this check
+      // signs nobody in, whatever the provider said, and touches and cancels nothing of the newer
+      // record. It answers from its own try, wrong or at the 5th dead, as the same try at a number
+      // off the roster answered at RESERVE, before the newer request landed; code_expired here
+      // would tell a roster number apart (T14 item 3). The attempt's next check finds another
+      // owner's record and answers code_expired, for every number alike.
+      const { tries } = settled
+      check = { result: tries >= OTP.maxTries ? 'dead' : 'wrong', tries }
+    } else {
+      // expired: the provider no longer holds the code. A record gone meanwhile (another check
+      // killed or used it) answers wrong or dead from this check's count, as a number off the
+      // roster would (codes.ts).
+      check = 'tries' in settled ? settled : { result: 'expired', tries: 0 }
+      // The 5th try is dead: this attempt's own code is cancelled after the reply.
+      if (settled.result === 'dead' && sms !== undefined) {
+        const ref = reserved.ref
+        info.after(() => cancelQuietly(sms, info, ref))
+      }
     }
   } else if (reserved.result === 'expired') {
     // Only the caller's own record, past its 5 minutes, answers a ref: cancel it after the reply.
