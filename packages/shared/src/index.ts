@@ -4,9 +4,13 @@
 // From C0.6: the purpose keys (PDPA-01), the feature flag registry (T17), the outbox event
 // catalogue (T16) and the ids-only rule their schemas follow. From C0.7: the realtime gateway's
 // protocol (T19 item 10). From C0.8: the sign-in and re-authentication contract (T20).
+
+export * from './api-errors.ts'
 export * from './auth.ts'
 export * from './events.ts'
 export * from './flags.ts'
 export * from './gateway.ts'
 export * from './ids.ts'
+export * from './phone.ts'
+export * from './pin-policy.ts'
 export * from './purposes.ts'

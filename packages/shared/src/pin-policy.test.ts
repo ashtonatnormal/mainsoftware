@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { COMMON_PINS, pinProblem } from '#src/auth/pin-policy.ts'
+import { COMMON_PINS, pinProblem } from './pin-policy.ts'
 
 describe('SHL-49 choosing a PIN', () => {
   it('refuses one digit six times', () => {

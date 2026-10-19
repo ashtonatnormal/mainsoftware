@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { maskNumber, normalisePhone } from '#src/auth/phone.ts'
+import { formatE164, maskNumber, normalisePhone } from './phone.ts'
 
 describe('ACC-01 T14 normalising a phone number (any country, the owner decided 2026-10-13)', () => {
   it('reads a Singapore number however it is typed', () => {
@@ -75,5 +75,12 @@ describe('T7 masking a number for the local log provider', () => {
     expect(maskNumber('+447700900123')).toBe('+44 xxxxxxxx23')
     expect(maskNumber('+85291234567')).toBe('+852 xxxxxx67')
     expect(maskNumber('+79161234567')).toBe('+7 xxxxxxxx67')
+  })
+})
+
+describe('T20 showing a number back (formatE164)', () => {
+  it('groups the rest in fours after the country code', () => {
+    expect(formatE164('+6580000003')).toBe('+65 8000 0003')
+    expect(formatE164('+14155550100')).toBe('+1 4155 5501 00')
   })
 })

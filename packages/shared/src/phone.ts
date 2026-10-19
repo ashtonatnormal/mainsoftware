@@ -41,3 +41,12 @@ export function maskNumber(e164: string): string {
   const rest = digits.slice(country.length)
   return `+${country} ${'x'.repeat(Math.max(rest.length - 2, 0))}${rest.slice(-2)}`
 }
+
+// An E.164 number as people read it: the country code, then the rest in groups of four from the
+// left, such as '+65 8000 0003'. For showing a number back to the person who typed it.
+export function formatE164(e164: string): string {
+  const digits = e164.replace(/^\+/, '')
+  const country = digits.slice(0, countryCodeLength(digits))
+  const groups = digits.slice(country.length).match(/.{1,4}/g) ?? []
+  return [`+${country}`, ...groups].join(' ')
+}

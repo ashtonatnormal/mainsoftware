@@ -20,7 +20,15 @@
 //   rows, which append nothing (outbox/coverage.ts).
 // - Valkey errors fail closed: sign-in answers 503 unavailable while Valkey is down.
 // - Nothing here logs a phone number, code, PIN, token, attempt id, challenge or credential id.
+import {
+  type CodeSentSchema,
+  type CodeVerifiedSchema,
+  normalisePhone,
+  pinProblem,
+  type SignedInSchema,
+} from '@hearth/shared'
 import { sql } from 'kysely'
+import type { z } from 'zod'
 import type { Api } from '#src/api.ts'
 import {
   type Attempt,
@@ -44,10 +52,8 @@ import {
   type StoredCredential,
   verifyAuthentication,
 } from '#src/auth/passkeys.ts'
-import { normalisePhone } from '#src/auth/phone.ts'
 import { checkPin, type PinCheck, pinStateJSON } from '#src/auth/pin.ts'
 import { pinState } from '#src/auth/pin-lock.ts'
-import { pinProblem } from '#src/auth/pin-policy.ts'
 import { LIMITS, OTP, PASSKEY_CHALLENGE_TTL_MS } from '#src/auth/policy.ts'
 import { AttemptStale, type IssuedSession, issueSession, numberStillTheirs } from '#src/auth/sessions.ts'
 import { type InOrg, withOrg } from '#src/db/database.ts'
@@ -229,7 +235,9 @@ async function dropQuietly(api: Api, info: ReqInfo, key: string): Promise<void> 
 
 function signedIn(session: IssuedSession): Answer {
   return {
-    body: { status: 'signed_in', device: { id: session.deviceId, label: session.label } },
+    body: { status: 'signed_in', device: { id: session.deviceId, label: session.label } } satisfies z.input<
+      typeof SignedInSchema
+    >,
     cookies: [sessionCookie(session.token, session.maxAgeSeconds), clearedCookie('attempt')],
   }
 }
@@ -288,7 +296,9 @@ export async function requestCode(
   if (attemptId !== undefined) await dropQuietly(api, info, keyName(attemptId))
   info.after(() => deliverCode(api, info, { e164, code, attemptKey: created.key, attempt }))
   return {
-    body: { status: 'code_sent', expiresInSeconds: OTP.ttlMs / 1000, codeLength: OTP.length },
+    body: { status: 'code_sent', expiresInSeconds: OTP.ttlMs / 1000, codeLength: OTP.length } satisfies z.input<
+      typeof CodeSentSchema
+    >,
     cookies: [attemptCookie(created.id)],
   }
 }
@@ -420,11 +430,17 @@ export async function verifyCode(
       if (!(await fromValkey(info, updateAttempt(api.valkey, api.names, key, { ...attempt, step: next })))) {
         throw attemptExpired()
       }
-      if (user === undefined || pinHash === null) return { body: { status: 'code_verified', next: 'set_pin' } }
+      if (user === undefined || pinHash === null)
+        return { body: { status: 'code_verified', next: 'set_pin' } satisfies z.input<typeof CodeVerifiedSchema> }
       const state = pinState({ pinHash, failures: user.pin_failures, lastFailedAt: user.pin_last_failed_at }, user.now)
       if (state.state === 'unset') throw new Error('a PIN with a hash read as unset')
       return {
-        body: { status: 'code_verified', next: 'step_up', pin: pinStateJSON(state), passkey: account.passkeys > 0 },
+        body: {
+          status: 'code_verified',
+          next: 'step_up',
+          pin: pinStateJSON(state),
+          passkey: account.passkeys > 0,
+        } satisfies z.input<typeof CodeVerifiedSchema>,
       }
     }
     stale = account

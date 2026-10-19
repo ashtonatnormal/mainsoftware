@@ -2,7 +2,7 @@
 // config.ts refuses anything else, and so does this constructor. It prints the code to stderr,
 // never to the JSON log stream, with the number masked, so a developer can sign in to the local
 // stack. On ECS stderr reaches CloudWatch too, which is why two independent conditions guard it.
-import { maskNumber } from '#src/auth/phone.ts'
+import { maskNumber } from '@hearth/shared'
 import type { SmsProvider } from '#src/auth/sms/provider.ts'
 import { isLoopbackOrigin } from '#src/config.ts'
 
