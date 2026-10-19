@@ -4,7 +4,8 @@
 // Org Brain, and the row shape the SQL filter (@hearth/access/sql) reads. No role reads content
 // here: privileged access (Rule 9) lives only in the server's Rule 9 module. From C0.7 it also
 // decides the realtime gateway's live topics (topic.subscribe; canTopics for the re-checks). From
-// C0.8 it decides who signs in with the PIN and how a session re-authenticates (reauth.ts, D46).
+// C0.8 it decides who signs in with the PIN and how a session re-authenticates (reauth.ts, D46),
+// and who reads their own session and client flags (session.read_own, T21).
 export { isAdmin, isOwner } from './admin.ts'
 export {
   type Audience,

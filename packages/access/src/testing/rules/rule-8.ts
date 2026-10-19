@@ -101,8 +101,10 @@ const ADMIN_REQUESTS: readonly AdminRequest[] = [
   { action: 'privileged_console.open', console: 'dpo' },
   { action: 'privileged_console.open', console: 'compliance' },
 ]
-// Requests about your own devices and passkeys, naming ones the fixture holds (ACC-02, ACC-04).
+// Requests about your own session, devices and passkeys, naming devices and passkeys the fixture
+// holds (ACC-02, ACC-04, T21).
 const SELF_REQUESTS: readonly SelfRequest[] = [
+  { action: 'session.read_own' },
   { action: 'devices.sign_out_own' },
   { action: 'devices.sign_out_own', device: DEV.marcusPhone },
   { action: 'devices.sign_out_own', device: DEV.marcusOld },
@@ -245,7 +247,7 @@ export const RULE_8: readonly RuleCase[] = [
         expect(after, `${p} admin`).toEqual(before)
         const ownBefore = SELF_REQUESTS.map(r => can(world, s, r, reauthenticated))
         const ownAfter = SELF_REQUESTS.map(r => can(injected, as(s), as(r), reauthenticated))
-        expect(ownAfter, `${p} own devices and passkeys`).toEqual(ownBefore)
+        expect(ownAfter, `${p} own session, devices and passkeys`).toEqual(ownBefore)
         const topicsBefore = TOPIC_REQUESTS.map(r => can(world, s, r))
         const topicsAfter = TOPIC_REQUESTS.map(r => can(injected, as(s), as(r)))
         expect(topicsAfter, `${p} live topics`).toEqual(topicsBefore)

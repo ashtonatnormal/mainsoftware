@@ -2,13 +2,16 @@ import type { Id } from './model.ts'
 import type { RequestContext, SelfRequest } from './requests.ts'
 import type { World } from './world.ts'
 
-// What anyone active may do about their own devices and passkeys (ACC-02, ACC-04, T14). Signing
-// out and listing devices need no re-authentication, so a lost phone can always be signed out.
+// What anyone active may do about their own session, devices and passkeys (ACC-02, ACC-04, T14,
+// T21). Reading your own session and client flags, signing out and listing devices need no
+// re-authentication, so a lost phone can always be signed out and the shell can always load.
 // A device or passkey the request names must be the person's own and not already ended; one the
 // snapshot doesn't hold is refused like someone else's, so the answer never shows what exists.
 export function selfCan(world: World, me: Id, request: SelfRequest, context: RequestContext): boolean {
   if (!world.isActivePerson(me)) return false
   switch (request.action) {
+    case 'session.read_own':
+      return true
     case 'devices.list_own':
       return true
     case 'devices.sign_out_own': {

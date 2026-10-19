@@ -1,12 +1,13 @@
 // The per-role matrix for admin actions (CLAUDE.md Database: "The full per-role matrix (Member,
 // Team Admin, Admin, Owner, AI Admin, Leadership, DPO, Compliance Officer, including the roles that
 // must be refused) lives in packages/access's tests"; ACC-10; BUILD-PLAN C0.4). Every admin request
-// in src/requests.ts, the create request and every request about your own devices and passkeys is
-// decided by can() for every actor below, after a fresh re-authentication, and each row writes out
-// exactly who it allows: every other actor must be refused. After the matrix come the dimensions
-// one row can't show: re-authentication, the two-person rule, changing your own roles, ended roles,
-// roles with no admin power yet, a run of every admin action an Admin may take, which never opens
-// #leadership, and (from C0.8) the PIN roles and the re-authentication method each session uses (D46).
+// in src/requests.ts, the create request and every request about your own session, devices and
+// passkeys is decided by can() for every actor below, after a fresh re-authentication, and each row
+// writes out exactly who it allows: every other actor must be refused. After the matrix come the
+// dimensions one row can't show: re-authentication, the two-person rule, changing your own roles,
+// ended roles, roles with no admin power yet, a run of every admin action an Admin may take, which
+// never opens #leadership, and (from C0.8) the PIN roles and the re-authentication method each
+// session uses (D46).
 //
 // The actors are the fixture org (src/testing) plus one persona per role holding exactly that role,
 // so each role's powers show on their own, and the seed's combined holders, which show that roles
@@ -1222,6 +1223,19 @@ const SECTIONS: readonly Section[] = [
       },
     ],
   },
+  {
+    ids: 'T17 T21',
+    title: 'your own session and client flags (no re-authentication)',
+    rows: [
+      {
+        // The web shell's GET /api/session and GET /api/flags (T17 item 11). A leaver, another org's
+        // Owner, an assistant, an agent and the system principal are refused (ACC-05, ACC-11, R9-03).
+        name: 'everyone active reads their own session and client flags',
+        request: { action: 'session.read_own' },
+        allowed: ACTIVE_PEOPLE,
+      },
+    ],
+  },
 ]
 
 const ALL_ROWS: readonly Row[] = SECTIONS.flatMap(s => s.rows)
@@ -1259,12 +1273,13 @@ const ADMIN_ACTION_IDS: Record<AdminRequest['action'], string> = {
 const ADMIN_ACTIONS = Object.keys(ADMIN_ACTION_IDS) as AdminRequest['action'][]
 const isAdminRow = (row: Row) => (ADMIN_ACTIONS as string[]).includes(row.request.action)
 
-// Every request about your own devices and passkeys, the same way.
+// Every request about your own session, devices and passkeys, the same way.
 const SELF_ACTION_IDS: Record<SelfRequest['action'], string> = {
   'devices.sign_out_own': 'ACC-04',
   'devices.list_own': 'ACC-04',
   'passkeys.add_own': 'ACC-02 T14',
   'passkeys.remove_own': 'ACC-02 T14',
+  'session.read_own': 'T17 T21',
 }
 const SELF_KINDS = Object.keys(SELF_ACTION_IDS) as SelfRequest['action'][]
 const PASSKEY_ACTIONS: readonly SelfRequest['action'][] = ['passkeys.add_own', 'passkeys.remove_own']
@@ -1317,7 +1332,7 @@ describe('ACC-10 CLAUDE.md Database: the matrix', () => {
     }
   })
 
-  test('ACC-10 ADM-02 ACC-04: the matrix decides every admin request kind, the create request and every request about your own devices and passkeys', () => {
+  test('ACC-10 ADM-02 ACC-04 T21: the matrix decides every admin request kind, the create request and every request about your own session, devices and passkeys', () => {
     const actions = new Set(ALL_ROWS.map(r => r.request.action))
     for (const action of ADMIN_ACTIONS) expect(actions.has(action), action).toBe(true)
     expect(actions.has('create')).toBe(true)
@@ -1365,18 +1380,23 @@ describe('§9.4 ADM-02: every admin request needs a fresh re-authentication', ()
     })
   }
 
-  test('§9.4 ACC-04: listing and signing out your own devices and creating things need no re-authentication', () => {
+  test('§9.4 ACC-04 T21: reading your own session and client flags, listing and signing out your own devices and creating things need no re-authentication', () => {
     const rows = ALL_ROWS.filter(
       r =>
+        r.request.action === 'session.read_own' ||
         r.request.action === 'devices.sign_out_own' ||
         r.request.action === 'devices.list_own' ||
         r.request.action === 'create',
     )
+    expect(rows.some(r => r.request.action === 'session.read_own')).toBe(true)
     for (const row of rows) {
-      expect(allowedIn(worldOf(row), row.request), row.name).toEqual(
-        ACTORS.filter(a => can(worldOf(row), a.subject, row.request)).map(a => a.key),
-      )
+      for (const context of [undefined, {}, { reauthenticated: false }]) {
+        expect(allowedIn(worldOf(row), row.request), `${JSON.stringify(context)}: ${row.name}`).toEqual(
+          ACTORS.filter(a => can(worldOf(row), a.subject, row.request, context)).map(a => a.key),
+        )
+      }
     }
+    expect(can(W, human(ONE.member), { action: 'session.read_own' })).toBe(true)
     expect(can(W, human(ONE.member), { action: 'devices.sign_out_own' })).toBe(true)
     expect(can(W, human(ONE.member), { action: 'devices.list_own' })).toBe(true)
     expect(can(W, human(P.marcus), { action: 'devices.sign_out_own', device: DEV.marcusPhone })).toBe(true)
@@ -1764,6 +1784,22 @@ describe('R9-03 D16 ACC-11: only a person on this org’s roster holds admin pow
   })
 })
 
+describe('T17 T21: your own session and client flags', () => {
+  test('T21 ACC-05: reading your own session is decided by the acting person alone; a field naming someone else changes nothing', () => {
+    // The request names no one. A field smuggled into it, naming an active person or a leaver,
+    // neither opens it to a leaver nor closes it to an active person (the server never sends one).
+    const read = { action: 'session.read_own' } as const
+    for (const named of [P.ashton, P.formerDpo, ORG_2_PEOPLE.owner]) {
+      const smuggled = { ...read, person: named, userId: named } as unknown as SelfRequest
+      for (const a of ACTORS) {
+        expect(can(W, a.subject, smuggled), `${a.key} naming ${named}`).toBe(can(W, a.subject, read))
+      }
+    }
+    expect(can(W, human(P.formerDpo), read)).toBe(false)
+    expect(can(W, human(P.ashton), read)).toBe(true)
+  })
+})
+
 describe('ACC-04 ACC-06: device sign-out and the lone Owner', () => {
   test('ACC-04: every active person lists and signs out their own devices, either way, and nobody else’s without Admin', () => {
     for (const a of ACTORS) {
@@ -2141,5 +2177,21 @@ describe('D46 AQ-02 AQ-01: the PIN roles and the re-authentication method', () =
     const member = (f: ReauthFacts) => ({ reauthenticated: reauthenticated(W, ONE.member, f) })
     expect(can(W, human(ONE.member), add, member(facts()))).toBe(true)
     expect(can(W, human(ONE.member), add, member(facts({ stampFresh: false })))).toBe(false)
+  })
+
+  test('D46 T21: reading your own session ignores the re-authentication method, so a session only a new sign-in mends still loads the shell', () => {
+    const read = { action: 'session.read_own' } as const
+    // An Owner on a code-only session, or on a PIN-rule session whose PIN was cleared, must sign in
+    // again before any admin action, and a Member's stamp may be stale: each still reads who they are
+    // and their client flags.
+    expect(reauthMethodOf(W, ONE.owner, facts())).toBe('sign_in')
+    for (const [id, f] of [
+      [ONE.owner, facts()],
+      [ONE.owner, facts({ issuedPrivileged: true, pinSet: false })],
+      [ONE.member, facts({ stampFresh: false })],
+    ] as const) {
+      expect(reauthenticated(W, id, f), id).toBe(false)
+      expect(can(W, human(id), read, { reauthenticated: reauthenticated(W, id, f) }), id).toBe(true)
+    }
   })
 })
