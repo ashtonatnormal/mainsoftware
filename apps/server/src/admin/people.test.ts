@@ -224,6 +224,8 @@ describe('C0.5 ACC-05 C0.6 T16 deactivating someone', () => {
 })
 
 describe('C0.5 ACC-06 resetting a PIN', () => {
+  // The Admin resets a Member who holds no Owner-only role, so the PIN is a former holder's
+  // leftover one, which an Admin may still clear (D46, AUTH-DESIGN §4.5).
   it('locks the person, then the account, clears the PIN and lock, ends their sessions and publishes them', async () => {
     const pool = org({
       rows: ({ text }) => {
@@ -294,7 +296,14 @@ describe('C0.5 ACC-06 resetting a PIN', () => {
     expect(
       await refusal(resetPin(c.api, { person: MEMBER, identityCheck: 'in_person' }, session, c.info)),
     ).toMatchObject({ status: 409, code: 'no_pin' })
+    // It decided after locking the person and the account, and changed, appended and audited nothing.
+    expect(pool.texts().filter(text => /^(select 1 from people|select pin_hash from users)/.test(text))).toEqual([
+      'select 1 from people where org_id = $1 and id = $2 for no key update',
+      'select pin_hash from users where org_id = $1 and id = $2 for update',
+    ])
     expect(pool.texts().some(text => text.startsWith('update'))).toBe(false)
+    expect(appended(pool.statements)).toEqual([])
+    expect(audits(pool)).toEqual([])
     expect(c.published).toEqual([])
   })
 })

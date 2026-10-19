@@ -53,6 +53,18 @@ describe('C0.5 api errors', () => {
     expect(messageFor(new ApiError(404, 'not_found'))).toBe("We couldn't find that.")
   })
 
+  it('ACC-06 D46 AQ-02: the PIN-reset copy asks an Owner, and no_pin says there is nothing to reset', () => {
+    // Only privileged holders have a PIN, and only an Owner resets one (AUTH-DESIGN §4.5).
+    expect(MESSAGES.pin_reset_needed).toBe(
+      "Your PIN needs resetting. Ask an Owner to reset it. They'll check it's you first.",
+    )
+    expect(messageFor(new ApiError(423, 'pin_locked', { pin: { state: 'admin_locked' } }))).toBe(
+      "Your PIN is locked. Ask an Owner to reset it. They'll check it's you first.",
+    )
+    expect(messageFor(new ApiError(409, 'no_pin'))).toBe("They haven't set a PIN, so there's nothing to reset.")
+    expect(Object.keys(MESSAGES)).not.toContain('no_account')
+  })
+
   it('carries its extras and the cookies to clear', () => {
     const error = new ApiError(401, 'attempt_expired', {}, ['attempt'])
     expect(error).toBeInstanceOf(Error)

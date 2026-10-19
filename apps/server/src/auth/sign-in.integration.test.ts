@@ -1015,12 +1015,13 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('C0.5 Done: the PIN locks after 5 wrong tries for 15 minutes and after 10 until an admin resets it (PRD-53, ACC-02, ACC-06)', async () => {
-    // Budgets: M 3 code requests, E 1, K 1, U 0, the Owner 1. M, E and K are privileged, so they
-    // have PINs (D46), and only an Owner resets a privileged holder's PIN.
+    // Budgets: M 3 code requests, E 1, K 1, U 0, C 1, the Owner 1. M, E and K are privileged, so
+    // they have PINs (D46), and only an Owner resets a privileged holder's PIN.
     const m = await s.person({ roles: ['leadership'], pin: s.newPin() })
     const e = await s.person({ roles: ['compliance_officer'], pin: s.newPin() })
     const k = await s.person({ roles: ['ai_admin'], pin: s.newPin() })
     const u = await s.person()
+    const c = await s.person()
     const admin = await s.person({ roles: ['owner'], pin: s.newPin() })
 
     const mFirst = await s.signIn(m)
@@ -1088,6 +1089,16 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const adminC = await s.signIn(admin)
     const noPin = await adminC.post('/api/admin/people/reset-pin', { person: u.id, identityCheck: 'in_person' })
     expect([noPin.status, noPin.error]).toEqual([409, 'no_pin'])
+    // D46 AQ-02: C, a Member, signs in on the code alone, so has an account but no PIN: there's
+    // nothing to reset either, and the refused reset ends none of C's sessions and writes nothing.
+    const cc = await s.signIn(c)
+    expect(await userOf(c)).toMatchObject({ pin_hash: null, pin_reset_at: null })
+    const codeOnly = await adminC.post('/api/admin/people/reset-pin', { person: c.id, identityCheck: 'in_person' })
+    expect([codeOnly.status, codeOnly.error]).toEqual([409, 'no_pin'])
+    expect((await cc.get('/api/devices')).status).toBe(200)
+    expect(await userOf(c)).toMatchObject({ pin_hash: null, pin_reset_at: null, pin_reset_by: null })
+    expect((await auditOf(c)).filter(row => row.actor_id === admin.id)).toEqual([])
+    expect((await eventsOf(c)).filter(event => event.actor_id === admin.id)).toEqual([])
     const note = 'Checked against the roster at the front desk'
     const reset = await adminC.post('/api/admin/people/reset-pin', {
       person: m.id,

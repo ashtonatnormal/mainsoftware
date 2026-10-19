@@ -120,9 +120,10 @@ export async function deactivate(
 // --- POST /api/admin/people/reset-pin -------------------------------------------------------
 
 // ACC-06: after an identity check in person or on a video call, an admin clears someone's PIN and
-// its lock. Only privileged holders have a PIN (D46), so in practice only an Owner resets a live one.
-// Their sessions end, so their next sign-in sets a new PIN after the SMS code. Their passkeys stay. The transaction appends account.pin_reset, and signin.ended for the sessions it
-// ended (C0.6, T16).
+// its lock. Only privileged holders have a PIN (D46), and only an Owner acts on them (T13), so in
+// practice only an Owner resets a live one; an Admin may still clear a former holder's leftover PIN.
+// Their sessions end, so their next sign-in sets a new PIN after the SMS code. Their passkeys stay.
+// The transaction appends account.pin_reset, and signin.ended for the sessions it ended (C0.6, T16).
 export async function resetPin(
   api: Api,
   body: { person: string; identityCheck: 'in_person' | 'video_call'; note?: string | undefined },
