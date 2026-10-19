@@ -120,8 +120,8 @@ export async function deactivate(
 // --- POST /api/admin/people/reset-pin -------------------------------------------------------
 
 // ACC-06: after an identity check in person or on a video call, an admin clears someone's PIN and
-// its lock. Their sessions end, so their next sign-in sets a new PIN after the SMS code. Their
-// passkeys stay. The transaction appends account.pin_reset, and signin.ended for the sessions it
+// its lock. Only privileged holders have a PIN (D46), so in practice only an Owner resets a live one.
+// Their sessions end, so their next sign-in sets a new PIN after the SMS code. Their passkeys stay. The transaction appends account.pin_reset, and signin.ended for the sessions it
 // ended (C0.6, T16).
 export async function resetPin(
   api: Api,
@@ -137,9 +137,11 @@ export async function resetPin(
     // in progress holds it FOR SHARE, so it finishes first and this then ends the session it made,
     // and a deactivation in progress is seen, so someone who has just left is refused.
     await authorise(trx, session, { action: 'person.reset_pin', person: target }, 'forbidden', { target })
-    const user = await sql`select id from users where org_id = ${orgId} and id = ${target} for update`.execute(trx)
-    // Someone who has never signed in has no PIN to reset.
-    if (user.rows.length === 0) throw new ApiError(409, 'no_account')
+    const user = await sql<{ pin_hash: string | null }>`select pin_hash from users
+      where org_id = ${orgId} and id = ${target} for update`.execute(trx)
+    // Someone who has never signed in, or signs in on the code alone (D46), has no PIN to reset;
+    // ending their sessions is what sign-out-devices does.
+    if (user.rows[0]?.pin_hash == null) throw new ApiError(409, 'no_pin')
     await sql`update users set pin_hash = null, pin_key_id = null, pin_set_at = null, pin_failures = 0,
         pin_reset_at = now(), pin_reset_by = ${me}
       where org_id = ${orgId} and id = ${target}`.execute(trx)

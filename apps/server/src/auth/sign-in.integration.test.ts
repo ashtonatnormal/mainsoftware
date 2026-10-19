@@ -1086,8 +1086,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
 
     // ACC-06: an admin resets the PIN after checking who it is.
     const adminC = await s.signIn(admin)
-    const noAccount = await adminC.post('/api/admin/people/reset-pin', { person: u.id, identityCheck: 'in_person' })
-    expect([noAccount.status, noAccount.error]).toEqual([409, 'no_account'])
+    const noPin = await adminC.post('/api/admin/people/reset-pin', { person: u.id, identityCheck: 'in_person' })
+    expect([noPin.status, noPin.error]).toEqual([409, 'no_pin'])
     const note = 'Checked against the roster at the front desk'
     const reset = await adminC.post('/api/admin/people/reset-pin', {
       person: m.id,

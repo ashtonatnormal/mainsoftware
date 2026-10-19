@@ -21,7 +21,7 @@ export const MESSAGES = {
   pin_wrong: "That PIN isn't right.",
   pin_locked: 'Too many wrong PINs. Wait for the lock to end, then try again.',
   pin_already_set: 'Your PIN is already set. Start signing in again.',
-  pin_reset_needed: "Your PIN needs resetting. Ask an admin to reset it. They'll check it's you first.",
+  pin_reset_needed: "Your PIN needs resetting. Ask an Owner to reset it. They'll check it's you first.",
   no_passkey: "There's no passkey on your account. Use your PIN.",
   passkey_expired: 'That took too long. Try again.',
   passkey_failed: "That didn't work. Try again or use your PIN.",
@@ -33,7 +33,7 @@ export const MESSAGES = {
   no_number: "There's no mobile number on your account. Ask an admin to add one.",
   forbidden: "You can't do that.",
   not_found: "We couldn't find that.",
-  no_account: "They haven't signed in yet, so there's no PIN to reset.",
+  no_pin: "They haven't set a PIN, so there's nothing to reset.",
   // The flags route (C0.6, apps/server/src/flags/set.ts).
   flag_locked: 'That flag is locked: only a release can change it.',
   purpose_refused: "That feature isn't cleared for use yet.",

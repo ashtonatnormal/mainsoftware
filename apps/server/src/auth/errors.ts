@@ -22,8 +22,8 @@ export { type ErrorCode, MESSAGES }
 // server can't send one the web app doesn't read.
 type Extras = z.input<typeof ErrorExtrasSchema>
 
-// pin_locked's copy when only an admin can lift the lock (the extra's pin.state is admin_locked).
-export const PIN_ADMIN_LOCKED_MESSAGE = "Your PIN is locked. Ask an admin to reset it. They'll check it's you first."
+// pin_locked's copy when only an Owner can lift the lock (the extra's pin.state is admin_locked).
+export const PIN_ADMIN_LOCKED_MESSAGE = "Your PIN is locked. Ask an Owner to reset it. They'll check it's you first."
 
 export class ApiError extends Error {
   override name = 'ApiError'

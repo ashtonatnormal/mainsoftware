@@ -227,7 +227,7 @@ describe('C0.5 ACC-06 resetting a PIN', () => {
   it('locks the person, then the account, clears the PIN and lock, ends their sessions and publishes them', async () => {
     const pool = org({
       rows: ({ text }) => {
-        if (text.startsWith('select id from users')) return [{ id: MEMBER }]
+        if (text.startsWith('select pin_hash from users')) return [{ pin_hash: 'hashed' }]
         if (text.startsWith('update sessions')) return ENDED.map(id => ({ id }))
         return undefined
       },
@@ -241,10 +241,10 @@ describe('C0.5 ACC-06 resetting a PIN', () => {
         c.info,
       ),
     ).toEqual({ body: { status: 'pin_reset', sessionsEnded: 2 } })
-    const work = pool.texts().filter(text => /^(select 1 from people|select id from users|update)/.test(text))
+    const work = pool.texts().filter(text => /^(select 1 from people|select pin_hash from users|update)/.test(text))
     expect(work).toEqual([
       'select 1 from people where org_id = $1 and id = $2 for no key update',
-      'select id from users where org_id = $1 and id = $2 for update',
+      'select pin_hash from users where org_id = $1 and id = $2 for update',
       'update users set pin_hash = null, pin_key_id = null, pin_set_at = null, pin_failures = 0, pin_reset_at = now(), pin_reset_by = $1 where org_id = $2 and id = $3',
       "update sessions set revoked_at = now(), revoked_by = $1, revoke_reason = 'pin_reset' where org_id = $2 and user_id = $3 and revoked_at is null returning id",
     ])
@@ -267,7 +267,7 @@ describe('C0.5 ACC-06 resetting a PIN', () => {
   it('C0.7 T19 item 4: leaves the publish to the worker when told to, and still appends signin.ended', async () => {
     const pool = org({
       rows: ({ text }) => {
-        if (text.startsWith('select id from users')) return [{ id: MEMBER }]
+        if (text.startsWith('select pin_hash from users')) return [{ pin_hash: 'hashed' }]
         if (text.startsWith('update sessions')) return ENDED.map(id => ({ id }))
         return undefined
       },
@@ -278,14 +278,23 @@ describe('C0.5 ACC-06 resetting a PIN', () => {
     expect(appended(pool.statements).map(event => event.type)).toEqual(['account.pin_reset', 'signin.ended'])
   })
 
-  it('answers 409 no_account for someone who has never signed in', async () => {
+  it('ACC-06 D46 answers 409 no_pin for someone who has never signed in', async () => {
     const c = context(org({}))
     expect(
       await refusal(resetPin(c.api, { person: MEMBER, identityCheck: 'in_person' }, session, c.info)),
-    ).toMatchObject({
-      status: 409,
-      code: 'no_account',
+    ).toMatchObject({ status: 409, code: 'no_pin' })
+    expect(c.published).toEqual([])
+  })
+
+  it('ACC-06 D46 answers 409 no_pin for someone who signs in on the code alone, ending nothing', async () => {
+    const pool = org({
+      rows: ({ text }) => (text.startsWith('select pin_hash from users') ? [{ pin_hash: null }] : undefined),
     })
+    const c = context(pool)
+    expect(
+      await refusal(resetPin(c.api, { person: MEMBER, identityCheck: 'in_person' }, session, c.info)),
+    ).toMatchObject({ status: 409, code: 'no_pin' })
+    expect(pool.texts().some(text => text.startsWith('update'))).toBe(false)
     expect(c.published).toEqual([])
   })
 })
