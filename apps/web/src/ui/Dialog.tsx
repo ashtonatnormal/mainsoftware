@@ -7,15 +7,19 @@
 //   close it, so `open` stays the one truth.
 // - `close` also calls onClose() while `open` is still true: a close request the page can't stop
 //   (Chrome lets only one cancel be refused without a user gesture, and Android's back gesture)
-//   closes the element without our say, and the caller's state must follow.
+//   closes the element without our say, and the caller's state must follow. A close the effect's
+//   own cleanup makes, when React runs the effect again while `open` stays true (StrictMode,
+//   Fast Refresh, an <Activity> hidden and shown again), is never taken for one (dialog-model.ts).
 // - It is labelled by its h2 title and has a 44 px Close button.
 // - The screen behind stops scrolling (lockScroll(), a class on <html>, never a <style>).
-// - The element that opened it is read in the effect, as showModal() runs, not while rendering, and
-//   gets focus back on close unless focus has already gone somewhere on purpose (DRV-48).
+// - The element that opened it is read in the effect, as showModal() runs, not while rendering,
+//   once per opening, and gets focus back on close unless focus has already gone somewhere on
+//   purpose (DRV-48).
 import { X } from 'lucide-react'
-import { type ReactNode, type RefObject, type SyntheticEvent, useEffect, useId, useRef } from 'react'
+import { type ReactNode, type RefObject, type SyntheticEvent, useEffect, useId, useRef, useState } from 'react'
 import { IconButton } from './Button.tsx'
 import { cx } from './cx.ts'
+import { createDialogModel } from './dialog-model.ts'
 import { lockScroll } from './scroll-lock.ts'
 import { UI } from './strings.ts'
 
@@ -25,7 +29,8 @@ export interface DialogProps {
   title: string
   presentation?: 'sheet' | 'centred'
   footer?: ReactNode
-  // What takes focus when it opens; else the browser's choice, the first focusable element.
+  // What takes focus when it opens; else the browser's choice, the first focusable element. It is
+  // read as it opens, so a new ref object on each render doesn't move focus.
   initialFocus?: RefObject<HTMLElement | null>
   children: ReactNode
 }
@@ -36,29 +41,34 @@ const PRESENTATION = {
   centred: 'm-auto w-[calc(100%-2rem)] max-w-lg rounded-3xl',
 } as const
 
+// What has focus, or null for nothing or <body>.
+const focusedElement = () => {
+  const now = document.activeElement
+  return now instanceof HTMLElement && now !== document.body ? now : null
+}
+
 export function Dialog({ open, onClose, title, presentation = 'sheet', footer, initialFocus, children }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null)
   const titleId = useId()
-  // The latest props, for the event handlers the effect keeps.
-  const latest = useRef({ open, onClose })
-  latest.current = { open, onClose }
+  // The latest props, for the event handlers and the effect, which runs only when `open` changes.
+  const latest = useRef({ open, onClose, initialFocus })
+  latest.current = { open, onClose, initialFocus }
+  const [model] = useState(() => createDialogModel(focusedElement))
 
   useEffect(() => {
     const dialog = ref.current
-    if (!open || !dialog) return
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    if (!dialog.open) dialog.showModal()
-    const unlock = lockScroll()
-    initialFocus?.current?.focus()
-    return () => {
-      if (dialog.open) dialog.close()
-      unlock()
-      // Back to the opener, unless closing put focus somewhere on purpose (the next screen, a field).
-      const now = document.activeElement
-      const lost = now === null || now === document.body || dialog.contains(now)
-      if (lost && opener?.isConnected) opener.focus({ preventScroll: true })
+    if (!open || !dialog) {
+      model.end()
+      return
     }
-  }, [open, initialFocus])
+    const hide = model.show(dialog)
+    const unlock = lockScroll()
+    latest.current.initialFocus?.current?.focus()
+    return () => {
+      unlock()
+      hide()
+    }
+  }, [open, model])
 
   if (!open) return null
 
@@ -68,8 +78,8 @@ export function Dialog({ open, onClose, title, presentation = 'sheet', footer, i
     latest.current.onClose()
   }
 
-  const onNativeClose = () => {
-    if (latest.current.open) latest.current.onClose()
+  const onNativeClose = (event: SyntheticEvent<HTMLDialogElement>) => {
+    if (latest.current.open && model.closedByBrowser(event.currentTarget)) latest.current.onClose()
   }
 
   return (
