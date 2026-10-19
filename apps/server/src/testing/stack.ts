@@ -37,6 +37,7 @@
 import { randomBytes, randomInt, randomUUID } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import { Writable } from 'node:stream'
+import { PIN_ROLES } from '@hearth/access'
 import { FLAGS, type FlagSpec, pinProblem } from '@hearth/shared'
 import type { FastifyInstance } from 'fastify'
 import type { Redis } from 'ioredis'
@@ -170,8 +171,8 @@ export interface WorkerInstance {
   pauseHeartbeats(paused?: boolean): void
 }
 
-// The roles a test person may hold (a Team Admin would need a team, which no test here makes).
-export type PersonRole = 'owner' | 'admin' | 'ai_admin' | 'leadership' | 'dpo' | 'compliance_officer'
+// The roles a test person may hold. person() makes a team for a Team Admin, with them in it.
+export type PersonRole = 'owner' | 'admin' | 'ai_admin' | 'leadership' | 'dpo' | 'compliance_officer' | 'team_admin'
 
 export interface Person {
   id: string
@@ -181,8 +182,11 @@ export interface Person {
   local: string
   phoneNumberId: string
   // The PIN they sign in with, once they have one; signIn() sets it when it sets a new PIN. Only a
-  // privileged holder (one of PersonRole's roles) is asked for it (D46).
+  // privileged holder is asked for it (D46).
   pin: string | undefined
+  // Whether they were made holding a privileged role (PIN_ROLES: the roles only an Owner grants),
+  // so signIn() expects the PIN step, and anyone else a sign-in on the code alone (D46).
+  privileged: boolean
 }
 
 export interface Reply {
@@ -999,8 +1003,12 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       const code = await sms.nextCode(person.e164)
       const verified = await browser.post('/api/auth/otp/verify', { code })
       if (verified.status !== 200) fail('otp/verify', verified)
-      // Someone with no privileged role is signed in on the code alone (D46).
+      // Someone with no privileged role is signed in on the code alone, and a privileged holder goes
+      // on to the PIN step (D46).
       const answer = verified.json<{ status: 'signed_in' } | { status: 'code_verified'; next: 'set_pin' | 'step_up' }>()
+      if ((answer.status === 'signed_in') === person.privileged) {
+        throw new Error(`signIn: a ${person.privileged ? 'privileged' : 'code-only'} person got ${answer.status}`)
+      }
       if (answer.status === 'signed_in') return browser
       if (answer.next === 'set_pin') {
         const pin = newPin()
@@ -1041,12 +1049,21 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       )
       if (phone === undefined) throw new Error('the phone number was not returned')
       for (const role of o.roles ?? []) {
-        await query('insert into role_assignments (org_id, person_id, role, created_by) values ($1, $2, $3, $4)', [
-          inOrg.id,
-          id,
-          role,
-          inOrg.system,
-        ])
+        // A Team Admin needs a team: a new one, with them in it.
+        let teamId: string | null = null
+        if (role === 'team_admin') {
+          teamId = await team({ org: inOrg })
+          await query('insert into team_memberships (org_id, team_id, person_id, created_by) values ($1, $2, $3, $4)', [
+            inOrg.id,
+            teamId,
+            id,
+            inOrg.system,
+          ])
+        }
+        await query(
+          'insert into role_assignments (org_id, person_id, role, team_id, created_by) values ($1, $2, $3, $4, $5)',
+          [inOrg.id, id, role, teamId, inOrg.system],
+        )
       }
       if (o.pin !== undefined) {
         pins.add(o.pin)
@@ -1060,7 +1077,8 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       if (o.left) {
         await query('update people set deactivated_at = now(), deactivated_by = $2 where id = $1', [id, inOrg.system])
       }
-      return { id, orgId: inOrg.id, e164, local: e164.slice(3), phoneNumberId: phone.id, pin: o.pin }
+      const privileged = (o.roles ?? []).some(role => PIN_ROLES.includes(role))
+      return { id, orgId: inOrg.id, e164, local: e164.slice(3), phoneNumberId: phone.id, pin: o.pin, privileged }
     }
 
     async function sessionOf(browser: Client): Promise<{ id: string; deviceId: string }> {

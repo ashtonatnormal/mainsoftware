@@ -551,8 +551,9 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
   })
 
   it('R6-10 ACC-04 PRD-53: a PIN reset closes every socket of the person', async () => {
-    const admin = await s.person({ roles: ['admin'], pin: s.newPin() })
-    const r = await s.person({ pin: s.newPin() })
+    // A PIN belongs to a privileged holder (D46), and only an Owner resets one.
+    const admin = await s.person({ roles: ['owner'], pin: s.newPin() })
+    const r = await s.person({ roles: ['leadership'], pin: s.newPin() })
     const sockets = [await s.gatewaySocket(await s.signIn(r)), await s.gatewaySocket(await s.signIn(r))]
     const adminBrowser = await s.signIn(admin)
     const started = Date.now()

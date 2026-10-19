@@ -520,16 +520,37 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect([badPin.status, badPin.error]).toEqual([400, 'invalid_pin'])
   })
 
-  it('D46 AQ-02: each of the six Owner-only roles sets a PIN after the code; a Member does not', async () => {
+  it('D46 AQ-02: each of the six Owner-only roles sets or enters a PIN after the code; a Member and a Team Admin sign in on the code alone', async () => {
     // Budgets: one code request each.
     for (const role of ['owner', 'admin', 'ai_admin', 'leadership', 'dpo', 'compliance_officer'] as const) {
-      const holder = await s.person({ roles: [role] })
-      const { reply } = await atStepUp(holder)
-      expect(reply.body, role).toEqual({ status: 'code_verified', next: 'set_pin' })
+      const first = await s.person({ roles: [role] })
+      expect((await atStepUp(first)).reply.body, role).toEqual({ status: 'code_verified', next: 'set_pin' })
+      const again = await s.person({ roles: [role], pin: s.newPin() })
+      expect((await atStepUp(again)).reply.body, role).toMatchObject({
+        status: 'code_verified',
+        next: 'step_up',
+        pin: { state: 'ok' },
+      })
     }
-    const member = await s.person({ pin: s.newPin() })
-    const { reply } = await atStepUp(member)
-    expect(reply.body).toMatchObject({ status: 'signed_in' })
+    // A Member's leftover PIN is never asked for, and a Team Admin's role is not an Owner-only one.
+    for (const codeOnly of [await s.person({ pin: s.newPin() }), await s.person({ roles: ['team_admin'] })]) {
+      const { client, reply } = await atStepUp(codeOnly)
+      const { id: sessionId, deviceId } = await s.sessionOf(client)
+      expect(reply.body).toEqual({ status: 'signed_in', device: { id: deviceId, label: 'iPhone · Safari' } })
+      const [term] = await s.query<{ full_term: boolean }>(
+        "select expires_at - created_at = interval '2160 hours' as full_term from sessions where id = $1",
+        [sessionId],
+      )
+      expect(term?.full_term).toBe(true)
+      expect(await eventsOf(codeOnly)).toEqual([
+        about(codeOnly, 'signin.started', codeOnly, {
+          device: deviceId,
+          session: sessionId,
+          method: 'sms',
+          privileged: false,
+        }),
+      ])
+    }
   })
 
   it("D46 AQ-05/06: a privileged session ends after 168 hours, while a Member's of the same age carries on", async () => {
