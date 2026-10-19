@@ -29,7 +29,7 @@ export const MESSAGES = {
   forbidden: "You can't do that.",
   not_found: "We couldn't find that.",
   no_account: "They haven't signed in yet, so there's no PIN to reset.",
-  // The flags route (C0.6, flags/set.ts).
+  // The flags route (C0.6, apps/server/src/flags/set.ts).
   flag_locked: 'That flag is locked: only a release can change it.',
   purpose_refused: "That feature isn't cleared for use yet.",
   invalid_cohort:
