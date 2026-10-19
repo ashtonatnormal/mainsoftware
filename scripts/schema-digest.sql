@@ -26,7 +26,10 @@
 -- cloned rules (data_access_events_yyyy_mm_pkey), with the month folded in their text too, and its
 -- bound reads yyyy-mm-01 for the first of its month and yyyy-mm+1-01 for the next. Identical lines
 -- are listed once, so two builds made in different months, whose sets of months differ, compare
--- equal, and a month that differs from the others adds a line of its own.
+-- equal, and a month that differs from the others adds a line of its own. Each month partition also
+-- gets a line with a hash of its own lines (partition data_access_events_yyyy_mm: <md5>), so a
+-- month that lacks a line the others have (an index, a rule, a trigger, a policy) adds a hash of
+-- its own.
 --
 -- Deparsed text follows the session's settings, so this fixes them first: time zone, date and
 -- interval styles, float digits, bytea output and search_path (which decides when a name is
@@ -69,10 +72,11 @@ with rel as (
   where n.nspname = 'public'
 ),
 -- The rules whose NOT VALID the calling check leaves out.
-skip as (select string_to_array(:'not_valid', ' ') as names)
-select distinct format('%s %s: %s', kind, name, detail) collate "C" as line from (
+skip as (select string_to_array(:'not_valid', ' ') as names),
+-- Every line, with the relation it describes (relid) where it describes one.
+lines as (
   select 'schema' as kind, format('%I', n.nspname) as name,
-         format('owner=%s acl=%s', pg_get_userbyid(n.nspowner), n.nspacl) as detail
+         format('owner=%s acl=%s', pg_get_userbyid(n.nspowner), n.nspacl) as detail, null::oid as relid
   from pg_namespace n
   where n.nspname !~ '^pg_' and n.nspname <> 'information_schema'
   union all
@@ -81,7 +85,7 @@ select distinct format('%s %s: %s', kind, name, detail) collate "C" as line from
                 case d.defaclobjtype when 'r' then 'tables' when 'S' then 'sequences' when 'f' then 'functions'
                                      when 'T' then 'types' when 'n' then 'schemas' else d.defaclobjtype::text end,
                 ' in ' || quote_ident(n.nspname)),
-         d.defaclacl::text
+         d.defaclacl::text, null
   from pg_default_acl d left join pg_namespace n on n.oid = d.defaclnamespace
   union all
   select 'table', format('%I', c.folded),
@@ -93,11 +97,11 @@ select distinct format('%s %s: %s', kind, name, detail) collate "C" as line from
                 case when c.month is null then pg_get_expr(c.relpartbound, c.oid)
                      else replace(replace(pg_get_expr(c.relpartbound, c.oid), to_char(c.month, 'YYYY-MM-DD'), 'yyyy-mm-01'),
                                   to_char(c.month + interval '1 month', 'YYYY-MM-DD'), 'yyyy-mm+1-01') end,
-                pg_get_partkeydef(c.oid))
+                pg_get_partkeydef(c.oid)), c.oid
   from rel c
   where c.relkind in ('r', 'p', 'v', 'm', 'f', 'S')
   union all
-  select 'view', format('%I', c.folded), md5(pg_get_viewdef(c.oid))
+  select 'view', format('%I', c.folded), md5(pg_get_viewdef(c.oid)), c.oid
   from rel c
   where c.relkind in ('v', 'm')
   union all
@@ -108,7 +112,7 @@ select distinct format('%s %s: %s', kind, name, detail) collate "C" as line from
                  from pg_depend d join rel o on o.oid = d.refobjid
                  join pg_attribute a on a.attrelid = d.refobjid and a.attnum = d.refobjsubid
                  where d.classid = 'pg_class'::regclass and d.objid = c.oid and d.refclassid = 'pg_class'::regclass
-                   and d.deptype in ('a', 'i')))
+                   and d.deptype in ('a', 'i'))), c.oid
   from pg_sequence s join rel c on c.oid = s.seqrelid
   union all
   -- A composite type's attributes are its columns (below); a domain's rules are listed here, by
@@ -124,7 +128,7 @@ select distinct format('%s %s: %s', kind, name, detail) collate "C" as line from
                                                then regexp_replace(pg_get_constraintdef(k.oid), ' NOT VALID$', '')
                                                else pg_get_constraintdef(k.oid) end),
                                    '; ' order by k.conname)
-                 from pg_constraint k where k.contypid = t.oid), t.typacl)
+                 from pg_constraint k where k.contypid = t.oid), t.typacl), null
   from pg_type t join pg_namespace n on n.oid = t.typnamespace
   left join pg_class c on c.oid = t.typrelid
   cross join skip
@@ -132,14 +136,14 @@ select distinct format('%s %s: %s', kind, name, detail) collate "C" as line from
   union all
   select 'collation', format('%I', l.collname),
          format('owner=%s provider=%s locale=%s collate=%s ctype=%s rules=%s deterministic=%s', pg_get_userbyid(l.collowner),
-                l.collprovider, l.colllocale, l.collcollate, l.collctype, l.collicurules, l.collisdeterministic)
+                l.collprovider, l.colllocale, l.collcollate, l.collctype, l.collicurules, l.collisdeterministic), null
   from pg_collation l join pg_namespace n on n.oid = l.collnamespace
   where n.nspname = 'public'
   union all
   select 'column', format('%I.%I', c.folded, a.attname),
          format('%s collation=%s notnull=%s default=%s identity=%s generated=%s acl=%s', format_type(a.atttypid, a.atttypmod),
                 a.attcollation::regcollation, a.attnotnull, pg_get_expr(d.adbin, d.adrelid), a.attidentity, a.attgenerated,
-                a.attacl)
+                a.attacl), c.oid
   from pg_attribute a join rel c on c.oid = a.attrelid
   left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
   where c.relkind in ('r', 'p', 'v', 'm', 'f', 'c') and a.attnum > 0 and not a.attisdropped
@@ -147,27 +151,41 @@ select distinct format('%s %s: %s', kind, name, detail) collate "C" as line from
   select 'constraint', format('%I.%I', c.folded, replace(k.conname, c.relname, c.folded)),
          replace(case when format('%I.%I', c.folded, k.conname) = any (skip.names)
                       then regexp_replace(pg_get_constraintdef(k.oid), ' NOT VALID$', '')
-                      else pg_get_constraintdef(k.oid) end, c.relname, c.folded)
+                      else pg_get_constraintdef(k.oid) end, c.relname, c.folded), c.oid
   from pg_constraint k join rel c on c.oid = k.conrelid
   cross join skip
   union all
-  select 'index', format('%I', replace(x.relname, c.relname, c.folded)), replace(pg_get_indexdef(i.indexrelid), c.relname, c.folded)
+  select 'index', format('%I', replace(x.relname, c.relname, c.folded)), replace(pg_get_indexdef(i.indexrelid), c.relname, c.folded),
+         c.oid
   from pg_index i join rel c on c.oid = i.indrelid join pg_class x on x.oid = i.indexrelid
   union all
   select 'trigger', format('%I.%I', c.folded, replace(t.tgname, c.relname, c.folded)),
-         format('%s enabled=%s', replace(pg_get_triggerdef(t.oid), c.relname, c.folded), t.tgenabled)
+         format('%s enabled=%s', replace(pg_get_triggerdef(t.oid), c.relname, c.folded), t.tgenabled), c.oid
   from pg_trigger t join rel c on c.oid = t.tgrelid
   where not t.tgisinternal
   union all
   select 'function', p.oid::regprocedure::text,
          format('%s owner=%s definer=%s config=%s acl=%s', md5(pg_get_functiondef(p.oid)), pg_get_userbyid(p.proowner),
-                p.prosecdef, p.proconfig, p.proacl)
+                p.prosecdef, p.proconfig, p.proacl), null
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
   where n.nspname = 'public' and p.prokind in ('f', 'p')
   union all
   select 'policy', format('%I.%I', c.folded, pol.polname),
          format('%s %s %s using=%s check=%s', pol.polcmd, pol.polpermissive, pol.polroles::regrole[],
-                pg_get_expr(pol.polqual, pol.polrelid), pg_get_expr(pol.polwithcheck, pol.polrelid))
+                pg_get_expr(pol.polqual, pol.polrelid), pg_get_expr(pol.polwithcheck, pol.polrelid)), c.oid
   from pg_policy pol join rel c on c.oid = pol.polrelid
-) as objects
+)
+select distinct line collate "C" as line from (
+  select format('%s %s: %s', kind, name, detail) as line from lines
+  union all
+  -- One line per month partition, with a hash of its own lines, so a month that lacks a line the
+  -- other months have (an index, a rule, a trigger, a policy) shows, though identical lines are
+  -- listed once.
+  select format('partition %I: %s', c.folded,
+                md5(string_agg(format('%s %s: %s', l.kind, l.name, l.detail), E'\n'
+                               order by format('%s %s: %s', l.kind, l.name, l.detail) collate "C")))
+  from lines l join rel c on c.oid = l.relid
+  where c.month is not null
+  group by c.oid, c.folded
+) as every_line
 order by line;

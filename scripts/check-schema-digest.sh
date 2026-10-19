@@ -6,10 +6,11 @@
 #
 # Each probe builds two throwaway databases and compares their digests. Most differ in one respect
 # and must produce different digests, in a line the probe names: a partition's row level security,
-# grants, column grants, owner, policies, indexes, rules, bound, a parent's partition key or a
-# DEFAULT partition; a view's or table's options; whether a table is unlogged; a sequence's
-# parameters and its owning column; identity and generated columns; collations; default
-# privileges; schemas; a rule left NOT VALID. The others are equivalent and must compare equal:
+# grants, column grants, owner, policies, indexes, rules, triggers or bound; a month lacking an
+# index, policy or trigger the other months have; a parent's partition key or a DEFAULT partition;
+# a view's or table's options; whether a table is unlogged; a sequence's parameters and its owning
+# column; identity and generated columns; collations; default privileges; schemas; a rule left
+# NOT VALID. The others are equivalent and must compare equal:
 # partitions made in different months; a database set to New York, or to other date, interval,
 # float, bytea or search_path settings, against the defaults; a domain made in a New York session
 # against one made in UTC; a NOT VALID rule the caller names. Then, against the real migrations
@@ -120,6 +121,16 @@ probe 'partitions: a rule on a month' differs '^constraint p_yyyy_mm\.p_yyyy_mm_
   "$partitioned; $two" "" "alter table p_2026_02 add constraint p_2026_02_small check (id < 10)"
 probe 'partitions: a trigger on a month' differs '^trigger p_yyyy_mm\.own: CREATE TRIGGER own .* ON public\.p_yyyy_mm ' \
   "$partitioned; $two" "" "create trigger own before update on p_2026_02 for each row execute function p_touch()"
+probe 'partitions: a month without the index the others have' differs '^partition p_yyyy_mm: ' \
+  "$partitioned; $two" "create index on p_2026_01 (id); create index on p_2026_02 (id)" "create index on p_2026_01 (id)"
+probe 'partitions: a month without the policy the others have' differs '^partition p_yyyy_mm: ' \
+  "$partitioned; $two" "create policy own on p_2026_01 for select using (true); create policy own on p_2026_02 for select using (true)" \
+  "create policy own on p_2026_01 for select using (true)"
+probe 'partitions: a month without the trigger the others have' differs '^partition p_yyyy_mm: ' \
+  "$partitioned; $two" \
+  "create trigger own before update on p_2026_01 for each row execute function p_touch();
+   create trigger own before update on p_2026_02 for each row execute function p_touch()" \
+  "create trigger own before update on p_2026_01 for each row execute function p_touch()"
 probe 'partitions: a month whose bound starts at New York midnight' differs "^table p_yyyy_mm: .*bound=FOR VALUES FROM \('yyyy-mm-01 05:00:00\+00'\)" \
   "$partitioned; $(months 2026-01-01)" "$(months 2026-02-01)" \
   "create table p_2026_02 partition of p for values from ('2026-02-01 00:00-05') to ('2026-03-01 00:00-05');
