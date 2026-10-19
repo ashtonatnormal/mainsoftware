@@ -210,6 +210,17 @@ describe('C0.5 T5 ACC-05 C0.7 T19: the realtime role, wired', () => {
     }
   })
 
+  it('T17 item 11: the gateway stops listening for flag changes when it stops, since the flag cache outlives it', async () => {
+    // Like FlagCache's, the remover answers whether it removed anything.
+    const remove = vi.fn(() => true)
+    const flags = { track: vi.fn(async (_orgId: string) => {}), onChange: vi.fn(() => remove), registry: FLAGS }
+    const { stop } = await wired({ flags })
+    expect(flags.onChange).toHaveBeenCalledTimes(1)
+    expect(remove).not.toHaveBeenCalled()
+    await stop()
+    expect(remove).toHaveBeenCalledTimes(1)
+  })
+
   it('OD-22 P2 T19 item 12: the full readiness and the local one pass only once both channels are subscribed, and fail while the gateway stops', async () => {
     const sub = fakeSubscriber({ failures: 1 })
     const subscriptions = new Subscriptions(sub.asRedis, pino({ level: 'silent' }), { retryMs: 50 })

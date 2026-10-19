@@ -127,12 +127,18 @@ export function registerRealtime(
     })
   }
 
-  // A change to a flag whose value may reach the browser nudges the org's sockets (T17 item 11).
+  // A change to a flag whose value may reach the browser nudges the org's sockets (T17 item 11),
+  // until the gateway stops: the cache outlives it, so its listener goes at the drain.
   if (flags !== undefined) {
-    flags.onChange((orgId, changed) => {
+    const stopNudges = flags.onChange((orgId, changed) => {
       if (changed.some(key => Object.hasOwn(flags.registry, key) && flags.registry[key]?.client === true)) {
         server.nudge(orgId, 'flags')
       }
+    })
+    app.addHook('preClose', async () => {
+      // The remover answers whether it removed anything; a close hook must resolve with nothing,
+      // since Fastify treats anything else as an error.
+      stopNudges()
     })
   }
 
