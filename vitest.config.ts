@@ -32,6 +32,11 @@ export default defineConfig(({ mode }) => {
       : {
           include: ['{apps,packages}/*/**/*.test.{ts,tsx}', 'infra/**/*.test.ts', 'scripts/**/*.test.ts'],
           exclude: [...defaultExclude, '**/dist/**', '**/cdk.out/**', '**/*.integration.test.ts'],
+          // The token tests read tokens.css and app.css with ?raw, which is '' unless CSS processing
+          // is on for those files (T21). The pattern is matched against the module id, query
+          // included, so it must allow the ?raw. The scope keeps every other test's CSS imports as
+          // they are, and no Tailwind plugin runs here, so ?raw is the file as written.
+          css: { include: [/apps\/web\/src\/styles\/[^/?]+\.css(?:\?|$)/] },
           // Tags on the Rule 1-9 suite (packages/access/rules.test.ts): one per rule, and on a todo
           // the kind of stage that builds it. `--tags-filter=ai` lists the AI cases.
           tags: [

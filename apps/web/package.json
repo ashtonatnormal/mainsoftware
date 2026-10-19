@@ -6,6 +6,7 @@
   "description": "The Hearth PWA: Vite, React 19 and Tailwind v4 (T8, T21).",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "build": "vite build",
     "dev": "vite"
   },
   "dependencies": {

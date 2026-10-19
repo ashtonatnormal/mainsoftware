@@ -1,0 +1,191 @@
+/* The app's one stylesheet (T21): Tailwind v4, the tokens, and the base rules every screen gets.
+   main.ts imports it with the two self-hosted font faces (R-17), so Vite links all three in
+   index.html's head before any script runs.
+
+   Colours compile only from the tokens (R-18, OD-28): the @theme reset below removes Tailwind's
+   default palette, so bg-red-500 or text-white compile to nothing, and @theme inline maps each
+   token in tokens.css to its utility name (bg-surface, text-muted, border-line-strong …). inline
+   makes each utility read the token itself, so the dark block in tokens.css re-themes it.
+   styles/app-css.test.ts checks the reset and that every mapped colour names a declared token. */
+
+@import "tailwindcss";
+@import "./tokens.css";
+
+/* The desktop rail replaces the tab bar from 48rem wide and 30rem tall, so a phone on its side
+   keeps the tab bar (D-08, OD-30). */
+@custom-variant rail (@media (min-width: 48rem) and (min-height: 30rem));
+
+@theme {
+  --color-*: initial;
+  --font-*: initial;
+  /* Body text is 15 px and the small size 13 px (OD-45), in rem so they follow the person's text
+     size. Inputs are 16 px (the base layer below). */
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.35;
+  --text-body: 0.9375rem;
+  --text-body--line-height: 1.45;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-inverse: var(--accent-inverse);
+  --color-agent: var(--agent);
+  --color-agent-soft: var(--agent-soft);
+  --color-agent-fg: var(--agent-fg);
+  --color-rec: var(--rec);
+  --color-rec-soft: var(--rec-soft);
+  --color-rec-fg: var(--rec-fg);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-wall: var(--wall);
+  --color-avatar-0: var(--avatar-0);
+  --color-avatar-1: var(--avatar-1);
+  --color-avatar-2: var(--avatar-2);
+  --color-avatar-3: var(--avatar-3);
+  --color-avatar-4: var(--avatar-4);
+  --color-avatar-5: var(--avatar-5);
+  --color-avatar-6: var(--avatar-6);
+  --color-avatar-7: var(--avatar-7);
+  --color-avatar-8: var(--avatar-8);
+  --color-avatar-9: var(--avatar-9);
+  --color-avatar-10: var(--avatar-10);
+  --color-avatar-11: var(--avatar-11);
+  --color-avatar-fg: var(--avatar-fg);
+  /* The reset removed these two keywords too; border-transparent and text-current need them. */
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  /* The families Fontsource's variable packages register (main.ts imports their CSS). */
+  --font-sans: "Figtree Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Bricolage Grotesque Variable", "Figtree Variable", ui-sans-serif, system-ui, sans-serif;
+  --shadow-card: var(--shadow);
+}
+
+/* The safe areas (a notch, the home indicator) pad only the bars that sit against them, never the
+   root, so nothing adds them twice (R-16). */
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@utility pl-safe {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+@utility px-safe {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: 1.45;
+    -webkit-tap-highlight-color: transparent;
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+  /* Every focusable thing shows where focus is (WCAG 2.4.7); on an inverse ground, such as a
+     toast, the ring takes the inverse accent (SHL-35). */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .on-inverse :focus-visible {
+    outline-color: var(--accent-inverse);
+  }
+  /* 16 px at every width, so iOS never zooms into a field (X7, SHL-28). */
+  input,
+  select,
+  textarea {
+    font-size: 1rem;
+  }
+  /* No double-tap zoom delay on controls. */
+  button,
+  a,
+  [role="button"] {
+    touch-action: manipulation;
+  }
+  button {
+    cursor: pointer;
+  }
+}
+
+/* A Dialog locks the screen's scroll with this class, never with an injected <style>, which the
+   CSP refuses (C-22). */
+html.scroll-locked #screen {
+  overflow: hidden;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A toast's entrance. The demo's pulse, ring and bar animations come with C2's rooms. */
+@keyframes hearth-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.anim-in {
+  animation: hearth-in 0.25s ease-out both;
+}
+
+/* Reduced motion ends every animation and transition at once, whatever adds it later (R-15,
+   SHL-46). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /* biome-ignore-start lint/complexity/noImportantStyles: reduced motion must win over every
+       animation and transition, whatever the specificity of the rule that adds it */
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+    /* biome-ignore-end lint/complexity/noImportantStyles: the end of the reduced-motion rule */
+  }
+}
+
+/* Forced colours (Windows High Contrast) drop backgrounds, so the current tab and the Switch's
+   track keep an outline in the system's text colour. */
+@media (forced-colors: active) {
+  [aria-current="page"] {
+    outline: 2px solid CanvasText;
+    outline-offset: -4px;
+  }
+  .switch-track {
+    border: 1px solid CanvasText;
+  }
+}

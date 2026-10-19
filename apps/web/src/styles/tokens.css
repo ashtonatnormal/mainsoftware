@@ -1,0 +1,86 @@
+/* The design tokens (T21, R-10 to R-13, OD-08). Every colour the app draws is one of these, through
+   the Tailwind names app.css maps them to (bg-surface, text-muted …); no other file holds a colour
+   literal. Ported from the demo (demo/src/index.css), with --chat-wall renamed --wall and the
+   dark-mode contrast fixes (X8, SHL-35 to SHL-37, RMS-36, QA-01):
+   - --rec-fg, --agent-fg: ink on a red or teal fill. White fails on dark mode's lighter fills.
+   - --accent-inverse: accent text and the focus ring on an inverse (bg-fg) ground, such as a toast.
+   - --line-strong: the border that identifies a control (an input, the Switch's off track), at 3:1
+     on every ground. --line stays for hairlines and dividers, which identify nothing.
+   - --avatar-0 to --avatar-11: avatar fills at oklch(0.52 0.12 h), h = 15° + 30°n, each at least
+     4.5:1 under --avatar-fg. They are the same in both themes.
+   styles/contrast-pairs.ts lists every ink and ground the kit pairs, and styles/contrast.test.ts
+   holds each pair to its WCAG minimum in both themes.
+
+   The theme follows the system only (OD-08): the light values sit on :root, and the dark values
+   are written once, in the one prefers-color-scheme block below. There is no data-theme selector
+   and no toggle, so the first paint has the right theme with no script (SHL-11, under the CSP). */
+
+:root {
+  --bg: #f4f5f7; /* the app ground */
+  --surface: #ffffff; /* cards, panels, others' bubbles */
+  --surface-2: #eceef2; /* inputs, hover, chips */
+  --fg: #1b2130; /* ink */
+  --muted: #5e6778; /* secondary text */
+  --line: #dde1e8; /* hairlines and dividers */
+  --line-strong: #767f8f; /* the border of a control */
+  --accent: #c84d0a; /* ember */
+  --accent-fg: #ffffff; /* ink on accent */
+  --accent-soft: #ffe8d6; /* my bubbles, highlights */
+  --accent-ink: #b8460a; /* accent as text on light grounds */
+  --accent-inverse: #ff9a5c; /* accent as text or ring on fg */
+  --agent: #0b7375;
+  --agent-soft: #dcf2f1;
+  --agent-fg: #ffffff; /* ink on agent */
+  --rec: #c22d33; /* recording, live, danger */
+  --rec-soft: #fde4e4;
+  --rec-fg: #ffffff; /* ink on rec */
+  --ok: #257a36;
+  --ok-soft: #dff3e3;
+  --warn: #94600f;
+  --warn-soft: #fbf0d9;
+  --wall: #eef0f3; /* the conversation ground */
+  --avatar-0: #a24852;
+  --avatar-1: #a04f27;
+  --avatar-2: #905d00;
+  --avatar-3: #746c00;
+  --avatar-4: #49782a;
+  --avatar-5: #007e57;
+  --avatar-6: #007d7e;
+  --avatar-7: #00769c;
+  --avatar-8: #346aac;
+  --avatar-9: #635dab;
+  --avatar-10: #835198;
+  --avatar-11: #984979;
+  --avatar-fg: #ffffff; /* initials on an avatar fill */
+  --shadow: 0 1px 2px rgb(16 22 35 / 0.06), 0 4px 16px rgb(16 22 35 / 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1218;
+    --surface: #171b23;
+    --surface-2: #20252f;
+    --fg: #e8ebf1;
+    --muted: #9aa3b3;
+    --line: #2a303b;
+    --line-strong: #717a8d;
+    --accent: #ff7a33;
+    --accent-fg: #1a0e06;
+    --accent-soft: #3a2416;
+    --accent-ink: #ff9a5c;
+    --accent-inverse: #a13d08;
+    --agent: #38c3c4;
+    --agent-soft: #12302f;
+    --agent-fg: #04201f;
+    --rec: #ff5c62;
+    --rec-soft: #3a1a1c;
+    --rec-fg: #1f0a0b;
+    --ok: #5fcf75;
+    --ok-soft: #173020;
+    --warn: #e7b04a;
+    --warn-soft: #33270f;
+    --wall: #12161d;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 6px 20px rgb(0 0 0 / 0.35);
+    color-scheme: dark;
+  }
+}

@@ -7,7 +7,11 @@
 // LiveKit host) changes the builder and this allow-list in the same reviewed PR, or the browser
 // blocks it.
 //
-// The cases that read apps/web files (CSP-07 to CSP-09) land with those files.
+// CSP-07 and CSP-08 read apps/web/index.html, the page the policy governs: a policy without
+// 'unsafe-inline' holds only while the page itself carries nothing inline. CSP-09 lands with the
+// e2e preview it reads (C0.8 S12).
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   CLOUDFRONT_CSP_MAX,
   CSP_REPORT_PATH,
@@ -17,6 +21,7 @@ import {
 } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import { isModelHost, MODEL_HOST } from './ai-free'
+import { readRepoFile, root } from './repo-files'
 
 // The origins the builder serves: production, the e2e preview over HTTPS on this machine, and the
 // dev server on each loopback host.
@@ -194,4 +199,90 @@ describe('T21 item 7: the CSP guard', () => {
         .join('; '),
     )
   })
+
+  it('CSP-07 K-01 R-06 D-02: apps/web/index.html exists and has no inline script, style element, style or event-handler attribute, meta CSP or absolute URL, and exactly one script, the module /src/main.ts', () => {
+    expect(existsSync(join(root, INDEX_HTML)), INDEX_HTML).toBe(true)
+    const page = readRepoFile(INDEX_HTML)
+    const tags = tagsOf(page)
+    expect(tags.length).toBeGreaterThan(5)
+    // One script, external, the module entry; nothing between its tags.
+    const scripts = tags.filter(tag => tag.name === 'script')
+    expect(scripts.map(tag => Object.fromEntries(tag.attributes))).toEqual([{ type: 'module', src: '/src/main.ts' }])
+    expect(withoutHtmlComments(page)).toMatch(/<script type="module" src="\/src\/main\.ts"><\/script>/)
+    // No <style> element, and no style or on* attribute anywhere.
+    expect(tags.filter(tag => tag.name === 'style')).toEqual([])
+    for (const tag of tags) {
+      for (const [name] of tag.attributes) {
+        expect(name, `<${tag.name} ${name}>`).not.toBe('style')
+        expect(name, `<${tag.name} ${name}>`).not.toMatch(/^on/)
+      }
+    }
+    // The policy comes from the response headers only (T21 item 7): a meta policy would add a
+    // second one that the guard above never sees.
+    const metaPolicies = tags.filter(
+      tag => tag.name === 'meta' && /^content-security-policy/i.test(tag.attributes.get('http-equiv') ?? ''),
+    )
+    expect(metaPolicies).toEqual([])
+    // Every URL the page names is a path on its own origin: no scheme (https:, data:, javascript:)
+    // and no host (//cdn.example).
+    for (const tag of tags) {
+      for (const [name, value] of tag.attributes) {
+        if (!URL_ATTRIBUTES.has(name)) continue
+        expect(value, `<${tag.name} ${name}>`).toMatch(/^\/(?!\/)/)
+      }
+    }
+    expect(withoutHtmlComments(page)).not.toMatch(/[a-z][a-z0-9+.-]*:\/\/|["'\s=]\/\//i)
+  })
+
+  it('CSP-08 WCAG 1.4.4: the viewport meta allows zoom (no maximum-scale, no user-scalable=no)', () => {
+    expect(existsSync(join(root, INDEX_HTML)), INDEX_HTML).toBe(true)
+    const viewports = tagsOf(readRepoFile(INDEX_HTML)).filter(
+      tag => tag.name === 'meta' && tag.attributes.get('name') === 'viewport',
+    )
+    expect(viewports).toHaveLength(1)
+    const content = viewports[0]?.attributes.get('content') ?? ''
+    const keys = new Map(
+      content.split(',').map(part => {
+        const [key = '', value = ''] = part.split('=').map(side => side.trim().toLowerCase())
+        return [key, value] as const
+      }),
+    )
+    expect(keys.get('width')).toBe('device-width')
+    expect(keys.get('initial-scale')).toBe('1')
+    // Both keys are refused whatever their value: a maximum-scale above 1 still caps zoom, and
+    // user-scalable has no value that helps.
+    expect(keys.has('maximum-scale'), content).toBe(false)
+    expect(keys.has('user-scalable'), content).toBe(false)
+    expect(keys.has('minimum-scale'), content).toBe(false)
+  })
 })
+
+const INDEX_HTML = 'apps/web/index.html'
+
+// The attributes that name a URL the browser fetches or navigates to.
+const URL_ATTRIBUTES = new Set(['src', 'href', 'action', 'formaction', 'srcset', 'poster', 'data', 'manifest', 'ping'])
+
+const withoutHtmlComments = (page: string) => page.replace(/<!--[\s\S]*?-->/g, '')
+
+interface Tag {
+  name: string
+  attributes: Map<string, string>
+}
+
+// The page's start tags with their attributes, comments removed. index.html is static and written
+// by hand, so a tag-and-attribute reader is enough, and it throws on any start tag it can't read
+// (a single-quoted or unquoted value, a quoted ">") rather than letting that tag slip past.
+function tagsOf(page: string): Tag[] {
+  const text = withoutHtmlComments(page)
+  const starts = text.match(/<[a-z]/gi)?.length ?? 0
+  const tags = [...text.matchAll(/<([a-z][a-z0-9-]*)((?:\s+[^\s=>/]+(?:\s*=\s*"[^"]*")?)*)\s*\/?>/gi)].map(match => ({
+    name: (match[1] ?? '').toLowerCase(),
+    attributes: new Map(
+      [...(match[2] ?? '').matchAll(/([^\s=>/]+)(?:\s*=\s*"([^"]*)")?/g)].map(
+        attribute => [(attribute[1] ?? '').toLowerCase(), attribute[2] ?? ''] as const,
+      ),
+    ),
+  }))
+  if (tags.length !== starts) throw new Error(`read ${tags.length} of the page's ${starts} start tags`)
+  return tags
+}
