@@ -19,7 +19,8 @@
 # - a rewrite rule (CREATE RULE), and one turned off; an aggregate's grants, definition and
 #   declared arguments.
 # The others are equivalent and must compare equal: partitions made in different months, including
-# months whose index names Postgres shortened and months with policies named for them; a database set to New York, or to other date,
+# months whose index names Postgres shortened (copies of the parent's, and indexes of their own,
+# which it also numbers) and months with policies named for them; a database set to New York, or to other date,
 # interval, float, bytea, string-escape, identifier-quoting or search_path settings, against the
 # defaults; a domain made in a New York session against one made in UTC; NOT VALID rules the caller
 # names, a month's rule among them. Then, against the real migrations (copies of the full build,
@@ -129,7 +130,7 @@ probe 'partitions: a month with another owner' differs '^table p_yyyy_mm: .*owne
   "$partitioned; $two" "" "alter table p_2026_02 owner to hearth_owner"
 probe 'partitions: a policy on a month' differs '^policy p_yyyy_mm\.own:' \
   "$partitioned; $two" "" "create policy own on p_2026_02 for select using (true)"
-probe 'partitions: an index on a month' differs '^index p_yyyy_mm_id_idx: CREATE INDEX p_yyyy_mm_id_idx ON public\.p_yyyy_mm ' \
+probe 'partitions: an index on a month' differs '^index p_yyyy_mm\.\(local\): CREATE INDEX p_yyyy_mm\.\(local\) ON public\.p_yyyy_mm USING btree \(id\)' \
   "$partitioned; $two" "" "create index on p_2026_02 (id)"
 probe 'partitions: a rule on a month' differs '^constraint p_yyyy_mm\.p_yyyy_mm_small: CHECK' \
   "$partitioned; $two" "" "alter table p_2026_02 add constraint p_2026_02_small check (id < 10)"
@@ -175,6 +176,13 @@ probe 'partitions: months whose index names Postgres shortened' same '' \
      partition by range (at);
    create index on $long (org_id, subject_id, at)" \
   "$(months_of "$long" 2026-01-01 2026-02-01)" "$(months_of "$long" 2026-05-01 2026-06-01 2026-07-01)"
+# Each month's own index, which Postgres names after the table cut short and then numbers (_idx,
+# _idx1, _idx2) to keep the names unique, so a build with more months has more names.
+own_index() { local m; for m in "$@"; do printf 'create index on %s_%s (org_id, subject_id, at, org_id);\n' "$long" "$m"; done; }
+probe "partitions: months with their own indexes, whose names Postgres shortened and numbered" same '' \
+  "create table $long (org_id int not null, subject_id int not null, at timestamptz not null) partition by range (at)" \
+  "$(months_of "$long" 2026-01-01 2026-02-01); $(own_index 2026_01 2026_02)" \
+  "$(months_of "$long" 2026-05-01 2026-06-01 2026-07-01); $(own_index 2026_05 2026_06 2026_07)"
 
 # 2. Session settings: deparsed text reads the same whatever the database or session is set to.
 constants="create domain moment as timestamptz default '2026-01-01 00:00+00' check (value > '2020-01-01 00:00+00');

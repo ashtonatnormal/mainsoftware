@@ -31,7 +31,9 @@
 -- next. Its copies of the parent's indexes and of its primary key, unique,
 -- exclusion and foreign key rules are listed by the parent's names
 -- (data_access_events_yyyy_mm.data_access_events_pkey), however Postgres named them (it shortens
--- long index names), and a copy left unattached reads differently. Identical lines are listed once,
+-- long index names), and a copy left unattached reads differently: an index of a month's own is
+-- listed as data_access_events_yyyy_mm.(local), whatever Postgres shortened and numbered its name
+-- to. Identical lines are listed once,
 -- so two builds made in different months, whose sets of months differ, compare equal, and a month
 -- that differs from the others adds a line of its own. Each month partition also gets a line with a
 -- hash of its own lines (partition data_access_events_yyyy_mm: <md5>), so a month that lacks a line
@@ -186,8 +188,10 @@ lines as (
   union all
   -- A partition's index attached to its parent's is listed by the parent index's name (as
   -- <partition>.<parent index>), so it reads alike in every month however Postgres named it (it
-  -- shortens long names), and one left unattached reads differently. A partitioned index is valid
-  -- only once every partition's index is attached.
+  -- shortens long names). A month partition's own index, attached to none, is listed as
+  -- <partition>.(local): Postgres may have shortened its name past the month and numbered it to
+  -- keep it unique, so its name says nothing stable; its definition and the month's hash still
+  -- count it. A partitioned index is valid only once every partition's index is attached.
   select 'index', x.name,
          format('%s valid=%s', replace(replace(pg_get_indexdef(i.indexrelid), 'INDEX ' || quote_ident(x.relname) || ' ON ',
                                                'INDEX ' || x.name || ' ON '), c.relname, c.folded),
@@ -199,6 +203,7 @@ lines as (
                      from pg_inherits h join pg_class px on px.oid = h.inhparent
                      join pg_index pi on pi.indexrelid = px.oid join rel pc on pc.oid = pi.indrelid
                      where h.inhrelid = i.indexrelid),
+                    case when c.month is not null then format('%I.(local)', c.folded) end,
                     format('%I', replace(ix.relname, c.relname, c.folded))) as name
     from pg_class ix where ix.oid = i.indexrelid
   ) x
