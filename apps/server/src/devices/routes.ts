@@ -1,9 +1,10 @@
-// Your own devices (ACC-04, T14 item 7): the list of browsers and phones you're signed in on,
-// with your passkeys, and signing one out, or all but this one. Signing a device out ends its
-// sessions in the same transaction (0003's devices_end_sessions), which appends signin.ended to the
-// outbox (C0.6, T16), and after the commit the realtime role is told to close their sockets
-// (revocation/channels.ts), as the worker's revocation consumer also does from the outbox (C0.7).
-// Your own list shows exact times; an admin's view of it shows dates only (admin/people.ts).
+// Your own devices (ACC-04, T14 item 7): the list of browsers and phones you're signed in on (with
+// your passkeys only while those are switched on, D46), and signing one out, or all but this one.
+// Signing a device out ends its sessions in the same transaction (0003's devices_end_sessions),
+// which appends signin.ended to the outbox (C0.6, T16), and after the commit the realtime role is
+// told to close their sockets (revocation/channels.ts), as the worker's revocation consumer also
+// does from the outbox (C0.7). Your own list shows exact times; an admin's view of it shows dates
+// only (admin/people.ts).
 import type { FastifyInstance } from 'fastify'
 import { sql } from 'kysely'
 import { z } from 'zod'

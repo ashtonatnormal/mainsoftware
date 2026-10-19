@@ -1,9 +1,11 @@
-// Signed-in self-service (ACC-02, §9.4, T14, T20): re-authenticating with the PIN, an SMS code or
-// a passkey, adding and removing a passkey, and signing out. Every transaction runs as the
-// session's person (inSession) and starts by re-reading the acting session FOR SHARE (person,
-// device, session), so a session that ended a moment ago is refused with 401 signed_out. Adding
-// or removing a passkey and signing out append their outbox events beside the change (C0.6, T16);
-// a re-authentication writes only stamps and counters, which are exempt (outbox/coverage.ts).
+// Signed-in self-service (ACC-02, §9.4, T14, T20): re-authenticating with the PIN or an SMS code,
+// signing out, and the dormant passkey routes (re-authenticating with a passkey, adding and
+// removing one), registered only while passkeys are switched on (D46, policy.ts PASSKEYS_ON).
+// Every transaction runs as the session's person (inSession) and starts by re-reading the acting
+// session FOR SHARE (person, device, session), so a session that ended a moment ago is refused
+// with 401 signed_out. Adding or removing a passkey and signing out append their outbox events
+// beside the change (C0.6, T16); a re-authentication writes only stamps and counters, which are
+// exempt (outbox/coverage.ts).
 //
 // Re-authentication stamps the session; admin actions and passkey changes need a stamp from the
 // last 5 minutes. Each session has one method (D46, AQ-01, AQ-02; packages/access reauthMethodOf):

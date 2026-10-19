@@ -34,6 +34,8 @@ describe('T14 T20: the sign-in replies parse as the server sends them', () => {
     expect(
       OtpVerifyReplySchema.safeParse({ status: 'code_verified', next: 'step_up', pin, passkey: false }).success,
     ).toBe(true)
+    // D46: passkeys are dormant, so the server's step-up reply has no passkey key.
+    expect(OtpVerifyReplySchema.safeParse({ status: 'code_verified', next: 'step_up', pin }).success).toBe(true)
     expect(OtpVerifyReplySchema.safeParse({ status: 'code_verified', next: 'step_up' }).success).toBe(false)
     expect(ReauthenticatedSchema.parse({ status: 'reauthenticated', validForSeconds: 300 }).validForSeconds).toBe(300)
   })

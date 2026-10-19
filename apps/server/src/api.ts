@@ -1,8 +1,9 @@
-// The api role's routes under /api (C0.5): sign-in, your own devices and passkeys, the admin
-// actions on a person, and from C0.6 changing a feature flag. Every response in the scope carries Cache-Control: no-store, errors
-// included. Every body is JSON of at most 16 KiB, parsed by a strict zod object (http.ts). Errors
-// become `{ error, message, ...extra }` (auth/errors.ts); anything unexpected is a 500 whose detail
-// goes only to the (redacted) log. Work a handler queues for after its response runs once that
+// The api role's routes under /api (C0.5): sign-in, your own devices (and passkeys, dormant: D46,
+// PASSKEYS_ON), the admin actions on a person, and from C0.6 changing a feature flag. Every
+// response in the scope carries Cache-Control: no-store, errors and the scope's own 404 included.
+// Every body is JSON of at most 16 KiB, parsed by a strict zod object (http.ts). Errors become
+// `{ error, message, ...extra }` (auth/errors.ts); anything unexpected is a 500 whose detail goes
+// only to the (redacted) log. Work a handler queues for after its response runs once that
 // response has ended, sent or abandoned (http.ts AfterResponse).
 import { setTimeout as delay } from 'node:timers/promises'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'

@@ -237,6 +237,19 @@ describe('C0.5 T14 the api scope: bodies, errors and no-store', () => {
     ])
   })
 
+  it('D46: the Origin check runs before the /api 404, so another origin gets the same 403 from a dormant passkey route as from a live one', async () => {
+    const { post } = setup()
+    const answer = async (path: string, headers: Record<string, string>) => {
+      const response = await post(path, {}, headers)
+      return [response.statusCode, response.json(), response.headers['cache-control']]
+    }
+    for (const headers of [{ origin: 'https://evil.example' }, { origin: 'null' }]) {
+      const live = await answer('/api/auth/otp/request', headers)
+      expect(live).toEqual([403, { error: 'Forbidden' }, 'no-store'])
+      expect(await answer('/api/auth/passkey/options', headers)).toEqual(live)
+    }
+  })
+
   it('gives a malformed phone number, code or PIN its own error', async () => {
     const { post } = setup()
     const phone = await post('/api/auth/otp/request', { phone: 'abc' })

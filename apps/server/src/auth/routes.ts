@@ -1,7 +1,8 @@
 // /api/auth (T14 item 16): signing in, which needs no session, and the signed-in self-service
-// (re-authentication by PIN or SMS code, sign-out, and the dormant passkey routes, D46). Every route is a POST, so the root Origin check refuses
-// any request that isn't from the app's own origin (origin.ts). Bodies are strict zod objects: an
-// unknown key is 400 invalid_request, and nothing a client sends is echoed back.
+// (re-authentication by PIN or SMS code, sign-out, and the dormant passkey routes, D46). Every
+// route is a POST, so the root Origin check refuses any request that isn't from the app's own
+// origin (origin.ts). Bodies are strict zod objects: an unknown key is 400 invalid_request, and
+// nothing a client sends is echoed back.
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import type { Api } from '#src/api.ts'
