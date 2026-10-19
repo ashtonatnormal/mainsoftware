@@ -121,10 +121,13 @@ export function browserEnv(): RuntimeEnv {
 export const topicKey = (topic: string) => ['topic', topic] as const
 
 // Whether the session still holds, from GET /api/flags (T19 item 11): an answer means yes, a 401
-// no, anything else can't tell. It runs at once and only once, whatever the network says, since the
-// gateway asks again in 30 s.
+// no, anything else can't tell. It sends one request of its own at once, whatever the network says,
+// since the gateway asks again in 30 s. A flags fetch already in flight is cancelled first: Query
+// would otherwise hand the probe that fetch, with its retries and its wait for the network, and a
+// poll paused offline would hold the probe, and the gateway's later probes, until it came back.
 async function probeSession(queryClient: QueryClient): Promise<ProbeAnswer> {
   try {
+    await queryClient.cancelQueries({ queryKey: flagsQuery.queryKey, exact: true })
     await queryClient.fetchQuery({ ...flagsQuery, staleTime: 0, retry: false, networkMode: 'always' })
     return 'signed_in'
   } catch (error) {

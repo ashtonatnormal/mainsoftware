@@ -1,12 +1,17 @@
 import type { FlagKey } from '@hearth/shared'
-import { focusManager, QueryObserver } from '@tanstack/react-query'
+import { environmentManager, focusManager, QueryObserver } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/session/query-client.ts'
 import { flagOn, flagsQuery, sessionQuery } from './queries.ts'
 
+// Whether Query took this test run for a server (no window) before a case changed it.
+const queryOnServer = environmentManager.isServer()
+
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.useRealTimers()
   focusManager.setFocused(undefined)
+  environmentManager.setIsServer(() => queryOnServer)
 })
 
 // Wei Ling, from the Tembusu seed (db/seed/tembusu.sql).
@@ -33,9 +38,7 @@ describe('T21: the api answers as Query options (api/queries.ts)', () => {
     expect(seen[0]?.signal).toBeInstanceOf(AbortSignal)
   })
 
-  it('QY-01 R-50 T17 item 11: flags refetch every 60 s while visible and on focus (options)', async () => {
-    // Query runs the 60 s poll only in a browser (it skips intervals where there is no window), so
-    // the poll itself is the e2e suite's (LV-01); here, its options and the refetch on focus.
+  it('QY-01 R-50 T17 item 11: flags refetch every 60 s while visible, not while hidden, and at once on focus', async () => {
     expect(flagsQuery.queryKey).toEqual(['flags'])
     expect(flagsQuery).toMatchObject({
       staleTime: 0,
@@ -44,6 +47,10 @@ describe('T21: the api answers as Query options (api/queries.ts)', () => {
       refetchOnWindowFocus: true,
     })
 
+    // Query sets no poll timer where there is no window (it takes that for a server), so this case
+    // tells it it's in a browser, and runs its timers on Vitest's clock.
+    environmentManager.setIsServer(() => false)
+    vi.useFakeTimers()
     const calls: string[] = []
     vi.stubGlobal('fetch', async (url: RequestInfo | URL) => {
       calls.push(String(url))
@@ -53,12 +60,28 @@ describe('T21: the api answers as Query options (api/queries.ts)', () => {
     client.mount()
     const stop = new QueryObserver(client, flagsQuery).subscribe(() => {})
     try {
-      await vi.waitFor(() => expect(client.getQueryState(['flags'])?.fetchStatus).toBe('idle'))
+      await vi.advanceTimersByTimeAsync(0)
       expect(calls).toEqual(['/api/flags'])
-      // Hidden and shown again: asked at once, since the answer is never fresh (staleTime 0).
+      // Visible: asked again every 60 s.
+      await vi.advanceTimersByTimeAsync(59_999)
+      expect(calls).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(calls).toHaveLength(2)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(calls).toHaveLength(3)
+      // Hidden: no poll, however long.
       focusManager.setFocused(false)
+      await vi.advanceTimersByTimeAsync(600_000)
+      expect(calls).toHaveLength(3)
+      // Shown again: asked at once, since the answer is never fresh (staleTime 0), then every 60 s.
       focusManager.setFocused(true)
-      await vi.waitFor(() => expect(calls).toHaveLength(2))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls).toHaveLength(4)
+      await vi.advanceTimersByTimeAsync(59_999)
+      expect(calls).toHaveLength(4)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(calls).toHaveLength(5)
+      expect(new Set(calls)).toEqual(new Set(['/api/flags']))
     } finally {
       stop()
       client.unmount()

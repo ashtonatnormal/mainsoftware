@@ -1,3 +1,4 @@
+import { onlineManager } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { FakeClock, type FakeSocket, socketClass } from '@/live/testing/fakes.ts'
@@ -15,6 +16,7 @@ beforeEach(async () => {
 })
 afterEach(() => {
   vi.unstubAllGlobals()
+  onlineManager.setOnline(true)
 })
 
 // Marcus and Priya, from the Tembusu seed (db/seed/tembusu.sql).
@@ -285,7 +287,7 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(storage.map.get('hearth:left')).toBe('session_ended')
   })
 
-  it("RT-08 R-42: a 401 signed_out that arrives while signOut() waits ends with signed_out_here; after a failed sign-out it's session_ended again", async () => {
+  it('RT-08 R-42: a 401 signed_out that arrives while signOut() waits ends with signed_out_here; a failed sign-out leaves the gateway running, and a later 401 is session_ended again', async () => {
     let answerSignOut: (response: Response) => void = () => {}
     stubFetch({
       '/api/auth/sign-out': () =>
@@ -308,14 +310,22 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(await signingOut).toBe('ended')
     expect(left).toHaveLength(1)
 
-    // A sign-out that failed leaves no trace: a later 401 is the server ending the session.
+    // A sign-out that failed leaves no trace: the live connection was never stopped, so it carries
+    // on as it was, and a later 401 is the server ending the session.
     vi.resetModules()
     runtimeModule = await import('./runtime.ts')
     http = await import('@/api/http.ts')
     stubFetch({ '/api/flags': signedOut })
     const second = fakeEnv()
     const again = runtimeModule.startSessionRuntime(MARCUS, second.env)
+    goLive(second.net.last())
     expect(await again.signOut()).toBe('failed')
+    expect(again.live.snapshot().status).toBe('live')
+    expect(second.net.last().closedWith).toBeUndefined()
+    expect(second.net.sockets).toHaveLength(1)
+    const pings = second.net.last().frames('ping').length
+    second.clock.advance(25_000)
+    expect(second.net.last().frames('ping')).toHaveLength(pings + 1)
     await again.queryClient
       .fetchQuery({ queryKey: ['flags'], queryFn: () => http.apiGet('/api/flags', z.unknown()) })
       .catch(() => {})
@@ -395,6 +405,27 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     const tried = net.sockets.length
     clock.advance(600_000)
     expect(net.sockets).toHaveLength(tried)
+  })
+
+  it('RT-07 R-48 T19 item 11: the probe sends a request of its own while a flags fetch waits offline, so its 401 still ends the session', async () => {
+    const calls = stubFetch({ '/api/flags': signedOut })
+    const { env, left, storage, clock } = fakeEnv(() => {}, { random: () => 0.5, refuse: true })
+    const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
+    // A flags poll that started while the browser said it was offline: Query holds it, unsent.
+    onlineManager.setOnline(false)
+    const polled = runtime.queryClient
+      .fetchQuery({ queryKey: ['flags'], queryFn: () => http.apiGet('/api/flags', z.unknown()) })
+      .catch(() => 'cancelled')
+    await tick()
+    expect(runtime.queryClient.getQueryState(['flags'])?.fetchStatus).toBe('paused')
+    expect(calls).toEqual([])
+    // Stalled at 30 s; the probe runs half-way through the next 5 s with this random.
+    clock.advance(32_500)
+    await tick()
+    expect(calls).toEqual(['/api/flags'])
+    expect(left).toEqual(['replace /sign-in'])
+    expect(storage.map.get('hearth:left')).toBe('session_ended')
+    expect(await polled).toBe('cancelled')
   })
 
   it('RT-07 R-48: a probe that finds the session alive, or can’t tell, keeps it and the connection trying', async () => {

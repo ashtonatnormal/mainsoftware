@@ -11,7 +11,8 @@
 //    never raise them past what this build was tested with); every pong updates the spread. Until a
 //    welcome the socket keeps this build's limits, a 25 s heartbeat and a 30 s spread (the server's
 //    widest). A welcome in a version this build doesn't speak means a newer server: onOutdated. No
-//    welcome within 15 s of opening (a proxy that upgraded while realtime hangs) is a failed try.
+//    welcome within 15 s of opening (a proxy that upgraded while realtime hangs) is a failed try,
+//    and so is a socket that hasn't opened 30 s after it was made (a connect that hangs).
 // 2. Topics: what the views hold (hold(), which returns the release) is compared with what the
 //    socket holds 250 ms after the first change, and the difference goes in one unsub, then sub
 //    frames of at most 50 topics (and the frame's bytes) each, with at most 100 held. A release
@@ -118,8 +119,13 @@ export const CLIENT_POLICY = {
   stalledAfterMs: 30_000,
   probeWindowMs: 5_000,
   probeEveryMs: 30_000,
-  // The server's hello limit and 5 s more: a proxy that upgrades while realtime hangs.
+  // From open: the server's hello limit and 5 s more, for a proxy that upgrades while realtime
+  // hangs.
   welcomeTimeoutMs: GATEWAY_LIMITS.helloTimeoutMs + 5_000,
+  // From the socket's creation to its open (T21 item 4, a default for the owner): a connect that
+  // hangs is let go and tried again, since a browser may take minutes to fail it. 30 s gives a slow
+  // link's handshake twice the welcome's 15 s, and is when a first try's episode reads as stalled.
+  connectTimeoutMs: 30_000,
   // The server's widest spread (apps/server/src/realtime/policy.ts, spreadMaxMs), used until a
   // welcome names the real one.
   spreadBeforeWelcomeMs: 30_000,
@@ -264,6 +270,8 @@ interface Socket {
   limits: SocketLimits
   nextId: number
   lastPingAt: number
+  // Until open, the connect timeout; from open until the welcome, the welcome timeout.
+  deadline?: number
   pumpTimer?: number
   pongTimer?: number
 }
@@ -429,11 +437,15 @@ export class GatewayClient {
       lastPingAt: Number.NEGATIVE_INFINITY,
     }
     this.#socket = socket
-    // From the socket's creation, so a connect that hangs counts too.
-    socket.timers.set(() => this.#abandon(socket, 'welcome_timeout'), CLIENT_POLICY.welcomeTimeoutMs)
+    socket.deadline = socket.timers.set(() => this.#abandon(socket, 'connect_timeout'), CLIENT_POLICY.connectTimeoutMs)
     ws.onopen = () => {
       if (this.#socket !== socket) return
       socket.opened = true
+      socket.timers.clear(socket.deadline)
+      socket.deadline = socket.timers.set(
+        () => this.#abandon(socket, 'welcome_timeout'),
+        CLIENT_POLICY.welcomeTimeoutMs,
+      )
       const versions = [...GATEWAY_VERSIONS]
       this.#send(socket, JSON.stringify({ v: Math.max(...versions), t: 'hello', versions }))
     }
@@ -472,8 +484,8 @@ export class GatewayClient {
     if (this.#socket === socket) this.#socket = undefined
   }
 
-  // The client closes the socket itself: no welcome in time, or silence after a ping.
-  #abandon(socket: Socket, why: 'welcome_timeout' | 'no_pong'): void {
+  // The client closes the socket itself: no open or no welcome in time, or silence after a ping.
+  #abandon(socket: Socket, why: 'connect_timeout' | 'welcome_timeout' | 'no_pong'): void {
     if (this.#socket !== socket) return
     this.#detach(socket)
     try {
@@ -481,7 +493,7 @@ export class GatewayClient {
     } catch {
       // Closed either way.
     }
-    this.#retry(socket, why === 'welcome_timeout' ? 'failed' : 'closed')
+    this.#retry(socket, why === 'no_pong' ? 'closed' : 'failed')
   }
 
   // The server or the network closed it (header item 7).

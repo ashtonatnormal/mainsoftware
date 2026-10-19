@@ -616,7 +616,11 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
     const { client, clock, net } = setup({ random: () => 0.999 })
     client.start()
     const socket = net.last()
+    // A slow link: the socket opens 20 s after it was made, and the 15 s count from there.
+    clock.advance(20_000)
+    expect(socket.closedWith).toBeUndefined()
     socket.open()
+    expect(socket.frames('hello')).toHaveLength(1)
     clock.advance(14_999)
     expect(socket.closedWith).toBeUndefined()
     clock.advance(1)
@@ -626,9 +630,31 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
     expect(net.sockets).toHaveLength(1)
     clock.advance(1)
     expect(net.sockets).toHaveLength(2)
-    // A connect that never even opens is given up on the same way.
-    clock.advance(15_000)
-    expect(net.sockets[1]?.closedWith).toEqual({ code: 4000, reason: 'welcome_timeout' })
+    // The next opens late too, and its welcome arrives in time: live.
+    clock.advance(25_000)
+    net.last().connect()
+    expect(client.status()).toBe('live')
+    expect(net.last().closedWith).toBeUndefined()
+  })
+
+  it('GW-22 (1)(7) T21 item 4: a socket that hasn’t opened 30 s after it was made closes 4000 and reconnects as a failed attempt', () => {
+    const { client, clock, net } = setup({ random: () => 0.999 })
+    client.start()
+    const socket = net.last()
+    clock.advance(29_999)
+    expect(socket.closedWith).toBeUndefined()
+    clock.advance(1)
+    expect(socket.closedWith).toEqual({ code: 4000, reason: 'connect_timeout' })
+    // Opening after that changes nothing: the client has let it go.
+    socket.open()
+    expect(socket.sent).toEqual([])
+    // A failed try waits full jitter from 1 s (999 ms here), not the 30 s spread.
+    clock.advance(998)
+    expect(net.sockets).toHaveLength(1)
+    clock.advance(1)
+    expect(net.sockets).toHaveLength(2)
+    clock.advance(30_000)
+    expect(net.sockets[1]?.closedWith).toEqual({ code: 4000, reason: 'connect_timeout' })
   })
 
   it('GW-20 (6)(7): before any welcome the heartbeat is 25 s and a reconnect waits within a 30 s spread', () => {
