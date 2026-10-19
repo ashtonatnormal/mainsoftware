@@ -21,7 +21,7 @@ select format('%s %s: %s', kind, name, detail) from (
                 pg_get_userbyid(t.typowner),
                 (select string_agg(e.enumlabel, ',' order by e.enumsortorder) from pg_enum e where e.enumtypid = t.oid),
                 format_type(t.typbasetype, t.typtypmod), t.typnotnull, t.typdefault,
-                (select string_agg(format('%I %s', k.conname, replace(pg_get_constraintdef(k.oid), ' NOT VALID', '')),
+                (select string_agg(format('%I %s', k.conname, regexp_replace(pg_get_constraintdef(k.oid), ' NOT VALID$', '')),
                                    '; ' order by k.conname)
                  from pg_constraint k where k.contypid = t.oid), t.typacl)
   from pg_type t join pg_namespace n on n.oid = t.typnamespace
@@ -36,7 +36,7 @@ select format('%s %s: %s', kind, name, detail) from (
   where n.nspname = 'public' and c.relkind in ('r', 'p', 'v', 'm', 'f', 'c') and not c.relispartition
     and a.attnum > 0 and not a.attisdropped
   union all
-  select 'constraint', format('%I.%I', c.relname, k.conname), replace(pg_get_constraintdef(k.oid), ' NOT VALID', '')
+  select 'constraint', format('%I.%I', c.relname, k.conname), regexp_replace(pg_get_constraintdef(k.oid), ' NOT VALID$', '')
   from pg_constraint k join pg_class c on c.oid = k.conrelid join pg_namespace n on n.oid = c.relnamespace
   where n.nspname = 'public' and not c.relispartition
   union all
