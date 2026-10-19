@@ -201,8 +201,9 @@ jobs:
           CHECK_DB: hearth_upgrade_check
         run: UP_TO=0008 scripts/check-migrations.sh && scripts/check-revocation-upgrade.sh
       # The schema digest the upgrade checks compare (scripts/schema-digest.sql), against pairs of
-      # throwaway databases: each respect it compares (partitions, options, sequences, identity and
-      # generated columns, collations, default privileges, schemas, NOT VALID) shows, and
-      # equivalent builds compare equal (other months' partitions, a database in New York, an
-      # older month made by 0005's function in a copy of the fresh build above).
+      # throwaway databases: each respect it was widened for (partitions, options, sequences,
+      # identity and generated columns, collations, default privileges, schemas, NOT VALID,
+      # rewrite rules, aggregates) shows, and equivalent builds compare equal (other months'
+      # partitions, a database in New York, an older month made by 0005's function in a copy of
+      # the fresh build above).
       - run: scripts/check-schema-digest.sh
