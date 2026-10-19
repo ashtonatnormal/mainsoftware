@@ -41,10 +41,16 @@ const REGISTRY = {
 
 // The org: an Admin and a Member. `revision` is what set_feature_flag() returns (1 is the row's
 // own: a change that changed nothing); `fails` makes it raise.
-function org(options: { fresh?: boolean; row?: boolean; revision?: string; fails?: Error } = {}) {
+// issuedPrivileged: whether the acting session was issued under the PIN rule (D46); the Admin holds
+// a PIN.
+function org(
+  options: { fresh?: boolean; issuedPrivileged?: boolean; row?: boolean; revision?: string; fails?: Error } = {},
+) {
   return scriptedPool((statement: Statement) => {
     const { text } = statement
-    if (text.includes('from people p')) return [{ fresh: options.fresh ?? true }]
+    if (text.includes('from people p')) {
+      return [{ fresh: options.fresh ?? true, pin_set: true, issued_privileged: options.issuedPrivileged ?? true }]
+    }
     if (text.startsWith('select "id", "deactivated_at" from "people"')) {
       return [
         { id: ADMIN, deactivated_at: null },
@@ -178,6 +184,19 @@ describe('C0.6 T17 item 9 POST /api/admin/flags/set', () => {
       expect(pool.texts().some(text => text.includes('feature_flags'))).toBe(false)
       expect(c.published).toEqual([])
     }
+  })
+
+  it('D46 AQ-02: refuses an Admin on a session issued under the code-only rule with reauth_required {method: sign_in}', async () => {
+    const pool = org({ issuedPrivileged: false })
+    const c = context(pool)
+    expect(await refusal(setFlag(c.api, body({ key: 'it.optional', enabled: true }), session(), c.info))).toMatchObject(
+      {
+        status: 403,
+        code: 'reauth_required',
+        extra: { method: 'sign_in' },
+      },
+    )
+    expect(pool.texts().some(text => text.includes('feature_flags'))).toBe(false)
   })
 
   it('answers 404 for a key this process doesn’t know, before reading rows, and for one the org has no row for', async () => {

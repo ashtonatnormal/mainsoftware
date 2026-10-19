@@ -26,6 +26,8 @@ const session = { sessionId: SESSION, orgId: ORG, userId: ADMIN, deviceId: DEVIC
 // action's own statements.
 function org(options: {
   fresh?: boolean
+  // Whether the acting session was issued under the PIN rule (D46); the Admin holds a PIN.
+  issuedPrivileged?: boolean
   memberLeft?: boolean
   rows?: (statement: Statement) => unknown[] | undefined
 }) {
@@ -33,7 +35,9 @@ function org(options: {
     const answered = options.rows?.(statement)
     if (answered !== undefined) return answered
     const { text } = statement
-    if (text.includes('from people p')) return [{ fresh: options.fresh ?? true }]
+    if (text.includes('from people p')) {
+      return [{ fresh: options.fresh ?? true, pin_set: true, issued_privileged: options.issuedPrivileged ?? true }]
+    }
     if (text.startsWith('select "id", "deactivated_at" from "people"')) {
       return [
         { id: ADMIN, deactivated_at: null },
@@ -203,6 +207,18 @@ describe('C0.5 ACC-05 C0.6 T16 deactivating someone', () => {
         code: 'forbidden',
       })
     }
+  })
+
+  it('D46 AQ-02: an Admin on a session issued under the code-only rule must sign in again, even with a fresh stamp', async () => {
+    const c = context(org({ issuedPrivileged: false }))
+    const error = await refusal(deactivate(c.api, { person: MEMBER }, session, c.info))
+    expect(error).toMatchObject({ status: 403, code: 'reauth_required', extra: { method: 'sign_in' }, person: ADMIN })
+    const stale = context(org({ fresh: false }))
+    expect(await refusal(deactivate(stale.api, { person: MEMBER }, session, stale.info))).toMatchObject({
+      status: 403,
+      code: 'reauth_required',
+      extra: { method: 'pin' },
+    })
   })
 })
 

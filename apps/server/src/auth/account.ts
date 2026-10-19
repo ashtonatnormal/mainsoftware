@@ -1,23 +1,36 @@
-// Signed-in self-service (ACC-02, §9.4, T14): re-authenticating with the PIN or a
-// passkey, adding and removing a passkey, and signing out. Every transaction runs as the
+// Signed-in self-service (ACC-02, §9.4, T14, T20): re-authenticating with the PIN, an SMS code or
+// a passkey, adding and removing a passkey, and signing out. Every transaction runs as the
 // session's person (inSession) and starts by re-reading the acting session FOR SHARE (person,
 // device, session), so a session that ended a moment ago is refused with 401 signed_out. Adding
 // or removing a passkey and signing out append their outbox events beside the change (C0.6, T16);
 // a re-authentication writes only stamps and counters, which are exempt (outbox/coverage.ts).
 //
 // Re-authentication stamps the session; admin actions and passkey changes need a stamp from the
-// last 5 minutes. It counts against a per-session window that, unlike sign-in's, lets requests
-// through when Valkey is down: re-authentication is signed-in traffic, which carries on without
-// Valkey, and the PIN lock in Postgres still bounds guessing while the PIN slots bound the work.
-import type { ReauthenticatedSchema } from '@hearth/shared'
+// last 5 minutes. Each session has one method (D46, AQ-01, AQ-02; packages/access reauthMethodOf):
+// the PIN for a session issued under the PIN rule, a fresh SMS code to the person's own number for
+// any other, and a new sign-in for one that neither mends. Each route decides the method in the
+// transaction that stamps, after re-reading the acting session, and refuses any other with 409
+// reauth_method {method} before it checks or sends anything, so a privileged holder's session never
+// gets an SMS stamp.
+// - The PIN counts against a per-session window that, unlike sign-in's, lets requests through when
+//   Valkey is down: re-authentication is signed-in traffic, which carries on without Valkey, and the
+//   PIN lock in Postgres still bounds guessing while the PIN slots bound the work. So privileged
+//   holders keep their admin powers through a Valkey or SMS provider outage.
+// - An SMS code fails closed instead (AQ-10): the same per-session window, and per person 20 code
+//   requests and 20 code checks a rolling day. The code lives in the number's one challenge record
+//   (codes.ts), owned by `r:<session id>`, so a re-authentication code replaces a pending sign-in
+//   code and the reverse; re-authentication codes don't count against sign-in's per-number windows.
+//   Its refusals carry no floor: the caller is signed in, and there's nothing to hide.
+import type { CodeSentSchema, ReauthenticatedSchema, ReauthMethod } from '@hearth/shared'
 import { sql } from 'kysely'
 import type { z } from 'zod'
-import { actingSession, authorise } from '#src/access/world.ts'
+import { actingSession, authorise, reauthMethodNow } from '#src/access/world.ts'
 import type { Api } from '#src/api.ts'
 import { writeAudit } from '#src/auth/audit.ts'
+import { openCode, reserveCode, settleCode } from '#src/auth/codes.ts'
 import { clearedCookie } from '#src/auth/cookies.ts'
-import { withPinSlot } from '#src/auth/crypto.ts'
-import { ApiError } from '#src/auth/errors.ts'
+import { tag, withPinSlot } from '#src/auth/crypto.ts'
+import { ApiError, reauthRefusal } from '#src/auth/errors.ts'
 import { hit } from '#src/auth/limiter.ts'
 import {
   type AuthenticationResponse,
@@ -28,20 +41,26 @@ import {
   verifyRegistration,
 } from '#src/auth/passkeys.ts'
 import { checkPin } from '#src/auth/pin.ts'
-import { LIMITS, PASSKEY_CHALLENGE_TTL_MS, REAUTH } from '#src/auth/policy.ts'
-import { inSession, type SessionIds, signedOut, stampReauth } from '#src/auth/sessions.ts'
+import { LIMITS, OTP, PASSKEY_CHALLENGE_TTL_MS, REAUTH } from '#src/auth/policy.ts'
+import { inSession, numberStillTheirs, type SessionIds, signedOut, stampReauth } from '#src/auth/sessions.ts'
 import {
+  cancelQuietly,
   credentialFor,
+  enforce,
   fromValkey,
   livePasskeys,
   pinRefusal,
+  providerFailure,
   recordPasskeyUse,
+  startCode,
   tooManyRequests,
   windowOf,
 } from '#src/auth/sign-in.ts'
+import type { Verdict } from '#src/auth/sms/provider.ts'
 import type { InOrg } from '#src/db/database.ts'
 import { endDevices } from '#src/devices/routes.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
+import { C06_GATE } from '#src/jobs/gate.ts'
 import { appendOutbox } from '#src/outbox/append.ts'
 import { publishRevoked } from '#src/revocation/channels.ts'
 
@@ -52,8 +71,17 @@ const reauthenticated: Answer = {
 }
 
 // The acting session, or 401 signed_out.
-async function acting(trx: InOrg, session: SessionIds): Promise<void> {
-  if ((await actingSession(trx, session)) === undefined) throw signedOut()
+async function acting(trx: InOrg, session: SessionIds) {
+  const facts = await actingSession(trx, session)
+  if (facts === undefined) throw signedOut()
+  return facts
+}
+
+// The acting session, and 409 reauth_method {method} unless it re-authenticates by `own` (D46, I2).
+// Thrown before anything is checked, counted or sent, so nothing is written.
+async function actingBy(trx: InOrg, session: SessionIds, own: ReauthMethod): Promise<void> {
+  const method = await reauthMethodNow(trx, session, await acting(trx, session))
+  if (method !== own) throw reauthRefusal('reauth_method', method, session.userId)
 }
 
 // At most 10 re-authentications per session per 10 minutes. A Valkey error lets it through.
@@ -86,7 +114,7 @@ export async function reauthPin(api: Api, body: { pin: string }, session: Sessio
   await reauthLimit(api, session, info)
   const check = await withPinSlot(() =>
     inSession(api, info, session, async trx => {
-      await acting(trx, session)
+      await actingBy(trx, session, 'pin')
       const check = await checkPin(
         trx,
         api.keys,
@@ -112,6 +140,173 @@ export async function reauthPin(api: Api, body: { pin: string }, session: Sessio
   )
   if (!check.ok) throw pinRefusal(check, 'reauth')
   return reauthenticated
+}
+
+// --- POST /api/auth/reauth/code/request -----------------------------------------------------
+
+// The person's one current number (0002: one per person), read with no lock: phone_numbers comes
+// before devices and sessions in the lock order, which acting() has already taken.
+async function currentNumber(trx: InOrg, session: SessionIds): Promise<{ id: string; e164: string }> {
+  const row = await trx
+    .selectFrom('phone_numbers')
+    .select(['id', 'e164'])
+    .where('org_id', '=', session.orgId)
+    .where('person_id', '=', session.userId)
+    .where('removed_at', 'is', null)
+    .executeTakeFirst()
+  if (row === undefined) throw new ApiError(409, 'no_number')
+  return row
+}
+
+// The challenge record's owner for a session's re-authentication (codes.ts).
+const ownerOf = (session: SessionIds) => `r:${session.sessionId}`
+
+export async function reauthCodeRequest(api: Api, session: SessionIds, info: ReqInfo): Promise<Answer> {
+  const sms = api.sms
+  if (sms === undefined) throw new ApiError(503, 'unavailable')
+  await enforce(api, info, [windowOf(api, LIMITS.reauthPerSession, session.sessionId)])
+  const owner = ownerOf(session)
+  const opened = await inSession(api, info, session, async trx => {
+    await actingBy(trx, session, 'code')
+    const number = await currentNumber(trx, session)
+    await enforce(api, info, [windowOf(api, LIMITS.reauthCodePerPerson, session.userId)])
+    const requested = (send: 'attempted' | 'skipped_not_cleared' | 'skipped_cap') =>
+      writeAudit(trx, {
+        ...audit(session, info),
+        action: 'auth.code_requested',
+        details: { during: 'reauth', send },
+      })
+    // An outside provider receives the number only once PDPA-10's transfer register clears it (C0.9).
+    if (sms.transfer !== null && !(api.gate ?? C06_GATE).providerCleared(session.orgId, sms.transfer)) {
+      await requested('skipped_not_cleared')
+      info.log.error(
+        { event: 'sms_provider_not_cleared', provider: sms.name, personId: session.userId },
+        'a re-authentication code was not sent: the provider is not cleared in the transfer register',
+      )
+      return undefined
+    }
+    let capped: 'sms_global_cap' | 'sms_cap_unavailable' | undefined
+    try {
+      const result = await hit(api.valkey, [windowOf(api, LIMITS.smsGlobal, 'all')])
+      if (!result.allowed) capped = 'sms_global_cap'
+    } catch {
+      capped = 'sms_cap_unavailable'
+    }
+    if (capped !== undefined) {
+      await requested('skipped_cap')
+      info.log.error({ event: capped, personId: session.userId }, 'a re-authentication code was not sent: the SMS cap')
+      return undefined
+    }
+    const numberTag = tag(api.keys, number.e164)
+    // This session owns the number's challenge from here; any earlier code is cancelled below.
+    const replacedRef = await fromValkey(info, openCode(api.valkey, api.names, numberTag, owner))
+    await requested('attempted')
+    return { e164: number.e164, numberTag, replacedRef }
+  })
+  // A skip was audited and committed; nothing was sent.
+  if (opened === undefined) throw new ApiError(503, 'unavailable')
+  // Signed-in traffic, nothing to hide: the text is sent before the reply, so a failure says so.
+  if (opened.replacedRef !== undefined) await cancelQuietly(sms, info, opened.replacedRef)
+  let started: Awaited<ReturnType<typeof startCode>>
+  try {
+    started = await startCode(api, info, sms, {
+      e164: opened.e164,
+      numberTag: opened.numberTag,
+      owner,
+      personId: session.userId,
+    })
+  } catch (error) {
+    info.log.error(
+      { event: 'sms_send_failed', provider: sms.name, ...providerFailure(error), personId: session.userId },
+      'a re-authentication code could not be sent',
+    )
+    throw new ApiError(503, 'unavailable')
+  }
+  // A sign-in request for the number replaced this code meanwhile, or the provider twice handed back
+  // a verification Hearth didn't start: no code is live for this session.
+  if (started !== 'attached') throw new ApiError(503, 'unavailable')
+  return {
+    body: { status: 'code_sent', expiresInSeconds: OTP.ttlMs / 1000, codeLength: OTP.length } satisfies z.input<
+      typeof CodeSentSchema
+    >,
+  }
+}
+
+// --- POST /api/auth/reauth/code/verify ------------------------------------------------------
+
+export async function reauthCodeVerify(
+  api: Api,
+  body: { code: string },
+  session: SessionIds,
+  info: ReqInfo,
+): Promise<Answer> {
+  const sms = api.sms
+  if (sms === undefined) throw new ApiError(503, 'unavailable')
+  await enforce(api, info, [
+    windowOf(api, LIMITS.reauthPerSession, session.sessionId),
+    windowOf(api, LIMITS.reauthCheckPerPerson, session.userId),
+  ])
+  const owner = ownerOf(session)
+  // Transaction A writes nothing: the method is decided before any provider check is spent.
+  const number = await inSession(api, info, session, async trx => {
+    await actingBy(trx, session, 'code')
+    return currentNumber(trx, session)
+  })
+  if (api.otp.breaker.isOpen()) throw new ApiError(503, 'unavailable')
+  const numberTag = tag(api.keys, number.e164)
+  const reserved = await fromValkey(info, reserveCode(api.valkey, api.names, numberTag, owner))
+  let check: { result: 'approved' | 'wrong' | 'dead' | 'expired'; tries: number }
+  if (reserved.result === 'check') {
+    let verdict: Verdict | 'failed' = 'failed'
+    try {
+      verdict = await sms.check(reserved.ref, body.code)
+    } catch (error) {
+      api.otp.breaker.failed()
+      info.log.error(
+        { event: 'sms_check_failed', provider: sms.name, ...providerFailure(error) },
+        'the SMS provider could not check a code',
+      )
+    }
+    const settled = await fromValkey(info, settleCode(api.valkey, api.names, numberTag, owner, reserved, verdict))
+    // The provider couldn't answer: the try was given back.
+    if (settled.result === 'failed') throw new ApiError(503, 'unavailable')
+    // A sign-in request replaced this session's code during the check: it no longer counts.
+    if (settled.result === 'displaced') check = { result: 'expired', tries: 0 }
+    else check = 'tries' in settled ? settled : { result: 'expired', tries: 0 }
+    if (settled.result === 'dead') {
+      const ref = reserved.ref
+      info.after(() => cancelQuietly(sms, info, ref))
+    }
+  } else if (reserved.result === 'expired') {
+    const { ref } = reserved
+    if (ref !== undefined) info.after(() => cancelQuietly(sms, info, ref))
+    check = { result: 'expired', tries: 0 }
+  } else {
+    check = reserved
+  }
+  if (check.result === 'approved') {
+    // Transaction B: the method again (a grant committed since refuses, and the spent code stamps
+    // nothing), and the number still theirs. Read with no lock: acting() has already taken the
+    // person, device and session FOR SHARE, and phone_numbers comes before devices and sessions in
+    // the lock order (0006, CLAUDE.md). The person's row, held FOR SHARE, already serialises this
+    // against a phone change, which takes it FOR NO KEY UPDATE first and ends every session.
+    const stamped = await inSession(api, info, session, async trx => {
+      await actingBy(trx, session, 'code')
+      if (!(await numberStillTheirs(trx, session.orgId, session.userId, number.id, { locked: false }))) return false
+      await stampReauth(trx, session)
+      await writeAudit(trx, { ...audit(session, info), action: 'auth.reauth', details: { method: 'sms' } })
+      return true
+    })
+    if (stamped) return reauthenticated
+    check = { result: 'expired', tries: 0 }
+  }
+  const result = check.result
+  await inSession(api, info, session, trx =>
+    writeAudit(trx, { ...audit(session, info), action: 'auth.code_failed', details: { during: 'reauth', result } }),
+  )
+  if (result === 'expired') throw new ApiError(401, 'code_expired')
+  if (result === 'dead') throw new ApiError(401, 'code_dead')
+  throw new ApiError(401, 'code_wrong', { triesLeft: OTP.maxTries - check.tries })
 }
 
 // --- POST /api/auth/reauth/passkey/options --------------------------------------------------
@@ -143,7 +338,8 @@ export async function reauthPasskeyVerify(
   if (expected === null) throw new ApiError(401, 'passkey_expired')
   const credentialId = Buffer.from(body.response.id, 'base64url')
   const ok = await inSession(api, info, session, async trx => {
-    await acting(trx, session)
+    // A passkey stands in for the PIN, so only a session that re-authenticates with the PIN uses one.
+    await actingBy(trx, session, 'pin')
     const failed = async (passkey?: string) => {
       await writeAudit(trx, {
         ...audit(session, info),

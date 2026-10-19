@@ -423,44 +423,46 @@ async function deliverCode(
 // text. A request that has lost the record to a newer one by the time either start answers leaves
 // that verification alone, so it never cancels the newer owner's: a newer request that starts
 // between this one's cancel and its second start makes the verification this one then gets back
-// as foreign.
-async function startCode(
+// as foreign. Answers whether a code is now live for the owner (attached), or not (lost: a newer
+// request owns the record; foreign: twice handed someone else's); account.ts's re-authentication
+// answers 503 for either.
+export async function startCode(
   api: Api,
   info: ReqInfo,
   sms: SmsProvider,
   sending: { e164: string; numberTag: string; owner: string; personId: string },
-): Promise<void> {
+): Promise<'attached' | 'lost' | 'foreign'> {
   const { numberTag, owner } = sending
   const stillOwner = async () => (await codeOwner(api.valkey, api.names, numberTag)) === owner
   let started = await sms.start(sending.e164)
-  if (!(await stillOwner())) return
+  if (!(await stillOwner())) return 'lost'
   if (started.foreign) {
     await sms.cancel(started.ref)
     started = await sms.start(sending.e164)
-    if (!(await stillOwner())) return
+    if (!(await stillOwner())) return 'lost'
     if (started.foreign) {
       await cancelQuietly(sms, info, started.ref)
       info.log.warn(
         { event: 'provider_foreign_verification', provider: sms.name, personId: sending.personId },
         'the provider handed back a verification Hearth did not start, twice; nothing was attached',
       )
-      return
+      return 'foreign'
     }
   }
-  await attachCode(api.valkey, api.names, numberTag, owner, started.ref)
+  return attachCode(api.valkey, api.names, numberTag, owner, started.ref)
 }
 
 // What a provider's failure puts in a log line: the error's name, and for an SmsProviderError its
 // kind, the provider's numeric code and the HTTP status (TECH-SPEC T7, T20), so a refusal such as
 // Twilio's 60410 can be told from 60605. Never its message, which can quote the number.
-function providerFailure(error: unknown) {
+export function providerFailure(error: unknown) {
   if (!(error instanceof SmsProviderError)) return { error: error instanceof Error ? error.name : 'unknown' }
   return { error: error.name, kind: error.kind, providerCode: error.providerCode, httpStatus: error.httpStatus }
 }
 
 // Cancels a provider reference, best effort: a failure is logged (without the reference) and
 // otherwise ignored, since the record no longer accepts that code anyway.
-async function cancelQuietly(sms: SmsProvider, info: ReqInfo, ref: string): Promise<void> {
+export async function cancelQuietly(sms: SmsProvider, info: ReqInfo, ref: string): Promise<void> {
   try {
     await sms.cancel(ref)
   } catch (error) {

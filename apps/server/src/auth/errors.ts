@@ -7,7 +7,13 @@
 // transaction's work and becomes an ApiError only after the transaction has committed. A throw
 // inside withOrg() rolls back, so throwing is kept for refusals that write nothing.
 
-import { type ErrorCode, type ErrorExtrasSchema, MESSAGES } from '@hearth/shared'
+import {
+  type ErrorCode,
+  type ErrorExtrasSchema,
+  MESSAGES,
+  REAUTH_METHOD_MESSAGES,
+  type ReauthMethod,
+} from '@hearth/shared'
 import type { z } from 'zod'
 
 export { type ErrorCode, MESSAGES }
@@ -25,19 +31,42 @@ export class ApiError extends Error {
   readonly code: ErrorCode
   readonly extra: Extras
   readonly clear: readonly ('session' | 'attempt')[]
+  // The acting person, for a refusal whose method is sign_in: the error handler logs
+  // privileged_session_mismatch with this id only (D46). Never sent.
+  readonly person: string | undefined
 
-  constructor(status: number, code: ErrorCode, extra: Extras = {}, clear: readonly ('session' | 'attempt')[] = []) {
+  constructor(
+    status: number,
+    code: ErrorCode,
+    extra: Extras = {},
+    clear: readonly ('session' | 'attempt')[] = [],
+    person?: string,
+  ) {
     super(code)
     this.status = status
     this.code = code
     this.extra = extra
     this.clear = clear
+    this.person = person
   }
 }
 
-// The copy to send with an error: MESSAGES, except pin_locked when only an admin can lift it.
+// 403 reauth_required or 409 reauth_method naming the session's method (D46, AQ-01).
+export function reauthRefusal(
+  code: 'reauth_required' | 'reauth_method',
+  method: ReauthMethod,
+  person: string,
+): ApiError {
+  return new ApiError(code === 'reauth_required' ? 403 : 409, code, { method }, [], person)
+}
+
+// The copy to send with an error: MESSAGES, except pin_locked when only an admin can lift it, and
+// reauth_required and reauth_method, which name the method when they carry one.
 export function messageFor(error: ApiError): string {
   if (error.code === 'pin_locked' && error.extra.pin?.state === 'admin_locked') return PIN_ADMIN_LOCKED_MESSAGE
+  const method = error.extra.method
+  if (method !== undefined && error.code === 'reauth_required') return REAUTH_METHOD_MESSAGES[method].required
+  if (method !== undefined && error.code === 'reauth_method') return REAUTH_METHOD_MESSAGES[method].method
   return MESSAGES[error.code]
 }
 

@@ -381,6 +381,11 @@ export interface Stack {
   }): Promise<Person>
   // Another org with its system principal and the test flags, and nobody in it.
   newOrg(): Promise<Org>
+  // A role row inserted (or revoked) as the superuser and nothing else: no session is ended, so it
+  // models a grant that skipped C0.16's rule of ending the grantee's sessions first (D46 I3).
+  // Answers the person as signIn() should now treat them.
+  grantRole(person: Person, role: Exclude<PersonRole, 'team_admin'>): Promise<Person>
+  revokeRole(person: Person, role: Exclude<PersonRole, 'team_admin'>): Promise<Person>
   // A Singapore mobile number nobody in this run holds.
   number(): string
   // A PIN the policy accepts, recorded as typed.
@@ -1081,6 +1086,40 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       return { id, orgId: inOrg.id, e164, local: e164.slice(3), phoneNumberId: phone.id, pin: o.pin, privileged }
     }
 
+    // Whether the person holds a privileged role now, read from their unrevoked role rows.
+    async function privilegedNow(person: Person): Promise<boolean> {
+      const rows = await query<{ role: PersonRole }>(
+        'select role from role_assignments where person_id = $1 and revoked_at is null',
+        [person.id],
+      )
+      return rows.some(row => PIN_ROLES.includes(row.role))
+    }
+
+    async function grantRole(person: Person, role: Exclude<PersonRole, 'team_admin'>): Promise<Person> {
+      const [org] = await query<{ system: string }>(
+        "select id as system from principals where org_id = $1 and kind = 'system'",
+        [person.orgId],
+      )
+      await query(
+        'insert into role_assignments (org_id, person_id, role, team_id, created_by) values ($1, $2, $3, null, $4)',
+        [person.orgId, person.id, role, org?.system],
+      )
+      return { ...person, privileged: await privilegedNow(person) }
+    }
+
+    async function revokeRole(person: Person, role: Exclude<PersonRole, 'team_admin'>): Promise<Person> {
+      const [org] = await query<{ system: string }>(
+        "select id as system from principals where org_id = $1 and kind = 'system'",
+        [person.orgId],
+      )
+      await query(
+        `update role_assignments set revoked_at = now(), revoked_by = $3
+         where person_id = $1 and role = $2 and revoked_at is null`,
+        [person.id, role, org?.system],
+      )
+      return { ...person, privileged: await privilegedNow(person) }
+    }
+
     async function sessionOf(browser: Client): Promise<{ id: string; deviceId: string }> {
       const token = browser.cookie('__Host-hearth_session')
       if (token === undefined) throw new Error('that client has no session cookie')
@@ -1268,6 +1307,8 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
         return cache
       },
       person,
+      grantRole,
+      revokeRole,
       newOrg: () => newOrg(),
       number,
       newPin,

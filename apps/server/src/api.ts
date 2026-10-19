@@ -147,6 +147,13 @@ function answerError(error: unknown, request: FastifyRequest, reply: FastifyRepl
     request.log.info({ event: 'db_conflict', code: typeof code === 'string' ? code : undefined }, 'database conflict')
   } else if (error instanceof PinSlotsFull) {
     request.log.warn({ event: 'pin_slots_full' }, 'too many PIN checks are waiting')
+  } else if (known.extra.method === 'sign_in' && known.person !== undefined) {
+    // A session that only a new sign-in mends (D46): a privileged role reached a code-only session,
+    // or a PIN-rule session lost its PIN. The person's id only.
+    request.log.warn(
+      { event: 'privileged_session_mismatch', personId: known.person },
+      'this session must sign in again to re-authenticate',
+    )
   }
   for (const which of known.clear) addCookie(reply, clearedCookie(which))
   if (known.code === 'too_many_requests' && typeof known.extra.retryAfterSeconds === 'number') {

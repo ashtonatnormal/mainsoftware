@@ -39,8 +39,9 @@ export const SESSION = {
 // tells a session issued under the PIN rule by its shorter lifetime, and policy.test.ts pins that.
 export const PRIVILEGED_SESSION = { lifetime: '168 hours', lifetimeSeconds: 604_800 } as const
 
-// Admin actions, and adding or removing a passkey, need a PIN or passkey check from the last 5
-// minutes (§9.4).
+// Admin actions, and adding or removing a passkey, need a re-authentication from the last 5 minutes
+// (§9.4): the PIN for a session issued to a privileged holder, a fresh SMS code for anyone else
+// (D46, AQ-01; packages/access reauthMethodOf).
 export const REAUTH = { window: '5 minutes', windowSeconds: 300 } as const
 
 // PRD-53: 5 wrong PINs lock the PIN for 15 minutes, and every failure after that starts a new
@@ -73,8 +74,11 @@ export const LIMITS = {
   otpPerIp: { name: 'otp-ip', windowMs: 600_000, max: 30 },
   // Every sign-in request per IP.
   authPerIp: { name: 'auth-ip', windowMs: 600_000, max: 100 },
-  // Re-authentications per session.
+  // Re-authentications per session (the PIN, and SMS code requests and checks alike).
   reauthPerSession: { name: 'reauth', windowMs: 600_000, max: 10 },
+  // SMS re-authentication code requests, and code checks, per person per rolling day (D46, AQ-09).
+  reauthCodePerPerson: { name: 'reauth-code-p24h', windowMs: 86_400_000, max: 20 },
+  reauthCheckPerPerson: { name: 'reauth-check-p24h', windowMs: 86_400_000, max: 20 },
   // Texts actually sent, across all numbers (checked after the reply, before the send).
   smsGlobal: { name: 'sms-global', windowMs: 3_600_000, max: 100 },
 } as const

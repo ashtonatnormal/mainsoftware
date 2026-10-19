@@ -79,15 +79,15 @@ export async function deactivate(
   const request: Request = { action: 'person.deactivate', person: target }
   const ended = await inSession(api, info, session, async trx => {
     const nothing = { sessions: [], devices: [] }
-    const { world, verdict, fresh } = await consider(trx, session, request)
+    const { world, verdict, fresh, method } = await consider(trx, session, request)
     if (verdict !== 'allowed') {
       // can() refuses an action on someone who has already left, so ask it as though they hadn't.
       if (verdict === 'refused' && world.person(target)?.deactivatedAt != null) {
         const again = decide(asIfActive(world, target), me, request, fresh)
         if (again === 'allowed') return nothing
-        throw refusalFor(again, 'forbidden')
+        throw refusalFor(again, 'forbidden', { method, person: me })
       }
-      throw refusalFor(verdict, 'forbidden')
+      throw refusalFor(verdict, 'forbidden', { method, person: me })
     }
     const updated = await trx
       .updateTable('people')

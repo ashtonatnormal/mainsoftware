@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { ApiError, fromDatabase, MESSAGES, messageFor, PIN_ADMIN_LOCKED_MESSAGE } from '#src/auth/errors.ts'
+import {
+  ApiError,
+  fromDatabase,
+  MESSAGES,
+  messageFor,
+  PIN_ADMIN_LOCKED_MESSAGE,
+  reauthRefusal,
+} from '#src/auth/errors.ts'
 
 describe('C0.5 api errors', () => {
   it('turns a deadlock, a serialisation failure and a lock not granted into 409 try_again', () => {
@@ -52,5 +59,27 @@ describe('C0.5 api errors', () => {
     expect(error.message).toBe('attempt_expired')
     expect(error.clear).toEqual(['attempt'])
     expect(new ApiError(429, 'too_many_requests', { retryAfterSeconds: 60 }).extra).toEqual({ retryAfterSeconds: 60 })
+  })
+
+  it('D46 AQ-01: reauth_required and reauth_method name the method in their copy, and carry the person for the log only', () => {
+    expect(messageFor(new ApiError(403, 'reauth_required'))).toBe("Confirm it's you, then try again.")
+    const cases = [
+      ['pin', "Confirm it's you with your PIN first.", "Confirm it's you with your PIN."],
+      ['code', "Confirm it's you with a code we text you first.", "Confirm it's you with a code we text you."],
+      [
+        'sign_in',
+        'Your account has changed. Sign out and sign in again to carry on.',
+        'Your account has changed. Sign out and sign in again to carry on.',
+      ],
+    ] as const
+    for (const [method, required, other] of cases) {
+      const refused = reauthRefusal('reauth_required', method, 'p-1')
+      expect(refused).toMatchObject({ status: 403, code: 'reauth_required', extra: { method }, person: 'p-1' })
+      expect(messageFor(refused)).toBe(required)
+      const wrong = reauthRefusal('reauth_method', method, 'p-1')
+      expect(wrong).toMatchObject({ status: 409, code: 'reauth_method', extra: { method } })
+      expect(messageFor(wrong)).toBe(other)
+    }
+    expect(messageFor(new ApiError(409, 'no_number'))).toBe(MESSAGES.no_number)
   })
 })

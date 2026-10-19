@@ -1,11 +1,13 @@
 // /api/auth (T14 item 16): signing in, which needs no session, and the signed-in self-service
-// (re-authentication, passkeys, sign-out). Every route is a POST, so the root Origin check refuses
+// (re-authentication by PIN, SMS code or passkey, passkeys, sign-out). Every route is a POST, so the root Origin check refuses
 // any request that isn't from the app's own origin (origin.ts). Bodies are strict zod objects: an
 // unknown key is 400 invalid_request, and nothing a client sends is echoed back.
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import type { Api } from '#src/api.ts'
 import {
+  reauthCodeRequest,
+  reauthCodeVerify,
   reauthPasskeyOptions,
   reauthPasskeyVerify,
   reauthPin,
@@ -72,6 +74,17 @@ export function authRoutes(api: Api) {
       const body = parse(PinBody, request.body)
       const session = await requireSession(api.db, request)
       return send(reply, await reauthPin(api, body, session, requestInfo(api, request)))
+    })
+    scope.post('/reauth/code/request', async (request, reply) => {
+      parse(Empty, request.body)
+      const session = await requireSession(api.db, request)
+      return send(reply, await reauthCodeRequest(api, session, requestInfo(api, request)))
+    })
+    scope.post('/reauth/code/verify', async (request, reply) => {
+      const body = parse(CodeBody, request.body)
+      if (!/^[0-9]{6}$/.test(body.code)) throw new ApiError(400, 'invalid_code')
+      const session = await requireSession(api.db, request)
+      return send(reply, await reauthCodeVerify(api, body, session, requestInfo(api, request)))
     })
     scope.post('/reauth/passkey/options', async (request, reply) => {
       parse(Empty, request.body)

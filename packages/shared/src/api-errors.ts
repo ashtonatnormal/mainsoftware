@@ -2,6 +2,8 @@
 // web app reads the code and may show the copy as it is (British spelling, short, active, and true
 // in every case).
 
+import type { ReauthMethod } from './auth.ts'
+
 export const MESSAGES = {
   invalid_request: "That request wasn't understood.",
   invalid_phone:
@@ -25,7 +27,10 @@ export const MESSAGES = {
   passkey_failed: "That didn't work. Try again or use your PIN.",
   passkey_exists: 'That passkey is already added.',
   signed_out: "You've been signed out. Sign in again to keep using Hearth.",
-  reauth_required: "Confirm it's you with your PIN or a passkey first.",
+  reauth_required: "Confirm it's you, then try again.",
+  // The session re-authenticates another way (D46); the copy names it (REAUTH_METHOD_MESSAGES).
+  reauth_method: "Confirm it's you another way.",
+  no_number: "There's no mobile number on your account. Ask an admin to add one.",
   forbidden: "You can't do that.",
   not_found: "We couldn't find that.",
   no_account: "They haven't signed in yet, so there's no PIN to reset.",
@@ -39,3 +44,18 @@ export const MESSAGES = {
 } as const satisfies Record<string, string>
 
 export type ErrorCode = keyof typeof MESSAGES
+
+// What reauth_required and reauth_method say once the server names the method (D46, AQ-01): the
+// first copy for a refused action, the second for a re-authentication route that isn't the
+// session's own.
+export const REAUTH_METHOD_MESSAGES = {
+  pin: { required: "Confirm it's you with your PIN first.", method: "Confirm it's you with your PIN." },
+  code: {
+    required: "Confirm it's you with a code we text you first.",
+    method: "Confirm it's you with a code we text you.",
+  },
+  sign_in: {
+    required: 'Your account has changed. Sign out and sign in again to carry on.',
+    method: 'Your account has changed. Sign out and sign in again to carry on.',
+  },
+} as const satisfies Record<ReauthMethod, { required: string; method: string }>
