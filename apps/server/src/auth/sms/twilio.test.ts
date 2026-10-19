@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { SmsProviderError } from '#src/auth/sms/provider.ts'
-import { createTwilioVerify, TwilioVerify } from '#src/auth/sms/twilio.ts'
+import { createTwilioVerify, TWILIO_TIMEOUTS, TwilioVerify } from '#src/auth/sms/twilio.ts'
 import { type FakeTwilio, startFakeTwilio } from '#src/testing/fake-twilio.ts'
 
 // Fictional numbers from the seed's +65 8000 range.
@@ -52,7 +52,8 @@ describe('T7 T20 Twilio Verify adapter, against a loopback fake', () => {
     const started = await sms.start(A)
     expect(started).toEqual({ ref: expect.stringMatching(/^VE[0-9a-f]{32}$/), foreign: false })
     const code = twilio.sent[0]?.code ?? ''
-    expect(await sms.check(started.ref, code === '000000' ? '111111' : '000000')).toBe('wrong')
+    const wrong = code === '000000' ? '111111' : '000000'
+    expect(await sms.check(started.ref, wrong)).toBe('wrong')
     expect(await sms.check(started.ref, code)).toBe('approved')
     // Approved is used up: 404 reads as gone.
     expect(await sms.check(started.ref, code)).toBe('gone')
@@ -63,9 +64,12 @@ describe('T7 T20 Twilio Verify adapter, against a loopback fake', () => {
       path: `/v2/Services/${twilio.serviceSid}/Verifications`,
       contentType: 'application/x-www-form-urlencoded',
       authorised: true,
-      form: { To: A, Channel: 'sms' },
     })
-    expect(check).toMatchObject({ op: 'check', authorised: true, form: { VerificationSid: started.ref } })
+    // Exactly these fields: never a CustomCode, and nothing but the number and the Service SID
+    // (in the path) reaches Twilio (AUTH-DESIGN §12 items 6 and 13).
+    expect(start?.form).toEqual({ To: A, Channel: 'sms' })
+    expect(check).toMatchObject({ op: 'check', authorised: true })
+    expect(check?.form).toEqual({ VerificationSid: started.ref, Code: wrong })
     expect(twilio.requests.every(r => r.authorised)).toBe(true)
   })
 
@@ -77,6 +81,23 @@ describe('T7 T20 Twilio Verify adapter, against a loopback fake', () => {
     expect(await sms.start(B)).toEqual({ ref: seeded, foreign: true })
   })
 
+  it('reads a start reply without send_code_attempts, or with null, as not foreign (AUTH-DESIGN §3.1)', async () => {
+    const sms = verify()
+    const sid = `VE${'a'.repeat(32)}`
+    twilio.script('start', { status: 201, body: { sid, status: 'pending' } })
+    expect(await sms.start(A)).toEqual({ ref: sid, foreign: false })
+    twilio.script('start', { status: 201, body: { sid, status: 'pending', send_code_attempts: null } })
+    expect(await sms.start(A)).toEqual({ ref: sid, foreign: false })
+  })
+
+  it('counts no send for a first try answered 20429, so a verification it never started still reads as foreign (AUTH-DESIGN §3.1)', async () => {
+    const sms = verify()
+    const seeded = twilio.seed(B)
+    twilio.script('start', { status: 429, body: { code: 20429, status: 429 } })
+    expect(await sms.start(B)).toEqual({ ref: seeded, foreign: true })
+    expect(twilio.requests.filter(r => r.op === 'start')).toHaveLength(2)
+  })
+
   it('cancels with Status=canceled, and counts an unknown or finished verification as done', async () => {
     const sms = verify()
     const { ref } = await sms.start(A)
@@ -84,8 +105,8 @@ describe('T7 T20 Twilio Verify adapter, against a loopback fake', () => {
     expect(twilio.requests.at(-1)).toMatchObject({
       op: 'cancel',
       path: `/v2/Services/${twilio.serviceSid}/Verifications/${ref}`,
-      form: { Status: 'canceled' },
     })
+    expect(twilio.requests.at(-1)?.form).toEqual({ Status: 'canceled' })
     await sms.cancel(ref)
     expect(await sms.check(ref, twilio.sent[0]?.code ?? '')).toBe('gone')
     // A new start after a cancel makes a new verification.
@@ -183,6 +204,10 @@ describe('T7 T20 Twilio Verify adapter, against a loopback fake', () => {
     expect((await refusal(sms.start(A))).kind).toBe('bug')
     twilio.script('start', { status: 201, raw: big, length: true })
     expect((await refusal(sms.start(A))).kind).toBe('bug')
+  })
+
+  it('times out a start or check try at 4 s and a cancel at 3 s unless a test passes its own (AUTH-DESIGN §6.3)', () => {
+    expect(TWILIO_TIMEOUTS).toEqual({ startMs: 4000, checkMs: 4000, cancelMs: 3000 })
   })
 
   it('times out each start try at its limit, retries once, then answers unavailable', async () => {

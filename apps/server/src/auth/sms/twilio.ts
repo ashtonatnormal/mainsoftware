@@ -30,10 +30,11 @@ const MAX_REPLY_BYTES = 64 * 1024
 const VERIFICATION_SID = /^VE[0-9a-f]{32}$/
 
 // Twilio's status has seven values; only 'approved' counts, so any other string is accepted.
+// send_code_attempts is nullable in Twilio's spec: absent or null lists no sends (AUTH-DESIGN §3.1).
 const verificationReply = z.object({
   sid: z.string().regex(VERIFICATION_SID),
   status: z.string(),
-  send_code_attempts: z.array(z.unknown()),
+  send_code_attempts: z.array(z.unknown()).nullish(),
 })
 const checkReply = z.object({ status: z.string() })
 const errorReply = z.object({ code: z.number().int() }).partial()
@@ -90,24 +91,34 @@ export class TwilioVerify implements SmsProvider {
 
   async start(to: string): Promise<{ ref: string; foreign: boolean }> {
     let tries = 0
+    // The tries that may have reached Twilio, so may have sent: a network error, a timeout or a
+    // 5xx counts; a 20429 doesn't, since Twilio never processed it. Counting one would let a
+    // pending verification Hearth didn't start, with one send of its own, pass as this call's.
+    let sends = 0
     let reply: Reply | undefined
     while (reply === undefined) {
       tries++
+      let answer: Reply
       try {
-        const answer = await this.#post('/Verifications', { To: to, Channel: 'sms' }, this.#timeouts.startMs)
-        if (tries === 1 && retryable(answer)) continue
-        reply = answer
+        answer = await this.#post('/Verifications', { To: to, Channel: 'sms' }, this.#timeouts.startMs)
       } catch (error) {
-        if (tries === 1 && error instanceof NetworkError) continue
+        if (tries === 1 && error instanceof NetworkError) {
+          sends++
+          continue
+        }
         throw unavailable(error)
       }
+      if (codeOf(answer) !== 20429) sends++
+      if (tries === 1 && retryable(answer)) continue
+      reply = answer
     }
     if (reply.status !== 201 && reply.status !== 200) throw failure(reply)
     const parsed = verificationReply.safeParse(reply.body)
     if (!parsed.success) throw new SmsProviderError('bug', undefined, reply.status)
     // Twilio hands back a pending verification for the same number, with every send listed; more
     // sends than this call made means one Hearth didn't start here (sign-in.ts cancels it).
-    return { ref: parsed.data.sid, foreign: parsed.data.send_code_attempts.length > tries }
+    const listed = (parsed.data.send_code_attempts ?? []).length
+    return { ref: parsed.data.sid, foreign: listed > sends }
   }
 
   async check(ref: string, code: string): Promise<Verdict> {

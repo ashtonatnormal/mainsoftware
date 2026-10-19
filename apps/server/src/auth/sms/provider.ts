@@ -2,9 +2,10 @@
 // provider; TECH-SPEC T20). The provider makes, sends and checks the code (Twilio Verify, AQ-03);
 // Hearth's own rules (5 minutes, 5 tries, the newest request wins, the code bound to the attempt
 // that asked for it, PRD-53's windows) live in the challenge record (auth/codes.ts), so the same
-// sign-in code is tested whatever sits behind this interface. C0.8 has the local fake (fake.ts);
-// Twilio Verify follows in this PR, and AWS End User Messaging stays the fallback, each once C0.9
-// has cleared it in the transfer register (PDPA-10).
+// sign-in code is tested whatever sits behind this interface. The implementations: twilio.ts
+// (Twilio Verify, the primary), fake.ts (the local fake) and hearth-codes.ts over a TextSender (the
+// shape the AWS End User Messaging fallback takes). Each outside provider sends only once C0.9 has
+// cleared it in the transfer register (PDPA-10).
 // An implementation never puts the number, the code or a provider's message (which can quote the
 // number) in an error it throws or logs, because errors are logged.
 import type { ProviderKey } from '@hearth/shared'
