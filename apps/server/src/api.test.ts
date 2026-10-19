@@ -199,7 +199,8 @@ describe('C0.5 T14 the api scope: bodies, errors and no-store', () => {
   })
 
   it('refuses a body over 16 KiB before the route reads it, even one of the right shape', async () => {
-    const { post } = setup()
+    // Its route is a dormant passkey one (D46), switched on for this app.
+    const { post } = setup({ passkeysForTests: true })
     const registration = (size: number) => ({
       response: {
         id: 'AAAAAAAAAAAAAAAAAAAAAA',
@@ -216,6 +217,24 @@ describe('C0.5 T14 the api scope: bodies, errors and no-store', () => {
     const over = await post('/api/auth/passkeys/register/verify', registration(16_384))
     expect(over.statusCode).toBe(400)
     expect(over.json().error).toBe('invalid_request')
+  })
+
+  it('D46: an unknown /api path, a dormant passkey route among them, answers 404 no-store; an unknown root path is unchanged', async () => {
+    const { app, post } = setup()
+    for (const path of ['/api/auth/passkey/options', '/api/auth/passkeys/register/verify', '/api/nothing-here']) {
+      const response = await post(path, {})
+      expect([response.statusCode, response.json(), response.headers['cache-control']]).toEqual([
+        404,
+        { error: 'Not Found' },
+        'no-store',
+      ])
+    }
+    const root = await app.inject({ method: 'GET', url: '/nothing-here' })
+    expect([root.statusCode, root.json(), root.headers['cache-control']]).toEqual([
+      404,
+      { error: 'Not Found' },
+      undefined,
+    ])
   })
 
   it('gives a malformed phone number, code or PIN its own error', async () => {

@@ -178,7 +178,7 @@ export async function sweepWrites(superuser: Pick<PgClient, 'query'>): Promise<S
 // stack but the roles one sweeps its writes this way; the gateway's (C0.7) owns no event type.
 export async function expectEveryWriteCovered(
   superuser: Pick<PgClient, 'query'>,
-  suite: 'sign-in' | 'flags' | 'outbox' | 'jobs' | 'gateway',
+  suite: 'sign-in' | 'passkeys' | 'flags' | 'outbox' | 'jobs' | 'gateway',
   options: { allPassed: boolean },
 ): Promise<Sweep> {
   const sweep = await sweepWrites(superuser)

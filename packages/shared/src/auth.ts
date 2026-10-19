@@ -39,7 +39,8 @@ export const CodeVerifiedSchema = z.discriminatedUnion('next', [
     status: z.literal('code_verified'),
     next: z.literal('step_up'),
     pin: PinStateSchema,
-    passkey: z.boolean(),
+    // Only while passkeys are switched on (D46: dormant, so absent).
+    passkey: z.boolean().optional(),
   }),
 ])
 export type CodeVerified = z.infer<typeof CodeVerifiedSchema>

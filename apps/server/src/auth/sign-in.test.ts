@@ -155,6 +155,7 @@ function context(valkey: Redis, pool = scriptedPool(), sms: SmsProvider = checki
     names,
     rp: relyingParty('https://hearth.example.com'),
     otp: { verifyFloorMs: 0, breaker: new Breaker(OTP.breaker) },
+    passkeys: false,
   }
   const info: ReqInfo = {
     ip: '198.51.100.7',
@@ -383,6 +384,9 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
     )
     const hash = `$argon2id$v=19$m=19456,t=2,p=1$${'A'.repeat(22)}$${'B'.repeat(43)}`
     const againContext = context(again.valkey, orgPool({ pinHash: hash, passkeys: 1, roles: ['owner'] }))
+    // Passkeys switched on, as the dormant suite has them, so the reply says whether one exists
+    // (D46; off, it has no passkey key, which sign-in.integration.test.ts checks).
+    againContext.api.passkeys = true
     expect(await verifyCode(againContext.api, code, ATTEMPT_ID, againContext.info)).toEqual({
       body: {
         status: 'code_verified',

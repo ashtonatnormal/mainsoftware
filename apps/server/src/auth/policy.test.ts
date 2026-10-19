@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { otpChecks } from '#src/api.ts'
-import { OTP, PRIVILEGED_SESSION, SESSION } from '#src/auth/policy.ts'
+import { OTP, PASSKEYS_ON, PRIVILEGED_SESSION, SESSION } from '#src/auth/policy.ts'
 
 // '168 hours' → seconds.
 const seconds = (lifetime: string) => {
@@ -26,5 +26,9 @@ describe('D46 T20 the sign-in policy constants', () => {
     expect(otp.verifyFloorMs).toBe(2_000)
     expect(otp.breaker.policy).toEqual(OTP.breaker)
     expect(otpChecks({ otpForTests: { verifyFloorMs: 0 } }).verifyFloorMs).toBe(0)
+  })
+
+  it('D46: passkeys stay switched off, so turning them on is a reviewed change', () => {
+    expect(PASSKEYS_ON).toBe(false)
   })
 })

@@ -316,14 +316,15 @@ export const MATCH: Readonly<Record<string, string>> = {
 
 // The integration suite that must append each emitted type at least once (testing/writes.ts): each
 // suite has its own database and module state, so a union across files can't be taken, and each
-// checks its own share instead.
-export const EMITTED_BY: Readonly<Record<EmittedEventType, 'sign-in' | 'flags' | 'outbox' | 'jobs'>> = {
+// checks its own share instead. The passkey events belong to the dormant passkey suite, the only one
+// that switches passkeys on (D46).
+export const EMITTED_BY: Readonly<Record<EmittedEventType, 'sign-in' | 'passkeys' | 'flags' | 'outbox' | 'jobs'>> = {
   'signin.started': 'sign-in',
   'signin.ended': 'sign-in',
   'account.pin_set': 'sign-in',
   'account.pin_reset': 'sign-in',
-  'account.passkey_added': 'sign-in',
-  'account.passkey_removed': 'sign-in',
+  'account.passkey_added': 'passkeys',
+  'account.passkey_removed': 'passkeys',
   'person.deactivated': 'sign-in',
   'acl.changed': 'sign-in',
   'flag.changed': 'flags',

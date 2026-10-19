@@ -494,7 +494,9 @@ function setCookiesOf(header: unknown): string[] {
   return Array.isArray(header) ? header.map(String) : [String(header)]
 }
 
-export async function startStack(options: { recheckMs?: number } = {}): Promise<Stack> {
+// passkeysForTests switches the dormant passkeys on for the stack's main api (D46; the dormant
+// suite only, scripts/guards/api-test-overrides.test.ts).
+export async function startStack(options: { recheckMs?: number; passkeysForTests?: boolean } = {}): Promise<Stack> {
   const c = connection()
   if (!LOCAL_HOSTS.has(c.host)) {
     throw new Error(`Refusing to use Postgres on ${c.host}: the integration tests run on the local stack only.`)
@@ -666,7 +668,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     async function startApiOn(
       apiValkey: Redis,
       apiLogger: Logger,
-      o: { publishRevoked?: boolean; sms?: FakeVerify; realTiming?: boolean } = {},
+      o: { publishRevoked?: boolean; sms?: FakeVerify; realTiming?: boolean; passkeysForTests?: boolean } = {},
     ): Promise<{ app: FastifyInstance; flags: FlagCache }> {
       const afterResponse = new AfterResponse()
       const flags = flagCache({ logger: apiLogger })
@@ -688,6 +690,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
           // No floor on refused code checks (the suites make dozens), unless a test asks for the
           // real one; production's breaker either way, each app its own (T20).
           ...(o.realTiming ? {} : { otpForTests: { verifyFloorMs: 0 } }),
+          ...(o.passkeysForTests ? { passkeysForTests: true } : {}),
         },
       })
       closers.push(() => app.close())
@@ -858,7 +861,9 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       return instance
     }
 
-    const { app: api, flags: apiFlags } = await startApiOn(valkey, logger)
+    const { app: api, flags: apiFlags } = await startApiOn(valkey, logger, {
+      ...(options.passkeysForTests ? { passkeysForTests: true } : {}),
+    })
     const realtime = await startRealtimeApp({ recheckMs: options.recheckMs ?? SOCKET_RECHECK_MS, subscribe: true })
     // The realtime app subscribes to both revocation channels in the background; a revocation
     // published before it has would be caught only by the re-check. Its full readiness says when it

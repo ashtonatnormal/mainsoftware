@@ -314,7 +314,9 @@ export async function reauthCodeVerify(
 
 export async function reauthPasskeyOptions(api: Api, session: SessionIds, info: ReqInfo): Promise<Answer> {
   const live = await inSession(api, info, session, async trx => {
-    await acting(trx, session)
+    // A passkey stands in for the PIN, so only a session that re-authenticates with the PIN asks for
+    // one (D46, I2): the dormant code keeps the one-method rule.
+    await actingBy(trx, session, 'pin')
     return livePasskeys(trx, session.orgId, session.userId)
   })
   if (live.length === 0) throw new ApiError(409, 'no_passkey')
@@ -335,6 +337,8 @@ export async function reauthPasskeyVerify(
   info: ReqInfo,
 ): Promise<Answer> {
   await reauthLimit(api, session, info)
+  // The wrong method is refused before the challenge is spent (D46, I2), as the options route does.
+  await inSession(api, info, session, trx => actingBy(trx, session, 'pin'))
   const expected = await fromValkey(info, api.valkey.getdel(api.names.challenge('reauth', session.sessionId)))
   if (expected === null) throw new ApiError(401, 'passkey_expired')
   const credentialId = Buffer.from(body.response.id, 'base64url')

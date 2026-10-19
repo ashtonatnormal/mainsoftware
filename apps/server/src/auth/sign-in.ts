@@ -648,7 +648,7 @@ async function finish(api: Api, info: ReqInfo, key: string, attempt: Named): Pro
     | {
         kind: 'pin'
         user: { pin_hash: string | null; pin_failures: number; pin_last_failed_at: Date | null; now: Date } | undefined
-        passkeys: number
+        passkeys: number | undefined
       }
   try {
     outcome = await withOrg(api.db, { orgId, system: true }, async trx => {
@@ -676,6 +676,8 @@ async function finish(api: Api, info: ReqInfo, key: string, attempt: Named): Pro
         now: Date
       }>`select pin_hash, pin_failures, pin_last_failed_at, now() as now from users
         where org_id = ${orgId} and id = ${personId}`.execute(trx)
+      // Passkeys are counted only while they're switched on (D46); off, the reply has no passkey key.
+      if (!api.passkeys) return { kind: 'pin', user: user.rows[0], passkeys: undefined } as const
       const passkeys = await sql<{ n: string }>`select count(*) as n from passkeys
         where org_id = ${orgId} and user_id = ${personId} and removed_at is null`.execute(trx)
       return { kind: 'pin', user: user.rows[0], passkeys: Number(passkeys.rows[0]?.n ?? 0) } as const
@@ -708,7 +710,7 @@ async function finish(api: Api, info: ReqInfo, key: string, attempt: Named): Pro
         status: 'code_verified',
         next: 'step_up',
         pin: pinStateJSON(state),
-        passkey: outcome.passkeys > 0,
+        ...(outcome.passkeys === undefined ? {} : { passkey: outcome.passkeys > 0 }),
       } satisfies z.input<typeof CodeVerifiedSchema>,
     },
   }

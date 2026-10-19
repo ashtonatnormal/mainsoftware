@@ -16,10 +16,6 @@
 // code (but try_again, internal and the flags route's, which flags.integration.test.ts sees) was
 // answered, every audit action written, and every event type this suite owns appended, at least once.
 import { type AddressInfo, connect } from 'node:net'
-import type {
-  PublicKeyCredentialCreationOptionsJSON,
-  PublicKeyCredentialRequestOptionsJSON,
-} from '@simplewebauthn/server'
 import { sql } from 'kysely'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuditAction } from '#src/auth/audit.ts'
@@ -31,9 +27,20 @@ import { LIMITS, OTP } from '#src/auth/policy.ts'
 import { FakeVerify } from '#src/auth/sms/fake.ts'
 import { withOrg } from '#src/db/database.ts'
 import { FLAG_ERRORS } from '#src/flags/set.ts'
-import { createAuthenticator } from '#src/testing/authenticator.ts'
+import { DORMANT_ACTIONS, DORMANT_ERRORS } from '#src/testing/dormant.ts'
 import { APP_ORIGIN, type Client, type Closed, type Person, type Stack, startStack } from '#src/testing/stack.ts'
 import { expectEveryWriteCovered, sweepWrites } from '#src/testing/writes.ts'
+
+// The dormant passkey routes (D46), unregistered while passkeys are off.
+const PASSKEY_ROUTES = [
+  '/api/auth/passkey/options',
+  '/api/auth/passkey/verify',
+  '/api/auth/reauth/passkey/options',
+  '/api/auth/reauth/passkey/verify',
+  '/api/auth/passkeys/register/options',
+  '/api/auth/passkeys/register/verify',
+  '/api/auth/passkeys/remove',
+]
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ISSUED_PIN_HASH = /^\$argon2id\$v=19\$m=19456,t=2,p=1\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$/
@@ -361,13 +368,18 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       // When every test ran and passed, every code and every audit action was seen.
       if (all && suite.tasks.length > 0) {
         const answered = new Set(s.replies.map(reply => reply.error))
-        const elsewhere = new Set<string>(['try_again', 'internal', ...FLAG_ERRORS])
+        // The dormant passkey codes and actions are the passkey suite's (D46, testing/dormant.ts).
+        const elsewhere = new Set<string>(['try_again', 'internal', ...FLAG_ERRORS, ...DORMANT_ERRORS])
         const missing = Object.keys(MESSAGES).filter(code => !elsewhere.has(code) && !answered.has(code))
         expect(missing).toEqual([])
         const written = new Set(
           (await s.query<{ action: string }>('select distinct action from audit_events')).map(r => r.action),
         )
-        expect(Object.keys(AUDIT_ACTIONS).filter(action => !written.has(action))).toEqual([])
+        expect(
+          (Object.keys(AUDIT_ACTIONS) as (keyof typeof AUDIT_ACTIONS)[]).filter(
+            action => !DORMANT_ACTIONS.has(action) && !written.has(action),
+          ),
+        ).toEqual([])
       }
     } finally {
       await s.stop()
@@ -487,8 +499,9 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(devices.status).toBe(200)
     expect(devices.body).toMatchObject({
       devices: [{ id: deviceId, label: 'iPhone · Safari', current: true }],
-      passkeys: [],
     })
+    // Passkeys are switched off (D46), so none are listed.
+    expect(devices.body).not.toHaveProperty('passkeys')
     expect(devices.json<{ devices: unknown[] }>().devices).toHaveLength(1)
     const [after] = await sessionTimes()
     expect(after).toMatchObject({ stamped: true, full_term: true })
@@ -873,7 +886,6 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       status: 'code_verified',
       next: 'step_up',
       pin: { state: 'ok', triesBeforeLock: 5, triesBeforeAdminLock: 10 },
-      passkey: false,
     })
 
     // A second request replaces the first code.
@@ -1192,130 +1204,25 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(await sessions()).toBe(before + 1)
   })
 
-  it('ACC-02: a passkey is added, used at step-up while the PIN is locked, used to re-authenticate, and removed', async () => {
-    // Budgets: P 3 code requests, W 1. Both privileged: a passkey stands in for a set PIN (D46).
-    const p = await s.person({ roles: ['leadership'] })
-    const w = await s.person({ roles: ['leadership'], pin: s.newPin() })
-    const authenticator = createAuthenticator(APP_ORIGIN)
-    type CreationOptions = { options: PublicKeyCredentialCreationOptionsJSON }
-    type RequestOptions = { options: PublicKeyCredentialRequestOptionsJSON }
-
-    // Signing in counts as a re-authentication, so a passkey can be added at once.
-    const first = await s.signIn(p)
-    const options = await first.post('/api/auth/passkeys/register/options', {})
-    expect(options.status).toBe(200)
-    const created = options.json<CreationOptions>().options
-    expect(created.rp).toEqual({ name: 'Hearth', id: 'hearth.test' })
-    const registered = await first.post('/api/auth/passkeys/register/verify', {
-      response: authenticator.register(created),
-    })
-    expect(registered.status).toBe(201)
-    const passkeyId = registered.json<{ passkey: { id: string; backedUp: boolean } }>().passkey.id
-    expect(registered.body).toMatchObject({ passkey: { id: passkeyId, backedUp: true } })
-    expect((await auditOf(p)).map(row => row.action)).toContain('auth.passkey_added')
-    const again = await first.post('/api/auth/passkeys/register/options', {})
-    const duplicate = await first.post('/api/auth/passkeys/register/verify', {
-      response: authenticator.register(again.json<CreationOptions>().options, { reuseCredential: true }),
-    })
-    expect([duplicate.status, duplicate.error]).toEqual([409, 'passkey_exists'])
-
-    // On a new device, with the PIN locked, the passkey stands in for it.
-    const { client: second, reply: stepUp } = await atStepUp(p)
-    expect(stepUp.body).toMatchObject({ next: 'step_up', passkey: true })
-    const wrongPin = another(pinOf(p))
-    for (let failures = 1; failures <= 5; failures++) await verifyPin(second, wrongPin)
-    const allow = await second.post('/api/auth/passkey/options', {})
-    expect(allow.status).toBe(200)
-    const request = allow.json<RequestOptions>().options
-    const [credential] = await s.query<{ credential_id: Buffer }>('select credential_id from passkeys where id = $1', [
-      passkeyId,
-    ])
-    expect(request.allowCredentials?.map(c => c.id)).toEqual([credential?.credential_id.toString('base64url')])
-    const viaPasskey = await second.post('/api/auth/passkey/verify', { response: authenticator.assert(request) })
-    expect(viaPasskey.status).toBe(200)
-    expect(viaPasskey.body).toMatchObject({ status: 'signed_in' })
-    expect((await userOf(p))?.pin_failures).toBe(5)
-    const [stored] = await s.query<{ counter: string; last_used_at: Date | null }>(
-      'select counter::text, last_used_at from passkeys where id = $1',
-      [passkeyId],
-    )
-    expect(stored?.counter).toBe('1')
-    expect(stored?.last_used_at).toBeInstanceOf(Date)
-    expect((await auditOf(p)).filter(row => row.action === 'auth.sign_in').map(row => row.details.method)).toContain(
-      'sms_passkey',
-    )
-
-    // Re-authenticating with the passkey leaves the PIN count alone; its challenge is single-use.
-    const reauthOptions = await second.post('/api/auth/reauth/passkey/options', {})
-    expect(reauthOptions.status).toBe(200)
-    const assertion = authenticator.assert(reauthOptions.json<RequestOptions>().options)
-    const reauth = await second.post('/api/auth/reauth/passkey/verify', { response: assertion })
-    expect(reauth.status).toBe(200)
-    expect(reauth.body).toEqual({ status: 'reauthenticated', validForSeconds: 300 })
-    expect((await auditOf(p)).filter(row => row.action === 'auth.reauth').map(row => row.details.method)).toContain(
-      'passkey',
-    )
-    expect((await userOf(p))?.pin_failures).toBe(5)
-    const replayed = await second.post('/api/auth/reauth/passkey/verify', { response: assertion })
-    expect([replayed.status, replayed.error]).toEqual([401, 'passkey_expired'])
-
-    // A tampered assertion (another origin) fails, and its audit row commits.
-    const { client: third } = await atStepUp(p)
-    const tamperedOptions = await third.post('/api/auth/passkey/options', {})
-    const tampered = await third.post('/api/auth/passkey/verify', {
-      response: authenticator.assert(tamperedOptions.json<RequestOptions>().options, { origin: 'https://evil.test' }),
-    })
-    expect([tampered.status, tampered.error]).toEqual([401, 'passkey_failed'])
-    expect((await auditOf(p)).filter(row => row.action === 'auth.passkey_failed')).toHaveLength(1)
-
-    // T14: an assertion without user verification fails, and so does one whose signature counter
-    // is the stored one (a replayed assertion, or a cloned authenticator).
-    const thirdOptions = async () => (await third.post('/api/auth/passkey/options', {})).json<RequestOptions>().options
-    const noUv = await third.post('/api/auth/passkey/verify', {
-      response: authenticator.assert(await thirdOptions(), { uv: false }),
-    })
-    expect([noUv.status, noUv.error]).toEqual([401, 'passkey_failed'])
-    const [now] = await s.query<{ counter: string }>('select counter::text from passkeys where id = $1', [passkeyId])
-    expect(Number(now?.counter)).toBeGreaterThan(0)
-    const cloned = await third.post('/api/auth/passkey/verify', {
-      response: authenticator.assert(await thirdOptions(), { counter: Number(now?.counter) }),
-    })
-    expect([cloned.status, cloned.error]).toEqual([401, 'passkey_failed'])
-    expect((await auditOf(p)).filter(row => row.action === 'auth.passkey_failed')).toHaveLength(3)
-
-    // §9.4: adding or removing a passkey needs a re-authentication from the last 5 minutes.
-    const { id: sessionId } = await s.sessionOf(second)
-    await s.age(sessionId, '4 minutes')
-    expect((await second.post('/api/auth/passkeys/register/options', {})).status).toBe(200)
-    await s.age(sessionId, '2 minutes')
-    const stale = await second.post('/api/auth/passkeys/remove', { passkey: passkeyId })
-    expect([stale.status, stale.error]).toEqual([403, 'reauth_required'])
-    const staleAdd = await second.post('/api/auth/passkeys/register/options', {})
-    expect([staleAdd.status, staleAdd.error]).toEqual([403, 'reauth_required'])
-    const fresh = await second.post('/api/auth/reauth/passkey/options', {})
-    const refreshed = await second.post('/api/auth/reauth/passkey/verify', {
-      response: authenticator.assert(fresh.json<RequestOptions>().options),
-    })
-    expect(refreshed.status).toBe(200)
-    const removed = await second.post('/api/auth/passkeys/remove', { passkey: passkeyId })
-    expect(removed.status).toBe(200)
-    expect(removed.body).toEqual({ status: 'removed' })
-    expect((await auditOf(p)).map(row => row.action)).toContain('auth.passkey_removed')
-    // C0.6 T16: the passkey's events, the session's person acting; the passkey's sign-in.
-    const events = await eventsOf(p)
-    expect(events.filter(event => event.type.startsWith('account.passkey'))).toEqual([
-      about(p, 'account.passkey_added', p, { passkey: passkeyId }),
-      about(p, 'account.passkey_removed', p, { passkey: passkeyId }),
-    ])
-    expect(events.filter(event => event.type === 'signin.started').map(event => event.ids.method)).toEqual([
-      'sms_new_pin',
-      'sms_passkey',
-    ])
-
-    // Someone with no passkey is told so at step-up.
-    const { client: wc } = await atStepUp(w)
-    const none = await wc.post('/api/auth/passkey/options', {})
-    expect([none.status, none.error]).toEqual([409, 'no_passkey'])
+  it('D46: passkeys are switched off: every passkey route answers 404 no-store, and no reply names passkeys', async () => {
+    // Budgets: P 1 code request (a sign-in), Q 1.
+    const p = await s.person({ roles: ['leadership'], pin: s.newPin() })
+    const signedIn = await s.signIn(p)
+    const q = await s.person({ roles: ['leadership'], pin: s.newPin() })
+    const { client: atPin, reply: stepUp } = await atStepUp(q)
+    expect(stepUp.body).not.toHaveProperty('passkey')
+    for (const client of [signedIn, atPin, s.client()]) {
+      for (const path of PASSKEY_ROUTES) {
+        // The afterAll sweep checks each reply was no-store (the /api scope's own 404).
+        const reply = await client.post(path, {})
+        expect([reply.status, reply.body], path).toEqual([404, { error: 'Not Found' }])
+      }
+    }
+    const devices = await signedIn.get('/api/devices')
+    expect(devices.status).toBe(200)
+    expect(devices.body).not.toHaveProperty('passkeys')
+    // Nothing was written for any of them.
+    expect((await auditOf(p)).map(row => row.action)).toEqual(['auth.code_requested', 'auth.sign_in'])
   })
 
   it('D46 AQ-01: a Member re-authenticates with an SMS code to their own number, never the PIN', async () => {
@@ -2030,7 +1937,6 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     ])
     const guessed = await wc.post('/api/auth/pin/verify', { pin: s.newPin() })
     expect([guessed.status, guessed.error]).toEqual([401, 'attempt_expired'])
-    expect((await wc.post('/api/auth/passkey/options', {})).error).toBe('attempt_expired')
     expect((await userOf(w))?.pin_failures).toBe(0)
     await s.settled()
     expect((await auditOf(w)).map(row => row.action)).toEqual(['auth.code_requested'])
@@ -2132,7 +2038,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect((await requestCode(s.client({ ip: '2001:db8:7:7::1234' }), s.number())).status).toBe(429)
 
     // Every sign-in request per IP, 100 per 10 minutes: from the address, each step is refused (a
-    // code request, a code check, setting a PIN, a PIN check, and a passkey's options and check).
+    // code request, a code check, setting a PIN and a PIN check; the dormant passkey suite checks
+    // its own routes, D46).
     const authIp = '192.0.2.78'
     // P7 and P9 are privileged, to reach the PIN steps (D46).
     const p7 = await s.person({ roles: ['leadership'], pin: s.newPin() })
@@ -2148,24 +2055,10 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const toSetPin = await verifyCode(atSetPin, await s.sms.nextCode(p9.e164))
     expect(toSetPin.body).toMatchObject({ next: 'set_pin' })
     await fill('auth-ip', tag(s.keys, `ip:${limitSubject(authIp)}`), 100)
-    // The limit is checked before the challenge is read, so a well-formed assertion is enough.
-    const assertion = {
-      id: Buffer.alloc(16, 1).toString('base64url'),
-      rawId: Buffer.alloc(16, 1).toString('base64url'),
-      type: 'public-key',
-      response: {
-        clientDataJSON: Buffer.from('{}').toString('base64url'),
-        authenticatorData: Buffer.alloc(37).toString('base64url'),
-        signature: Buffer.alloc(70, 3).toString('base64url'),
-      },
-      clientExtensionResults: {},
-    }
     const fromAuthIp = {
       codeCheck: await verifyCode(atCode, await s.sms.nextCode(p8.e164)),
       setPin: await atSetPin.post('/api/auth/pin/set', { pin: s.newPin() }),
       pinCheck: await verifyPin(atPin, pinOf(p7)),
-      passkeyOptions: await atPin.post('/api/auth/passkey/options', {}),
-      passkeyCheck: await atPin.post('/api/auth/passkey/verify', { response: assertion }),
       codeRequest: await requestCode(s.client({ ip: authIp }), s.number()),
     }
     for (const [step, reply] of Object.entries(fromAuthIp)) {

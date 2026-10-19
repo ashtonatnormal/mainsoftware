@@ -95,3 +95,10 @@ export const SOCKETS_PER_SESSION = 8
 // The close a socket gets when its session ends: the client doesn't reconnect. The gateway's
 // protocol owns every close code (packages/shared GATEWAY_CLOSE, TECH-SPEC T19 item 10).
 export const SIGNED_OUT_CLOSE = GATEWAY_CLOSE.signedOut
+
+// D46: passkeys are kept, switched off. A passkey stands in for a set PIN, and only privileged
+// holders have PINs. While off, the passkey routes aren't registered (an /api 404), the step-up
+// reply has no passkey key and GET /api/devices lists no passkeys. policy.test.ts pins this false,
+// so turning it on is a reviewed change; never a flag or an env var. The integration harness turns
+// them on for the dormant suite only (ApiDeps.passkeysForTests).
+export const PASSKEYS_ON = false

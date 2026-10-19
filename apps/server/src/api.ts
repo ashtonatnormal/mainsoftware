@@ -13,7 +13,7 @@ import { addCookie, clearedCookie } from '#src/auth/cookies.ts'
 import { type AuthKeys, PinSlotsFull } from '#src/auth/crypto.ts'
 import { ApiError, fromDatabase, messageFor } from '#src/auth/errors.ts'
 import { loadWebAuthn, type RelyingParty, relyingParty } from '#src/auth/passkeys.ts'
-import { OTP } from '#src/auth/policy.ts'
+import { OTP, PASSKEYS_ON } from '#src/auth/policy.ts'
 import { authRoutes } from '#src/auth/routes.ts'
 import type { SmsProvider } from '#src/auth/sms/provider.ts'
 import { type ValkeyKeys, valkeyKeys } from '#src/auth/valkey-keys.ts'
@@ -50,6 +50,9 @@ export interface ApiDeps {
   // shorter floor on refused code checks, so a suite making dozens of them doesn't wait 2 s each,
   // and a breaker policy of its own. Production takes OTP's.
   otpForTests?: { verifyFloorMs?: number; breaker?: Partial<BreakerPolicy> }
+  // The integration harness and unit tests only (the same guard): turns the dormant passkey routes
+  // and fields on (D46). Production takes PASSKEYS_ON, which is false.
+  passkeysForTests?: boolean
 }
 
 // What every service gets: the deps, and what registerApi derives from them.
@@ -61,6 +64,8 @@ export interface Api extends ApiDeps {
   rp: RelyingParty
   // The code checks' floor and circuit breaker (T20), built per registerApi from OTP.
   otp: { verifyFloorMs: number; breaker: Breaker }
+  // Whether passkeys are switched on (D46): PASSKEYS_ON unless a test overrides it.
+  passkeys: boolean
 }
 
 // A pending text or audit row gets this long to finish when the server stops.
@@ -73,6 +78,7 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps & { appOrigin: s
     names: valkeyKeys(deps.keyPrefix),
     rp: relyingParty(deps.appOrigin),
     otp: otpChecks(deps),
+    passkeys: deps.passkeysForTests ?? PASSKEYS_ON,
   }
   app.register(
     async scope => {
@@ -98,6 +104,10 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps & { appOrigin: s
         await Promise.race([api.afterResponse.idle(), delay(DRAIN_MS, undefined, { ref: false })])
       })
       scope.setErrorHandler((error, request, reply) => answerError(error, request, reply))
+      // An /api path with no route (the dormant passkey routes among them, D46) answers here, inside
+      // the scope, so its 404 carries no-store like every other reply in it. The root handler
+      // (app.ts) answers the same body for paths outside /api.
+      scope.setNotFoundHandler(async (_request, reply) => reply.code(404).send({ error: 'Not Found' }))
       await scope.register(authRoutes(api), { prefix: '/auth' })
       await scope.register(deviceRoutes(api), { prefix: '/devices' })
       await scope.register(adminRoutes(api), { prefix: '/admin' })

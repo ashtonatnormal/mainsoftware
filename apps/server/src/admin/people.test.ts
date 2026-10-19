@@ -70,6 +70,7 @@ function context(pool: ReturnType<typeof scriptedPool>, options: { publishRevoke
     names: valkeyKeys('it:unit:'),
     rp: relyingParty('https://hearth.example.com'),
     otp: { verifyFloorMs: 0, breaker: new Breaker(OTP.breaker) },
+    passkeys: false,
   }
   const info: ReqInfo = {
     ip: '198.51.100.7',

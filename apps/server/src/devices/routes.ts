@@ -74,6 +74,8 @@ export async function listOwn(api: Api, session: SessionIds, info: ReqInfo): Pro
       select d.id, d.label, d.created_at, d.last_seen_at from devices d
       where d.org_id = ${orgId} and d.user_id = ${userId} and d.signed_out_at is null and ${hasLiveSession}
       order by d.last_seen_at desc`.execute(trx)
+    // Passkeys are listed only while they're switched on (D46); off, the reply has no passkeys key.
+    if (!api.passkeys) return { body: { devices: devices.rows.map(d => deviceJSON(d, session.deviceId)) } }
     const passkeys = await sql<{
       id: string
       created_at: Date
@@ -86,13 +88,7 @@ export async function listOwn(api: Api, session: SessionIds, info: ReqInfo): Pro
       order by k.created_at`.execute(trx)
     return {
       body: {
-        devices: devices.rows.map(d => ({
-          id: d.id,
-          label: d.label,
-          createdAt: d.created_at,
-          lastSeenAt: d.last_seen_at,
-          current: d.id === session.deviceId,
-        })),
+        devices: devices.rows.map(d => deviceJSON(d, session.deviceId)),
         passkeys: passkeys.rows.map(k => ({
           id: k.id,
           createdAt: k.created_at,
@@ -103,6 +99,11 @@ export async function listOwn(api: Api, session: SessionIds, info: ReqInfo): Pro
       },
     }
   })
+}
+
+// One device as GET /api/devices lists it.
+function deviceJSON(d: { id: string; label: string; created_at: Date; last_seen_at: Date }, current: string) {
+  return { id: d.id, label: d.label, createdAt: d.created_at, lastSeenAt: d.last_seen_at, current: d.id === current }
 }
 
 // --- POST /api/devices/sign-out -------------------------------------------------------------
