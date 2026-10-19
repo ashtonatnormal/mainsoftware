@@ -1,12 +1,15 @@
 // The kit's markup, rendered with react-dom/server in Node: no DOM, no jsdom, no Testing Library
 // (D-03). What a component renders (roles, names, ids, attributes, classes) is checked here; what
 // it does once mounted (focus, the native dialog, menu keys in a browser) is the e2e suite's.
+import { QueryClientProvider } from '@tanstack/react-query'
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from '@tanstack/react-router'
 import { Bell, Inbox, LogOut, Settings } from 'lucide-react'
 import type { ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { usePrefersReducedMotion } from '@/lib/media.ts'
+import { createQueryClient } from '@/session/query-client.ts'
+import { SearchBar } from '@/shell/SearchBar.tsx'
 import { Avatar, initialsOf } from './Avatar.tsx'
 import { AVATAR_BG, avatarHue } from './avatar-hue.ts'
 import { Button, IconButton } from './Button.tsx'
@@ -21,6 +24,11 @@ import { SkipLink } from './SkipLink.tsx'
 import { Switch } from './Switch.tsx'
 
 const html = (element: ReactElement) => renderToStaticMarkup(element)
+
+// Under a QueryClient with no flags answer, as a component holding an AI slot renders before the
+// first one (every slot off).
+const withQuery = (element: ReactElement) =>
+  html(<QueryClientProvider client={createQueryClient(() => {})}>{element}</QueryClientProvider>)
 
 // The attributes of every element with this tag, in order, so a case reads what one element has.
 function tags(markup: string, tag: string): Map<string, string>[] {
@@ -345,6 +353,35 @@ describe('T21: the kit’s markup', () => {
     expect(markup).not.toContain('<h1')
     expect(markup).toMatch(/<svg[^>]*aria-hidden="true"/)
   })
+
+  it("KM-13 R-34 OD-04 decision 8: SearchBar is a search form whose field is type search, 16 px and named 'Search' by its label, with a Search button and no Ask", () => {
+    const markup = withQuery(<SearchBar onSearch={() => {}} />)
+    const form = one(markup, 'form')
+    expect(form.get('role')).toBe('search')
+    const input = one(markup, 'input')
+    expect(input.get('type')).toBe('search')
+    // react-dom/server keeps React's casing (enterKeyHint, noValidate); HTML reads attributes in any case.
+    expect(input.get('enterKeyHint')).toBe('search')
+    expect(classesOf(input)).toEqual(expect.arrayContaining(['text-base', 'min-h-11']))
+    const label = one(markup, 'label')
+    expect(label.get('for')).toBe(input.get('id'))
+    expect(markup).toMatch(/<label[^>]*>Search<\/label>/)
+    const button = one(markup, 'button')
+    expect(button.get('type')).toBe('submit')
+    expect(markup).toMatch(/<button[^>]*>.*Search<\/button>/s)
+    expect(markup).not.toMatch(/\bask\b|search &amp; ask/i)
+  })
+
+  it('KM-14 SHL-27 WCAG 3.3.1: every form rendered carries novalidate (SearchBar here; the sign-in steps with C0.8 S11)', () => {
+    const forms = tags(withQuery(<SearchBar onSearch={() => {}} />), 'form')
+    expect(forms).toHaveLength(1)
+    for (const form of forms) {
+      expect(form.has('noValidate')).toBe(true)
+      expect(form.get('method')).toBe('post')
+    }
+  })
+
+  it.todo('KM-14 follow-up (C0.8 S11): PhoneStep, CodeStep and PinStep (set and enter) carry novalidate')
 
   it('SHL-16: the media-query hooks read false where there is no window, so markup renders', () => {
     function Motion() {

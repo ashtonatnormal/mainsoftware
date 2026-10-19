@@ -229,7 +229,7 @@ export function takeLeftReason(storage: TabStorage | undefined = tabStorage()): 
   return LEFT_REASONS.find(known => known === reason)
 }
 
-// Whether this document's first route should focus its h1 (RouteFocus, C0.8 S10), once.
+// Whether this document's first route should focus its h1 (router/RouteFocus.tsx), once.
 export function takeFocusHeading(storage: TabStorage | undefined = tabStorage()): boolean {
   const flag = read(storage, STORAGE_KEYS.focusHeading)
   remove(storage, STORAGE_KEYS.focusHeading)

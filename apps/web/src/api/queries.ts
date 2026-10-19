@@ -5,6 +5,7 @@ import { type FlagKey, readFlagsAnswer, SessionResponseForClient } from '@hearth
 import { queryOptions, useQuery } from '@tanstack/react-query'
 import { z } from 'zod'
 import { apiGet } from '@/api/http.ts'
+import { useRuntime } from '@/app/runtime-context.ts'
 import type { SessionInfo } from '@/boot/load-session.ts'
 
 // GET /api/session, refetched at most once a minute (on focus or reconnect while something
@@ -17,6 +18,14 @@ export const sessionQuery = queryOptions({
   queryFn: ({ signal }): Promise<SessionInfo> => apiGet('/api/session', SessionResponseForClient, { signal }),
   staleTime: SESSION_STALE_MS,
 })
+
+// The signed-in person, as the session answer last said (the avatar menu's name). The runtime seeds
+// the cache with the boot's answer, and the boot's answer stands in whenever the cache is empty
+// (after end() clears it, while the document leaves), so a screen never renders without one.
+export function useSession(): SessionInfo {
+  const runtime = useRuntime()
+  return useQuery(sessionQuery).data ?? runtime.info
+}
 
 // The person's client flags (T17 item 11, R-50, R-53): each flag the registry marks client: true,
 // evaluated for them, as a plain boolean. Read leniently (readFlagsAnswer): only true reads on, a

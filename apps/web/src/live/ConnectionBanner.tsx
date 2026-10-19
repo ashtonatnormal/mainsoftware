@@ -3,7 +3,7 @@
 // reconnects) it reads "Reconnecting…"; when a new deploy needs a reload the page couldn't make
 // itself (one a minute at most), it says so with a Reload button. The line is not a live region:
 // each change is spoken once through the app's announcer (liveAnnouncement), so it never
-// chatters. The shell mounts it with the runtime's store (C0.8 S10).
+// chatters. The shell mounts it under the screen's header, with the runtime's store (shell/Shell.tsx).
 import { type ReactNode, useEffect, useRef } from 'react'
 import { LIVE } from '@/strings/live.ts'
 import { announce } from '@/ui/announce.ts'

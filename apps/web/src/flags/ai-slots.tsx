@@ -4,8 +4,9 @@
 // - no slot has content (AI_SLOT_CONTENT is empty; C0–C6 make no model calls and show no AI);
 // - every ai.* flag is client: false and locked off (packages/shared/src/flags.ts), so
 //   GET /api/flags never sends one and its FlagSlot reads off.
-// There is no placeholder, no "coming soon" and no AI copy (decision 8). The screens mount their
-// slots in C0.8 S10 (Chats, Today; the Search bar's, unmounted, OD-04).
+// There is no placeholder, no "coming soon" and no AI copy (decision 8). Today's and Chats' screens
+// mount theirs (screens/TabScreen.tsx), and the Search bar holds its own while it waits, unmounted,
+// for C1.7 (OD-04).
 import type { FlagKey } from '@hearth/shared'
 import type { ComponentType, ReactNode } from 'react'
 import { FlagSlot } from './FlagSlot.tsx'

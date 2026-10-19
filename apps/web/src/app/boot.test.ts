@@ -1,15 +1,23 @@
+import { createMemoryHistory } from '@tanstack/react-router'
+import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FakeClock, socketClass } from '@/live/testing/fakes.ts'
 import type { ChannelLike, TabStorage } from '@/session/document.ts'
 import type { RuntimeEnv } from '@/session/runtime.ts'
 import { BOOT } from '@/strings/boot.ts'
+import type { AppProps } from './App.tsx'
 
 // boot.tsx, the api client's halt latch and the document's identity channel are module state that
 // lives as long as a document, so each test loads fresh copies, as a new document would.
+// The App and BootErrorScreen a test compares with come from the same fresh copies boot.tsx loaded.
 let app: typeof import('./boot.tsx')
+let App: typeof import('./App.tsx')['App']
+let BootErrorScreen: typeof import('@/screens/BootErrorScreen.tsx')['BootErrorScreen']
 beforeEach(async () => {
   vi.resetModules()
   app = await import('./boot.tsx')
+  ;({ App } = await import('./App.tsx'))
+  ;({ BootErrorScreen } = await import('@/screens/BootErrorScreen.tsx'))
 })
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -99,26 +107,42 @@ function fakeDocument() {
     },
   }
   const root = { textContent: 'Loading Hearth…' }
+  // What the boot rendered into #root, in order.
+  const rendered: ReactElement[] = []
+  const render = (element: ReactElement) => {
+    rendered.push(element)
+  }
+  // A new document's first location: a deep link to Drive.
+  const history = createMemoryHistory({ initialEntries: ['/drive'] })
   // Another tab says its person changed: it signed in or out, or its session ended.
   const otherTab = () => {
     const channel = new FakeChannel('hearth:identity')
     channel.postMessage({ t: 'identity' })
     channel.close()
   }
-  return { env, root, storage, left, otherTab }
+  return { env, root, render, history, rendered, storage, left, otherTab }
 }
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 5))
 
 describe('T21 D-01: the boot (app/boot.tsx)', () => {
-  it("BT-02 D-01 CHT-60: signed in, it drops the last document's leave reason and starts the person's runtime, which another tab's identity message ends with other_tab", async () => {
+  it("BT-02 D-01 CHT-60 X12: signed in, it drops the last document's leave reason, starts the person's runtime and renders the app once with the deep link's route loaded; another tab's identity message ends it with other_tab", async () => {
     const fetch = stubSession(signedIn)
-    const { env, root, storage, left, otherTab } = fakeDocument()
-    await app.boot({ env, root })
+    const { env, root, render, history, rendered, storage, left, otherTab } = fakeDocument()
+    await app.boot({ env, root, render, history })
     // The reason was for a sign-in screen; this document isn't one.
     expect(storage.map.has('hearth:left')).toBe(false)
     expect(root.textContent).toBe('Loading Hearth…')
     expect(left).toEqual([])
+    // The app rendered once, with Marcus's runtime, its router already on Drive inside the shell,
+    // so the first paint is the screen.
+    const [shown, ...more] = rendered
+    expect(more).toEqual([])
+    expect(shown?.type).toBe(App)
+    const props = shown?.props as AppProps
+    expect(props.runtime?.info).toEqual(MARCUS)
+    expect(props.router.state.matches.map(match => match.routeId)).toEqual(['__root__', '/_app', '/_app/drive'])
+    expect(storage.map.has('hearth:return-to')).toBe(false)
 
     otherTab()
     await tick()
@@ -129,12 +153,18 @@ describe('T21 D-01: the boot (app/boot.tsx)', () => {
     expect(fetch.calls).toBe(1)
   })
 
-  it("BT-03 D-01 AUTH-DESIGN §10.1: signed out, the leave reason stays for the sign-in screen; another tab's sign-out or ended session doesn't reload, its sign-in does, once", async () => {
+  it("BT-03 D-01 R-44 AUTH-DESIGN §10.1: signed out, it renders the app with no runtime, keeping the deep link as the return path and the leave reason for the sign-in screen; another tab's sign-out or ended session doesn't reload, its sign-in does, once", async () => {
     const fetch = stubSession(signedOut)
-    const { env, root, storage, left, otherTab } = fakeDocument()
-    await app.boot({ env, root })
+    const { env, root, render, history, rendered, storage, left, otherTab } = fakeDocument()
+    await app.boot({ env, root, render, history })
     expect(storage.map.get('hearth:left')).toBe('session_ended')
     expect(fetch.calls).toBe(1)
+    // The app rendered with no runtime; the shell's guard sent the deep link to sign-in and kept
+    // Drive as the path to open afterwards (R-44).
+    expect(rendered.map(element => element.type)).toEqual([App])
+    const props = rendered[0]?.props as AppProps
+    expect(props.runtime).toBeNull()
+    expect(storage.map.get('hearth:return-to')).toBe('/drive')
 
     // A stale tab learns its session ended, or signs out: the cookie still names no one here, so a
     // sign-in step in progress keeps its place.
@@ -163,8 +193,8 @@ describe('T21 D-01: the boot (app/boot.tsx)', () => {
 
   it('BT-03 D-01: a message during a check makes one more check after it, so a sign-in that lands meanwhile is followed', async () => {
     const fetch = stubSession(signedOut)
-    const { env, root, left, otherTab } = fakeDocument()
-    await app.boot({ env, root })
+    const { env, root, render, history, left, otherTab } = fakeDocument()
+    await app.boot({ env, root, render, history })
 
     let answer: (response: Response) => void = () => {}
     fetch.session = () =>
@@ -185,11 +215,12 @@ describe('T21 D-01: the boot (app/boot.tsx)', () => {
     expect(left).toEqual(['reload'])
   })
 
-  it("BT-04 OD-22: an api that can't answer, or a boot that throws, leaves the plain text in #root and starts nothing", async () => {
+  it("BT-04 OD-22 OD-42: an api that can't answer renders the boot error screen alone and starts nothing; a boot that throws leaves the plain text in #root", async () => {
     stubSession(() => json(503, { error: 'unavailable', message: 'Later.' }))
     const down = fakeDocument()
-    await app.boot({ env: down.env, root: down.root })
-    expect(down.root.textContent).toBe(BOOT.cantReach)
+    await app.boot({ env: down.env, root: down.root, render: down.render, history: down.history })
+    expect(down.rendered.map(element => element.type)).toEqual([BootErrorScreen])
+    expect(down.root.textContent).toBe('Loading Hearth…')
     down.otherTab()
     await tick()
     expect(down.left).toEqual([])
@@ -204,8 +235,9 @@ describe('T21 D-01: the boot (app/boot.tsx)', () => {
         throw new Error('storage gone')
       },
     }
-    await app.boot({ env, root: broken.root })
+    await app.boot({ env, root: broken.root, render: broken.render, history: broken.history })
     expect(broken.root.textContent).toBe(BOOT.cantReach)
+    expect(broken.rendered).toEqual([])
     expect(logged).toHaveBeenCalledTimes(1)
     broken.otherTab()
     await tick()

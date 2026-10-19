@@ -37,15 +37,23 @@ export interface MenuProps {
   label: string
   items: readonly MenuItem[]
   placement?: 'bottom-end' | 'top-start'
+  // A line shown above the items (the avatar menu's name). It is decoration, hidden from
+  // assistive technology, because the trigger's name already says it, and it sits outside the
+  // role="menu" element, whose children must all be menu items.
+  heading?: string
   trigger(props: MenuTriggerProps): ReactNode
 }
+
+// The popup's box: above <main> (z-30), never wider than the screen less 2rem.
+const POPUP =
+  'absolute z-30 min-w-48 max-w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-line bg-surface p-1 text-fg shadow-card'
 
 const PLACEMENT = {
   'bottom-end': 'right-0 top-full mt-1',
   'top-start': 'bottom-full left-0 mb-1',
 } as const
 
-export function Menu({ label, items, placement = 'bottom-end', trigger }: MenuProps) {
+export function Menu({ label, items, placement = 'bottom-end', heading, trigger }: MenuProps) {
   const [state, setState] = useState<MenuState>(CLOSED)
   const id = useId()
   const triggerId = `${id}trigger`
@@ -118,6 +126,41 @@ export function Menu({ label, items, placement = 'bottom-end', trigger }: MenuPr
     ),
   )
 
+  const list = (
+    <div
+      id={menuId}
+      role="menu"
+      aria-label={label}
+      hidden={!state.open}
+      className={heading === undefined ? cx(POPUP, PLACEMENT[placement]) : undefined}
+    >
+      {items.map((item, index) => {
+        const Icon = item.icon
+        const disabled = item.disabledReason !== undefined
+        return (
+          <button
+            key={item.id}
+            ref={element => {
+              itemRefs.current[index] = element
+            }}
+            type="button"
+            role="menuitem"
+            // Only the active item is in the tab order, so Tab leaves the menu in one step.
+            tabIndex={index === state.active ? 0 : -1}
+            aria-disabled={disabled || undefined}
+            aria-describedby={disabled ? `${id}reason${index}` : undefined}
+            onKeyDown={onItemKeyDown}
+            onClick={() => activate(index)}
+            className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-left hover:bg-surface-2 focus-visible:bg-surface-2 aria-disabled:cursor-not-allowed aria-disabled:text-muted"
+          >
+            {Icon && <Icon aria-hidden size={18} className="shrink-0" />}
+            <span className="min-w-0 flex-1">{item.label}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+
   return (
     <div ref={wrapper} className="relative">
       {trigger({
@@ -129,41 +172,16 @@ export function Menu({ label, items, placement = 'bottom-end', trigger }: MenuPr
         onClick: () => (state.open ? closeAndRestore() : setState(openAt(0))),
         onKeyDown: onTriggerKeyDown,
       })}
-      <div
-        id={menuId}
-        role="menu"
-        aria-label={label}
-        hidden={!state.open}
-        className={cx(
-          'absolute z-30 min-w-48 max-w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-line bg-surface p-1 text-fg shadow-card',
-          PLACEMENT[placement],
-        )}
-      >
-        {items.map((item, index) => {
-          const Icon = item.icon
-          const disabled = item.disabledReason !== undefined
-          return (
-            <button
-              key={item.id}
-              ref={element => {
-                itemRefs.current[index] = element
-              }}
-              type="button"
-              role="menuitem"
-              // Only the active item is in the tab order, so Tab leaves the menu in one step.
-              tabIndex={index === state.active ? 0 : -1}
-              aria-disabled={disabled || undefined}
-              aria-describedby={disabled ? `${id}reason${index}` : undefined}
-              onKeyDown={onItemKeyDown}
-              onClick={() => activate(index)}
-              className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-left hover:bg-surface-2 focus-visible:bg-surface-2 aria-disabled:cursor-not-allowed aria-disabled:text-muted"
-            >
-              {Icon && <Icon aria-hidden size={18} className="shrink-0" />}
-              <span className="min-w-0 flex-1">{item.label}</span>
-            </button>
-          )
-        })}
-      </div>
+      {heading === undefined ? (
+        list
+      ) : (
+        <div hidden={!state.open} className={cx(POPUP, PLACEMENT[placement])}>
+          <p aria-hidden className="break-words px-3 pt-2 pb-1 text-small font-semibold text-muted">
+            {heading}
+          </p>
+          {list}
+        </div>
+      )}
       {reasons}
     </div>
   )

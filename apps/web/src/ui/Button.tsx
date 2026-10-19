@@ -42,6 +42,17 @@ export const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
 // class is left to change its fill or ink.
 export const INERT_BUTTON = 'bg-surface-2 text-muted cursor-not-allowed'
 
+// Every button's shape and size: at least 44×44 at every width (X7).
+const BUTTON_SHAPE =
+  'inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full font-semibold transition'
+const BUTTON_SIZES = { md: 'px-4 text-body', lg: 'px-6 text-base' } as const
+
+// A button's shape, size and variant, for a link that looks like one (the not-found and error
+// screens' "Go to Chats"): a link that navigates stays a link, and keeps the 44 px target.
+export function buttonClass(variant: ButtonVariant = 'secondary', size: 'md' | 'lg' = 'md'): string {
+  return cx(BUTTON_SHAPE, BUTTON_SIZES[size], BUTTON_VARIANTS[variant])
+}
+
 // The props every button shares once a reason may hold it back: aria-disabled and the description
 // in place of `disabled`, and a press that does nothing (a click, or Enter in a form, whose implicit
 // submission is a click on this button).
@@ -91,12 +102,7 @@ export function Button({
         // A reason replaces `disabled`, so the button stays in the tab order.
         disabled={disabledReason === undefined ? disabled : undefined}
         type={type}
-        className={cx(
-          'inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full font-semibold transition',
-          size === 'lg' ? 'px-6 text-base' : 'px-4 text-body',
-          inert ? INERT_BUTTON : BUTTON_VARIANTS[variant],
-          className,
-        )}
+        className={cx(BUTTON_SHAPE, BUTTON_SIZES[size], inert ? INERT_BUTTON : BUTTON_VARIANTS[variant], className)}
       >
         {Icon && <Icon aria-hidden size={size === 'lg' ? 20 : 18} className="shrink-0" />}
         {children}
