@@ -27,7 +27,7 @@ import { ATTEMPT_COOKIE, SESSION_COOKIE } from '#src/auth/cookies.ts'
 import { keyName, tag } from '#src/auth/crypto.ts'
 import { MESSAGES } from '#src/auth/errors.ts'
 import { limitSubject } from '#src/auth/limiter.ts'
-import { LIMITS } from '#src/auth/policy.ts'
+import { LIMITS, OTP } from '#src/auth/policy.ts'
 import { withOrg } from '#src/db/database.ts'
 import { FLAG_ERRORS } from '#src/flags/set.ts'
 import { createAuthenticator } from '#src/testing/authenticator.ts'
@@ -588,6 +588,10 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     }
     const dead = await verifyCode(ac, code)
     expect([dead.status, dead.error]).toEqual([401, 'code_expired'])
+    // T20: the 5th wrong try's dead code is cancelled at the provider, after the reply.
+    await s.settled()
+    const aRef = s.sms.sent.filter(sent => sent.to === a.e164).at(-1)?.ref
+    expect(s.sms.cancels.map(entry => entry.ref)).toContain(aRef)
     expect((await requestCode(ac, a.e164)).status).toBe(200)
     const fresh = await verifyCode(ac, await s.sms.nextCode(a.e164))
     expect(fresh.status).toBe(200)
@@ -621,7 +625,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     // T20: the newer request cancelled the older code first, so the provider made a new one.
     const [olderText, newerText] = s.sms.sent.filter(sent => sent.to === d.e164).slice(-2)
     expect(newerText?.ref).not.toBe(olderText?.ref)
-    expect(s.sms.cancels.map(c => c.ref)).toContain(olderText?.ref)
+    expect(s.sms.cancels.map(entry => entry.ref)).toContain(olderText?.ref)
     const checksBefore = s.sms.checks.length
     for (let tries = 1; tries <= 5; tries++) {
       const reply = await verifyCode(older, tries < 5 ? another(newest) : newest)
@@ -630,16 +634,26 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     await s.settled()
     // The stale attempt asked the provider nothing and cancelled nothing of the newest code.
     expect(s.sms.checks.length).toBe(checksBefore)
-    expect(s.sms.cancels.map(c => c.ref)).not.toContain(newerText?.ref)
+    expect(s.sms.cancels.map(entry => entry.ref)).not.toContain(newerText?.ref)
     expect((await verifyCode(newer, newest)).status).toBe(200)
 
-    // A code past its 5 minutes (its record gone from Valkey, as expiry leaves it).
+    // T20 PRD-53: a code past its 5 minutes, on Valkey's clock from the request, is refused, and
+    // its provider code is cancelled after the reply; the record goes, as its 10-minute expiry
+    // would leave it, and the next check finds nothing.
     const cc = s.client()
     expect((await requestCode(cc, c.e164)).status).toBe(200)
     const late = await s.sms.nextCode(c.e164)
-    await s.valkey.del(s.names.otp(tag(s.keys, c.e164)))
+    const cKey = s.names.otp(tag(s.keys, c.e164))
+    const [seconds] = await s.valkey.time()
+    await s.valkey.hset(cKey, 'born', Number(seconds) * 1000 - OTP.ttlMs - 1)
     const expired = await verifyCode(cc, late)
     expect([expired.status, expired.error]).toEqual([401, 'code_expired'])
+    await s.settled()
+    const cRef = s.sms.sent.filter(sent => sent.to === c.e164).at(-1)?.ref
+    expect(s.sms.cancels.map(entry => entry.ref)).toContain(cRef)
+    expect(await s.valkey.exists(cKey)).toBe(0)
+    const gone = await verifyCode(cc, late)
+    expect([gone.status, gone.error]).toEqual([401, 'code_expired'])
   })
 
   it('BUILD-PLAN C0.5 ADM-06: a wrong code whose sender hangs up before the reply is counted once and still audited', async () => {

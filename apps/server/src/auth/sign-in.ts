@@ -425,12 +425,15 @@ async function cancelQuietly(sms: SmsProvider, info: ReqInfo, ref: string): Prom
   try {
     await sms.cancel(ref)
   } catch (error) {
-    info.log.warn({
-      event: 'sms_cancel_failed',
-      provider: sms.name,
-      error: error instanceof Error ? error.name : 'unknown',
-      kind: error instanceof SmsProviderError ? error.kind : undefined,
-    })
+    info.log.warn(
+      {
+        event: 'sms_cancel_failed',
+        provider: sms.name,
+        error: error instanceof Error ? error.name : 'unknown',
+        kind: error instanceof SmsProviderError ? error.kind : undefined,
+      },
+      'the SMS provider could not cancel a code',
+    )
   }
 }
 
@@ -461,12 +464,15 @@ export async function verifyCode(
       try {
         verdict = await sms.check(reserved.ref, body.code)
       } catch (error) {
-        info.log.error({
-          event: 'sms_check_failed',
-          provider: sms.name,
-          error: error instanceof Error ? error.name : 'unknown',
-          kind: error instanceof SmsProviderError ? error.kind : undefined,
-        })
+        info.log.error(
+          {
+            event: 'sms_check_failed',
+            provider: sms.name,
+            error: error instanceof Error ? error.name : 'unknown',
+            kind: error instanceof SmsProviderError ? error.kind : undefined,
+          },
+          'the SMS provider could not check a code',
+        )
       }
     }
     const settled = await fromValkey(info, settleCode(api.valkey, api.names, attempt.numberTag, key, reserved, verdict))

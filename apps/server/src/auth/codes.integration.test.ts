@@ -109,6 +109,27 @@ describe('T14 T20 PRD-53 the code challenge record on Valkey', () => {
     expect(await valkey.hgetall(keys.otp(n))).toEqual(before)
   })
 
+  it("a stale attempt's check cancels nothing and the newest owner's code still works", async () => {
+    const n = fresh()
+    await openCode(valkey, keys, n, 'a')
+    await attachCode(valkey, keys, n, 'a', 'VE1')
+    // A newer request replaces a's record and answers a's ref for the newer owner to cancel.
+    expect(await openCode(valkey, keys, n, 'b')).toBe('VE1')
+    await attachCode(valkey, keys, n, 'b', 'VE2')
+    // a's checks find another owner's record: expired with no ref, so a never cancels VE2, and they
+    // spend none of b's tries.
+    for (let t = 1; t <= 6; t++)
+      expect(await reserveCode(valkey, keys, n, 'a')).toEqual({ result: 'expired', ref: undefined })
+    expect(await valkey.hgetall(keys.otp(n))).toMatchObject({ owner: 'b', ref: 'VE2', tries: '0' })
+    const reserved = await reserveCode(valkey, keys, n, 'b')
+    expect(reserved).toEqual({ result: 'check', ref: 'VE2', tries: 1 })
+    expect(await settleCode(valkey, keys, n, 'b', { ref: 'VE2', tries: 1 }, 'approved')).toEqual({
+      result: 'approved',
+      tries: 1,
+    })
+    expect(await valkey.exists(keys.otp(n))).toBe(0)
+  })
+
   it('SETTLE failed after an OPEN refunds no try on the new record, and on its own record gives the try back', async () => {
     const n = fresh()
     await openCode(valkey, keys, n, 'a')

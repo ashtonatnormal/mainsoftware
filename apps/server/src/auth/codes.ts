@@ -11,7 +11,7 @@
 // record, or none, changes nothing, so a stale attempt can never delete, cancel or spend a try of
 // the newest owner's code.
 // - OPEN replaces any record for the number with the caller's, and answers the replaced ref for the
-//   caller to cancel (after its commit).
+//   caller to cancel (after the reply, before it starts its own code).
 // - ATTACH sets the ref, only on the caller's record and only once.
 // - RESERVE counts a try before the provider is asked, so parallel guesses stop at 5; past the 5
 //   minutes it deletes the caller's record and answers its ref, the only ref a caller may cancel.
@@ -150,7 +150,7 @@ export function parseSettle(reply: unknown): Settled {
 type Valkey = Pick<Redis, 'evalsha' | 'eval'>
 
 // Starts a new challenge for the number, owned by `owner`; answers the replaced record's ref, if it
-// had one, for the caller to cancel once it has committed.
+// had one, for the caller to cancel after the reply, before it starts its own code.
 export async function openCode(
   valkey: Valkey,
   keys: ValkeyKeys,
