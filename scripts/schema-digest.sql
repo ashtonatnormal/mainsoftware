@@ -16,18 +16,19 @@
 --   rules and grants;
 -- - custom collations: owner, provider, locale, collate and ctype, ICU rules, whether
 --   deterministic;
--- - columns: type, collation, NOT NULL, default or generated expression, identity, generated, and
---   column grants;
+-- - columns: type, collation, NOT NULL, default or generated expression, identity, generated,
+--   storage (PLAIN refuses a row too big for a page) and column grants;
 -- - rules (constraints); indexes and whether each is valid; triggers and rewrite rules (CREATE
 --   RULE), and whether each is on; policies;
 -- - functions, procedures and window functions (body, owner, SECURITY DEFINER, settings and
---   grants), and aggregates (owner, grants and their definition).
+--   grants), and aggregates (declared arguments, owner, grants and their definition).
 --
 -- A partition is compared like any table (its row level security, grants, column grants, owner,
 -- policies, indexes, rules and triggers) under a name with its month folded:
--- data_access_events_2026_10 is listed as data_access_events_yyyy_mm, with the month folded in the
--- names and text of what belongs to it, and its bound reads yyyy-mm-01 for the first of its month
--- and yyyy-mm+1-01 for the next. Its copies of the parent's indexes and of its primary key, unique,
+-- data_access_events_2026_10 is listed as data_access_events_yyyy_mm, with its name folded the
+-- same way wherever it appears in the names and text of its rules, indexes, triggers, rewrite rules
+-- and policies, and its bound reads yyyy-mm-01 for the first of its month and yyyy-mm+1-01 for the
+-- next. Its copies of the parent's indexes and of its primary key, unique,
 -- exclusion and foreign key rules are listed by the parent's names
 -- (data_access_events_yyyy_mm.data_access_events_pkey), however Postgres named them (it shortens
 -- long index names), and a copy left unattached reads differently. Identical lines are listed once,
@@ -54,12 +55,12 @@
 -- - the database's own settings, owner and extensions (only plpgsql today; the migration that adds
 --   pgvector, A2, adds a line); roles and memberships, which belong to the whole server
 --   (scripts/check-migrations.sh checks them on every fresh and partial build);
--- - tuning that changes no result: TOAST options, replica identity, a column's storage,
---   compression and statistics target, and extended statistics;
+-- - tuning that changes no result: TOAST options, replica identity, a column's compression and
+--   statistics target, and extended statistics;
 -- - Postgres's own internal triggers (foreign keys' and deferred unique rules'), which only a
 --   superuser can turn off, and hearth_owner isn't one;
 -- - comments; column order; collation versions, which follow the server's libraries; names that
---   carry a month other than through the partition's own name (a policy named for its month makes
+--   carry a month other than through the partition's whole name (a policy named read_2026_10 makes
 --   months differ, which fails the check rather than hiding anything);
 -- - object kinds no migration makes yet: range types, operators, casts, operator classes and
 --   families, text search objects, conversions, publications, foreign servers and event triggers;
@@ -161,9 +162,9 @@ lines as (
   where n.nspname = 'public'
   union all
   select 'column', format('%I.%I', c.folded, a.attname),
-         format('%s collation=%s notnull=%s default=%s identity=%s generated=%s acl=%s', format_type(a.atttypid, a.atttypmod),
-                a.attcollation::regcollation, a.attnotnull, pg_get_expr(d.adbin, d.adrelid), a.attidentity, a.attgenerated,
-                a.attacl), c.oid
+         format('%s collation=%s notnull=%s default=%s identity=%s generated=%s storage=%s acl=%s',
+                format_type(a.atttypid, a.atttypmod), a.attcollation::regcollation, a.attnotnull, pg_get_expr(d.adbin, d.adrelid),
+                a.attidentity, a.attgenerated, a.attstorage, a.attacl), c.oid
   from pg_attribute a join rel c on c.oid = a.attrelid
   left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
   where c.relkind in ('r', 'p', 'v', 'm', 'f', 'c') and a.attnum > 0 and not a.attisdropped
@@ -220,13 +221,15 @@ lines as (
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
   where n.nspname = 'public' and p.prokind in ('f', 'p', 'w')
   union all
-  -- An aggregate, which pg_get_functiondef refuses: its owner, grants and definition, with every
-  -- function, operator and type by name.
+  -- An aggregate, which pg_get_functiondef refuses: its declared arguments (VARIADIC, names, an
+  -- ordered-set aggregate's ORDER BY), owner, grants and definition, with every function, operator
+  -- and type by name.
   select 'aggregate', p.oid::regprocedure::text,
-         format('owner=%s acl=%s returns=%s parallel=%s kind=%s direct=%s transfn=%s finalfn=%s combinefn=%s serialfn=%s '
+         format('args=%s owner=%s acl=%s returns=%s parallel=%s kind=%s direct=%s transfn=%s finalfn=%s combinefn=%s serialfn=%s '
                 'deserialfn=%s mtransfn=%s minvtransfn=%s mfinalfn=%s finalextra=%s mfinalextra=%s finalmodify=%s '
                 'mfinalmodify=%s sortop=%s transtype=%s transspace=%s mtranstype=%s mtransspace=%s initval=%s minitval=%s',
-                pg_get_userbyid(p.proowner), p.proacl, format_type(p.prorettype, null), p.proparallel, a.aggkind,
+                pg_get_function_arguments(p.oid), pg_get_userbyid(p.proowner), p.proacl, format_type(p.prorettype, null),
+                p.proparallel, a.aggkind,
                 a.aggnumdirectargs, a.aggtransfn::regprocedure, a.aggfinalfn::regprocedure, a.aggcombinefn::regprocedure,
                 a.aggserialfn::regprocedure, a.aggdeserialfn::regprocedure, a.aggmtransfn::regprocedure,
                 a.aggminvtransfn::regprocedure, a.aggmfinalfn::regprocedure, a.aggfinalextra, a.aggmfinalextra,
@@ -235,9 +238,10 @@ lines as (
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace join pg_aggregate a on a.aggfnoid = p.oid
   where n.nspname = 'public' and p.prokind = 'a'
   union all
-  select 'policy', format('%I.%I', c.folded, pol.polname),
+  select 'policy', format('%I.%I', c.folded, replace(pol.polname, c.relname, c.folded)),
          format('%s %s %s using=%s check=%s', pol.polcmd, pol.polpermissive, pol.polroles::regrole[],
-                pg_get_expr(pol.polqual, pol.polrelid), pg_get_expr(pol.polwithcheck, pol.polrelid)), c.oid
+                replace(pg_get_expr(pol.polqual, pol.polrelid), c.relname, c.folded),
+                replace(pg_get_expr(pol.polwithcheck, pol.polrelid), c.relname, c.folded)), c.oid
   from pg_policy pol join rel c on c.oid = pol.polrelid
 )
 select distinct line collate "C" as line from (
