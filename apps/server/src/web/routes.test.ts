@@ -1,9 +1,11 @@
 // GET /api/session and GET /api/flags at the api (web/routes.ts), on a scripted pool: what they
 // answer, that they run read only, which one counts as use of the session, and that no refusal of
 // theirs clears the cookie (T21 item 10). The integration suite (routes.integration.test.ts) runs
-// them on the Compose stack.
+// them on the Compose stack. Then POST /api/csp-report (web/csp-report.ts, OD-12): its scoped
+// parser, the Origin hook, what it logs and the cap on that log; csp-report.test.ts tests the
+// reduction and the cap alone.
 import { Writable } from 'node:stream'
-import { FLAGS, type FlagSpec, FlagsResponse, MESSAGES, SessionResponse } from '@hearth/shared'
+import { CSP_REPORT_PATH, FLAGS, type FlagSpec, FlagsResponse, MESSAGES, SessionResponse } from '@hearth/shared'
 import type { Redis } from 'ioredis'
 import type { Pool } from 'pg'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -18,6 +20,7 @@ import { AfterResponse, type ReqInfo } from '#src/http.ts'
 import { createLogger } from '#src/logger.ts'
 import { staticFlags } from '#src/testing/flags.ts'
 import { type Statement, scriptedPool } from '#src/testing/pool.ts'
+import { CSP_REPORT_LIMIT } from '#src/web/csp-report.ts'
 import { readFlags } from '#src/web/flags.ts'
 import { keepCookie } from '#src/web/routes.ts'
 
@@ -113,7 +116,25 @@ function setup(deps: Partial<ApiDeps> = {}) {
   })
   const get = (url: string, cookie?: string) =>
     app.inject({ method: 'GET', url, headers: cookie === undefined ? {} : { cookie } })
-  return { app, logs, afterResponse, get }
+  // A POST from the app origin with a CSP report's content type, unless the headers say otherwise
+  // (an undefined header is left out).
+  const post = (url: string, payload: unknown, headers: Record<string, string | undefined> = {}) => {
+    const sent: Record<string, string> = {}
+    for (const [name, value] of Object.entries({
+      origin: APP_ORIGIN,
+      'content-type': 'application/csp-report',
+      ...headers,
+    })) {
+      if (value !== undefined) sent[name] = value
+    }
+    return app.inject({
+      method: 'POST',
+      url,
+      headers: sent,
+      payload: typeof payload === 'string' ? payload : JSON.stringify(payload),
+    })
+  }
+  return { app, logs, afterResponse, get, post }
 }
 
 // The test registry: production's flags, three a browser may see and one it may not.
@@ -387,5 +408,176 @@ describe('C0.8 OD-22 GET /api/session', () => {
     expect(response.statusCode).toBe(401)
     expect(response.json()).toEqual({ error: 'signed_out', message: MESSAGES.signed_out })
     expect(response.headers['set-cookie']).toBeUndefined()
+  })
+})
+
+// A report as Chromium sends one to a report-uri, with MARKER in every field a log line must not
+// keep: the query strings, the referrer, the policy, the source file and the script sample.
+const MARKER = 'csp-marker'
+const CHAT = '0f9c2c4e-1b7a-4c1e-9f55-3d2a1b0c9e8d'
+const REPORT = {
+  'csp-report': {
+    'document-uri': `${APP_ORIGIN}/chats/${CHAT}?invite=${MARKER}#${MARKER}`,
+    referrer: `${APP_ORIGIN}/today?from=${MARKER}`,
+    'violated-directive': 'img-src',
+    'effective-directive': 'img-src',
+    'original-policy': `default-src 'none'; img-src 'self' ${MARKER}`,
+    disposition: 'enforce',
+    'blocked-uri': `https://example.invalid/x.png?${MARKER}=1`,
+    'line-number': 12,
+    'column-number': 34,
+    'source-file': `${APP_ORIGIN}/assets/index.js?${MARKER}`,
+    'status-code': 200,
+    'script-sample': `alert("${MARKER}")`,
+  },
+}
+const REDUCED = { directive: 'img-src', blocked: 'https://example.invalid', path: '/chats/:id', disposition: 'enforce' }
+const REFUSED = { error: 'invalid_request', message: MESSAGES.invalid_request }
+
+const reportLines = (logs: Record<string, unknown>[]) => logs.filter(line => line.event === 'csp_report')
+
+describe('C0.8 OD-12 POST /api/csp-report', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('CR-01 OD-12 R-59: application/csp-report from the app origin answers 204 and logs only directive, blocked, path and disposition', async () => {
+    // A session cookie is sent and ignored: the route reads no session, and the database and
+    // Valkey (an empty object here) are never reached.
+    const { db, touched } = unreachableDb()
+    const { post, logs } = setup({ db })
+    expect(CSP_REPORT_PATH).toBe('/api/csp-report')
+    const response = await post(CSP_REPORT_PATH, REPORT, { cookie: COOKIE })
+    expect([response.statusCode, response.body, response.headers['cache-control']]).toEqual([204, '', 'no-store'])
+    expect(response.headers['set-cookie']).toBeUndefined()
+    expect(touched()).toBe(0)
+    // One line for the request, and only the four fields beside pino's own: the route's request
+    // lines are logged at warn only, so no incoming or completed line carries anything more.
+    expect(logs).toHaveLength(1)
+    const [line] = logs
+    expect(line).toMatchObject({ level: 40, event: 'csp_report', ...REDUCED })
+    expect(Object.keys(line ?? {}).sort()).toEqual(
+      ['blocked', 'directive', 'disposition', 'event', 'level', 'msg', 'path', 'reqId', 'role', 'time'].sort(),
+    )
+    expect(JSON.stringify(logs)).not.toContain(MARKER)
+    // A content type with parameters is the same type.
+    const charset = await post(CSP_REPORT_PATH, REPORT, { 'content-type': 'application/csp-report; charset=utf-8' })
+    expect(charset.statusCode).toBe(204)
+    expect(reportLines(logs)).toHaveLength(2)
+  })
+
+  it('OD-12: the route is CSP_REPORT_PATH alone, for POST alone', async () => {
+    const { app, post, logs } = setup()
+    const slash = await post(`${CSP_REPORT_PATH}/`, REPORT)
+    const get = await app.inject({ method: 'GET', url: CSP_REPORT_PATH })
+    for (const response of [slash, get]) {
+      expect([response.statusCode, response.json(), response.headers['cache-control']]).toEqual([
+        404,
+        { error: 'Not Found' },
+        'no-store',
+      ])
+    }
+    expect(reportLines(logs)).toEqual([])
+  })
+
+  it('CR-02 OD-12 CL Security: a report with another Origin, or none, is refused 403 by the root hook', async () => {
+    const { post, logs } = setup()
+    for (const origin of ['https://evil.example', 'https://usercontent.hearth.example.com', 'null', undefined]) {
+      const response = await post(CSP_REPORT_PATH, REPORT, { origin })
+      expect([origin, response.statusCode, response.json()]).toEqual([origin, 403, { error: 'Forbidden' }])
+    }
+    expect(reportLines(logs)).toEqual([])
+  })
+
+  it('CR-03 OD-12: malformed JSON or a body over 8 KiB is 400 invalid_request, never 500', async () => {
+    const { post, logs } = setup()
+    expect(CSP_REPORT_LIMIT).toBe(8_192)
+    // Under the limit, fields the route doesn't read are dropped, however long.
+    const padded = (size: number) => {
+      const body = { 'csp-report': { ...REPORT['csp-report'], 'script-sample': '' } }
+      body['csp-report']['script-sample'] = 'x'.repeat(size - JSON.stringify(body).length)
+      return JSON.stringify(body)
+    }
+    expect(padded(CSP_REPORT_LIMIT)).toHaveLength(CSP_REPORT_LIMIT)
+    expect((await post(CSP_REPORT_PATH, padded(CSP_REPORT_LIMIT))).statusCode).toBe(204)
+    const refused = [
+      `{"csp-report": {"blocked-uri": "${MARKER}"`,
+      '',
+      'null',
+      '[]',
+      `"${MARKER}"`,
+      '{}',
+      { 'csp-report': null },
+      { 'csp-report': { 'blocked-uri': 5 } },
+      { 'csp-report': { 'document-uri': `${APP_ORIGIN}/${'a'.repeat(4096)}` } },
+      { 'csp-report': { disposition: 'enforce'.repeat(3) } },
+      padded(CSP_REPORT_LIMIT + 1),
+      padded(100_000),
+      // Refused as Fastify's JSON parser refuses it on every other route.
+      `{"csp-report": {}, "__proto__": {"${MARKER}": true}}`,
+      `{"csp-report": {}, "constructor": {"prototype": {"${MARKER}": true}}}`,
+    ]
+    for (const payload of refused) {
+      const response = await post(CSP_REPORT_PATH, payload)
+      const shown = typeof payload === 'string' ? payload.slice(0, 60) : JSON.stringify(payload).slice(0, 60)
+      expect([shown, response.statusCode, response.json()]).toEqual([shown, 400, REFUSED])
+      expect(response.body).not.toContain(MARKER)
+    }
+    // One line, for the report that fitted; nothing at error level, and no marker anywhere.
+    expect(reportLines(logs)).toHaveLength(1)
+    expect(logs.filter(line => typeof line.level === 'number' && line.level >= 50)).toEqual([])
+    expect(JSON.stringify(logs)).not.toContain(MARKER)
+  })
+
+  it('CR-04 OD-12: past 60 reports in a minute nothing more is logged, and one csp_reports_dropped line follows', async () => {
+    // The cap reads a monotonic clock; Fastify reads the same one for response times only.
+    let now = 1_000
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const { post, logs } = setup()
+    for (let i = 0; i < 61; i++) expect((await post(CSP_REPORT_PATH, REPORT)).statusCode).toBe(204)
+    expect(reportLines(logs)).toHaveLength(60)
+    expect(logs).toHaveLength(60)
+    now += 59_999
+    expect((await post(CSP_REPORT_PATH, REPORT)).statusCode).toBe(204)
+    expect(logs).toHaveLength(60)
+    // The first report after the minute ends reports the two dropped, then is logged itself.
+    now += 1
+    expect((await post(CSP_REPORT_PATH, REPORT)).statusCode).toBe(204)
+    expect(logs.slice(60).map(line => [line.level, line.event, line.count])).toEqual([
+      [40, 'csp_reports_dropped', 2],
+      [40, 'csp_report', undefined],
+    ])
+    // Reported once.
+    now += 60_000
+    await post(CSP_REPORT_PATH, REPORT)
+    expect(logs.slice(62).map(line => line.event)).toEqual(['csp_report'])
+  })
+
+  it('CR-05 OD-12: a plain JSON route under /api still refuses application/csp-report with 400 (the parser is scoped)', async () => {
+    const { db, touched } = unreachableDb()
+    const { post } = setup({ db })
+    // Signing out takes {} as JSON, with or without a session (auth/routes.ts).
+    const json = await post('/api/auth/sign-out', {}, { 'content-type': 'application/json' })
+    expect([json.statusCode, json.json()]).toEqual([200, { status: 'signed_out' }])
+    const report = await post('/api/auth/sign-out', {})
+    expect([report.statusCode, report.json()]).toEqual([400, REFUSED])
+    const otp = await post('/api/auth/otp/request', REPORT)
+    expect([otp.statusCode, otp.json()]).toEqual([400, REFUSED])
+    expect(touched()).toBe(0)
+  })
+
+  it('CR-06 C-21: application/reports+json is refused, and so is JSON: the route takes application/csp-report alone', async () => {
+    const { post, logs } = setup()
+    // The Reporting API's shape (report-to), which the policy doesn't use.
+    const reporting = [{ type: 'csp-violation', age: 0, url: `${APP_ORIGIN}/chats`, body: REPORT['csp-report'] }]
+    const refused = [
+      await post(CSP_REPORT_PATH, reporting, { 'content-type': 'application/reports+json' }),
+      await post(CSP_REPORT_PATH, REPORT, { 'content-type': 'application/reports+json' }),
+      await post(CSP_REPORT_PATH, REPORT, { 'content-type': 'application/json' }),
+      await post(CSP_REPORT_PATH, REPORT, { 'content-type': 'text/plain' }),
+      await post(CSP_REPORT_PATH, REPORT, { 'content-type': undefined }),
+    ]
+    for (const response of refused) expect([response.statusCode, response.json()]).toEqual([400, REFUSED])
+    expect(reportLines(logs)).toEqual([])
   })
 })

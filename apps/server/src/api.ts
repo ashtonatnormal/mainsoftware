@@ -1,13 +1,14 @@
 // The api role's routes under /api (C0.5): sign-in, your own devices (and passkeys, dormant: D46,
 // PASSKEYS_ON), the admin actions on a person, from C0.6 changing a feature flag, and from C0.8 the
 // web shell's own reads, who is signed in and the client flags evaluated for them (web/routes.ts,
-// T21 item 10). Every response in the scope carries Cache-Control: no-store, errors and the scope's
-// own 404 included.
-// Every body a route reads is JSON of at most 16 KiB, parsed by a strict zod object (http.ts); a
-// path with no route answers 404 before any body is read. Errors become
-// `{ error, message, ...extra }` (auth/errors.ts); anything unexpected is a 500 whose detail goes
-// only to the (redacted) log. Work a handler queues for after its response runs once that
-// response has ended, sent or abandoned (http.ts AfterResponse).
+// T21 item 10), and the browsers' CSP violation reports (web/csp-report.ts, OD-12). Every response
+// in the scope carries Cache-Control: no-store, errors and the scope's own 404 included.
+// Every body a route reads is JSON of at most 16 KiB, parsed by a strict zod object (http.ts),
+// except a CSP report's: application/csp-report of at most 8 KiB, read leniently, in a child scope
+// of its own whose parser no other route sees. A path with no route answers 404 before any body is
+// read. Errors become `{ error, message, ...extra }` (auth/errors.ts); anything unexpected is a 500
+// whose detail goes only to the (redacted) log. Work a handler queues for after its response runs
+// once that response has ended, sent or abandoned (http.ts AfterResponse).
 import { setTimeout as delay } from 'node:timers/promises'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Redis } from 'ioredis'
@@ -26,6 +27,7 @@ import { deviceRoutes } from '#src/devices/routes.ts'
 import type { FlagCache } from '#src/flags/cache.ts'
 import { AfterResponse, BODY_LIMIT } from '#src/http.ts'
 import type { Gate } from '#src/jobs/gate.ts'
+import { cspReportRoute } from '#src/web/csp-report.ts'
 import { webRoutes } from '#src/web/routes.ts'
 
 export interface ApiDeps {
@@ -91,6 +93,7 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps & { appOrigin: s
       // At start, so a package the image left out fails the api role's start (check-server.sh
       // sees it), not the first passkey request.
       await loadWebAuthn()
+      // A route that sets its own limit (the CSP report's 8 KiB) keeps it.
       scope.addHook('onRoute', route => {
         route.bodyLimit ??= BODY_LIMIT
       })
@@ -127,6 +130,7 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps & { appOrigin: s
       await scope.register(deviceRoutes(api), { prefix: '/devices' })
       await scope.register(adminRoutes(api), { prefix: '/admin' })
       await scope.register(webRoutes(api))
+      await scope.register(cspReportRoute(api), { prefix: '/csp-report' })
     },
     { prefix: '/api' },
   )
