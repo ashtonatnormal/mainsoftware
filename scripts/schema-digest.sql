@@ -194,8 +194,11 @@ lines as (
   -- by the parent's rule's name, so it reads alike in every month however Postgres named it, and
   -- one left unattached reads differently. not_valid names a rule as it's listed. A foreign key
   -- into a partitioned table gets a copy for each of its partitions, on the referencing table,
-  -- naming the partition, so a referenced month partition's name is folded too.
-  select 'constraint', l.name, case when rf.month is null then t.def else replace(t.def, rf.escaped, rf.folded) end, c.oid
+  -- naming the partition, so a referenced month partition's name is folded too, only where the
+  -- key names it (REFERENCES <name>(), not in a column that happens to share its name.
+  select 'constraint', l.name,
+         case when rf.month is null then t.def
+              else replace(t.def, ' REFERENCES ' || rf.escaped || '(', ' REFERENCES ' || rf.folded || '(') end, c.oid
   from pg_constraint k join rel c on c.oid = k.conrelid
   left join rel rf on rf.oid = k.confrelid
   cross join lateral (

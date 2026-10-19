@@ -23,7 +23,8 @@
 # The others are equivalent and must compare equal: partitions made in different months, including
 # months whose index names Postgres shortened (copies of the parent's, and indexes of their own,
 # which it also numbers), months with policies named for them, months whose rules or column
-# defaults name their own month, and a foreign key into months held in different numbers; a database set to New York, or to other date,
+# defaults name their own month, and a foreign key into months held in different numbers, even one
+# whose column is named like a month it references; a database set to New York, or to other date,
 # interval, float, bytea, string-escape, identifier-quoting or search_path settings, against the
 # defaults; a domain made in a New York session against one made in UTC; NOT VALID rules the caller
 # names, a month's rule among them. Then, against the real migrations (copies of the full build,
@@ -181,6 +182,12 @@ probe "indexes: a predicate holding text like the index's own name" differs '^in
 probe 'partitions: a foreign key into months held in different numbers' same '' \
   "$partitioned; create table t (id int primary key, p_id int, p_at timestamptz, foreign key (p_id, p_at) references p (id, at))" \
   "$two" "$(months 2026-05-01)"
+probe "partitions: a foreign key whose column is named like a month it references" same '' \
+  "create table r (id int not null, at date not null, primary key (id, at)) partition by range (at);
+   create table t (id int primary key, r_2026_01 int, r_at date, foreign key (r_2026_01, r_at) references r (id, at))" \
+  "create table r_2026_01 partition of r for values from ('2026-01-01') to ('2026-02-01');
+   create table r_2026_02 partition of r for values from ('2026-02-01') to ('2026-03-01')" \
+  "create table r_2026_05 partition of r for values from ('2026-05-01') to ('2026-06-01')"
 probe 'partitions: months whose column defaults name their own month' same '' \
   "create table q (src text, at date not null) partition by range (at)" \
   "create table q_2026_01 partition of q for values from ('2026-01-01') to ('2026-02-01');
