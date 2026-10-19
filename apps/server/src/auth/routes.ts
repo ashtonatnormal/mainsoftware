@@ -80,7 +80,8 @@ export function authRoutes(api: Api) {
     })
 
     // Passkeys (D46): kept, switched off. While api.passkeys is false none of these is registered,
-    // so each answers the /api scope's 404 before anything is parsed.
+    // so each answers the /api scope's 404, after the Origin check and before any body is read
+    // (api.ts).
     if (!api.passkeys) return
     scope.post('/passkey/options', async (request, reply) => {
       parse(Empty, request.body)

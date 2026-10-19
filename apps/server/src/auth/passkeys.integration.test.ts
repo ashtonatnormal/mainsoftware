@@ -9,7 +9,9 @@
 // person's budget. A passkey stands in for a set PIN, and only privileged holders have PINs, so the
 // people who use one are privileged (D46).
 //
-// afterAll checks that every /api reply was no-store and none a 500, that every committed write
+// afterAll runs the sign-in suite's sweep (testing/leaks.ts): no log line or audit row holds a
+// number, code, PIN, session token or attempt id; every /api reply was no-store, held no token or
+// attempt id and none was a 500; no Node warning fired. It also checks that every committed write
 // had its outbox event (testing/writes.ts), and, when every test ran and passed, that every dormant
 // error code and audit action (testing/dormant.ts) and both passkey event types were seen.
 import type {
@@ -22,6 +24,7 @@ import { tag } from '#src/auth/crypto.ts'
 import { limitSubject } from '#src/auth/limiter.ts'
 import { createAuthenticator } from '#src/testing/authenticator.ts'
 import { DORMANT_ACTIONS, DORMANT_ERRORS } from '#src/testing/dormant.ts'
+import { expectNothingLeaked } from '#src/testing/leaks.ts'
 import { APP_ORIGIN, type Client, type Person, type Stack, startStack } from '#src/testing/stack.ts'
 import { everyTestPassed, expectEveryWriteCovered } from '#src/testing/writes.ts'
 
@@ -126,10 +129,11 @@ describe('D46 the dormant passkeys, switched on for this suite alone (ACC-02, T1
   afterAll(async ({}, suite) => {
     if (s === undefined) return
     try {
-      for (const reply of s.replies) {
-        expect(reply.cacheControl, `${reply.method} ${reply.url}`).toBe('no-store')
-        expect(reply.error, `${reply.method} ${reply.url}`).not.toBe('internal')
-      }
+      // The sign-in suite's own sweep (testing/leaks.ts), over the passkey paths: no log line or
+      // audit row holds a number, code, PIN, token or attempt id, every /api reply was no-store
+      // with no token or attempt id and none a 500, and no Node warning fired (Web Crypto's
+      // included, which only these paths can cause).
+      await expectNothingLeaked(s)
       const all = everyTestPassed(suite) && suite.tasks.length > 0
       await expectEveryWriteCovered(s.superuser, 'passkeys', { allPassed: all })
       if (all) {

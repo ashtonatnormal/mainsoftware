@@ -11,10 +11,13 @@
 //
 // afterAll sweeps the whole run: no log line or audit row holds a number, code, PIN, session token
 // or attempt id; every /api reply was no-store and held no token or attempt id; no Node warning
-// fired; and every write a runtime role committed is exempt or had its outbox event naming it (C0.6,
-// T16 item 7; testing/writes.ts). When every test ran and passed, it also checks that every error
-// code (but try_again, internal and the flags route's, which flags.integration.test.ts sees) was
-// answered, every audit action written, and every event type this suite owns appended, at least once.
+// fired (testing/leaks.ts, which the dormant passkey suite runs too); and every write a runtime role
+// committed is exempt or had its outbox event naming it (C0.6, T16 item 7; testing/writes.ts). When
+// every test ran and passed, it also checks that every error code was answered, every audit action
+// written and every event type this suite owns appended, at least once; the exceptions are
+// try_again, internal, the flags route's codes (which flags.integration.test.ts sees), and the
+// dormant passkey codes and actions (testing/dormant.ts, D46; passkeys.integration.test.ts sees
+// them).
 import { type AddressInfo, connect } from 'node:net'
 import { sql } from 'kysely'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -28,6 +31,7 @@ import { FakeVerify } from '#src/auth/sms/fake.ts'
 import { withOrg } from '#src/db/database.ts'
 import { FLAG_ERRORS } from '#src/flags/set.ts'
 import { DORMANT_ACTIONS, DORMANT_ERRORS } from '#src/testing/dormant.ts'
+import { expectNothingLeaked } from '#src/testing/leaks.ts'
 import { APP_ORIGIN, type Client, type Closed, type Person, type Stack, startStack } from '#src/testing/stack.ts'
 import { expectEveryWriteCovered, sweepWrites } from '#src/testing/writes.ts'
 
@@ -301,27 +305,6 @@ function wrongMethodLines(personId: string): [unknown, unknown][] {
   return lines.map(line => [line.level, line.route])
 }
 
-// The text with every uuid and timestamp taken out, so a 6-digit code or PIN can be looked for
-// as a whole number without matching inside an id or a time.
-function scrub(text: string): string {
-  return text
-    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, 'UUID')
-    .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}(:?\d{2})?)?/g, 'TIME')
-}
-
-// What a run must never write anywhere: the numbers it used, the codes sent, the PINs typed, and
-// the tokens and attempt ids issued. Returns what a text holds of them.
-function leaksIn(text: string): string[] {
-  const found: string[] = []
-  const clean = scrub(text)
-  const whole = (digits: string) => new RegExp(`(?<![0-9])${digits}(?![0-9])`).test(clean)
-  for (const e164 of s.numbers) if (text.includes(e164) || whole(e164.slice(3))) found.push(`number ${e164}`)
-  for (const { code } of s.sms.sent) if (whole(code)) found.push(`code ${code}`)
-  for (const pin of s.pins) if (/^[0-9]{6}$/.test(pin) && whole(pin)) found.push(`PIN ${pin}`)
-  for (const secret of s.issued) if (text.includes(secret)) found.push('a token or attempt id')
-  return found
-}
-
 describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-01..06, PRD-53, T5, T14)', () => {
   beforeAll(async () => {
     s = await startStack()
@@ -340,26 +323,9 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   afterAll(async ({}, suite) => {
     if (s === undefined) return
     try {
-      // No log line holds a number, code, PIN, token or attempt id (time, pid and the response
-      // time are left out: they're numbers that could look like a code).
-      for (const line of s.logs) {
-        const { time: _time, pid: _pid, responseTime: _responseTime, ...rest } = line
-        expect(leaksIn(JSON.stringify(rest)), JSON.stringify(rest)).toEqual([])
-      }
-      // Nor does any audit row, read whole.
-      const rows = await s.query<{ row: string }>('select to_jsonb(a)::text as row from audit_events a')
-      for (const { row } of rows) expect(leaksIn(row), row).toEqual([])
-      // Every /api reply was no-store, held no token or attempt id, and none was a 500.
-      for (const reply of s.replies) {
-        expect(reply.cacheControl, `${reply.method} ${reply.url}`).toBe('no-store')
-        expect(
-          [...s.issued].some(secret => reply.text.includes(secret)),
-          `${reply.method} ${reply.url}`,
-        ).toBe(false)
-        expect(reply.error, `${reply.method} ${reply.url}`).not.toBe('internal')
-      }
-      // No Node warning fired (the experimental Web Crypto ones included).
-      expect(s.warnings.map(warning => `${warning.name}: ${warning.message}`)).toEqual([])
+      // No log line or audit row holds a number, code, PIN, token or attempt id, every /api reply
+      // was no-store with no token or attempt id and none a 500, and no Node warning fired.
+      await expectNothingLeaked(s)
 
       // C0.6: every write a runtime role committed is covered by its outbox event, or exempt.
       const all = suite.tasks.every(task => task.type !== 'test' || task.result?.state === 'pass')

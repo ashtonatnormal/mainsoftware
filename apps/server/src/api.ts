@@ -1,7 +1,8 @@
 // The api role's routes under /api (C0.5): sign-in, your own devices (and passkeys, dormant: D46,
 // PASSKEYS_ON), the admin actions on a person, and from C0.6 changing a feature flag. Every
 // response in the scope carries Cache-Control: no-store, errors and the scope's own 404 included.
-// Every body is JSON of at most 16 KiB, parsed by a strict zod object (http.ts). Errors become
+// Every body a route reads is JSON of at most 16 KiB, parsed by a strict zod object (http.ts); a
+// path with no route answers 404 before any body is read. Errors become
 // `{ error, message, ...extra }` (auth/errors.ts); anything unexpected is a 500 whose detail goes
 // only to the (redacted) log. Work a handler queues for after its response runs once that
 // response has ended, sent or abandoned (http.ts AfterResponse).
@@ -98,6 +99,15 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps & { appOrigin: s
       scope.addHook('onRequest', async (request, reply) => {
         reply.raw.once('close', () => api.afterResponse.start(request))
       })
+      // An /api path with no route (the dormant passkey routes among them, D46) answers 404 here,
+      // after the root's Origin check and before Fastify reads a body: its content-type parser runs
+      // before the not-found handler, and the 16 KiB limit above is set on routes alone, so the
+      // handler below would otherwise parse any body up to Fastify's default 1 MiB, and refuse a
+      // malformed one with 400 rather than 404. The scope's not-found handler is still needed: it
+      // is what brings these paths into the scope, so this hook and no-store reach them.
+      scope.addHook('onRequest', async (request, reply) => {
+        if (request.is404) return reply.code(404).send({ error: 'Not Found' })
+      })
       scope.addHook('onResponse', async request => {
         api.afterResponse.start(request)
       })
@@ -105,9 +115,9 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps & { appOrigin: s
         await Promise.race([api.afterResponse.idle(), delay(DRAIN_MS, undefined, { ref: false })])
       })
       scope.setErrorHandler((error, request, reply) => answerError(error, request, reply))
-      // An /api path with no route (the dormant passkey routes among them, D46) answers here, inside
-      // the scope, so its 404 carries no-store like every other reply in it. The root handler
-      // (app.ts) answers the same body for paths outside /api.
+      // An /api path with no route belongs to the scope, so its 404 (answered by the onRequest hook
+      // above, before any body is read) carries no-store like every other reply in it. The root
+      // handler (app.ts) answers the same body for paths outside /api.
       scope.setNotFoundHandler(async (_request, reply) => reply.code(404).send({ error: 'Not Found' }))
       await scope.register(authRoutes(api), { prefix: '/auth' })
       await scope.register(deviceRoutes(api), { prefix: '/devices' })

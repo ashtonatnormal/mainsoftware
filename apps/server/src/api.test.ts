@@ -237,6 +237,28 @@ describe('C0.5 T14 the api scope: bodies, errors and no-store', () => {
     ])
   })
 
+  it('D46 T14: an unknown /api path answers 404 no-store before reading any body: malformed JSON, the wrong type or a body over 16 KiB', async () => {
+    const { post, logs } = setup()
+    const large = JSON.stringify({ response: { attestationObject: 'A'.repeat(100_000) } })
+    const bodies: [string, Record<string, string>][] = [
+      ['{bad', { 'content-type': 'application/json' }],
+      ['plain text', { 'content-type': 'text/plain' }],
+      [large, { 'content-type': 'application/json' }],
+    ]
+    for (const path of ['/api/auth/passkey/options', '/api/auth/passkeys/register/verify', '/api/nothing-here']) {
+      for (const [payload, headers] of bodies) {
+        const response = await post(path, payload, headers)
+        expect([response.statusCode, response.json(), response.headers['cache-control']], path).toEqual([
+          404,
+          { error: 'Not Found' },
+          'no-store',
+        ])
+      }
+    }
+    // Nothing reached a body parser or the error handler.
+    expect(logs.filter(line => typeof line.level === 'number' && line.level >= 40)).toEqual([])
+  })
+
   it('D46: the Origin check runs before the /api 404, so another origin gets the same 403 from a dormant passkey route as from a live one', async () => {
     const { post } = setup()
     const answer = async (path: string, headers: Record<string, string>) => {
