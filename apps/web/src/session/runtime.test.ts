@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
+import { FakeClock, type FakeSocket, socketClass } from '@/live/testing/fakes.ts'
 import type { ChannelLike, TabStorage } from './document.ts'
 import type { RuntimeEnv } from './runtime.ts'
 
@@ -77,10 +78,28 @@ function memoryStorage(): TabStorage & { map: Map<string, string> } {
   }
 }
 
-function fakeEnv(onLeave: (how: string) => void = () => {}) {
+interface FakeEnvOptions {
+  random?: () => number
+  // Every socket fails to connect, as when realtime is down.
+  refuse?: boolean
+  // Called whenever the client closes a socket itself.
+  onSocketClose?: (code: number | undefined) => void
+}
+
+function fakeEnv(onLeave: (how: string) => void = () => {}, options: FakeEnvOptions = {}) {
   const storage = memoryStorage()
   const left: string[] = []
   const FakeChannel = channelClass()
+  const clock = new FakeClock()
+  const net = socketClass({ clock, refuse: () => options.refuse === true })
+  const onSocketClose = options.onSocketClose
+  class RecordingSocket extends net.WebSocket {
+    override close(code?: number, reason?: string) {
+      onSocketClose?.(code)
+      super.close(code, reason)
+    }
+  }
+  const visible = new Set<() => void>()
   const env: RuntimeEnv = {
     location: {
       replace: (url: string | URL) => {
@@ -95,9 +114,33 @@ function fakeEnv(onLeave: (how: string) => void = () => {}) {
     storage,
     addEventListener: () => {},
     BroadcastChannel: FakeChannel,
-    random: () => 0,
+    random: options.random ?? (() => 0),
+    live: {
+      url: 'wss://hearth.test/ws',
+      WebSocket: RecordingSocket,
+      clock,
+      onVisible: listener => {
+        visible.add(listener)
+        return () => visible.delete(listener)
+      },
+    },
   }
-  return { env, storage, left, FakeChannel }
+  // The page shown again: every listener the runtime left registered hears it.
+  const show = () => {
+    for (const listener of visible) listener()
+  }
+  return { env, storage, left, FakeChannel, clock, net, visible, show }
+}
+
+// The person's own topic, which the runtime holds from the start.
+const MARCUS_TOPIC = `person:${MARCUS.personId}`
+
+// Opens and welcomes the runtime's socket, and acks its sub of the person's topic.
+function goLive(socket: FakeSocket) {
+  socket.connect()
+  const sub = socket.frames('sub')[0]
+  socket.ack(sub?.id, { ok: sub?.topics ?? [] })
+  return sub
 }
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 5))
@@ -111,16 +154,29 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(runtime.formatters.time(Date.UTC(2026, 9, 11, 13, 30))).toBe('2:30 pm')
   })
 
-  it('RT-01 R-42 CHT-60: end() halts requests, clears the QueryClient, then leaves the document, in that order', async () => {
+  it('RT-01 R-42 CHT-60: end() halts requests, stops the gateway, clears the QueryClient, then leaves the document, in that order', async () => {
     const calls = stubFetch({ '/api/session': () => json(200, MARCUS) })
     const steps: string[] = []
     const refused: string[] = []
-    const { env, storage } = fakeEnv(how => {
-      steps.push(how)
-      // By the time the document leaves, nothing of the person is cached.
-      steps.push(`cached ${runtime.queryClient.getQueryCache().getAll().length}`)
-    })
+    const { env, storage, net, clock, visible } = fakeEnv(
+      how => {
+        steps.push(how)
+        // By the time the document leaves, nothing of the person is cached.
+        steps.push(`cached ${runtime.queryClient.getQueryCache().getAll().length}`)
+      },
+      {
+        onSocketClose: code => {
+          // Requests are already halted when the socket closes.
+          http.apiGet('/api/session', z.unknown()).catch((error: unknown) => {
+            if (error instanceof http.ApiFailure) refused.push(error.code)
+          })
+          steps.push(`socket closed ${code}`)
+        },
+      },
+    )
     const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
+    goLive(net.last())
+    expect(runtime.live.snapshot().status).toBe('live')
     runtime.queryClient.setQueryData(['topic', 'person:x'], { anything: true })
     runtime.queryClient.getQueryCache().subscribe(event => {
       if (event.type !== 'removed') return
@@ -134,10 +190,16 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     runtime.end('session_ended')
     await tick()
 
-    expect(steps).toEqual(['removed session', 'removed topic', 'replace /sign-in', 'cached 0'])
-    expect(refused).toEqual(['halted', 'halted'])
+    expect(steps).toEqual(['socket closed 1000', 'removed session', 'removed topic', 'replace /sign-in', 'cached 0'])
+    expect(refused).toEqual(['halted', 'halted', 'halted'])
     expect(calls).toEqual([])
     expect(storage.map.get('hearth:left')).toBe('session_ended')
+    // The live connection is off for good: no timer left, no listener, no new socket.
+    expect(runtime.live.snapshot().status).toBe('stopped')
+    expect(clock.pending()).toBe(0)
+    expect(visible.size).toBe(0)
+    clock.advance(600_000)
+    expect(net.sockets).toHaveLength(1)
   })
 
   it('RT-02: end() is idempotent: the first reason wins and the document leaves once', () => {
@@ -258,6 +320,149 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
       .fetchQuery({ queryKey: ['flags'], queryFn: () => http.apiGet('/api/flags', z.unknown()) })
       .catch(() => {})
     expect(second.storage.map.get('hearth:left')).toBe('session_ended')
+  })
+
+  it('RT-08 R-42 R-49: a 4401 that arrives while signOut() waits ends with signed_out_here', async () => {
+    stubFetch({ '/api/auth/sign-out': () => new Promise<Response>(() => {}) })
+    const { env, left, storage, net } = fakeEnv()
+    const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
+    goLive(net.last())
+    void runtime.signOut()
+    // The server revoked the session and closed this tab's socket before answering the POST.
+    net.last().serverClose(4401, 'signed_out')
+    expect(left).toEqual(['replace /sign-in'])
+    expect(storage.map.get('hearth:left')).toBe('signed_out_here')
+  })
+
+  it('RT-05 R-43 R-49: 4401 ends the session; 4403 does not, wipes nothing and keeps the session running', async () => {
+    const signedOutHere = fakeEnv()
+    const first = runtimeModule.startSessionRuntime(MARCUS, signedOutHere.env)
+    goLive(signedOutHere.net.last())
+    signedOutHere.net.last().serverClose(4401, 'signed_out')
+    expect(signedOutHere.left).toEqual(['replace /sign-in'])
+    expect(signedOutHere.storage.map.get('hearth:left')).toBe('session_ended')
+    expect(first.live.snapshot().status).toBe('stopped')
+
+    vi.resetModules()
+    runtimeModule = await import('./runtime.ts')
+    const notice = fakeEnv()
+    const runtime = runtimeModule.startSessionRuntime(MARCUS, notice.env)
+    goLive(notice.net.last())
+    runtime.queryClient.setQueryData(['topic', MARCUS_TOPIC], { inbox: 'cached' })
+    notice.net.last().serverClose(4403, 'notice_required')
+    expect(notice.left).toEqual([])
+    expect(runtime.live.snapshot().status).toBe('paused')
+    expect(runtime.queryClient.getQueryData(['topic', MARCUS_TOPIC])).toEqual({ inbox: 'cached' })
+    expect(runtime.queryClient.getQueryData(['session'])).toEqual(MARCUS)
+    // Paused: no reconnect until the notice is acknowledged (C0.9 calls resume()).
+    notice.clock.advance(120_000)
+    expect(notice.net.sockets).toHaveLength(1)
+    runtime.gateway.resume()
+    expect(notice.net.sockets).toHaveLength(2)
+  })
+
+  it('RT-06 R-47 T17 item 11: a flags nudge invalidates the flags query within the spread, and nothing else', () => {
+    const { env, clock, net } = fakeEnv(() => {}, { random: () => 0.5 })
+    const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
+    goLive(net.last())
+    runtime.queryClient.setQueryData(['flags'], { 'core.system': false })
+    runtime.queryClient.setQueryData(['topic', MARCUS_TOPIC], { inbox: 'cached' })
+    net.last().receive({ v: 1, t: 'nudge', what: 'flags' })
+    // The welcome's spread is 5 s: the refetch waits half of it with this random.
+    clock.advance(2_499)
+    expect(runtime.queryClient.getQueryState(['flags'])?.isInvalidated).toBe(false)
+    clock.advance(1)
+    expect(runtime.queryClient.getQueryState(['flags'])?.isInvalidated).toBe(true)
+    expect(runtime.queryClient.getQueryState(['topic', MARCUS_TOPIC])?.isInvalidated).toBe(false)
+    expect(runtime.queryClient.getQueryState(['session'])?.isInvalidated).toBe(false)
+  })
+
+  it('RT-07 R-48 T19 item 11: after 30 s of refused reconnects the probe reads GET /api/flags, and its 401 ends the session', async () => {
+    const calls = stubFetch({ '/api/flags': signedOut })
+    const { env, left, storage, clock, net } = fakeEnv(() => {}, { random: () => 0.5, refuse: true })
+    const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
+    clock.advance(29_999)
+    expect(runtime.live.snapshot().status).toBe('connecting')
+    expect(calls).toEqual([])
+    clock.advance(1)
+    expect(runtime.live.snapshot().status).toBe('stalled')
+    // The probe runs at a random point in the next 5 s: half-way with this random.
+    clock.advance(2_500)
+    await tick()
+    expect(calls).toEqual(['/api/flags'])
+    expect(left).toEqual(['replace /sign-in'])
+    expect(storage.map.get('hearth:left')).toBe('session_ended')
+    const tried = net.sockets.length
+    clock.advance(600_000)
+    expect(net.sockets).toHaveLength(tried)
+  })
+
+  it('RT-07 R-48: a probe that finds the session alive, or can’t tell, keeps it and the connection trying', async () => {
+    let answer = () => json(200, { flags: {} })
+    const calls = stubFetch({ '/api/flags': () => answer() })
+    const { env, left, clock, net } = fakeEnv(() => {}, { random: () => 0.5, refuse: true })
+    const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
+    clock.advance(32_500)
+    await tick()
+    expect(calls).toEqual(['/api/flags'])
+    answer = () => json(503, { error: 'unavailable', message: 'Later.' })
+    clock.advance(30_000)
+    await tick()
+    expect(calls).toEqual(['/api/flags', '/api/flags'])
+    expect(left).toEqual([])
+    expect(runtime.live.snapshot().status).toBe('stalled')
+    const tried = net.sockets.length
+    clock.advance(30_000)
+    expect(net.sockets.length).toBeGreaterThan(tried)
+  })
+
+  it('RT-09 T19 item 10 Rule 6: the runtime holds person:<id>; an ok ack, an ev or a reset invalidates the topic, a refusal or a drop removes it, and a shown page pings', () => {
+    const { env, clock, net, show } = fakeEnv(() => {}, { random: () => 0.5 })
+    const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
+    const socket = net.last()
+    expect(socket.url).toBe('wss://hearth.test/ws')
+    socket.connect()
+    const sub = socket.frames('sub')[0]
+    expect(sub?.topics).toEqual([MARCUS_TOPIC])
+    const key = ['topic', MARCUS_TOPIC]
+    runtime.queryClient.setQueryData(key, { inbox: 1 })
+    socket.ack(sub?.id, { ok: [MARCUS_TOPIC] })
+    expect(runtime.queryClient.getQueryState(key)?.isInvalidated).toBe(true)
+
+    runtime.queryClient.setQueryData(key, { inbox: 2 })
+    socket.receive({ v: 1, t: 'ev', topic: MARCUS_TOPIC, type: 'inbox.changed', ids: {} })
+    expect(runtime.queryClient.getQueryState(key)?.isInvalidated).toBe(true)
+
+    runtime.queryClient.setQueryData(key, { inbox: 3 })
+    socket.receive({ v: 1, t: 'reset', topics: [MARCUS_TOPIC], reason: 'gap' })
+    clock.advance(2_500)
+    expect(runtime.queryClient.getQueryState(key)?.isInvalidated).toBe(true)
+
+    const pings = socket.frames('ping').length
+    clock.advance(5_000)
+    show()
+    expect(socket.frames('ping')).toHaveLength(pings + 1)
+
+    socket.receive({ v: 1, t: 'dropped', topics: [MARCUS_TOPIC], reason: 'access' })
+    expect(runtime.queryClient.getQueryData(key)).toBeUndefined()
+    expect(runtime.queryClient.getQueryData(['session'])).toEqual(MARCUS)
+  })
+
+  it('RT-10 K-42 R-49: 4426 reloads for the update; a second within a minute is held back and the live store says so', () => {
+    const { env, left, net, storage } = fakeEnv()
+    const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
+    goLive(net.last())
+    net.last().serverClose(4426, 'client_outdated')
+    expect(left).toEqual(['reload'])
+    expect(runtime.live.snapshot()).toEqual({ status: 'paused', updateBlocked: false })
+
+    // The reloaded page is still too old, and asks again within the minute.
+    expect(storage.map.has('hearth:reloaded-at')).toBe(true)
+    runtime.gateway.resume()
+    goLive(net.last())
+    net.last().serverClose(4426, 'client_outdated')
+    expect(left).toEqual(['reload'])
+    expect(runtime.live.snapshot()).toEqual({ status: 'paused', updateBlocked: true })
   })
 
   it("K-10: another tab's identity message ends the session with other_tab, which reloads", async () => {

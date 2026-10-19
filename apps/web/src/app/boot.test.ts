@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { FakeClock, socketClass } from '@/live/testing/fakes.ts'
 import type { ChannelLike, TabStorage } from '@/session/document.ts'
 import type { RuntimeEnv } from '@/session/runtime.ts'
 import { BOOT } from '@/strings/boot.ts'
@@ -89,6 +90,13 @@ function fakeDocument() {
     addEventListener: () => {},
     BroadcastChannel: FakeChannel,
     random: () => 0,
+    // A live connection whose timers run only if a test moves the clock: here it never opens.
+    live: {
+      url: 'wss://hearth.test/ws',
+      WebSocket: socketClass().WebSocket,
+      clock: new FakeClock(),
+      onVisible: () => () => {},
+    },
   }
   const root = { textContent: 'Loading Hearth…' }
   // Another tab says its person changed: it signed in or out, or its session ended.
