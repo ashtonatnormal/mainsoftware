@@ -1,13 +1,17 @@
 // The token contrast gate (T21, R-10 to R-13, X8, QA-01): every ink and ground the kit pairs
-// (contrast-pairs.ts) keeps its WCAG minimum in both themes, read from tokens.css as written. The
-// stylesheet and index.html come in with ?raw, which Vitest leaves '' for a .css file unless CSS
-// processing is on for it (vitest.config.ts scopes that to src/styles/), so TK-00 fails on an
-// empty or unparsed sheet instead of every other case passing on nothing.
+// (contrast-pairs.ts) keeps its WCAG minimum in both themes, read from tokens.css as written, and
+// TK-11 reads Button.tsx's own variant classes for what a button paints under the pointer and
+// pressed, which no token pair can see. The stylesheet and index.html come in with ?raw, which
+// Vitest leaves '' for a .css file unless CSS processing is on for it (vitest.config.ts scopes that
+// to src/styles/), so TK-00 fails on an empty or unparsed sheet instead of every other case passing
+// on nothing.
 import { describe, expect, it } from 'vitest'
 import indexHtml from '../../index.html?raw'
-import { type Pair, TEXT_PAIRS, UI_PAIRS } from './contrast-pairs.ts'
+import { BUTTON_VARIANTS, INERT_BUTTON } from '../ui/Button.tsx'
+import { GROUNDS, type Pair, TEXT_PAIRS, UI_PAIRS } from './contrast-pairs.ts'
 import {
   blocksOf,
+  brightened,
   contrastRatio,
   DARK_QUERY,
   parseHex,
@@ -31,6 +35,39 @@ function belowMinimum(pairs: readonly Pair[]) {
       return ratio >= min ? [] : [`${fg} on ${bg} (${why}) in ${theme}: ${ratio.toFixed(2)} < ${min}`]
     }),
   )
+}
+
+// A Button's classes, folded into what it paints in each state: the fill and ink tokens and the
+// brightness() factor. A state's classes override the ones before it, as the stylesheet orders
+// them (hover, then active). A class this reader doesn't know fails the case, so a new state
+// class can't pass unread.
+type ButtonState = 'at rest' | 'under the pointer' | 'pressed with a pointer' | 'pressed by touch'
+const STATE_PREFIXES: Record<ButtonState, readonly string[]> = {
+  'at rest': [''],
+  'under the pointer': ['', 'hover:'],
+  'pressed with a pointer': ['', 'hover:', 'active:'],
+  // Tailwind's hover: applies only where the pointer can hover, so a tap is rest plus active:.
+  'pressed by touch': ['', 'active:'],
+}
+const LAYOUT_CLASS = /^cursor-not-allowed$/
+
+function paintOf(classes: string, prefixes: readonly string[]) {
+  let fill: string | undefined
+  let ink: string | undefined
+  let brightness = 1
+  for (const name of classes.split(/\s+/).filter(Boolean)) {
+    const match = /^(hover:|active:)?(?:(bg|text)-([a-z0-9-]+)|brightness-(\d+))$/.exec(name)
+    if (match === null) {
+      if (LAYOUT_CLASS.test(name)) continue
+      throw new Error(`${name} is not a class TK-11 reads`)
+    }
+    const [, prefix = '', kind, token, percent] = match
+    if (!prefixes.includes(prefix)) continue
+    if (kind === 'bg') fill = token
+    else if (kind === 'text') ink = token
+    else brightness = Number(percent) / 100
+  }
+  return { fill, ink, brightness }
 }
 
 describe('T21: the tokens and their contrast', () => {
@@ -122,5 +159,48 @@ describe('T21: the tokens and their contrast', () => {
     for (const theme of THEMES) expect(themeColour(theme), theme).toBe(tokenValue(sheet, theme, 'bg'))
     // The canvas and form controls follow the system before the CSS arrives.
     expect(indexHtml).toMatch(/<meta name="color-scheme" content="light dark" \/>/)
+  })
+
+  it('TK-11 X8 WCAG 1.4.3: every Button variant keeps 4.5:1 at rest, under the pointer and pressed, in both themes, read from Button.tsx’s own classes (a brightness() filter scales the ink with the fill)', () => {
+    const states = Object.keys(STATE_PREFIXES) as ButtonState[]
+    const rows = [
+      ...Object.entries(BUTTON_VARIANTS).map(([variant, classes]) => [variant, classes] as const),
+      ['inert', INERT_BUTTON] as const,
+    ]
+    const failures = rows.flatMap(([variant, classes]) =>
+      states.flatMap(state => {
+        const { fill, ink, brightness } = paintOf(classes, STATE_PREFIXES[state])
+        if (ink === undefined) return [`${variant} ${state}: no ink class`]
+        // A variant with no fill of its own (ghost) sits on whichever page ground is behind it,
+        // which the filter, if any, doesn't reach.
+        const grounds: readonly string[] = fill === undefined ? GROUNDS : [fill]
+        return grounds.flatMap(ground =>
+          THEMES.flatMap(theme => {
+            const own = fill !== undefined
+            const inkRgb = brightened(parseHex(tokenValue(sheet, theme, ink)), brightness)
+            const groundRgb = parseHex(tokenValue(sheet, theme, ground))
+            const ratio = contrastRatio(inkRgb, own ? brightened(groundRgb, brightness) : groundRgb)
+            return ratio >= 4.5
+              ? []
+              : [
+                  `${variant} ${state}: ${ink} on ${ground} at brightness ${brightness} in ${theme}: ${ratio.toFixed(2)}`,
+                ]
+          }),
+        )
+      }),
+    )
+    expect(failures).toEqual([])
+    // The reader sees the states it checks: the primary's hover fill, danger's filters.
+    expect(paintOf(BUTTON_VARIANTS.primary, STATE_PREFIXES['under the pointer']).fill).toBe('accent-ink')
+    expect(paintOf(BUTTON_VARIANTS.danger, STATE_PREFIXES['under the pointer']).brightness).toBe(1.05)
+    expect(paintOf(BUTTON_VARIANTS.danger, STATE_PREFIXES['pressed with a pointer']).brightness).toBe(0.95)
+    // The demo's primary hover, brightness-105 on ember, is what this case refuses.
+    const demo = contrastRatio(
+      brightened(parseHex(tokenValue(sheet, 'light', 'accent-fg')), 1.05),
+      brightened(parseHex(tokenValue(sheet, 'light', 'accent')), 1.05),
+    )
+    expect(demo).toBeLessThan(4.5)
+    expect(brightened([255, 255, 255], 1.05)).toEqual([255, 255, 255])
+    expect(() => paintOf('bg-accent focus:bg-rec', STATE_PREFIXES['at rest'])).toThrow(/focus:bg-rec/)
   })
 })

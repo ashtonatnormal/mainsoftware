@@ -128,6 +128,13 @@ export function relativeLuminance([red, green, blue]: Rgb): number {
   return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
 }
 
+// A colour under CSS brightness(k): each sRGB channel scaled by k and clamped, as the filter's
+// linear transfer does (Filter Effects 1, §13.1.2), rounded to the 8 bits a browser paints.
+export function brightened([red, green, blue]: Rgb, k: number): Rgb {
+  const scale = (channel: number) => Math.min(255, Math.max(0, Math.round(channel * k)))
+  return [scale(red), scale(green), scale(blue)]
+}
+
 // WCAG 2.2's contrast ratio, 1 to 21, unrounded: 4.499 fails a 4.5 minimum.
 export function contrastRatio(a: Rgb, b: Rgb): number {
   const [lighter, darker] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x) as [number, number]

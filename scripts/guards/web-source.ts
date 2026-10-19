@@ -212,8 +212,9 @@ export const POPOVER = /\b(?:show|hide|toggle)Popover\b|\bpopover(?:Target(?:Act
 export const PROCESS_ENV = /\bprocess\s*\.\s*env\b/g
 
 // WS-11: sign-in and session code read no flag (CLAUDE.md: flags gate features, never an access
-// check or a privacy or safety control; AUTH-DESIGN §10.5, D46). Nothing under these folders imports
-// a module in flags/ or one of these names, wherever it comes from. The session runtime alone may
+// check or a privacy or safety control; AUTH-DESIGN §10.5, D46). Nothing under these folders, and
+// no file whose path names sign-in or session, imports a module in flags/ or one of these names,
+// wherever it comes from. The session runtime alone may
 // hold flagsQuery: a flags nudge invalidates it (R-47), and the stalled gateway's probe fetches it
 // to learn only whether the session still holds (T19 item 11, R-48); neither reads a flag.
 export const NO_FLAGS_DIRS = ['sign-in/', 'session/'] as const
@@ -230,10 +231,157 @@ export const FLAG_READERS = new Set([
 ])
 export const FLAGS_QUERY_HOLDERS = new Set(['session/runtime.ts'])
 export const FLAGS_PATH = /\/api\/flags\b/
+// A path segment that names sign-in or session code: `sign-in`, `signin`, `SignInScreen.tsx`,
+// `sign-in-model.ts`, `session`, `sessions`, `load-session.ts` (but not `signing`). WS-11 reads
+// every runtime file under NO_FLAGS_DIRS or with such a name, and refuses a folder so named
+// anywhere but those two (`screens/sign-in/`), so sign-in code can't land where it isn't read.
+export const NAMES_SIGN_IN_OR_SESSION = /[sS]ign[-_]?[iI]n(?![a-z])|[sS]ession/
 
-// WS-12: passkeys are dormant (OD-01, D46): no WebAuthn ceremony in the browser code, neither the
-// create call nor the publicKey options either ceremony takes. credentials.get() alone stays
-// allowed, since the WebOTP API reads an SMS code through it with `otp:` options.
-export const WEBAUTHN = /\bcredentials\s*\.\s*create\s*\(|\bPublicKeyCredential\b|\bpublicKey\s*:/g
+// Whether the rule reads this file: it sits under sign-in/ or session/, or a folder or its own
+// name names sign-in or session.
+export const isSignInOrSessionCode = (path: string) =>
+  NO_FLAGS_DIRS.some(dir => path.startsWith(dir)) ||
+  path.split('/').some(segment => NAMES_SIGN_IN_OR_SESSION.test(segment))
+
+// A folder under apps/web/src/ that names sign-in or session other than the top-level sign-in/ and
+// session/ (INTEGRATION.md item 1: the sign-in screens live in sign-in/).
+export function misplacedSignInOrSessionFolder(path: string): boolean {
+  if (NO_FLAGS_DIRS.some(dir => path.startsWith(dir))) return false
+  return path
+    .split('/')
+    .slice(0, -1)
+    .some(segment => NAMES_SIGN_IN_OR_SESSION.test(segment))
+}
+
+// WS-12: passkeys are dormant (OD-01, D46): no WebAuthn ceremony in the browser code. Read from
+// the syntax tree, so comments say nothing and formatting hides nothing, it refuses:
+// - the name publicKey anywhere (a key, a shorthand `{ publicKey }`, a binding, a JSX attribute)
+//   and the string 'publicKey', which is how either ceremony's options are passed;
+// - the name PublicKeyCredential, in a value or a type;
+// - `create` read from navigator.credentials: directly (`navigator.credentials.create`,
+//   `?.create`, `['create']`), through a name bound to it (`const c = navigator.credentials`, or
+//   `const { credentials } = navigator`, then `c.create`), or destructured from it
+//   (`const { create } = navigator.credentials`).
+// Aliases are followed by name, file-wide and through further aliases, not by scope; code that
+// hides the read further (Reflect.get, a computed key) is a reviewer's to catch. credentials.get()
+// stays allowed, since the WebOTP API reads an SMS code through it with `otp:` options.
+const WEBAUTHN_NAMES = new Set(['publicKey', 'PublicKeyCredential'])
+const NAVIGATOR_HOLDERS = new Set(['window', 'globalThis', 'self'])
+
+// An expression with its parentheses, casts and non-null assertions taken off.
+function bare(node: ts.Expression): ts.Expression {
+  let at = node
+  while (
+    ts.isParenthesizedExpression(at) ||
+    ts.isAsExpression(at) ||
+    ts.isNonNullExpression(at) ||
+    ts.isSatisfiesExpression(at) ||
+    ts.isTypeAssertionExpression(at)
+  )
+    at = at.expression
+  return at
+}
+
+// The property an access reads: `a.name` or `a['name']`.
+function accessedName(node: ts.Node): string | undefined {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text
+  if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression))
+    return node.argumentExpression.text
+  return undefined
+}
+
+// The name a binding element reads from its object: `{ create }` or `{ create: make }` read create.
+function boundProperty(element: ts.BindingElement): string | undefined {
+  const key = element.propertyName ?? element.name
+  return ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : undefined
+}
+
+// Adds a name to a set, and says whether it was new.
+function addName(names: Set<string>, name: string): boolean {
+  if (names.has(name)) return false
+  names.add(name)
+  return true
+}
+
+export function webAuthnUses(path: string, source: string): string[] {
+  const file = parse(path, source)
+  const navigators = new Set(['navigator'])
+  const credentials = new Set<string>()
+
+  // `navigator`, `window.navigator` (or globalThis's, self's), or a name bound to one of them.
+  const isNavigator = (node: ts.Expression): boolean => {
+    const at = bare(node)
+    if (ts.isIdentifier(at)) return navigators.has(at.text)
+    if (!(ts.isPropertyAccessExpression(at) || ts.isElementAccessExpression(at))) return false
+    const holder = bare(at.expression)
+    return accessedName(at) === 'navigator' && ts.isIdentifier(holder) && NAVIGATOR_HOLDERS.has(holder.text)
+  }
+  // `<navigator>.credentials`, or a name bound to it.
+  const isCredentials = (node: ts.Expression): boolean => {
+    const at = bare(node)
+    if (ts.isIdentifier(at)) return credentials.has(at.text)
+    if (!(ts.isPropertyAccessExpression(at) || ts.isElementAccessExpression(at))) return false
+    return accessedName(at) === 'credentials' && isNavigator(at.expression)
+  }
+
+  // Binds names to navigator or navigator.credentials: `const n = navigator`, `c = n.credentials`,
+  // `const { credentials: c } = navigator`. Says whether any name was new.
+  const bind = (name: ts.BindingName | ts.Expression, value: ts.Expression): boolean => {
+    let added = false
+    if (ts.isIdentifier(name)) {
+      if (isCredentials(value)) added = addName(credentials, name.text) || added
+      if (isNavigator(value)) added = addName(navigators, name.text) || added
+    } else if (ts.isObjectBindingPattern(name) && isNavigator(value)) {
+      for (const element of name.elements)
+        if (boundProperty(element) === 'credentials' && ts.isIdentifier(element.name))
+          added = addName(credentials, element.name.text) || added
+    }
+    return added
+  }
+  const collect = (node: ts.Node): boolean => {
+    let added = false
+    if (ts.isVariableDeclaration(node) && node.initializer) added = bind(node.name, node.initializer) || added
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken)
+      added = bind(bare(node.left), node.right) || added
+    ts.forEachChild(node, child => {
+      added = collect(child) || added
+    })
+    return added
+  }
+  // An alias may be bound before the name it reads is known, so collect until nothing is new.
+  let more = true
+  while (more) more = collect(file)
+
+  const found: string[] = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && WEBAUTHN_NAMES.has(node.text)) found.push(node.text)
+    if (ts.isStringLiteralLike(node) && WEBAUTHN_NAMES.has(node.text)) found.push(`'${node.text}'`)
+    if (
+      (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+      accessedName(node) === 'create' &&
+      isCredentials(node.expression)
+    )
+      found.push('credentials.create')
+    if (ts.isVariableDeclaration(node) && node.initializer && ts.isObjectBindingPattern(node.name)) {
+      const readsCreate = (pattern: ts.ObjectBindingPattern) =>
+        pattern.elements.some(element => boundProperty(element) === 'create')
+      if (isCredentials(node.initializer) && readsCreate(node.name)) found.push('{ create } = credentials')
+      // `const { credentials: { create } } = navigator`.
+      if (
+        isNavigator(node.initializer) &&
+        node.name.elements.some(
+          element =>
+            boundProperty(element) === 'credentials' &&
+            ts.isObjectBindingPattern(element.name) &&
+            readsCreate(element.name),
+        )
+      )
+        found.push('{ credentials: { create } } = navigator')
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return found
+}
 
 export const matchesOf = (pattern: RegExp, text: string) => [...text.matchAll(pattern)].map(match => match[0])

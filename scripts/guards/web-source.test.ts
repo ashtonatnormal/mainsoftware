@@ -24,9 +24,10 @@ import {
   HTML_FROM_STRINGS,
   identifiersOf,
   isRuntimeSource,
+  isSignInOrSessionCode,
   matchesOf,
+  misplacedSignInOrSessionFolder,
   NEW_QUERY_CLIENT,
-  NO_FLAGS_DIRS,
   NO_OUTLINE_CLASS,
   NO_OUTLINE_CSS,
   OPACITY,
@@ -42,8 +43,8 @@ import {
   textOpacity,
   WEB_DIR,
   WEB_SRC,
-  WEBAUTHN,
   WEBSOCKET_FILES,
+  webAuthnUses,
 } from './web-source'
 
 const files = repoFiles()
@@ -283,7 +284,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     expect(web.filter(path => browser.has(path) && node.has(path))).toEqual([])
   })
 
-  it('WS-11 AUTH-DESIGN §10.5 D46 CL Database: no file under sign-in/ or session/ reads the flags client (flags never gate an access control)', () => {
+  it('WS-11 AUTH-DESIGN §10.5 D46 CL Database INTEGRATION item 1: no file under sign-in/ or session/, or named for either, reads the flags client (flags never gate an access control), and no folder elsewhere is named for either', () => {
     const problems = (path: string, source: string): string[] => {
       const modules = specifiersOf(path, source)
         .filter(specifier => srcTarget(path, specifier)?.startsWith('flags/'))
@@ -323,23 +324,87 @@ describe('T21: the web source guard (apps/web/src)', () => {
       ),
     ).toEqual([])
 
-    const guarded = runtime.filter(path => NO_FLAGS_DIRS.some(dir => path.startsWith(dir)) && !path.endsWith('.css'))
+    // Which files the rule reads: under sign-in/ or session/, or named for either; never a folder so
+    // named anywhere else, where the rule's readers might not look.
+    expect(
+      ['sign-in/PhoneStep.tsx', 'session/runtime.ts', 'screens/SignInScreen.tsx', 'boot/load-session.ts'].every(
+        isSignInOrSessionCode,
+      ),
+    ).toBe(true)
+    expect(['ui/Button.tsx', 'lib/focus.ts', 'api/queries.ts', 'lib/signing.ts'].some(isSignInOrSessionCode)).toBe(
+      false,
+    )
+    expect(
+      [
+        'screens/sign-in/PhoneStep.tsx',
+        'app/session/runtime.ts',
+        'Session/runtime.ts',
+        'signin/CodeStep.tsx',
+        'shell/sessions/List.tsx',
+      ].every(misplacedSignInOrSessionFolder),
+    ).toBe(true)
+    expect(
+      ['sign-in/PhoneStep.tsx', 'session/runtime.ts', 'sign-in/steps/PinStep.tsx', 'boot/load-session.ts'].some(
+        misplacedSignInOrSessionFolder,
+      ),
+    ).toBe(false)
+    expect(src.filter(misplacedSignInOrSessionFolder)).toEqual([])
+
+    // The files the rule reads, pinned so it can't read nothing unnoticed (R2-27). None exists yet:
+    // session/ and boot/load-session.ts land with the boot steps (C0.8 S8 on) and sign-in/ with S11,
+    // and each step adds its files here, so a file that lands fails this line until it is named,
+    // and a renamed folder fails it instead of leaving the rule reading nothing.
+    const guarded = runtime.filter(path => isSignInOrSessionCode(path) && !path.endsWith('.css'))
+    const READS: readonly string[] = []
+    expect(guarded).toEqual(READS)
     expect(
       guarded.flatMap(path => problems(path, sources.get(path) ?? '').map(problem => `${path}: ${problem}`)),
     ).toEqual([])
   })
 
-  it('WS-12 AUTH-DESIGN §7.3 item 7 OD-01 D46: apps/web/src has no navigator.credentials.create or publicKey options', () => {
+  it.todo(
+    'WS-11 follow-up (C0.8 S8 on, S11; R2-27): READS names session/document.ts, session/runtime.ts, session/query-client.ts and boot/load-session.ts as the boot steps land them, and sign-in/SignInScreen.tsx, PhoneStep.tsx, CodeStep.tsx, PinStep.tsx, sign-in-model.ts and api.ts with S11',
+  )
+
+  it('WS-12 AUTH-DESIGN §7.3 item 7 OD-01 D46: apps/web/src has no WebAuthn ceremony: no create read from navigator.credentials (directly, through a name bound to it, or destructured), no publicKey name, key or string, no PublicKeyCredential', () => {
+    const uses = (source: string) => webAuthnUses('fixture.tsx', source)
     expect(
-      matchesOf(
-        WEBAUTHN,
-        planted(
-          'await navigator.credentials.create({ publicKey: options }); PublicKeyCredential.isConditionalMediationAvailable()',
-        ),
+      uses(
+        'await navigator.credentials.create({ publicKey: options }); PublicKeyCredential.isConditionalMediationAvailable()',
       ),
-    ).toEqual(['credentials.create(', 'publicKey:', 'PublicKeyCredential'])
-    // WebOTP reads a texted code through credentials.get with otp options, which stays allowed.
-    expect(matchesOf(WEBAUTHN, planted("await navigator.credentials.get({ otp: { transport: ['sms'] } })"))).toEqual([])
-    expect(found(WEBAUTHN, scripts)).toEqual([])
+    ).toEqual(['credentials.create', 'publicKey', 'PublicKeyCredential'])
+    // The shorthand either ceremony takes, with get as much as with create.
+    expect(uses('const publicKey = toOptions(json)\nawait navigator.credentials.get({ publicKey })')).toEqual([
+      'publicKey',
+      'publicKey',
+    ])
+    expect(uses("const o = { ['publicKey']: x }; const p = { 'publicKey': x }")).toEqual(["'publicKey'", "'publicKey'"])
+    expect(uses('let c: PublicKeyCredential | null = null')).toEqual(['PublicKeyCredential'])
+    // create, however it is reached from navigator.credentials.
+    expect(uses('const c = navigator.credentials\nawait c.create(o)')).toEqual(['credentials.create'])
+    expect(uses('const n = window.navigator\nconst c = n.credentials\nconst d = c\nawait d.create(o)')).toEqual([
+      'credentials.create',
+    ])
+    expect(uses("let c\nc = (navigator as Navigator).credentials\nc?.['create'](o)")).toEqual(['credentials.create'])
+    expect(uses('const { credentials } = navigator\ncredentials.create(o)')).toEqual(['credentials.create'])
+    expect(uses('const { credentials: store } = globalThis.navigator\nstore.create(o)')).toEqual(['credentials.create'])
+    expect(uses('const { create } = navigator.credentials\ncreate(o)')).toEqual(['{ create } = credentials'])
+    expect(uses('const { credentials: { create: make } } = navigator\nmake(o)')).toEqual([
+      '{ credentials: { create } } = navigator',
+    ])
+    expect(uses('const make = navigator.credentials.create.bind(navigator.credentials)')).toEqual([
+      'credentials.create',
+    ])
+    // Comments hold nothing; WebOTP reads a texted code through credentials.get with otp options,
+    // which stays allowed, and other create calls are no ceremony.
+    expect(uses('// navigator.credentials.create({ publicKey })\nconst a = 1')).toEqual([])
+    expect(
+      uses(
+        "const otp = await navigator.credentials.get({ otp: { transport: ['sms'] }, signal })\nconst o = Object.create(null)\nconst r = createRouter({ routeTree })\nconst k = keys.create(1)",
+      ),
+    ).toEqual([])
+    expect(scripts.flatMap(path => webAuthnUses(path, sources.get(path) ?? '').map(use => `${path}: ${use}`))).toEqual(
+      [],
+    )
   })
 })

@@ -35,7 +35,8 @@ export type TokenName =
 
 export type Pair = readonly [fg: TokenName, bg: TokenName, min: 4.5 | 3, why: string]
 
-const GROUNDS = ['bg', 'surface', 'surface-2', 'wall'] as const
+// The page grounds a control can sit on.
+export const GROUNDS = ['bg', 'surface', 'surface-2', 'wall'] as const
 const AVATARS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] as const
 
 export const TEXT_PAIRS: readonly Pair[] = [
@@ -45,6 +46,7 @@ export const TEXT_PAIRS: readonly Pair[] = [
     ground => ['accent-ink', ground, 4.5, 'accent text, links, the current tab'] as const,
   ),
   ['accent-fg', 'accent', 4.5, 'a primary Button'],
+  ['accent-fg', 'accent-ink', 4.5, 'a primary Button under the pointer or pressed'],
   ['rec-fg', 'rec', 4.5, 'a danger Button; C2’s Leave (SHL-36)'],
   ['agent-fg', 'agent', 4.5, 'ink on an agent fill (RMS-36), kept so A5 can’t regress'],
   ...(['bg', 'surface', 'rec-soft'] as const).map(

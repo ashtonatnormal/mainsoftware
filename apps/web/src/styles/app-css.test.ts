@@ -1,7 +1,8 @@
 // The theme stylesheet's rules (T21, R-15, R-17, R-18, OD-28, OD-30): only the tokens compile as
-// colours, reduced motion stops everything, the rail needs room both ways, and no stylesheet fetches
-// from another host. app.css and tokens.css come in with ?raw, as in contrast.test.ts, so TK-10
-// fails on an empty or unparsed sheet instead of every other case passing on nothing.
+// colours, reduced motion stops everything, the rail needs room both ways, forced colours keep the
+// Switch's state visible, and no stylesheet fetches from another host. app.css and tokens.css come
+// in with ?raw, as in contrast.test.ts, so TK-10 fails on an empty or unparsed sheet instead of
+// every other case passing on nothing.
 import { describe, expect, it } from 'vitest'
 import appCss from './app.css?raw'
 import { blocksOf, declarationsOf, onlyBlock, readTokenSheet, statementsOf, withoutComments } from './token-sheet.ts'
@@ -57,6 +58,34 @@ describe('T21: app.css', () => {
   it('TK-07 OD-30 D-08: the rail variant needs 48rem wide and 30rem tall, so a phone on its side keeps the tab bar', () => {
     const variants = statementsOf(appCss).filter(statement => statement.startsWith('@custom-variant'))
     expect(variants).toEqual(['@custom-variant rail (@media (min-width: 48rem) and (min-height: 30rem))'])
+  })
+
+  it('TK-12 SHL-37 WCAG 1.4.11: in forced colours the Switch draws its knob and on track in system colours, so on and off differ, and the current tab keeps its outline', () => {
+    const forced = blocksOf(onlyBlock(blocks, '@media (forced-colors: active)').body)
+    const rule = (selector: string) => declarationsOf(onlyBlock(forced, selector).body)
+    expect(forced.map(block => block.prelude)).toEqual([
+      '[aria-current="page"]',
+      '.switch-track',
+      '.switch-knob',
+      '.switch-track.switch-on',
+      '.switch-on .switch-knob',
+    ])
+    expect(rule('[aria-current="page"]').get('outline')).toBe('2px solid CanvasText')
+    // Without forced-color-adjust: none the browser repaints both backgrounds Canvas.
+    const track = rule('.switch-track')
+    const knob = rule('.switch-knob')
+    expect(track.get('forced-color-adjust')).toBe('none')
+    expect(knob.get('forced-color-adjust')).toBe('none')
+    // Off: a CanvasText knob on a Canvas track; on: a HighlightText knob on a Highlight track.
+    const off = { track: track.get('background-color'), knob: knob.get('background-color') }
+    const on = {
+      track: rule('.switch-track.switch-on').get('background-color'),
+      knob: rule('.switch-on .switch-knob').get('background-color'),
+    }
+    expect(off).toEqual({ track: 'Canvas', knob: 'CanvasText' })
+    expect(on).toEqual({ track: 'Highlight', knob: 'HighlightText' })
+    expect(track.get('border')).toBe('1px solid CanvasText')
+    expect(rule('.switch-track.switch-on').get('border-color')).toBe('Highlight')
   })
 
   it('TK-08 R-17 SHL-69: no url() or @import names another host', () => {

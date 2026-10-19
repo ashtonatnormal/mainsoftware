@@ -23,17 +23,24 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   ref?: Ref<HTMLButtonElement>
 }
 
-const VARIANTS: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-accent-fg hover:brightness-105 active:brightness-95',
+// Each variant's fill and ink at rest, under the pointer and pressed (X8, WCAG 1.4.3). The
+// primary's hover and press swap the ember fill for accent-ink, which is deeper in light and
+// brighter in dark, so its ink gains contrast in both themes (accent-fg on accent-ink, TEXT_PAIRS).
+// A brightness() filter dims or brightens the ink with the fill, and the demo's brightness-105
+// took white on ember under 4.5:1 in light. Secondary and danger keep a 5 % brightness step, which
+// leaves their ink over 4.5:1 in both themes. TK-11 (styles/contrast.test.ts) reads these strings
+// and holds every state, filter included, to 4.5:1, so a class changed here is checked.
+export const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
+  primary: 'bg-accent text-accent-fg hover:bg-accent-ink active:bg-accent-ink',
   secondary: 'bg-surface-2 text-fg hover:brightness-95',
   ghost: 'text-fg hover:bg-surface-2',
   danger: 'bg-rec text-rec-fg hover:brightness-105 active:brightness-95',
 }
 
 // How a button that can't act looks, whichever way it can't: muted ink on the control ground (a
-// TEXT_PAIRS pair), never opacity (X9).
-const INERT =
-  'aria-disabled:bg-surface-2 aria-disabled:text-muted aria-disabled:hover:brightness-100 disabled:bg-surface-2 disabled:text-muted disabled:hover:brightness-100 aria-disabled:cursor-not-allowed disabled:cursor-not-allowed'
+// TEXT_PAIRS pair), never opacity (X9). It replaces the variant's classes, so no hover or press
+// class is left to change its fill or ink.
+export const INERT_BUTTON = 'bg-surface-2 text-muted cursor-not-allowed'
 
 // The props every button shares once a reason may hold it back: aria-disabled and the description
 // in place of `disabled`, and a press that does nothing (a click, or Enter in a form, whose implicit
@@ -75,6 +82,7 @@ export function Button({
   ...rest
 }: ButtonProps) {
   const held = useDisabledReason(disabledReason, describedBy, onClick)
+  const inert = disabledReason !== undefined || disabled === true
   return (
     <>
       <button
@@ -86,8 +94,7 @@ export function Button({
         className={cx(
           'inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full font-semibold transition',
           size === 'lg' ? 'px-6 text-base' : 'px-4 text-body',
-          VARIANTS[variant],
-          INERT,
+          inert ? INERT_BUTTON : BUTTON_VARIANTS[variant],
           className,
         )}
       >
@@ -121,6 +128,7 @@ export function IconButton({
   ...rest
 }: IconButtonProps) {
   const held = useDisabledReason(disabledReason, describedBy, onClick)
+  const inert = disabledReason !== undefined || disabled === true
   return (
     <>
       <button
@@ -132,8 +140,7 @@ export function IconButton({
         aria-pressed={pressed}
         className={cx(
           'inline-grid size-11 shrink-0 place-items-center rounded-full transition',
-          pressed ? 'bg-accent-soft text-accent-ink' : VARIANTS[variant],
-          INERT,
+          inert ? INERT_BUTTON : pressed ? 'bg-accent-soft text-accent-ink' : BUTTON_VARIANTS[variant],
           className,
         )}
       >

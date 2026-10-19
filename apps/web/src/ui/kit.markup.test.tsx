@@ -80,8 +80,11 @@ describe('T21: the kit’s markup', () => {
     )
     expect(segments).toHaveLength(2)
     for (const label of segments) for (const name of MIN_44) expect(classesOf(label)).toContain(name)
-    // The Skip link becomes a 44 px pill when focused.
-    expect(classesOf(one(html(<SkipLink />), 'a'))).toContain('focus:min-h-11')
+    // The Skip link becomes a 44 px pill when focused. Its ring is the base accent ring, which
+    // sits outside the pill on the page ground, so the link sets no outline colour of its own.
+    const skip = classesOf(one(html(<SkipLink />), 'a'))
+    expect(skip).toContain('focus:min-h-11')
+    expect(skip.filter(name => /outline/.test(name))).toEqual([])
   })
 
   it('KM-03 SHL-47: IconButton is named by label, icon hidden, aria-pressed only when given', () => {
@@ -188,7 +191,7 @@ describe('T21: the kit’s markup', () => {
     expect(markup).toMatch(/<label[^>]*><input[^>]*value="mine"[^>]*\/><svg[^>]*aria-hidden="true"/)
   })
 
-  it('KM-08 SHL-37: Switch is a checkbox with role switch, aria-checked matching checked, and a line-strong track', () => {
+  it('KM-08 SHL-37: Switch is a checkbox with role switch, aria-checked matching checked, and a line-strong track; the on track and the knob carry the classes forced colours draw (TK-12)', () => {
     for (const checked of [false, true]) {
       const markup = html(
         <Switch label="Sounds" description="When a message arrives" checked={checked} onChange={() => {}} />,
@@ -203,6 +206,12 @@ describe('T21: the kit’s markup', () => {
       expect(markup).toMatch(
         checked ? /switch-track[^"]*border-accent bg-accent/ : /switch-track[^"]*border-line-strong/,
       )
+      const [track, knob] = tags(markup, 'span').filter(span =>
+        /\bswitch-(?:track|knob)\b/.test(span.get('class') ?? ''),
+      )
+      expect(classesOf(track ?? new Map())).toContain('switch-track')
+      expect(classesOf(track ?? new Map()).includes('switch-on')).toBe(checked)
+      expect(classesOf(knob ?? new Map())).toContain('switch-knob')
     }
   })
 
@@ -267,7 +276,7 @@ describe('T21: the kit’s markup', () => {
     expect(classesOf(close ?? new Map())).toContain('size-11')
   })
 
-  it('KM-11: disabledReason renders aria-disabled and a described reason, never disabled', () => {
+  it('KM-11 X9: disabledReason renders aria-disabled and a described reason, never disabled; an inert button takes muted ink on the control ground and no hover or press class', () => {
     for (const markup of [
       html(
         <Button disabled disabledReason="You can get a new code 30 seconds after the last one.">
@@ -289,6 +298,28 @@ describe('T21: the kit’s markup', () => {
         'You can get a new code 30 seconds after the last one.',
       )
     }
+    // Held back by a reason or disabled, a button of any variant paints the same inert pair, and
+    // nothing under the pointer or a press changes it.
+    for (const markup of [
+      html(
+        <Button variant="primary" disabledReason="Wait.">
+          Send
+        </Button>,
+      ),
+      html(
+        <Button variant="danger" disabled>
+          Leave
+        </Button>,
+      ),
+      html(<IconButton label="Mute" icon={<Bell />} pressed variant="primary" disabledReason="Wait." />),
+    ]) {
+      const classes = classesOf(one(markup, 'button'))
+      expect(classes).toEqual(expect.arrayContaining(['bg-surface-2', 'text-muted']))
+      expect(classes.filter(name => /^(?:hover|active):|^bg-(?:accent|rec)|brightness/.test(name))).toEqual([])
+    }
+    const live = classesOf(one(html(<Button variant="primary">Send</Button>), 'button'))
+    expect(live).toEqual(expect.arrayContaining(['bg-accent', 'hover:bg-accent-ink']))
+
     const free = one(html(<Button aria-describedby="other">Send</Button>), 'button')
     expect(free.get('aria-describedby')).toBe('other')
     expect(free.has('aria-disabled')).toBe(false)

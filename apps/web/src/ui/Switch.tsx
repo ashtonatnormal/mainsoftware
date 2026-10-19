@@ -3,8 +3,10 @@
 // "off". The checkbox itself is the whole row, drawn without its native look, so the row is the
 // 44 px target and the focus ring goes round the row. Beside the label, the track: off is the
 // control ground with a line-strong border and a muted knob, on is the accent with an accent-fg
-// knob, each at 3:1 (SHL-37, UI_PAIRS). In forced colours the track keeps an outline (app.css's
-// .switch-track rule).
+// knob, each at 3:1 (SHL-37, UI_PAIRS). Forced colours (Windows High Contrast) would paint both
+// knob and track in Canvas, so app.css draws them in system colours there: the off track Canvas
+// with a CanvasText border and a CanvasText knob, the on track (.switch-on) Highlight with a
+// HighlightText knob (.switch-knob), and the state shows either way.
 //
 // A switch that can't change says why, as Button does: aria-disabled and its reason as a
 // description, focusable, and a press that changes nothing.
@@ -42,12 +44,12 @@ export function Switch({ label, checked, onChange, description, disabledReason }
         aria-hidden
         className={cx(
           'switch-track inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition',
-          checked ? 'border-accent bg-accent' : 'border-line-strong bg-surface-2',
+          checked ? 'switch-on border-accent bg-accent' : 'border-line-strong bg-surface-2',
         )}
       >
         <span
           className={cx(
-            'size-5 rounded-full transition',
+            'switch-knob size-5 rounded-full transition',
             checked ? 'translate-x-5 bg-accent-fg' : 'translate-x-0 bg-muted',
           )}
         />
