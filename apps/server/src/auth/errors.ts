@@ -7,9 +7,14 @@
 // transaction's work and becomes an ApiError only after the transaction has committed. A throw
 // inside withOrg() rolls back, so throwing is kept for refusals that write nothing.
 
-import { type ErrorCode, MESSAGES } from '@hearth/shared'
+import { type ErrorCode, type ErrorExtrasSchema, MESSAGES } from '@hearth/shared'
+import type { z } from 'zod'
 
 export { type ErrorCode, MESSAGES }
+
+// The extras a refusal may carry, as the shared contract types them (packages/shared), so the
+// server can't send one the web app doesn't read.
+type Extras = z.input<typeof ErrorExtrasSchema>
 
 // pin_locked's copy when only an admin can lift the lock (the extra's pin.state is admin_locked).
 export const PIN_ADMIN_LOCKED_MESSAGE = "Your PIN is locked. Ask an admin to reset it. They'll check it's you first."
@@ -18,15 +23,10 @@ export class ApiError extends Error {
   override name = 'ApiError'
   readonly status: number
   readonly code: ErrorCode
-  readonly extra: Record<string, unknown>
+  readonly extra: Extras
   readonly clear: readonly ('session' | 'attempt')[]
 
-  constructor(
-    status: number,
-    code: ErrorCode,
-    extra: Record<string, unknown> = {},
-    clear: readonly ('session' | 'attempt')[] = [],
-  ) {
+  constructor(status: number, code: ErrorCode, extra: Extras = {}, clear: readonly ('session' | 'attempt')[] = []) {
     super(code)
     this.status = status
     this.code = code
@@ -37,8 +37,7 @@ export class ApiError extends Error {
 
 // The copy to send with an error: MESSAGES, except pin_locked when only an admin can lift it.
 export function messageFor(error: ApiError): string {
-  const pin = error.extra.pin as { state?: unknown } | undefined
-  if (error.code === 'pin_locked' && pin?.state === 'admin_locked') return PIN_ADMIN_LOCKED_MESSAGE
+  if (error.code === 'pin_locked' && error.extra.pin?.state === 'admin_locked') return PIN_ADMIN_LOCKED_MESSAGE
   return MESSAGES[error.code]
 }
 

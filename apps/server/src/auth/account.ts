@@ -9,7 +9,9 @@
 // last 5 minutes. It counts against a per-session window that, unlike sign-in's, lets requests
 // through when Valkey is down: re-authentication is signed-in traffic, which carries on without
 // Valkey, and the PIN lock in Postgres still bounds guessing while the PIN slots bound the work.
+import type { ReauthenticatedSchema } from '@hearth/shared'
 import { sql } from 'kysely'
+import type { z } from 'zod'
 import { actingSession, authorise } from '#src/access/world.ts'
 import type { Api } from '#src/api.ts'
 import { writeAudit } from '#src/auth/audit.ts'
@@ -43,7 +45,11 @@ import type { Answer, ReqInfo } from '#src/http.ts'
 import { appendOutbox } from '#src/outbox/append.ts'
 import { publishRevoked } from '#src/revocation/channels.ts'
 
-const reauthenticated: Answer = { body: { status: 'reauthenticated', validForSeconds: REAUTH.windowSeconds } }
+const reauthenticated: Answer = {
+  body: { status: 'reauthenticated', validForSeconds: REAUTH.windowSeconds } satisfies z.input<
+    typeof ReauthenticatedSchema
+  >,
+}
 
 // The acting session, or 401 signed_out.
 async function acting(trx: InOrg, session: SessionIds): Promise<void> {

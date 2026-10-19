@@ -52,3 +52,17 @@ export const ReauthenticatedSchema = z.object({
   validForSeconds: z.number().int(),
 })
 export type Reauthenticated = z.infer<typeof ReauthenticatedSchema>
+
+// The fields a refusal may carry beside `error` and `message` (T14, T20): code_wrong's tries left,
+// too_many_requests' wait in seconds, pin_wrong's and pin_locked's PIN state, and the method a
+// re-authentication refusal names. The server types its extras with z.input of this. The web app
+// parses a refusal's body with it leniently: a field that is missing or doesn't parse reads as
+// absent, so it drops only the sentence it would have added, never the error, and a method it
+// doesn't know reads as `sign_in` (a new sign-in mends any session).
+export const ErrorExtrasSchema = z.object({
+  triesLeft: z.number().int().nonnegative().optional().catch(undefined),
+  retryAfterSeconds: z.number().int().nonnegative().optional().catch(undefined),
+  pin: PinStateSchema.optional().catch(undefined),
+  method: ReauthMethodSchema.catch('sign_in').optional(),
+})
+export type ErrorExtras = z.infer<typeof ErrorExtrasSchema>
