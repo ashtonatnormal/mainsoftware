@@ -1,10 +1,14 @@
 {
-  // The browser code in src/ (T21). Its lib is ES2023, not the base's ES2024, so tsc refuses what
-  // the pilot's oldest browser, Safari on iOS 16.4, lacks (Promise.withResolvers, Object.groupBy).
+  // The browser code in src/ (T21). Its target and lib are ES2023, not the base's ES2024, so tsc
+  // refuses what the pilot's oldest browser, Safari on iOS 16.4, lacks (D-09): the lib its library
+  // APIs (Promise.withResolvers, Object.groupBy), the target its syntax (the regex v flag, which a
+  // Vite build would emit as new RegExp(…, 'v') and iOS 16.4 would throw on). noEmit is on, so the
+  // target changes only what tsc accepts.
   // The Node side (vite.config.ts, the Playwright config and e2e/) is checked by tsconfig.node.json;
   // the workspace's typecheck runs both, and no file is in both.
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "target": "ES2023",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "types": ["vite/client"],

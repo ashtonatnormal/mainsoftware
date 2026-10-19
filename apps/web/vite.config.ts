@@ -22,9 +22,10 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     // changeOrigin and rewriteWsOrigin stay off, so the browser's own Origin reaches the server's
-    // checks (the root Origin hook and the WebSocket upgrade).
+    // checks (the root Origin hook and the WebSocket upgrade). Both entries take the object form:
+    // Vite turns a bare string target into { target, changeOrigin: true }.
     proxy: {
-      '/api': 'http://127.0.0.1:3000',
+      '/api': { target: 'http://127.0.0.1:3000' },
       '/ws': { target: 'ws://127.0.0.1:3001', ws: true },
     },
   },
