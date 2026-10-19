@@ -2,7 +2,6 @@
 // every file under apps/web/src (runtime code; tests only for tsconfig coverage) with comments
 // stripped, and both of the workspace's tsconfigs. Each case first proves its pattern on planted
 // source, so a rule that matches nothing can't pass by accident, then holds the tree to it.
-// WS-10, on main.ts's static import graph, lands with main.ts's boot step (C0.8 S8).
 import { dirname, join, relative } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
@@ -16,6 +15,8 @@ import {
   COLOUR_LITERAL_FILES,
   codeOf,
   DEFAULT_PALETTE,
+  ENTRY_APP,
+  entryGraph,
   FETCH_FILES,
   FLAG_READERS,
   FLAGS_PATH,
@@ -25,6 +26,7 @@ import {
   identifiersOf,
   isRuntimeSource,
   isSignInOrSessionCode,
+  loadsOf,
   matchesOf,
   misplacedSignInOrSessionFolder,
   NEW_QUERY_CLIENT,
@@ -284,6 +286,78 @@ describe('T21: the web source guard (apps/web/src)', () => {
     expect(web.filter(path => browser.has(path) && node.has(path))).toEqual([])
   })
 
+  it("WS-10 D-02 K-08 K-61: src/main.ts's static import graph, followed through relative imports, holds only .css files and modules with no package import (import type aside), and main.ts loads ./app/boot.tsx by one dynamic import after preBoot()", () => {
+    const graph = (planted: Record<string, string>) => entryGraph(path => planted[path])
+    const entry = (before = '', after = '') =>
+      `import '@fontsource-variable/figtree/index.css'\nimport './styles/app.css'\nimport { preBoot } from './boot/pre-boot.ts'\nimport { reloadForUpdate } from './session/document.ts'\n${before}preBoot(window, () => reloadForUpdate())\n${after}import('${ENTRY_APP}').then(app => app.boot())\n`
+    const good = {
+      'main.ts': entry(),
+      'styles/app.css': "@import 'tailwindcss';",
+      'boot/pre-boot.ts': 'export function preBoot() {}',
+      'session/document.ts':
+        "import type { QueryClient } from '@tanstack/react-query'\nimport { isAppPath } from '@/router/paths.ts'\nexport { type AppPath } from '../router/paths.ts'\nexport const reloadForUpdate = () => isAppPath('/chats')",
+      'router/paths.ts': 'export const isAppPath = (p: string) => p.length > 0',
+    }
+    expect(graph(good)).toEqual({
+      files: ['main.ts', 'styles/app.css', 'boot/pre-boot.ts', 'session/document.ts', 'router/paths.ts'],
+      problems: [],
+    })
+    // Static and dynamic loads are told apart, and inline `type` names still load their module.
+    expect(loadsOf('a.ts', "import type { A } from 'x'\nimport { type B } from 'y'\nconst c = import('z')")).toEqual([
+      { specifier: 'x', typeOnly: true, dynamic: false },
+      { specifier: 'y', typeOnly: false, dynamic: false },
+      { specifier: 'z', typeOnly: false, dynamic: true },
+    ])
+
+    // Each way the graph can reach a package before the wipe.
+    expect(
+      graph({
+        ...good,
+        'main.ts': entry("import 'react'\n"),
+        'session/document.ts':
+          "import { z } from 'zod'\nimport { type QueryClient } from '@tanstack/react-query'\nexport * from 'idb'\nimport { isAppPath } from '@/router/paths.ts'\nexport const reloadForUpdate = () => z",
+        'router/paths.ts': "const lazy = () => import('@/app/boot.tsx')\nconst r = require('dayjs')",
+      }).problems,
+    ).toEqual([
+      'main.ts: imports the package react',
+      'session/document.ts: imports the package zod',
+      'session/document.ts: imports the package @tanstack/react-query',
+      'session/document.ts: imports the package idb',
+      'router/paths.ts: loads @/app/boot.tsx dynamically; only main.ts may',
+      'router/paths.ts: imports the package dayjs',
+    ])
+    // A module the graph names that doesn't exist is no proof of anything.
+    expect(graph({ ...good, 'boot/pre-boot.ts': "import { x } from './gone.ts'" }).problems).toEqual([
+      'boot/gone.ts: no such file',
+    ])
+    // main.ts's own shape: the app loads after preBoot(), once, and only ./app/boot.tsx.
+    expect(graph({ ...good, 'main.ts': entry().replace(/^preBoot.*$/m, '') }).problems).toEqual([
+      'main.ts: calls preBoot() in no top-level statement of its own',
+    ])
+    expect(
+      graph({ ...good, 'main.ts': entry().replace(/^(preBoot.*)$/m, 'function later() {\n$1\n}') }).problems,
+    ).toEqual(['main.ts: calls preBoot() in no top-level statement of its own'])
+    expect(
+      graph({ ...good, 'main.ts': entry(`const early = import('${ENTRY_APP}')\n`).replace(/^import\('.*$/m, '') })
+        .problems,
+    ).toEqual(['main.ts: loads the app before preBoot() has run'])
+    expect(graph({ ...good, 'main.ts': entry('', "import('./app/other.tsx')\n") }).problems).toEqual([
+      `main.ts: makes 2 dynamic imports (./app/other.tsx, ${ENTRY_APP}); exactly one, of ${ENTRY_APP}, is allowed`,
+    ])
+
+    // The tree: main.ts reaches only these, and nothing in them loads a package.
+    const tree = entryGraph(path => sources.get(path))
+    expect(tree.problems).toEqual([])
+    expect(tree.files.sort()).toEqual([
+      'boot/pre-boot.ts',
+      'main.ts',
+      'router/paths.ts',
+      'session/document.ts',
+      'strings/boot.ts',
+      'styles/app.css',
+    ])
+  })
+
   it('WS-11 AUTH-DESIGN §10.5 D46 CL Database INTEGRATION item 1: no file under sign-in/ or session/, or named for either, reads the flags client (flags never gate an access control), and no folder elsewhere is named for either', () => {
     const problems = (path: string, source: string): string[] => {
       const modules = specifiersOf(path, source)
@@ -350,12 +424,17 @@ describe('T21: the web source guard (apps/web/src)', () => {
     ).toBe(false)
     expect(src.filter(misplacedSignInOrSessionFolder)).toEqual([])
 
-    // The files the rule reads, pinned so it can't read nothing unnoticed (R2-27). None exists yet:
-    // session/ and boot/load-session.ts land with the boot steps (C0.8 S8 on) and sign-in/ with S11,
-    // and each step adds its files here, so a file that lands fails this line until it is named,
-    // and a renamed folder fails it instead of leaving the rule reading nothing.
+    // The files the rule reads, pinned so it can't read nothing unnoticed (R2-27): the session code
+    // from the boot step (C0.8 S8); sign-in/ adds its files with S11. A file that lands fails this
+    // line until it is named, and a renamed folder fails it instead of leaving the rule reading
+    // nothing.
     const guarded = runtime.filter(path => isSignInOrSessionCode(path) && !path.endsWith('.css'))
-    const READS: readonly string[] = []
+    const READS: readonly string[] = [
+      'boot/load-session.ts',
+      'session/document.ts',
+      'session/query-client.ts',
+      'session/runtime.ts',
+    ]
     expect(guarded).toEqual(READS)
     expect(
       guarded.flatMap(path => problems(path, sources.get(path) ?? '').map(problem => `${path}: ${problem}`)),
@@ -363,7 +442,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
   })
 
   it.todo(
-    'WS-11 follow-up (C0.8 S8 on, S11; R2-27): READS names session/document.ts, session/runtime.ts, session/query-client.ts and boot/load-session.ts as the boot steps land them, and sign-in/SignInScreen.tsx, PhoneStep.tsx, CodeStep.tsx, PinStep.tsx, sign-in-model.ts and api.ts with S11',
+    'WS-11 follow-up (C0.8 S11; R2-27): READS names sign-in/SignInScreen.tsx, PhoneStep.tsx, CodeStep.tsx, PinStep.tsx, sign-in-model.ts and api.ts as S11 lands them',
   )
 
   it('WS-12 AUTH-DESIGN §7.3 item 7 OD-01 D46: apps/web/src has no WebAuthn ceremony: no create read from navigator.credentials (directly, through a name bound to it, or destructured), no publicKey name, key or string, no PublicKeyCredential', () => {

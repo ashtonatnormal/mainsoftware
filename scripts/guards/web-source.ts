@@ -155,6 +155,125 @@ export function srcTarget(fromPath: string, specifier: string): string | undefin
 export const specifiersOf = (path: string, source: string) =>
   moduleImports(source, path).flatMap(i => (i.specifier === undefined ? [] : [i.specifier]))
 
+// One module a file loads, read from the syntax tree: an import or re-export (static), an
+// import() call (dynamic), or a require() (static, and never right in browser code).
+export interface WebLoad {
+  // undefined when the module is chosen at run time.
+  specifier: string | undefined
+  // `import type` and `export type` only. An import whose names are each marked `type`
+  // (`import { type A } from 'x'`) still loads x under verbatimModuleSyntax, so it counts.
+  typeOnly: boolean
+  dynamic: boolean
+}
+
+const literalOf = (node: ts.Node | undefined) => (node && ts.isStringLiteralLike(node) ? node.text : undefined)
+
+export function loadsOf(path: string, source: string): WebLoad[] {
+  const found: WebLoad[] = []
+  const visit = (node: ts.Node): void => {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
+      const typeOnly = ts.isImportDeclaration(node) ? !!node.importClause?.isTypeOnly : node.isTypeOnly
+      found.push({ specifier: literalOf(node.moduleSpecifier), typeOnly, dynamic: false })
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      found.push({ specifier: literalOf(node.moduleReference.expression), typeOnly: node.isTypeOnly, dynamic: false })
+    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      found.push({ specifier: literalOf(node.arguments[0]), typeOnly: false, dynamic: true })
+    } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'require') {
+      found.push({ specifier: literalOf(node.arguments[0]), typeOnly: false, dynamic: false })
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(parse(path, source))
+  return found
+}
+
+// WS-10 (D-02, K-08, K-61): main.ts, the one entry, removes the router's scroll cache (preBoot)
+// before any library code evaluates, and only then loads the app by one dynamic import. That holds
+// however the bundler splits chunks, as long as main.ts's static import graph reaches no package:
+// - every module main.ts loads statically, followed through relative and `@/` imports, is a .css
+//   file (a package's stylesheet included) or a module that loads no package (`import type` aside);
+// - none of them loads anything dynamically, except main.ts itself;
+// - main.ts makes exactly one dynamic import, of ENTRY_APP, in a top-level statement after the one
+//   that calls preBoot().
+// `read` gives a file under apps/web/src/ by its path there, or undefined when there is none.
+export const ENTRY = 'main.ts'
+export const ENTRY_APP = './app/boot.tsx'
+
+export function entryGraph(read: (path: string) => string | undefined): { files: string[]; problems: string[] } {
+  const files: string[] = []
+  const problems: string[] = []
+  const queue = [ENTRY]
+  const seen = new Set<string>()
+  for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
+    if (seen.has(path)) continue
+    seen.add(path)
+    const source = read(path)
+    if (source === undefined) {
+      problems.push(`${path}: no such file`)
+      continue
+    }
+    files.push(path)
+    if (path.endsWith('.css')) continue
+    for (const load of loadsOf(path, source)) {
+      const name = load.specifier ?? '(a name chosen at run time)'
+      if (load.dynamic) {
+        if (path !== ENTRY) problems.push(`${path}: loads ${name} dynamically; only ${ENTRY} may`)
+        continue
+      }
+      if (load.typeOnly) continue
+      if (load.specifier === undefined) {
+        problems.push(`${path}: loads ${name}`)
+        continue
+      }
+      if (/\.css(?:\?.*)?$/.test(load.specifier)) {
+        const target = srcTarget(path, load.specifier)
+        if (target !== undefined) queue.push(target)
+        continue
+      }
+      const target = srcTarget(path, load.specifier)
+      if (target === undefined) problems.push(`${path}: imports the package ${load.specifier}`)
+      else queue.push(target)
+    }
+  }
+  return { files, problems: [...problems, ...entryOrder(read(ENTRY))] }
+}
+
+// main.ts's own shape: one dynamic import, of ENTRY_APP, in a top-level statement after preBoot().
+function entryOrder(source: string | undefined): string[] {
+  if (source === undefined) return []
+  const file = parse(ENTRY, source)
+  const problems: string[] = []
+  const dynamic = loadsOf(ENTRY, source).filter(load => load.dynamic)
+  if (dynamic.length !== 1 || dynamic[0]?.specifier !== ENTRY_APP)
+    problems.push(
+      `${ENTRY}: makes ${dynamic.length} dynamic imports (${dynamic.map(load => load.specifier).join(', ')}); exactly one, of ${ENTRY_APP}, is allowed`,
+    )
+  const statementIndex = (test: (node: ts.Node) => boolean): number =>
+    file.statements.findIndex(statement => {
+      let hit = false
+      const visit = (node: ts.Node): void => {
+        if (hit) return
+        if (test(node)) hit = true
+        else ts.forEachChild(node, visit)
+      }
+      visit(statement)
+      return hit
+    })
+  const preBoot = file.statements.findIndex(
+    statement =>
+      ts.isExpressionStatement(statement) &&
+      ts.isCallExpression(statement.expression) &&
+      ts.isIdentifier(statement.expression.expression) &&
+      statement.expression.expression.text === 'preBoot',
+  )
+  const loadsApp = statementIndex(
+    node => ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword,
+  )
+  if (preBoot === -1) problems.push(`${ENTRY}: calls preBoot() in no top-level statement of its own`)
+  else if (loadsApp !== -1 && loadsApp <= preBoot) problems.push(`${ENTRY}: loads the app before preBoot() has run`)
+  return problems
+}
+
 // --- The rules' patterns. Each takes the file's code with comments stripped. ---
 
 // WS-01: browser storage that outlives a document. sessionStorage is allowed in two files (D-02).
