@@ -159,3 +159,35 @@ describe("C0.5 T5 a session's last use (and C0.6: the org's flags kept)", () => 
     ])
   })
 })
+
+describe('C0.8 T21 item 10 OD-14 inSession for the web shell’s GETs', () => {
+  const info = (tasks: (() => Promise<void>)[]): ReqInfo => ({
+    ip: '198.51.100.7',
+    requestId: 'f0000000-0000-4000-8000-000000000003',
+    userAgent: undefined,
+    log: { warn: vi.fn() } as unknown as ReqInfo['log'],
+    after: task => tasks.push(task),
+  })
+
+  it('OD-14 C-23: runs the work read only when asked, and queues no touch with touch: false, keeping the org’s flags either way', async () => {
+    const { db, texts } = scriptedPool()
+    const flags = staticFlags()
+    const api = { db, flags } as unknown as Api
+    const session = { sessionId: 'b0000000-0000-4000-8000-0000000000ea', orgId: ORG, userId: PERSON, deviceId: DEVICE }
+    const tasks: (() => Promise<void>)[] = []
+    expect(await inSession(api, info(tasks), session, async () => 'read', { touch: false, readOnly: true })).toBe(
+      'read',
+    )
+    expect(texts()[0]).toBe('start transaction isolation level read committed read only')
+    expect(tasks).toHaveLength(0)
+    expect(flags.track).toHaveBeenCalledWith(ORG)
+    // Read only, still use of the session: one touch queued, in a transaction of its own.
+    expect(await inSession(api, info(tasks), session, async () => 'used', { readOnly: true })).toBe('used')
+    expect(tasks).toHaveLength(1)
+    // With no options, as before: read-write, touched.
+    const before = texts().length
+    await inSession(api, info(tasks), session, async () => 'default')
+    expect(texts()[before]).toBe('start transaction isolation level read committed')
+    expect(tasks).toHaveLength(2)
+  })
+})

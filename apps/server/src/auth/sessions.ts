@@ -44,19 +44,38 @@ export function signedOut(): ApiError {
   return new ApiError(401, 'signed_out', {}, ['session'])
 }
 
+export interface InSessionOptions {
+  // Whether the request counts as use of the session, so its last-use time is written after the
+  // response (touch; true unless set false). GET /api/flags sets it false (OD-14, T21 item 10): the
+  // shell polls it every 60 s while a tab is visible and on every gateway nudge, whether or not
+  // anyone is using it, so a poll that touched would keep an idle session alive past SESSION.idle
+  // for as long as a tab stayed open (C-23).
+  touch?: boolean
+  // `start transaction … read only` (withOrg's TransactionOptions): the web shell's GETs, which
+  // write nothing in their own transaction. A read-only transaction can't take row locks, so its
+  // work reads the acting session with `lock: false` (access/world.ts ActingOptions).
+  readOnly?: boolean
+}
+
 // Work for a signed-in request: withOrg() acting as the session's person. The process keeps the
 // org's flags from its first signed-in request on (C0.6, flags/cache.ts). The session's last-use
-// time is written after the response (touch).
+// time is written after the response (touch), unless the options say the request isn't use.
 export async function inSession<T>(
   api: Api,
   info: ReqInfo,
   session: SessionIds,
   work: (trx: InOrg) => Promise<T>,
+  options: InSessionOptions = {},
 ): Promise<T> {
   // It never rejects: the cache keeps trying by itself.
   void api.flags.track(session.orgId)
-  const result = await withOrg(api.db, { orgId: session.orgId, userId: session.userId }, work)
-  info.after(() => touch(api.db, session, info))
+  const result = await withOrg(
+    api.db,
+    { orgId: session.orgId, userId: session.userId },
+    work,
+    options.readOnly === true ? { readOnly: true } : {},
+  )
+  if (options.touch !== false) info.after(() => touch(api.db, session, info))
   return result
 }
 

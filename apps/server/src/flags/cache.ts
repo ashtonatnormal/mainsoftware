@@ -17,8 +17,9 @@
 // says (fence.ts; feature_fence, job_fence and job_finish compare revisions).
 //
 // The api keeps the org of every signed-in request, realtime the org of every socket, the worker
-// every org it lists (as hearth_queue, T18), forgetting one that leaves the list (untrack()). A caller that serves values to someone (C0.8's GET /api/flags)
-// waits for the org's first load (track()).
+// every org it lists (as hearth_queue, T18), forgetting one that leaves the list (untrack()). A
+// caller that serves values to someone (C0.8's GET /api/flags, web/flags.ts) waits for the org's
+// first load (track()), for at most FLAG_READ_WAIT_MS.
 import { performance } from 'node:perf_hooks'
 import { FLAGS, type FlagSpec, flagLineage } from '@hearth/shared'
 import { sql } from 'kysely'

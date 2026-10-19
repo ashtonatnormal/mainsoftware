@@ -175,10 +175,11 @@ export async function sweepWrites(superuser: Pick<PgClient, 'query'>): Promise<S
 // The suite's share of the contract: every committed write covered, at least one write that needed
 // an event checked (so the sweep can't pass by checking nothing), and, when every test in the suite
 // ran and passed, every event type EMITTED_BY assigns it appended at least once. Every suite on the
-// stack but the roles one sweeps its writes this way; the gateway's (C0.7) owns no event type.
+// stack but the roles one sweeps its writes this way; the gateway's (C0.7) and the web shell's
+// reads (C0.8) own no event type.
 export async function expectEveryWriteCovered(
   superuser: Pick<PgClient, 'query'>,
-  suite: 'sign-in' | 'passkeys' | 'flags' | 'outbox' | 'jobs' | 'gateway',
+  suite: 'sign-in' | 'passkeys' | 'flags' | 'outbox' | 'jobs' | 'gateway' | 'web',
   options: { allPassed: boolean },
 ): Promise<Sweep> {
   const sweep = await sweepWrites(superuser)

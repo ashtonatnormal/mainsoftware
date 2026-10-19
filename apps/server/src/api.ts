@@ -1,6 +1,8 @@
 // The api role's routes under /api (C0.5): sign-in, your own devices (and passkeys, dormant: D46,
-// PASSKEYS_ON), the admin actions on a person, and from C0.6 changing a feature flag. Every
-// response in the scope carries Cache-Control: no-store, errors and the scope's own 404 included.
+// PASSKEYS_ON), the admin actions on a person, from C0.6 changing a feature flag, and from C0.8 the
+// web shell's own reads, who is signed in and the client flags evaluated for them (web/routes.ts,
+// T21 item 10). Every response in the scope carries Cache-Control: no-store, errors and the scope's
+// own 404 included.
 // Every body a route reads is JSON of at most 16 KiB, parsed by a strict zod object (http.ts); a
 // path with no route answers 404 before any body is read. Errors become
 // `{ error, message, ...extra }` (auth/errors.ts); anything unexpected is a 500 whose detail goes
@@ -24,6 +26,7 @@ import { deviceRoutes } from '#src/devices/routes.ts'
 import type { FlagCache } from '#src/flags/cache.ts'
 import { AfterResponse, BODY_LIMIT } from '#src/http.ts'
 import type { Gate } from '#src/jobs/gate.ts'
+import { webRoutes } from '#src/web/routes.ts'
 
 export interface ApiDeps {
   db: Database
@@ -35,10 +38,11 @@ export interface ApiDeps {
   // unset, which clears no provider, so nothing reaches one until C0.9 passes the real gate.
   gate?: Pick<Gate, 'providerCleared'>
   keyPrefix: string
-  // The flags this process keeps (flags/cache.ts; T17): every signed-in request keeps its org's,
-  // and the flags route takes the keys it accepts and their purposes from the cache's registry,
-  // FLAGS in production (a test adds its own it.* flags, A5).
-  flags: Pick<FlagCache, 'registry' | 'track' | 'reload'>
+  // The flags this process keeps (flags/cache.ts; T17): every signed-in request keeps its org's;
+  // the flags route takes the keys it accepts and their purposes from the cache's registry, FLAGS
+  // in production (a test adds its own it.* flags, A5); and GET /api/flags sends the person the
+  // verdict on each flag the registry marks client: true (T17 item 11, web/flags.ts).
+  flags: Pick<FlagCache, 'registry' | 'track' | 'reload' | 'verdict'>
   // Whether the api publishes the sessions a commit ended on Valkey's revoked channel as soon as it
   // commits (a deactivation, a PIN reset, an admin's or your own device sign-out, a sign-out), so
   // their sockets close at once: the push path (true unless set false). The outbox carries the
@@ -122,6 +126,7 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps & { appOrigin: s
       await scope.register(authRoutes(api), { prefix: '/auth' })
       await scope.register(deviceRoutes(api), { prefix: '/devices' })
       await scope.register(adminRoutes(api), { prefix: '/admin' })
+      await scope.register(webRoutes(api))
     },
     { prefix: '/api' },
   )
