@@ -133,6 +133,12 @@
   }
 }
 
+/* A field or link scrolled into view stops above the toasts, whose height the Toaster keeps in
+   --toast-h (WCAG 2.4.11). */
+#screen {
+  scroll-padding-bottom: var(--toast-h, 0px);
+}
+
 /* A Dialog locks the screen's scroll with this class, never with an injected <style>, which the
    CSP refuses (C-22). */
 html.scroll-locked #screen {
