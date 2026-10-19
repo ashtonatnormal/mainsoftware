@@ -6,9 +6,10 @@
 // - Every number gets the same reply to a code request, and nothing touches Postgres before that
 //   reply. The roster lookup, the audit row and the text run after it, even when the client hangs
 //   up first. The attempt names the person only on the way to sending their code, just before its
-//   audit row is written and the code is handed to the SMS provider; if the audit row, the commit
-//   or the send then fails, it still names them, and a guess at that code has the same odds as at
-//   one that arrived. An attempt that names nobody answers every code as wrong, even the right one.
+//   audit row is written and the SMS provider is asked to make and send the code; if the audit
+//   row, the commit or the send then fails, it still names them, but no provider reference reaches
+//   its record, so there is no code to guess and every guess answers wrong. An attempt that names
+//   nobody answers every code as wrong, even the right one.
 // - Every transaction before a session exists acts as the org's system principal: whoever holds
 //   the phone hasn't proved anything yet. Each starts by reading the person's row FOR SHARE, the
 //   first row in the lock order (0006), so someone who has left is refused there, before any
@@ -388,11 +389,14 @@ async function deliverCode(
   }
 }
 
-// Asks the provider for a code and attaches its reference to the owner's record. Only while the
-// owner still holds the record does it act on a verification the provider handed back from someone
-// else (foreign): it cancels it and starts once more, and a second foreign reply is cancelled too
-// and nothing is attached, so the attempt answers as after a lost text. A request that lost the
-// race to a newer one leaves the verification alone, so it can never cancel the newer owner's.
+// Asks the provider for a code and attaches its reference to the owner's record. After every start
+// it first asks whether the owner still holds the record, and only then acts on a verification the
+// provider handed back from someone else (foreign): it cancels it and starts once more, and a second
+// foreign reply is cancelled too and nothing is attached, so the attempt answers as after a lost
+// text. A request that has lost the record to a newer one by the time either start answers leaves
+// that verification alone, so it never cancels the newer owner's: a newer request that starts
+// between this one's cancel and its second start makes the verification this one then gets back
+// as foreign.
 async function startCode(
   api: Api,
   info: ReqInfo,
@@ -406,6 +410,7 @@ async function startCode(
   if (started.foreign) {
     await sms.cancel(started.ref)
     started = await sms.start(sending.e164)
+    if (!(await stillOwner())) return
     if (started.foreign) {
       await cancelQuietly(sms, info, started.ref)
       info.log.warn(
@@ -414,7 +419,6 @@ async function startCode(
       )
       return
     }
-    if (!(await stillOwner())) return
   }
   await attachCode(api.valkey, api.names, numberTag, owner, started.ref)
 }
@@ -480,9 +484,11 @@ export async function verifyCode(
     if (settled.result === 'failed') throw new ApiError(503, 'unavailable')
     // displaced: a newer request replaced the record during the check. The newest request wins, so
     // this code has expired whatever the provider said, and nothing of the newer record was
-    // touched. expired: the provider no longer holds the code.
+    // touched. expired: the provider no longer holds the code. A record gone meanwhile (another
+    // check killed or used it) answers wrong or dead from this check's count, as a number off the
+    // roster would (codes.ts).
     check = 'tries' in settled ? settled : { result: 'expired', tries: 0 }
-    // The 5th wrong try killed the record: its code is cancelled after the reply.
+    // The 5th try is dead: this attempt's own code is cancelled after the reply.
     if (settled.result === 'dead' && sms !== undefined) {
       const ref = reserved.ref
       info.after(() => cancelQuietly(sms, info, ref))

@@ -67,7 +67,7 @@ describe('ACC-01 T14 normalising a phone number (any country, the owner decided 
   })
 })
 
-describe('T7 masking a number for the local log provider', () => {
+describe("T7 T20 masking a number for the local fake SMS provider's stderr line", () => {
   it('keeps the country code and the last two digits', () => {
     expect(maskNumber('+6581234567')).toBe('+65 xxxxxx67')
     expect(maskNumber('+60123456789')).toBe('+60 xxxxxxx89')

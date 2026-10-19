@@ -34,7 +34,8 @@ function countryCodeLength(digits: string): number {
 }
 
 // A number with everything but its country code and last two digits hidden, such as
-// '+65 xxxxxx67'. For the local log provider only, so a developer can tell which number a code is for.
+// '+65 xxxxxx67'. For the local fake SMS provider's stderr line only (createFakeVerify), so a
+// developer can tell which number a code is for.
 export function maskNumber(e164: string): string {
   const digits = e164.replace(/^\+/, '')
   const country = digits.slice(0, countryCodeLength(digits))

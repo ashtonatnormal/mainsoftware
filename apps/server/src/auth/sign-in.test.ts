@@ -368,7 +368,9 @@ describe('ACC-03 T14 sending a code after the reply', () => {
 
   // A code request for the seed-range number +65 8000 0001 with a provider that has `pending`
   // verifications for it already (foreign ones Hearth didn't start), and its after-reply work run.
-  async function started(options: { pending?: number; replaced?: string; displaceAfterStart?: boolean } = {}) {
+  async function started(
+    options: { pending?: number; replaced?: string; displaceAfterStart?: boolean; newerAtSecondStart?: boolean } = {},
+  ) {
     const pool = orgPool({ roster: true })
     const sms = new FakeVerify()
     const valkey = valkeyWith(undefined, undefined, undefined, options.replaced)
@@ -378,18 +380,33 @@ describe('ACC-03 T14 sending a code after the reply', () => {
       const { ref } = await sms.start('+6580000001')
       before.push(ref)
     }
+    const start = sms.start.bind(sms)
     if (options.displaceAfterStart) {
-      const start = sms.start.bind(sms)
       sms.start = async to => {
         const result = await start(to)
         valkey.displace()
         return result
       }
     }
+    // Just before this request's second start, a newer request takes the record and starts its
+    // own code, a fresh verification (the first was cancelled), which the second start then gets
+    // back as foreign.
+    const newer: string[] = []
+    if (options.newerAtSecondStart) {
+      let starts = 0
+      sms.start = async to => {
+        starts++
+        if (starts === 2) {
+          valkey.displace()
+          newer.push((await start(to)).ref)
+        }
+        return start(to)
+      }
+    }
     await requestCode(api, { phone: '+65 8000 0001' }, undefined, info)
     for (const task of tasks) await task()
     const attached = valkey.calls.filter(call => call.sha === ATTACH.sha).map(call => call.args[2])
-    return { sms, before, attached, info }
+    return { sms, before, attached, info, newer }
   }
 
   it("T20: cancels the replaced code first, then attaches the new reference to the owner's record", async () => {
@@ -428,6 +445,23 @@ describe('ACC-03 T14 sending a code after the reply', () => {
     const { sms, attached } = await started({ pending: 1, displaceAfterStart: true })
     expect(sms.cancels).toEqual([])
     expect(attached).toEqual([])
+  })
+
+  it("T14 T20: a request that loses the record during its second start never cancels the newer owner's code", async () => {
+    const { sms, before, attached, newer, info } = await started({ pending: 1, newerAtSecondStart: true })
+    // Only the stray verification was cancelled; the newer owner's, handed back as foreign, was left
+    // alone, and nothing was attached or logged as foreign.
+    expect(sms.cancels.map(c => c.ref)).toEqual(before)
+    expect(sms.sent.at(-1)?.ref).toBe(newer[0])
+    expect(attached).toEqual([])
+    expect(info.log.warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'provider_foreign_verification' }),
+      expect.any(String),
+    )
+    // The newer owner's code still works.
+    const ref = newer[0] ?? ''
+    const code = sms.sent.find(entry => entry.ref === ref)?.code ?? ''
+    expect(await sms.check(ref, code)).toBe('approved')
   })
 })
 

@@ -16,8 +16,14 @@
 // - RESERVE counts a try before the provider is asked, so parallel guesses stop at 5; past the 5
 //   minutes it deletes the caller's record and answers its ref, the only ref a caller may cancel.
 // - SETTLE applies the provider's verdict only while the record still holds the caller's owner and
-//   ref; otherwise it answers displaced (a newer request replaced it during the check), which
-//   sign-in answers as code_expired, whatever the provider said.
+//   ref. Another owner's record answers displaced (a newer request replaced it during the check),
+//   which sign-in answers as code_expired, whatever the provider said.
+// A refusal depends only on the tries counted and the record's owner, never on whether a ref is
+// attached, so parallel guesses at a roster number (which has one) answer exactly as at a number
+// off the roster (which never has one; /otp/verify mustn't tell them apart, T14): a try past the
+// 5th is expired, as once a record without a ref has died, and a SETTLE that finds the record gone
+// (an earlier check killed or used it) answers from its own count, wrong or at the 5th dead,
+// whatever order the provider's verdicts come back in.
 import type { Redis } from 'ioredis'
 import { runScript, script } from '#src/auth/limiter.ts'
 import { OTP } from '#src/auth/policy.ts'
@@ -47,8 +53,9 @@ return 'attached'
 `)
 
 // KEYS[1]: otp:{tag}. ARGV: the owner, the code's validity in ms, the tries allowed. A try past the
-// allowed ones while others are still being checked is dead, takes its count back and leaves the
-// record to them.
+// allowed ones while others are still being checked takes its count back, leaves the record to
+// them and answers expired with no ref, as it would once a record without a ref had died at the
+// last allowed try.
 export const RESERVE = script(`${NOW}
 local c = redis.call('HMGET', KEYS[1], 'owner', 'ref', 'born')
 if c[1] ~= ARGV[1] then return {'expired', ''} end
@@ -63,18 +70,23 @@ if not c[2] then
 end
 if tries > tonumber(ARGV[3]) then
   redis.call('HINCRBY', KEYS[1], 'tries', -1)
-  return {'dead', tries - 1}
+  return {'expired', ''}
 end
 return {'check', c[2], tries}
 `)
 
 // KEYS[1]: otp:{tag}. ARGV: the owner, the ref checked, the verdict (approved, wrong, gone or
 // failed), the try RESERVE counted for this check, the tries allowed. A wrong verdict keeps that
-// try; the one counted last kills the record.
+// try; the one counted last kills the record. A record that is gone answers from that try, as
+// RESERVE answers without a ref, whatever the verdict: nothing is left to approve, expire or refund.
 export const SETTLE = script(`
 local c = redis.call('HMGET', KEYS[1], 'owner', 'ref')
-if c[1] ~= ARGV[1] or c[2] ~= ARGV[2] then return {'displaced', 0} end
 local tries = tonumber(ARGV[4])
+if not c[1] then
+  if tries >= tonumber(ARGV[5]) then return {'dead', tries} end
+  return {'wrong', tries}
+end
+if c[1] ~= ARGV[1] or c[2] ~= ARGV[2] then return {'displaced', 0} end
 if ARGV[3] == 'approved' then redis.call('DEL', KEYS[1]); return {'approved', tries} end
 if ARGV[3] == 'wrong' then
   if tries >= tonumber(ARGV[5]) then redis.call('DEL', KEYS[1]); return {'dead', tries} end

@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto'
 import { Redis } from 'ioredis'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { attachCode, openCode, reserveCode, settleCode } from '#src/auth/codes.ts'
+import { attachCode, openCode, reserveCode, type Settled, settleCode } from '#src/auth/codes.ts'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 
 let valkey: Redis
@@ -37,9 +37,10 @@ describe('T14 T20 PRD-53 the code challenge record on Valkey', () => {
         .map(r => ('tries' in r ? r.tries : 0))
         .sort(),
     ).toEqual([1, 2, 3, 4, 5])
-    expect(reserved.filter(r => r.result === 'dead')).toEqual([
-      { result: 'dead', tries: 5 },
-      { result: 'dead', tries: 5 },
+    // The 6th and 7th take their count back and answer as once a record without a ref has died.
+    expect(reserved.filter(r => r.result !== 'check')).toEqual([
+      { result: 'expired', ref: undefined },
+      { result: 'expired', ref: undefined },
     ])
     expect(await valkey.hget(keys.otp(n), 'tries')).toBe('5')
     // The 5 checks settle wrong: only the try counted 5th kills the record.
@@ -53,6 +54,49 @@ describe('T14 T20 PRD-53 the code challenge record on Valkey', () => {
       result: 'dead',
       tries: 5,
     })
+    expect(await valkey.exists(keys.otp(n))).toBe(0)
+  })
+
+  // Seven parallel guesses on one attempt, as sign-in makes them, with the provider answering wrong
+  // to every check that reaches it: each reply as /otp/verify shows it (code_wrong carries the tries
+  // left, so its count), sorted. Every reserve lands within the provider's round trip, before any
+  // verdict; `lastFirst` settles the check counted 5th before the others.
+  async function guesses(options: { ref: boolean; lastFirst?: boolean }): Promise<string[]> {
+    const n = fresh()
+    await openCode(valkey, keys, n, 'a')
+    if (options.ref) await attachCode(valkey, keys, n, 'a', 'VE1')
+    const reserved = await Promise.all(Array.from({ length: 7 }, () => reserveCode(valkey, keys, n, 'a')))
+    const checks = reserved.flatMap(r => (r.result === 'check' ? [r] : []))
+    if (options.lastFirst) checks.sort((x, y) => y.tries - x.tries)
+    const settled: Settled[] = []
+    for (const r of checks) settled.push(await settleCode(valkey, keys, n, 'a', r, 'wrong'))
+    const replies = [...reserved.filter(r => r.result !== 'check'), ...settled]
+    return replies.map(r => (r.result === 'wrong' ? `wrong ${r.tries}` : r.result)).sort()
+  }
+
+  it('T14: parallel guesses answer a roster number (a provider ref) exactly as one off the roster (none), whatever order the verdicts come in', async () => {
+    const offRoster = await guesses({ ref: false })
+    expect(offRoster).toEqual(['dead', 'expired', 'expired', 'wrong 1', 'wrong 2', 'wrong 3', 'wrong 4'])
+    expect(await guesses({ ref: true })).toEqual(offRoster)
+    expect(await guesses({ ref: true, lastFirst: true })).toEqual(offRoster)
+  })
+
+  it('a SETTLE that finds the record gone answers from its own count, whatever the verdict, and leaves it gone', async () => {
+    const n = fresh()
+    await openCode(valkey, keys, n, 'a')
+    await attachCode(valkey, keys, n, 'a', 'VE1')
+    await reserveCode(valkey, keys, n, 'a')
+    await valkey.del(keys.otp(n))
+    for (const verdict of ['approved', 'wrong', 'gone', 'failed'] as const) {
+      expect(await settleCode(valkey, keys, n, 'a', { ref: 'VE1', tries: 2 }, verdict)).toEqual({
+        result: 'wrong',
+        tries: 2,
+      })
+      expect(await settleCode(valkey, keys, n, 'a', { ref: 'VE1', tries: 5 }, verdict)).toEqual({
+        result: 'dead',
+        tries: 5,
+      })
+    }
     expect(await valkey.exists(keys.otp(n))).toBe(0)
   })
 
