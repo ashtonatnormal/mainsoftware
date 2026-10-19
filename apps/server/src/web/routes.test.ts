@@ -63,7 +63,8 @@ interface Script {
 }
 
 // A signed-in request's statements, answered: the pre-org lookup, the acting session's re-read,
-// the World loader's reads (the person, their roles, no team, their device) and the session read.
+// the World loader's reads (the person, their roles, one live team, their device) and the session
+// read.
 function signedIn(script: Script = {}) {
   const sessionId = script.session ?? nextSession()
   return scriptedPool(({ text }: Statement) => {
@@ -76,6 +77,8 @@ function signedIn(script: Script = {}) {
       return script.live === false ? [] : [{ fresh: false, pin_set: false, issued_privileged: false }]
     }
     if (text.includes('from "people"')) return [{ id: PERSON, deactivated_at: null }]
+    // TEAM is live, so a team_admin row of it counts as held (World.rolesOf).
+    if (text.includes('from "teams"')) return [{ id: TEAM, archived_at: null }]
     if (text.includes('from "role_assignments"')) {
       return (script.roles ?? []).map(r => ({ person_id: PERSON, revoked_at: null, ...r }))
     }
@@ -238,7 +241,8 @@ describe('C0.8 T17 item 11 GET /api/flags', () => {
     expect(response.json()).toEqual({ flags: { 'it.alpha': true, 'it.beta': false, 'it.gamma': false } })
     expect(FlagsResponse.safeParse(response.json()).success).toBe(true)
     // Asked about the client keys alone, for this person as the cohorts see them: still at the org,
-    // with the org-wide roles a cohort can name (team_admin isn't one).
+    // with the org-wide roles a cohort can name. The team_admin row is held (TEAM is live) and left
+    // out because no cohort names it.
     const subject: FlagSubject = { personId: PERSON, active: true, roles: ['owner'] }
     expect(flags.verdict.mock.calls).toEqual([
       [ORG, 'it.alpha', subject],

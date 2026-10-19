@@ -1,12 +1,13 @@
 // The server's entry point: `node src/main.ts`, with ROLE choosing api, realtime or worker (T2).
 // All three roles come from one image and serve /health and /ready. The api role adds the
 // sign-in, device and admin routes under /api, with its SMS provider (C0.5), the flags route
-// (C0.6) and the web shell's reads (C0.8, web/routes.ts); the realtime role adds the gateway on /ws (C0.7, TECH-SPEC T19): topics, fan-out from each
-// org's Valkey stream on a blocking reader connection of its own, and sockets closed within 60 s of
-// their access ending, plus /ready/local for the load balancer. Both keep the flags of the orgs they
-// serve, polled and told of changes on Valkey (C0.6, T17). The worker connects as hearth_worker and
-// runs the job queue, the scheduler and the outbox consumers (C0.6, T15-T18; worker/index.ts). Each
-// role serves only its own routes (scripts/check-server.sh).
+// (C0.6) and the web shell's reads (C0.8, web/routes.ts); the realtime role adds the gateway on
+// /ws (C0.7, TECH-SPEC T19): topics, fan-out from each org's Valkey stream on a blocking reader
+// connection of its own, and sockets closed within 60 s of their access ending, plus /ready/local
+// for the load balancer. Both keep the flags of the orgs they serve, polled and told of changes on
+// Valkey (C0.6, T17). The worker connects as hearth_worker and runs the job queue, the scheduler
+// and the outbox consumers (C0.6, T15-T18; worker/index.ts). Each role serves only its own routes
+// (scripts/check-server.sh).
 import { performance } from 'node:perf_hooks'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { Redis } from 'ioredis'
