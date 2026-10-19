@@ -14,14 +14,15 @@ select format('%s %s: %s', kind, name, detail) from (
   from pg_class c join pg_namespace n on n.oid = c.relnamespace
   where n.nspname = 'public' and c.relkind in ('v', 'm')
   union all
-  -- A composite type's attributes are its columns (below); a domain's rules are listed here, since
-  -- the rules branch reads only tables'.
+  -- A composite type's attributes are its columns (below); a domain's rules are listed here, by name
+  -- and apart from whether each was validated, as the rules branch lists tables'.
   select 'type', format('%I', t.typname),
          format('kind=%s owner=%s labels=%s base=%s notnull=%s default=%s checks=%s acl=%s', t.typtype,
                 pg_get_userbyid(t.typowner),
                 (select string_agg(e.enumlabel, ',' order by e.enumsortorder) from pg_enum e where e.enumtypid = t.oid),
                 format_type(t.typbasetype, t.typtypmod), t.typnotnull, t.typdefault,
-                (select string_agg(format('%I %s', k.conname, pg_get_constraintdef(k.oid)), '; ' order by k.conname)
+                (select string_agg(format('%I %s', k.conname, replace(pg_get_constraintdef(k.oid), ' NOT VALID', '')),
+                                   '; ' order by k.conname)
                  from pg_constraint k where k.contypid = t.oid), t.typacl)
   from pg_type t join pg_namespace n on n.oid = t.typnamespace
   left join pg_class c on c.oid = t.typrelid
