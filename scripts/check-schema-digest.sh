@@ -10,7 +10,8 @@
 #   triggers or bound; a month lacking an index, policy or trigger the other months have; a
 #   partitioned index left invalid; a month's primary key not attached to the parent's; a parent's
 #   partition key; a DEFAULT partition; a rule literal or list bound that reads like the folded name
-#   or month, which the fold escapes rather than lets pass for a month;
+#   or month (a bound's own backslash included), which the fold escapes rather than lets pass for a
+#   month; an index predicate holding text like the index's own or listed name;
 # - a domain's default; a view's or table's options; whether a table is unlogged;
 # - a sequence's type, start, increment, bounds, cache, cycling and owning column;
 # - identity and generated columns; a column's storage; a column's, a domain's and a custom
@@ -21,8 +22,8 @@
 #   declared arguments.
 # The others are equivalent and must compare equal: partitions made in different months, including
 # months whose index names Postgres shortened (copies of the parent's, and indexes of their own,
-# which it also numbers), months with policies named for them, and months whose rules name their
-# own month; a database set to New York, or to other date,
+# which it also numbers), months with policies named for them, months whose rules or column
+# defaults name their own month, and a foreign key into months held in different numbers; a database set to New York, or to other date,
 # interval, float, bytea, string-escape, identifier-quoting or search_path settings, against the
 # defaults; a domain made in a New York session against one made in UTC; NOT VALID rules the caller
 # names, a month's rule among them. Then, against the real migrations (copies of the full build,
@@ -166,6 +167,28 @@ probe 'partitions: months whose rules name their own month' same '' \
 probe 'partitions: a list bound that reads like the folded month' differs "^table l_yyyy_mm: .*bound=FOR VALUES IN \\('\\\\yyyy-mm-01'\\)" \
   "create table l (d text) partition by list (d)" "create table l_2026_01 partition of l for values in ('2026-01-01')" \
   "create table l_2026_01 partition of l for values in ('yyyy-mm-01')"
+probe 'partitions: a list bound with a backslash before its own month' differs '^table l_yyyy_mm: .*bound=FOR VALUES IN \(.\\\\yyyy-mm-01.\)' \
+  "create table l (d text) partition by list (d)" "create table l_2026_01 partition of l for values in (E'\\\\2026-01-01')" \
+  "create table l_2026_01 partition of l for values in ('yyyy-mm-01')"
+probe "partitions: a month's own index whose predicate reads like its listed name" differs '^index p_yyyy_mm\.\(local\): .*WHERE \(\(?x\)? <> .INDEX p_yyyy_mm\.\(local\) ON .::text\)' \
+  "create table p (k date not null, x text) partition by range (k);
+   create table p_2026_01 partition of p for values from ('2026-01-01') to ('2026-02-01')" \
+  "create index p_2026_01_a on p_2026_01 (x) where x <> 'INDEX p_2026_01_a ON '" \
+  "create index p_2026_01_b on p_2026_01 (x) where x <> 'INDEX p_2026_01.(local) ON '"
+probe "indexes: a predicate holding text like the index's own name" differs '^index "i_\\yyyy_mm": .*WHERE \(\(?x\)? <> .INDEX i_\\yyyy_mm ON .::text\)' \
+  "create table t (x text)" "create index i_yyyy_mm on t (x) where x <> 'INDEX i_yyyy_mm ON '" \
+  "create index i_yyyy_mm on t (x) where x <> 'INDEX \"i_yyyy_mm\" ON '"
+probe 'partitions: a foreign key into months held in different numbers' same '' \
+  "$partitioned; create table t (id int primary key, p_id int, p_at timestamptz, foreign key (p_id, p_at) references p (id, at))" \
+  "$two" "$(months 2026-05-01)"
+probe 'partitions: months whose column defaults name their own month' same '' \
+  "create table q (src text, at date not null) partition by range (at)" \
+  "create table q_2026_01 partition of q for values from ('2026-01-01') to ('2026-02-01');
+   alter table q_2026_01 alter column src set default 'q_2026_01';
+   create table q_2026_02 partition of q for values from ('2026-02-01') to ('2026-03-01');
+   alter table q_2026_02 alter column src set default 'q_2026_02'" \
+  "create table q_2026_05 partition of q for values from ('2026-05-01') to ('2026-06-01');
+   alter table q_2026_05 alter column src set default 'q_2026_05'"
 probe 'partitions: the partition key' differs '^table k: .*partkey=LIST \(a\)' \
   "" "create table k (a int, b int) partition by range (a)" "create table k (a int, b int) partition by list (a)"
 probe 'partitions: a DEFAULT partition' differs '^table p_rest: .*parent=p bound=DEFAULT' \

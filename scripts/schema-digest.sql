@@ -26,8 +26,8 @@
 -- A partition is compared like any table (its row level security, grants, column grants, owner,
 -- policies, indexes, rules and triggers) under a name with its month folded:
 -- data_access_events_2026_10 is listed as data_access_events_yyyy_mm, with its name folded the
--- same way wherever it appears in the names and text of its rules, indexes, triggers, rewrite rules
--- and policies, and its bound reads yyyy-mm-01 for the first of its month and yyyy-mm+1-01 for the
+-- same way wherever it appears in the names and text of its rules, indexes, triggers, rewrite rules,
+-- policies and column defaults, and of foreign keys into it, and its bound reads yyyy-mm-01 for the first of its month and yyyy-mm+1-01 for the
 -- next. The fold is reversible: text that already reads yyyy_mm (or, in a bound, yyyy-mm) is
 -- escaped first (\yyyy_mm), so a literal 'data_access_events_yyyy_mm' can't pass for a folded
 -- month, while a rule naming its own month folds alike in every month. Its copies of the parent's indexes and of its primary key, unique,
@@ -55,7 +55,9 @@
 -- It leaves out:
 -- - the rows and sequence values (data, not schema), and which months have partitions
 --   (create_data_access_partitions() keeps them a year ahead; a missing month is the partitions
---   job's concern, not the schema's);
+--   job's concern, not the schema's), or which month has which variant: the digest shows the
+--   variants a build's months have (each month's hash), not which month carries each, so an extra
+--   index on January in one build and on February in the other compares equal;
 -- - the database's own settings, owner and extensions (only plpgsql today; the migration that adds
 --   pgvector, A2, adds a line); roles and memberships, which belong to the whole server
 --   (scripts/check-migrations.sh checks them on every fresh and partial build);
@@ -64,8 +66,10 @@
 -- - Postgres's own internal triggers (foreign keys' and deferred unique rules'), which only a
 --   superuser can turn off, and hearth_owner isn't one;
 -- - comments; column order; collation versions, which follow the server's libraries; names that
---   carry a month other than through the partition's whole name (a policy named read_2026_10 makes
---   months differ, which fails the check rather than hiding anything);
+--   carry a month other than through the partition's whole name (a policy named read_2026_10, or a
+--   rule of a month's own whose name Postgres shortened past the month, makes months differ, which
+--   fails the check rather than hiding anything), and so does a partition name holding a double
+--   quote, which deparsed text writes doubled;
 -- - object kinds no migration makes yet: range types, operators, casts, operator classes and
 --   families, text search objects, conversions, publications, foreign servers and event triggers;
 --   the migration that first makes one adds a line for it; and objects outside public apart from
@@ -127,7 +131,11 @@ lines as (
                 (select string_agg(coalesce(format('%I', p.folded), i.inhparent::regclass::text), ',' order by i.inhseqno)
                  from pg_inherits i left join rel p on p.oid = i.inhparent where i.inhrelid = c.oid),
                 case when c.month is null then pg_get_expr(c.relpartbound, c.oid)
-                     else replace(replace(replace(pg_get_expr(c.relpartbound, c.oid), 'yyyy-mm', E'\\yyyy-mm'),
+                     -- Backslashes are doubled before yyyy-mm is escaped, since a folded date
+                     -- may follow a backslash in the bound's own text; an odd run of them before
+                     -- yyyy-mm then marks a literal, an even one (none included) a fold.
+                     else replace(replace(replace(replace(pg_get_expr(c.relpartbound, c.oid), E'\\', E'\\\\'),
+                                                  'yyyy-mm', E'\\yyyy-mm'),
                                           to_char(c.month, 'YYYY-MM-DD'), 'yyyy-mm-01'),
                                   to_char(c.month + interval '1 month', 'YYYY-MM-DD'), 'yyyy-mm+1-01') end,
                 pg_get_partkeydef(c.oid)), c.oid
@@ -175,7 +183,8 @@ lines as (
   union all
   select 'column', format('%I.%I', c.folded, a.attname),
          format('%s collation=%s notnull=%s default=%s identity=%s generated=%s storage=%s acl=%s',
-                format_type(a.atttypid, a.atttypmod), a.attcollation::regcollation, a.attnotnull, pg_get_expr(d.adbin, d.adrelid),
+                format_type(a.atttypid, a.atttypmod), a.attcollation::regcollation, a.attnotnull,
+                replace(replace(pg_get_expr(d.adbin, d.adrelid), 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded),
                 a.attidentity, a.attgenerated, a.attstorage, a.attacl), c.oid
   from pg_attribute a join rel c on c.oid = a.attrelid
   left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
@@ -183,11 +192,12 @@ lines as (
   union all
   -- A partition's copy of its parent's primary key, unique, exclusion or foreign key rule is listed
   -- by the parent's rule's name, so it reads alike in every month however Postgres named it, and
-  -- one left unattached reads differently. not_valid names a rule as it's listed.
-  select 'constraint', l.name,
-         replace(replace(case when l.name = any (skip.names) then regexp_replace(pg_get_constraintdef(k.oid), ' NOT VALID$', '')
-                              else pg_get_constraintdef(k.oid) end, 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded), c.oid
+  -- one left unattached reads differently. not_valid names a rule as it's listed. A foreign key
+  -- into a partitioned table gets a copy for each of its partitions, on the referencing table,
+  -- naming the partition, so a referenced month partition's name is folded too.
+  select 'constraint', l.name, case when rf.month is null then t.def else replace(t.def, rf.escaped, rf.folded) end, c.oid
   from pg_constraint k join rel c on c.oid = k.conrelid
+  left join rel rf on rf.oid = k.confrelid
   cross join lateral (
     select format('%I.%I', c.folded,
                   coalesce((select replace(replace(pk.conname, 'yyyy_mm', E'\\yyyy_mm'), pc.escaped, pc.folded)
@@ -195,6 +205,10 @@ lines as (
                            replace(replace(k.conname, 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded))) as name
   ) l
   cross join skip
+  cross join lateral (
+    select replace(replace(case when l.name = any (skip.names) then regexp_replace(pg_get_constraintdef(k.oid), ' NOT VALID$', '')
+                                else pg_get_constraintdef(k.oid) end, 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded) as def
+  ) t
   union all
   -- A partition's index attached to its parent's is listed by the parent index's name (as
   -- <partition>.<parent index>), so it reads alike in every month however Postgres named it (it
@@ -202,12 +216,11 @@ lines as (
   -- <partition>.(local): Postgres may have shortened its name past the month and numbered it to
   -- keep it unique, so its name says nothing stable; its definition and the month's hash still
   -- count it. A partitioned index is valid only once every partition's index is attached. Its
-  -- definition is folded first and its own name, folded the same way, then read as it's listed.
+  -- definition begins CREATE [UNIQUE] INDEX <its name> ON: the name there is read as it's listed,
+  -- and only the rest is folded, so text later in the definition is never taken for the name.
   select 'index', x.name,
-         format('%s valid=%s',
-                replace(replace(replace(pg_get_indexdef(i.indexrelid), 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded),
-                        'INDEX ' || replace(replace(quote_ident(x.relname), 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded) || ' ON ',
-                        'INDEX ' || x.name || ' ON '),
+         format('%sINDEX %s ON %s valid=%s', left(d.def, d.at - 1), x.name,
+                replace(replace(substr(d.def, d.at + length(d.head)), 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded),
                 i.indisvalid), c.oid
   from pg_index i join rel c on c.oid = i.indrelid
   cross join lateral (
@@ -220,6 +233,10 @@ lines as (
                     format('%I', replace(replace(ix.relname, 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded))) as name
     from pg_class ix where ix.oid = i.indexrelid
   ) x
+  cross join lateral (
+    select pg_get_indexdef(i.indexrelid) as def, 'INDEX ' || quote_ident(x.relname) || ' ON ' as head,
+           strpos(pg_get_indexdef(i.indexrelid), 'INDEX ' || quote_ident(x.relname) || ' ON ') as at
+  ) d
   union all
   select 'trigger', format('%I.%I', c.folded, replace(replace(t.tgname, 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded)),
          format('%s enabled=%s', replace(replace(pg_get_triggerdef(t.oid), 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded),
