@@ -621,11 +621,16 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       expect(reply.body).toMatchObject({ error: 'code_wrong', triesLeft: 4 })
       expect(ms).toBeGreaterThanOrEqual(2_000)
     }
-    // Tries 2 to 4, then the 5th with a cancel that takes 3 s: the reply doesn't wait for it.
+    // Tries 2 to 4, then the 5th with a cancel that takes 6 s, longer than the bound on the reply:
+    // the reply doesn't wait for it, so a roster number's dead reply costs one provider round trip
+    // (the check), never two, and lands with one off the roster's, just after the floor. A cancel
+    // run before the reply would take it past 6 s and finish before it.
     for (let tries = 2; tries <= 4; tries++) await Promise.all([verifyCode(rc, wrong), verifyCode(nc, wrong)])
     const cancel = s.sms.cancel.bind(s.sms)
+    let cancelled = false
     const slow = vi.spyOn(s.sms, 'cancel').mockImplementation(async ref => {
-      await new Promise(resolve => setTimeout(resolve, 3_000))
+      await new Promise(resolve => setTimeout(resolve, 6_000))
+      cancelled = true
       return cancel(ref)
     })
     try {
@@ -643,9 +648,11 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
         expect(reply.json()).toMatchObject({ error: 'code_dead' })
         expect(ms).toBeGreaterThanOrEqual(2_000)
         expect(ms).toBeLessThan(4_500)
+        expect(cancelled).toBe(false)
       }
       await s.settled()
       expect(slow).toHaveBeenCalledTimes(1)
+      expect(cancelled).toBe(true)
     } finally {
       slow.mockRestore()
     }
