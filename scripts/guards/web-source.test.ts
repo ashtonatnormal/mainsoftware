@@ -286,7 +286,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     expect(web.filter(path => browser.has(path) && node.has(path))).toEqual([])
   })
 
-  it("WS-10 D-02 K-08 K-61: src/main.ts's static import graph, followed through relative imports, holds only .css files and modules with no package import (import type aside), and main.ts loads ./app/boot.tsx by one dynamic import after preBoot()", () => {
+  it("WS-10 D-02 K-08 K-61: src/main.ts's static import graph, followed through relative imports, holds only .css files and modules with no package import (import type aside), nothing in it uses import.meta.glob, and main.ts loads ./app/boot.tsx by one dynamic import after preBoot()", () => {
     const graph = (planted: Record<string, string>) => entryGraph(path => planted[path])
     const entry = (before = '', after = '') =>
       `import '@fontsource-variable/figtree/index.css'\nimport './styles/app.css'\nimport { preBoot } from './boot/pre-boot.ts'\nimport { reloadForUpdate } from './session/document.ts'\n${before}preBoot(window, () => reloadForUpdate())\n${after}import('${ENTRY_APP}').then(app => app.boot())\n`
@@ -325,6 +325,23 @@ describe('T21: the web source guard (apps/web/src)', () => {
       'session/document.ts: imports the package idb',
       'router/paths.ts: loads @/app/boot.tsx dynamically; only main.ts may',
       'router/paths.ts: imports the package dayjs',
+    ])
+    // Vite's import.meta.glob, eager (static imports) or lazy (dynamic ones), anywhere in the graph:
+    // the eager form here would evaluate app/boot.tsx's graph, packages and all, before preBoot().
+    expect(loadsOf('a.ts', "const all = import.meta.glob('./*.ts')\nconst g = import.meta.glob")).toEqual([
+      { specifier: undefined, typeOnly: false, dynamic: false, glob: true },
+      { specifier: undefined, typeOnly: false, dynamic: false, glob: true },
+    ])
+    expect(
+      graph({
+        ...good,
+        'main.ts': entry("const lazy = import.meta.glob('./app/*.tsx')\n"),
+        'boot/pre-boot.ts':
+          "const app = import.meta.glob('../app/*.tsx', { eager: true })\nexport function preBoot() {}",
+      }).problems,
+    ).toEqual([
+      "main.ts: loads modules by import.meta.glob, which this guard can't follow",
+      "boot/pre-boot.ts: loads modules by import.meta.glob, which this guard can't follow",
     ])
     // A module the graph names that doesn't exist is no proof of anything.
     expect(graph({ ...good, 'boot/pre-boot.ts': "import { x } from './gone.ts'" }).problems).toEqual([

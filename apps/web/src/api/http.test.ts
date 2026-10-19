@@ -183,21 +183,30 @@ describe('T21: the api client (api/http.ts)', () => {
     expect(await refused).toMatchObject({ code: 'halted' })
   })
 
-  it('HT-04 D-01: halted while the body is still being read, the answer is dropped too', async () => {
-    let release: () => void = () => {}
-    const body = new ReadableStream<Uint8Array>({
-      start: controller => {
-        release = () => {
-          controller.enqueue(new TextEncoder().encode(JSON.stringify(PERSON)))
-          controller.close()
-        }
-      },
-    })
-    const fetch = (async () => new Response(body, { status: 200 })) as typeof globalThis.fetch
-    const pending = failureOf(http.apiGet('/api/session', SessionResponseForClient, { fetch }))
+  it('HT-04 D-01: halted while the body is still being read, the answer is dropped too, success or refusal', async () => {
+    // A response whose body arrives only when the test releases it.
+    const held = (status: number, body: unknown) => {
+      let release: () => void = () => {}
+      const stream = new ReadableStream<Uint8Array>({
+        start: controller => {
+          release = () => {
+            controller.enqueue(new TextEncoder().encode(JSON.stringify(body)))
+            controller.close()
+          }
+        },
+      })
+      return { response: new Response(stream, { status }), release: () => release() }
+    }
+    const read = held(200, PERSON)
+    const refused = held(401, { error: 'signed_out', message: "You've been signed out." })
+    const { fetch } = fakeFetch(read.response, refused.response)
+    const pendingRead = failureOf(http.apiGet('/api/session', SessionResponseForClient, { fetch }))
+    const pendingRefusal = failureOf(http.apiGet('/api/session', SessionResponseForClient, { fetch }))
     await new Promise(resolve => setTimeout(resolve, 0))
     http.haltRequests()
-    release()
-    expect(await pending).toMatchObject({ code: 'halted' })
+    read.release()
+    refused.release()
+    expect(await pendingRead).toMatchObject({ code: 'halted' })
+    expect(await pendingRefusal).toMatchObject({ status: 0, code: 'halted' })
   })
 })

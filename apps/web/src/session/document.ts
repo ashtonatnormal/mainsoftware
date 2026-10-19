@@ -19,9 +19,11 @@
 // None holds anyone's data. The person's id, name and everything the api sent stay in memory.
 //
 // The identity channel (a BroadcastChannel) tells this browser's other tabs that the person here
-// changed. Its message is { t: 'identity' } alone: no id, no data. A tab that hears it reloads
-// (signed in: its runtime ends with other_tab), and its next document shows whoever the cookie now
-// names. A document opens at most one channel object, so its own posts never come back to it.
+// changed. Its message is { t: 'identity' } alone: no id, no data. A signed-in tab that hears it
+// ends its runtime with other_tab and reloads, so its next document shows whoever the cookie now
+// names. A signed-out tab asks GET /api/session again and reloads only when it names a person
+// (app/boot.tsx), so another tab's sign-out doesn't cost a sign-in step in progress. A document
+// opens at most one channel object, so its own posts never come back to it.
 //
 // main.ts loads this file statically, before preBoot() runs, so it imports nothing but import-free
 // modules (boot/pre-boot.ts, router/paths.ts) and types (WS-10).

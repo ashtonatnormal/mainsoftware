@@ -130,9 +130,13 @@ async function request<T>(
   } catch {
     throw halted ? haltedFailure() : new ApiFailure(0, 'network', API_COPY.network)
   }
-  // An answer that lands after the halt belongs to a session that is ending: drop it.
+  // An answer that lands after the halt belongs to a session that is ending: drop it, whether the
+  // halt came before its headers or while its body was read.
   if (halted) throw haltedFailure()
-  if (!response.ok) throw await failureOf(response)
+  if (!response.ok) {
+    const failure = await failureOf(response)
+    throw halted ? haltedFailure() : failure
+  }
   if (schema === undefined) return undefined
   let json: unknown
   try {

@@ -156,15 +156,26 @@ export const specifiersOf = (path: string, source: string) =>
   moduleImports(source, path).flatMap(i => (i.specifier === undefined ? [] : [i.specifier]))
 
 // One module a file loads, read from the syntax tree: an import or re-export (static), an
-// import() call (dynamic), or a require() (static, and never right in browser code).
+// import() call (dynamic), a require() (static, and never right in browser code), or Vite's
+// import.meta.glob (glob).
 export interface WebLoad {
-  // undefined when the module is chosen at run time.
+  // undefined when the module is chosen at run time, or by a glob's patterns.
   specifier: string | undefined
   // `import type` and `export type` only. An import whose names are each marked `type`
   // (`import { type A } from 'x'`) still loads x under verbatimModuleSyntax, so it counts.
   typeOnly: boolean
   dynamic: boolean
+  // import.meta.glob, eager or not: Vite turns it into static imports ({ eager: true }) or dynamic
+  // ones, of whatever files its patterns match, so no reading of the source can follow it.
+  glob?: true
 }
+
+// `import.meta.glob`, called or not (Vite rewrites only a call, but any use of it is a load).
+const isImportMetaGlob = (node: ts.Node) =>
+  ts.isPropertyAccessExpression(node) &&
+  ts.isMetaProperty(node.expression) &&
+  node.expression.keywordToken === ts.SyntaxKind.ImportKeyword &&
+  node.name.text.startsWith('glob')
 
 const literalOf = (node: ts.Node | undefined) => (node && ts.isStringLiteralLike(node) ? node.text : undefined)
 
@@ -180,6 +191,8 @@ export function loadsOf(path: string, source: string): WebLoad[] {
       found.push({ specifier: literalOf(node.arguments[0]), typeOnly: false, dynamic: true })
     } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'require') {
       found.push({ specifier: literalOf(node.arguments[0]), typeOnly: false, dynamic: false })
+    } else if (isImportMetaGlob(node)) {
+      found.push({ specifier: undefined, typeOnly: false, dynamic: false, glob: true })
     }
     ts.forEachChild(node, visit)
   }
@@ -192,7 +205,8 @@ export function loadsOf(path: string, source: string): WebLoad[] {
 // however the bundler splits chunks, as long as main.ts's static import graph reaches no package:
 // - every module main.ts loads statically, followed through relative and `@/` imports, is a .css
 //   file (a package's stylesheet included) or a module that loads no package (`import type` aside);
-// - none of them loads anything dynamically, except main.ts itself;
+// - none of them loads anything dynamically, except main.ts itself, and none (main.ts included)
+//   uses import.meta.glob, whose eager form would put a package in the static graph unseen;
 // - main.ts makes exactly one dynamic import, of ENTRY_APP, in a top-level statement after the one
 //   that calls preBoot().
 // `read` gives a file under apps/web/src/ by its path there, or undefined when there is none.
@@ -215,6 +229,10 @@ export function entryGraph(read: (path: string) => string | undefined): { files:
     files.push(path)
     if (path.endsWith('.css')) continue
     for (const load of loadsOf(path, source)) {
+      if (load.glob) {
+        problems.push(`${path}: loads modules by import.meta.glob, which this guard can't follow`)
+        continue
+      }
       const name = load.specifier ?? '(a name chosen at run time)'
       if (load.dynamic) {
         if (path !== ENTRY) problems.push(`${path}: loads ${name} dynamically; only ${ENTRY} may`)

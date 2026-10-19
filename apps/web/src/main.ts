@@ -18,13 +18,14 @@ import { BOOT } from './strings/boot.ts'
 
 preBoot(window, () => reloadForUpdate(browserDocumentEnv()))
 
-// The app's own chunk failed to load: plain text, no React (textContent, so the CSP holds). When a
-// gone deploy's chunk made preBoot reload, Vite's preload helper resolves with nothing, and the
-// reload is already on its way.
-import('./app/boot.tsx').then(
-  app => app?.boot(),
-  () => {
+// The app's chunk, or a file it needs, failed to load. Vite's preload helper fires vite:preloadError
+// first, and preBoot() reloads at most once a minute, since a deploy that's gone needs the new
+// index.html. When it doesn't reload, the error reaches the catch, which says so in #root as plain
+// text, with no React (textContent, so the CSP holds). Vite moves the import's own .then inside its
+// helper, so the catch hangs off the outer promise, where a failure the helper throws arrives too.
+import('./app/boot.tsx')
+  .then(app => app.boot())
+  .catch(() => {
     const root = document.getElementById('root')
     if (root) root.textContent = BOOT.cantReach
-  },
-)
+  })
