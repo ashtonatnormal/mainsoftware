@@ -520,17 +520,63 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect([badPin.status, badPin.error]).toEqual([400, 'invalid_pin'])
   })
 
-  it('D46 AQ-02: each of the six Owner-only roles sets or enters a PIN after the code; a Member and a Team Admin sign in on the code alone', async () => {
+  it('D46 AQ-02 AQ-05: each of the six Owner-only roles sets or enters a PIN after the code and gets a 7-day privileged session; a Member and a Team Admin sign in on the code alone', async () => {
     // Budgets: one code request each.
+    // The session a PIN step issues: 7 days on its cookie and its row, and privileged on its
+    // signin.started event and its auth.sign_in row, with the method of that step.
+    const privilegedSession = async (
+      person: Person,
+      client: Client,
+      finished: Awaited<ReturnType<Client['post']>>,
+      method: 'sms_new_pin' | 'sms_pin',
+      role: string,
+    ) => {
+      expect(finished.status, role).toBe(200)
+      const { id: sessionId, deviceId } = await s.sessionOf(client)
+      expect(finished.body, role).toEqual({ status: 'signed_in', device: { id: deviceId, label: 'iPhone · Safari' } })
+      expect(finished.setCookies, role).toEqual([
+        `${SESSION_COOKIE}=${client.cookie(SESSION_COOKIE)}; Path=/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax`,
+        `${ATTEMPT_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`,
+      ])
+      const [term] = await s.query<{ privileged: boolean }>(
+        "select expires_at - created_at = interval '168 hours' as privileged from sessions where id = $1",
+        [sessionId],
+      )
+      expect(term?.privileged, role).toBe(true)
+      expect(
+        (await eventsOf(person)).filter(event => event.type === 'signin.started'),
+        role,
+      ).toEqual([
+        about(person, 'signin.started', person, { device: deviceId, session: sessionId, method, privileged: true }),
+      ])
+      expect(
+        (await auditOf(person)).filter(row => row.action === 'auth.sign_in'),
+        role,
+      ).toEqual([
+        expect.objectContaining({ actor_id: person.id, device_id: deviceId, details: { method, privileged: true } }),
+      ])
+    }
     for (const role of ['owner', 'admin', 'ai_admin', 'leadership', 'dpo', 'compliance_officer'] as const) {
       const first = await s.person({ roles: [role] })
-      expect((await atStepUp(first)).reply.body, role).toEqual({ status: 'code_verified', next: 'set_pin' })
+      const toSet = await atStepUp(first)
+      expect(toSet.reply.body, role).toEqual({ status: 'code_verified', next: 'set_pin' })
+      const pin = s.newPin()
+      await privilegedSession(
+        first,
+        toSet.client,
+        await toSet.client.post('/api/auth/pin/set', { pin }),
+        'sms_new_pin',
+        role,
+      )
+      first.pin = pin
       const again = await s.person({ roles: [role], pin: s.newPin() })
-      expect((await atStepUp(again)).reply.body, role).toMatchObject({
+      const toEnter = await atStepUp(again)
+      expect(toEnter.reply.body, role).toMatchObject({
         status: 'code_verified',
         next: 'step_up',
         pin: { state: 'ok' },
       })
+      await privilegedSession(again, toEnter.client, await verifyPin(toEnter.client, pinOf(again)), 'sms_pin', role)
     }
     // A Member's leftover PIN is never asked for, and a Team Admin's role is not an Owner-only one.
     for (const codeOnly of [await s.person({ pin: s.newPin() }), await s.person({ roles: ['team_admin'] })]) {
@@ -1656,7 +1702,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('ACC-03 T14: a number in two orgs, and a number removed before its code is checked, at the step-up, and before the finish', async () => {
-    // Budgets: T 1 code request (the second org's person holds the same number), Z 1, W 1, Y 1.
+    // Budgets: T 1 code request (the second org's person holds the same number), Z 1, O 1, W 1, Y 1.
     const t = await s.person({ pin: s.newPin() })
     const twin = await s.person({ org: 'second', e164: t.e164 })
     const sentBefore = s.sms.sent.length
@@ -1684,6 +1730,31 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(checked.body).toMatchObject({ error: 'code_wrong', triesLeft: 4 })
     await s.settled()
     expect((await auditOf(z)).map(row => [row.action, row.details])).toEqual([
+      ['auth.code_requested', { send: 'attempted' }],
+      ['auth.code_failed', { result: 'wrong', numberRemoved: true }],
+    ])
+
+    // The same for a privileged holder with a PIN (D46), whose finish alone reads the account: the
+    // reply shows neither their PIN's state nor whether they have a passkey, and the attempt stays
+    // at the code.
+    const o = await s.person({ roles: ['owner'], pin: s.newPin() })
+    const oc = s.client()
+    expect((await requestCode(oc, o.e164)).status).toBe(200)
+    const oCode = await s.sms.nextCode(o.e164)
+    await s.query('update phone_numbers set removed_at = now(), removed_by = $2 where id = $1', [
+      o.phoneNumberId,
+      s.org.system,
+    ])
+    const oChecked = await verifyCode(oc, oCode)
+    expect(oChecked.status).toBe(401)
+    expect(oChecked.body).toMatchObject({ error: 'code_wrong', triesLeft: 4 })
+    expect(oChecked.body).not.toHaveProperty('pin')
+    expect(oChecked.body).not.toHaveProperty('passkey')
+    const oPin = await verifyPin(oc, pinOf(o))
+    expect([oPin.status, oPin.error]).toEqual([409, 'wrong_step'])
+    expect(await s.query('select id from sessions where user_id = $1', [o.id])).toEqual([])
+    await s.settled()
+    expect((await auditOf(o)).map(row => [row.action, row.details])).toEqual([
       ['auth.code_requested', { send: 'attempted' }],
       ['auth.code_failed', { result: 'wrong', numberRemoved: true }],
     ])

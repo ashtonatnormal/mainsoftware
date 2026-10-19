@@ -321,16 +321,20 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
     expect(audit?.values).toContainEqual({ result: 'wrong', left: true })
   })
 
-  it('ACC-03 T14: answers the right code sent to a number removed or moved since as a wrong one, shows nothing of the account, and audits it', async () => {
+  it('ACC-03 T14 D46: answers the right code sent to a privileged holder at a number removed or moved since as a wrong one, shows nothing of the account, and audits it', async () => {
     const pin = `$argon2id$v=19$m=19456,t=2,p=1$${'A'.repeat(22)}$${'B'.repeat(43)}`
-    const pool = orgPool({ numberRemoved: true, pinHash: pin, passkeys: 1 })
+    // A privileged holder with a PIN and a passkey: the one finish that reads the account and would
+    // answer with its PIN state and passkey.
+    const pool = orgPool({ numberRemoved: true, pinHash: pin, passkeys: 1, roles: ['admin'] })
     const stale = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1])
     const removed = context(stale.valkey, pool)
     expect(await refusal(verifyCode(removed.api, code, ATTEMPT_ID, removed.info))).toMatchObject({
       code: 'code_wrong',
       extra: { triesLeft: 4 },
     })
-    // The attempt stays where it was, and neither the PIN nor the passkeys were read.
+    // The roles were read, so this took the privileged branch; the attempt stays where it was, and
+    // neither the PIN nor the passkeys were read.
+    expect(pool.texts().some(text => text.startsWith('select person_id, role'))).toBe(true)
     expect(JSON.parse(stale.store.get(names.attempt(keyName(ATTEMPT_ID))) ?? '{}')).toMatchObject({ step: 'code_sent' })
     expect(pool.texts().filter(text => text.includes('pin_hash') || text.includes('from passkeys'))).toEqual([])
     const number = pool.statements.find(s => s.text.startsWith('select 1 from phone_numbers'))
@@ -340,6 +344,27 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
     await removed.tasks[0]?.()
     const audit = pool.statements.find(s => s.text.startsWith('insert into "audit_events"'))
     expect(audit?.values).toContain('auth.code_failed')
+    expect(audit?.values).toContainEqual({ result: 'wrong', numberRemoved: true })
+  })
+
+  it('ACC-03 T14 D46: answers the right code sent to someone code-only at a number removed or moved since as a wrong one, issuing nothing, and audits it', async () => {
+    const pool = orgPool({ numberRemoved: true, roles: [] })
+    const stale = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1])
+    const removed = context(stale.valkey, pool)
+    expect(await refusal(verifyCode(removed.api, code, ATTEMPT_ID, removed.info))).toMatchObject({
+      code: 'code_wrong',
+      extra: { triesLeft: 4 },
+    })
+    // issueSession found the number gone FOR SHARE before making anything: the transaction rolled
+    // back, so the account row it made first is gone with it, and the attempt is back at the code.
+    const texts = pool.texts()
+    expect(texts.some(text => /^select 1 from phone_numbers .* for share$/s.test(text))).toBe(true)
+    expect(texts.filter(text => /^insert into "?(devices|sessions)/.test(text))).toEqual([])
+    expect(texts).toContain('rollback')
+    expect(JSON.parse(stale.store.get(names.attempt(keyName(ATTEMPT_ID))) ?? '{}')).toMatchObject({ step: 'code_sent' })
+    expect(removed.tasks).toHaveLength(1)
+    await removed.tasks[0]?.()
+    const audit = pool.statements.find(s => s.text.startsWith('insert into "audit_events"'))
     expect(audit?.values).toContainEqual({ result: 'wrong', numberRemoved: true })
   })
 
@@ -398,6 +423,40 @@ describe('D46 T20 the code-only finish, the verified step, the floor and the bre
     expect(work.some(t => t.includes('pin_hash'))).toBe(false)
     const session = pool.statements.find(st => st.text.startsWith('insert into sessions'))
     expect(session?.values.at(-1)).toBe('2160 hours')
+  })
+
+  it("D46 AQ-05: the step-up reads the roles, then issues a privileged holder's session for 168 hours marked privileged; one whose role went since gets the normal term", async () => {
+    const keys = deriveKeys('unit-test-unit-test-unit-test-unit-test')
+    const stored = await hashPin('381904', keys)
+    for (const [roles, lifetime, maxAge, privileged] of [
+      [['owner'], '168 hours', 604_800, true],
+      [[], '2160 hours', 7_776_000, false],
+    ] as const) {
+      const held = valkeyWith({ v: 1, numberTag: 't', step: 'step_up', ...named })
+      const rows = orgAnswer({ roles: [...roles] })
+      const pool = scriptedPool(statement => {
+        if (statement.text.startsWith('select pin_hash, pin_key_id')) {
+          return [
+            { pin_hash: stored, pin_key_id: keys.pinKeyId, pin_failures: 0, pin_last_failed_at: null, now: new Date() },
+          ]
+        }
+        return rows(statement)
+      })
+      const c = context(held.valkey, pool)
+      const answer = await verifyPinStep(c.api, { pin: '381904' }, ATTEMPT_ID, c.info)
+      expect(answer.body, roles.join()).toMatchObject({ status: 'signed_in' })
+      expect(answer.cookies?.[0], roles.join()).toMatch(new RegExp(`^__Host-hearth_session=.*; Max-Age=${maxAge};`))
+      expect(held.store.has(attemptKey)).toBe(false)
+      const texts = pool.texts()
+      const rolesRead = texts.findIndex(text => text.startsWith('select person_id, role'))
+      expect(rolesRead, roles.join()).toBeGreaterThan(-1)
+      expect(texts.findIndex(text => text.startsWith('insert into sessions'))).toBeGreaterThan(rolesRead)
+      const session = pool.statements.find(st => st.text.startsWith('insert into sessions'))
+      expect(session?.values.at(-1), roles.join()).toBe(lifetime)
+      const audit = pool.statements.find(st => st.text.startsWith('insert into "audit_events"'))
+      expect(audit?.values).toContain('auth.sign_in')
+      expect(audit?.values, roles.join()).toContainEqual({ method: 'sms_pin', privileged })
+    }
   })
 
   it('T20 R1: a finish that fails before the consume leaves the attempt verified, and a retry with any 6 digits finishes it with no second check', async () => {
