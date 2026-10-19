@@ -14,7 +14,8 @@ export function valkeyPrefix(deployEnv: string): string {
 
 export function valkeyKeys(prefix: string) {
   return {
-    // A sign-in code's challenge for one number (a hash: the attempt, the code's MAC, the tries).
+    // A code challenge for one number (codes.ts: a hash of the owner, the provider's reference, the
+    // tries and when it was asked for; never a code or a number).
     otp: (numberTag: string) => `${prefix}otp:{${numberTag}}`,
     // A sign-in attempt, by the hash of its id (a JSON string; attempts.ts).
     attempt: (attemptKey: string) => `${prefix}att:${attemptKey}`,

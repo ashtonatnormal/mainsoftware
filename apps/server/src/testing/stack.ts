@@ -46,6 +46,7 @@ import { WebSocket } from 'ws'
 import { buildApp } from '#src/app.ts'
 import { type AuthKeys, deriveKeys, hashPin, newSecret, sha256 } from '#src/auth/crypto.ts'
 import { SOCKET_RECHECK_MS } from '#src/auth/policy.ts'
+import { FakeVerify } from '#src/auth/sms/fake.ts'
 import { type ValkeyKeys, valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { createDatabase, type Database } from '#src/db/database.ts'
 import { migrate } from '#src/db/migrations.ts'
@@ -63,7 +64,6 @@ import { type Gateway, registerRealtime } from '#src/realtime/index.ts'
 import { GATEWAY_POLICY, type GatewayPolicy } from '#src/realtime/policy.ts'
 import { TestClient } from '#src/testing/gateway.ts'
 import { startProxy, type TcpProxy } from '#src/testing/proxy.ts'
-import { MemorySms } from '#src/testing/sms.ts'
 import { installWriteTracking } from '#src/testing/writes.ts'
 import { closeValkey, createBlockingReader, createSubscriber, createValkey, valkeyCheck } from '#src/valkey.ts'
 import { CONTROL_POOL_SIZE, productionRegistries, startWorker, type Worker, workPoolSize } from '#src/worker/index.ts'
@@ -348,7 +348,7 @@ export interface Stack {
   prefix: string
   names: ValkeyKeys
   keys: AuthKeys
-  sms: MemorySms
+  sms: FakeVerify
   org: { id: string; system: string }
   logs: Record<string, unknown>[]
   warnings: Error[]
@@ -616,7 +616,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     }
     const names = valkeyKeys(prefix)
     const keys = deriveKeys(newSecret())
-    const sms = new MemorySms()
+    const sms = new FakeVerify()
 
     // Each api app's after-response queue, so a client can wait for its work.
     const queues = new Map<FastifyInstance, AfterResponse>()

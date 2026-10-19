@@ -360,9 +360,15 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(requested.setCookies).toEqual([
       `${ATTEMPT_COOKIE}=${attemptId}; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Strict`,
     ])
-    const otpTtl = await s.valkey.pttl(s.names.otp(tag(s.keys, p.e164)))
-    expect(otpTtl).toBeGreaterThan(295_000)
-    expect(otpTtl).toBeLessThanOrEqual(300_000)
+    // T20: the challenge record is kept 10 minutes (checks are refused after 5, from its born time),
+    // and holds the owner, the provider's reference, the tries and born: never a code or number.
+    const otpKey = s.names.otp(tag(s.keys, p.e164))
+    const otpTtl = await s.valkey.pttl(otpKey)
+    expect(otpTtl).toBeGreaterThan(595_000)
+    expect(otpTtl).toBeLessThanOrEqual(600_000)
+    const record = await s.valkey.hgetall(otpKey)
+    expect(Object.keys(record).sort()).toEqual(['born', 'owner', 'ref', 'tries'])
+    expect(record).toMatchObject({ owner: keyName(attemptId), ref: s.sms.sent.at(-1)?.ref, tries: '0' })
     const attemptTtl = await s.valkey.pttl(s.names.attempt(keyName(attemptId)))
     expect(attemptTtl).toBeGreaterThan(0)
     expect(attemptTtl).toBeLessThanOrEqual(600_000)
@@ -612,10 +618,19 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     await s.sms.nextCode(d.e164)
     expect((await requestCode(newer, d.e164)).status).toBe(200)
     const newest = await s.sms.nextCode(d.e164)
+    // T20: the newer request cancelled the older code first, so the provider made a new one.
+    const [olderText, newerText] = s.sms.sent.filter(sent => sent.to === d.e164).slice(-2)
+    expect(newerText?.ref).not.toBe(olderText?.ref)
+    expect(s.sms.cancels.map(c => c.ref)).toContain(olderText?.ref)
+    const checksBefore = s.sms.checks.length
     for (let tries = 1; tries <= 5; tries++) {
       const reply = await verifyCode(older, tries < 5 ? another(newest) : newest)
       expect([reply.status, reply.error]).toEqual([401, 'code_expired'])
     }
+    await s.settled()
+    // The stale attempt asked the provider nothing and cancelled nothing of the newest code.
+    expect(s.sms.checks.length).toBe(checksBefore)
+    expect(s.sms.cancels.map(c => c.ref)).not.toContain(newerText?.ref)
     expect((await verifyCode(newer, newest)).status).toBe(200)
 
     // A code past its 5 minutes (its record gone from Valkey, as expiry leaves it).

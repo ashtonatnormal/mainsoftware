@@ -32,17 +32,16 @@ import type { z } from 'zod'
 import type { Api } from '#src/api.ts'
 import {
   type Attempt,
-  checkOtp,
   consumeAttempt,
   createAttempt,
   dropAttempt,
   readAttempt,
-  storeOtp,
   updateAttempt,
 } from '#src/auth/attempts.ts'
 import { writeAudit } from '#src/auth/audit.ts'
+import { attachCode, codeOwner, openCode, reserveCode, settleCode } from '#src/auth/codes.ts'
 import { attemptCookie, clearedCookie, sessionCookie } from '#src/auth/cookies.ts'
-import { hashPin, keyName, newOtp, otpMac, tag, withPinSlot } from '#src/auth/crypto.ts'
+import { hashPin, keyName, tag, withPinSlot } from '#src/auth/crypto.ts'
 import { deviceLabel } from '#src/auth/device-label.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { hit, limitSubject, type Window } from '#src/auth/limiter.ts'
@@ -56,6 +55,7 @@ import { checkPin, type PinCheck, pinStateJSON } from '#src/auth/pin.ts'
 import { pinState } from '#src/auth/pin-lock.ts'
 import { LIMITS, OTP, PASSKEY_CHALLENGE_TTL_MS } from '#src/auth/policy.ts'
 import { AttemptStale, type IssuedSession, issueSession, numberStillTheirs } from '#src/auth/sessions.ts'
+import { type SmsProvider, SmsProviderError, type Verdict } from '#src/auth/sms/provider.ts'
 import { type InOrg, withOrg } from '#src/db/database.ts'
 import { personByPhone } from '#src/db/pre-org.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
@@ -285,16 +285,14 @@ export async function requestCode(
     windowOf(api, LIMITS.otpPerIp, ip),
     windowOf(api, LIMITS.authPerIp, ip),
   ])
-  const code = newOtp()
   const attempt: Attempt = { v: 1, numberTag, step: 'code_sent' }
   const created = await fromValkey(info, createAttempt(api.valkey, api.names, attempt))
-  await fromValkey(
-    info,
-    storeOtp(api.valkey, api.names, numberTag, created.key, otpMac(api.keys, created.key, numberTag, code)),
-  )
+  // The new attempt owns the number's challenge from here: a newer request replaces any earlier
+  // code (T14 item 4), whose provider reference is cancelled after the reply.
+  const replacedRef = await fromValkey(info, openCode(api.valkey, api.names, numberTag, created.key))
   // A new request starts a new attempt; the browser's old one goes.
   if (attemptId !== undefined) await dropQuietly(api, info, keyName(attemptId))
-  info.after(() => deliverCode(api, info, { e164, code, attemptKey: created.key, attempt }))
+  info.after(() => deliverCode(api, info, { e164, attemptKey: created.key, attempt, replacedRef }))
   return {
     body: { status: 'code_sent', expiresInSeconds: OTP.ttlMs / 1000, codeLength: OTP.length } satisfies z.input<
       typeof CodeSentSchema
@@ -303,17 +301,19 @@ export async function requestCode(
   }
 }
 
-// After the reply: find the number on the roster, and send the code only to a current number of
+// After the reply: find the number on the roster, and send a code only to a current number of
 // someone still at the org, within the global SMS cap. The attempt names them just before the audit
-// row is written and the code is handed to the provider. Its errors are logged with at most a
-// person id, never the number.
+// row is written and the provider is asked to send. The replaced record's code, if any, is cancelled
+// first, so the provider makes a new one. Its errors are logged with at most a person id, never the
+// number.
 async function deliverCode(
   api: Api,
   info: ReqInfo,
-  sending: { e164: string; code: string; attemptKey: string; attempt: Attempt },
+  sending: { e164: string; attemptKey: string; attempt: Attempt; replacedRef: string | undefined },
 ): Promise<void> {
   const sms = api.sms
   if (sms === undefined) return
+  if (sending.replacedRef !== undefined) await cancelQuietly(sms, info, sending.replacedRef)
   const matches = await personByPhone(api.db, sending.e164)
   if (matches.length === 0) {
     info.log.info({ event: 'otp_non_roster' }, 'a code was asked for a number not on the roster')
@@ -368,17 +368,69 @@ async function deliverCode(
   })
   if (!send) return
   try {
-    await sms.sendCode(sending.e164, sending.code)
+    await startCode(api, info, sms, {
+      e164: sending.e164,
+      numberTag: sending.attempt.numberTag,
+      owner: sending.attemptKey,
+      personId,
+    })
   } catch (error) {
     info.log.error(
       {
         event: 'sms_send_failed',
         provider: sms.name,
         error: error instanceof Error ? error.name : 'unknown',
+        kind: error instanceof SmsProviderError ? error.kind : undefined,
         personId,
       },
-      'a sign-in code could not be sent',
+      'a code could not be sent',
     )
+  }
+}
+
+// Asks the provider for a code and attaches its reference to the owner's record. Only while the
+// owner still holds the record does it act on a verification the provider handed back from someone
+// else (foreign): it cancels it and starts once more, and a second foreign reply is cancelled too
+// and nothing is attached, so the attempt answers as after a lost text. A request that lost the
+// race to a newer one leaves the verification alone, so it can never cancel the newer owner's.
+async function startCode(
+  api: Api,
+  info: ReqInfo,
+  sms: SmsProvider,
+  sending: { e164: string; numberTag: string; owner: string; personId: string },
+): Promise<void> {
+  const { numberTag, owner } = sending
+  const stillOwner = async () => (await codeOwner(api.valkey, api.names, numberTag)) === owner
+  let started = await sms.start(sending.e164)
+  if (!(await stillOwner())) return
+  if (started.foreign) {
+    await sms.cancel(started.ref)
+    started = await sms.start(sending.e164)
+    if (started.foreign) {
+      await cancelQuietly(sms, info, started.ref)
+      info.log.warn(
+        { event: 'provider_foreign_verification', provider: sms.name, personId: sending.personId },
+        'the provider handed back a verification Hearth did not start, twice; nothing was attached',
+      )
+      return
+    }
+    if (!(await stillOwner())) return
+  }
+  await attachCode(api.valkey, api.names, numberTag, owner, started.ref)
+}
+
+// Cancels a provider reference, best effort: a failure is logged (without the reference) and
+// otherwise ignored, since the record no longer accepts that code anyway.
+async function cancelQuietly(sms: SmsProvider, info: ReqInfo, ref: string): Promise<void> {
+  try {
+    await sms.cancel(ref)
+  } catch (error) {
+    info.log.warn({
+      event: 'sms_cancel_failed',
+      provider: sms.name,
+      error: error instanceof Error ? error.name : 'unknown',
+      kind: error instanceof SmsProviderError ? error.kind : undefined,
+    })
   }
 }
 
@@ -399,13 +451,49 @@ export async function verifyCode(
     windowOf(api, LIMITS.authPerIp, ipTag(api, info)),
     windowOf(api, LIMITS.verifyPerNumber, attempt.numberTag),
   ])
-  const check = await fromValkey(
-    info,
-    checkOtp(api.valkey, api.names, attempt.numberTag, key, otpMac(api.keys, key, attempt.numberTag, body.code)),
-  )
+  const reserved = await fromValkey(info, reserveCode(api.valkey, api.names, attempt.numberTag, key))
+  // The outcome: approved, or a refusal with the tries counted so far.
+  let check: { result: 'approved' | 'wrong' | 'dead' | 'expired'; tries: number }
+  if (reserved.result === 'check') {
+    const sms = api.sms
+    let verdict: Verdict | 'failed' = 'failed'
+    if (sms !== undefined) {
+      try {
+        verdict = await sms.check(reserved.ref, body.code)
+      } catch (error) {
+        info.log.error({
+          event: 'sms_check_failed',
+          provider: sms.name,
+          error: error instanceof Error ? error.name : 'unknown',
+          kind: error instanceof SmsProviderError ? error.kind : undefined,
+        })
+      }
+    }
+    const settled = await fromValkey(info, settleCode(api.valkey, api.names, attempt.numberTag, key, reserved, verdict))
+    // The provider couldn't answer: the try was given back, and the attempt stays at the code.
+    if (settled.result === 'failed') throw new ApiError(503, 'unavailable')
+    // displaced: a newer request replaced the record during the check. The newest request wins, so
+    // this code has expired whatever the provider said, and nothing of the newer record was
+    // touched. expired: the provider no longer holds the code.
+    check = 'tries' in settled ? settled : { result: 'expired', tries: 0 }
+    // The 5th wrong try killed the record: its code is cancelled after the reply.
+    if (settled.result === 'dead' && sms !== undefined) {
+      const ref = reserved.ref
+      info.after(() => cancelQuietly(sms, info, ref))
+    }
+  } else if (reserved.result === 'expired') {
+    // Only the caller's own record, past its 5 minutes, answers a ref: cancel it after the reply.
+    const { ref } = reserved
+    const sms = api.sms
+    if (ref !== undefined && sms !== undefined) info.after(() => cancelQuietly(sms, info, ref))
+    check = { result: 'expired', tries: 0 }
+  } else {
+    // No code was sent for this attempt (it names nobody, or the text failed): every guess is wrong.
+    check = reserved
+  }
   const person = named(attempt)
   let stale: 'left' | 'number_removed' | undefined
-  if (check.result === 'ok' && person !== undefined) {
+  if (check.result === 'approved' && person !== undefined) {
     const { orgId, personId, phoneNumberId } = person
     const account = await withOrg(api.db, { orgId, system: true }, async trx => {
       if (!(await stillHere(trx, orgId, personId))) return 'left' as const
@@ -445,11 +533,11 @@ export async function verifyCode(
     }
     stale = account
   }
-  // Every failure is answered as a wrong guess at that count would be: a right code on an attempt
-  // that names nobody (a one-in-a-million guess), a leaver, or a number no longer theirs too, so
-  // nothing tells them apart.
-  const tries = check.result === 'ok' ? check.tries + 1 : check.tries
-  const result = check.result === 'ok' ? (tries >= OTP.maxTries ? 'dead' : 'wrong') : check.result
+  // Every failure is answered as a wrong guess at that count would be: an approved code on an attempt
+  // that names nobody, a leaver, or a number no longer theirs too, so nothing tells them apart. The
+  // record is gone (SETTLE deleted it), so the attempt's next check answers code_expired.
+  const { tries } = check
+  const result = check.result === 'approved' ? (tries >= OTP.maxTries ? 'dead' : 'wrong') : check.result
   if (person !== undefined) {
     info.after(() =>
       withOrg(api.db, { orgId: person.orgId, system: true }, trx =>

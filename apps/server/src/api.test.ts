@@ -4,16 +4,17 @@ import type { Pool } from 'pg'
 import { describe, expect, it } from 'vitest'
 import { type ApiDeps, registerApi } from '#src/api.ts'
 import { buildApp } from '#src/app.ts'
+import { ATTACH, OPEN } from '#src/auth/codes.ts'
 import { ATTEMPT_COOKIE } from '#src/auth/cookies.ts'
-import { deriveKeys, keyName, otpMac, tag } from '#src/auth/crypto.ts'
+import { deriveKeys, keyName, tag } from '#src/auth/crypto.ts'
 import { SLIDING_WINDOW } from '#src/auth/limiter.ts'
+import { FakeVerify } from '#src/auth/sms/fake.ts'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { createDatabase, type Database } from '#src/db/database.ts'
 import { AfterResponse } from '#src/http.ts'
 import { createLogger } from '#src/logger.ts'
 import { staticFlags } from '#src/testing/flags.ts'
 import { pgError, type Statement, scriptedPool } from '#src/testing/pool.ts'
-import { MemorySms } from '#src/testing/sms.ts'
 
 const APP_ORIGIN = 'https://hearth.example.com'
 const ORG = 'a0000000-0000-4000-8000-000000000001'
@@ -42,10 +43,11 @@ function unreachableDb(): { db: Database; touched: () => number } {
   return { db: createDatabase(pool), touched: () => touched }
 }
 
-// The few Valkey commands sign-in uses. The sliding-window script answers `limit` ([1, 0] allows),
-// every other script 1; down makes every command fail as a closed connection does. `store`, if
-// given, holds the keys, and `scripts` gets each script's keys and arguments, so a test can read
-// what was written.
+// The few Valkey commands sign-in uses. The sliding-window script answers `limit` ([1, 0] allows);
+// the code challenge's OPEN and ATTACH keep the number's record (owner and ref) in `records`, as
+// codes.ts's Lua does on Valkey; every other script answers 1. down makes every command fail as a
+// closed connection does. `store`, if given, holds the keys, and `scripts` gets each script's keys
+// and arguments, so a test can read what was written.
 function fakeValkey(
   options: {
     limit?: [number, number]
@@ -55,6 +57,7 @@ function fakeValkey(
   } = {},
 ) {
   const store = options.store ?? new Map<string, string>()
+  const records = new Map<string, { owner: string; ref?: string }>()
   const fail = () => {
     if (options.down) throw new Error('Connection is closed.')
   }
@@ -62,7 +65,24 @@ function fakeValkey(
     evalsha: async (sha: string, _count: number, ...keysAndArgs: (string | number)[]) => {
       fail()
       options.scripts?.push(keysAndArgs)
+      const [key, owner, ref] = keysAndArgs.map(String)
+      if (sha === OPEN.sha && key !== undefined && owner !== undefined) {
+        const replaced = records.get(key)?.ref ?? ''
+        records.set(key, { owner })
+        return replaced
+      }
+      if (sha === ATTACH.sha && key !== undefined) {
+        const record = records.get(key)
+        if (record === undefined || record.owner !== owner || record.ref !== undefined) return 'lost'
+        record.ref = ref
+        return 'attached'
+      }
       return sha === SLIDING_WINDOW.sha ? (options.limit ?? [1, 0]) : 1
+    },
+    hget: async (key: string, field: string) => {
+      fail()
+      const record = records.get(key)
+      return field === 'owner' || field === 'ref' ? (record?.[field] ?? null) : null
     },
     eval: async () => {
       fail()
@@ -113,7 +133,7 @@ function setup(deps: Partial<ApiDeps> = {}) {
     db: unreachableDb().db,
     valkey: fakeValkey(),
     keys: KEYS,
-    sms: new MemorySms(),
+    sms: new FakeVerify(),
     keyPrefix: 'it:unit:',
     flags: staticFlags(),
     afterResponse,
@@ -249,7 +269,7 @@ describe('C0.5 ACC-03 PRD-53 a code request answers before anything touches Post
         if (statement.text.includes('public.person_by_phone')) await held
       },
     )
-    const sms = new MemorySms()
+    const sms = new FakeVerify()
     const { post, logs, afterResponse } = setup({ db: pool.db, sms })
     const first = await post('/api/auth/otp/request', { phone: '+65 8123 4567' })
     const second = await post('/api/auth/otp/request', { phone: '+44 7700 900123' })
@@ -297,7 +317,7 @@ describe('C0.5 ACC-03 PRD-53 a code request answers before anything touches Post
         if (statement.text.includes('public.person_by_phone')) await held
       },
     )
-    const sms = new MemorySms()
+    const sms = new FakeVerify()
     const store = new Map<string, string>()
     const scripts: (string | number)[][] = []
     const { post, afterResponse } = setup({ db: pool.db, sms, valkey: fakeValkey({ store, scripts }) })
@@ -317,15 +337,12 @@ describe('C0.5 ACC-03 PRD-53 a code request answers before anything touches Post
     release()
     await afterResponse.idle()
     expect(sms.sent.map(sent => sent.to)).toEqual(['+6581234567'])
-    // The code texted is the newer attempt's: its MAC is the one stored for that attempt (storeOtp:
-    // the number's otp key, then the attempt key and the MAC). The newer attempt names the person,
-    // and the replaced one is gone.
+    // The code texted is the newer attempt's: the newer attempt owns the number's record (OPEN, then
+    // ATTACH: the number's otp key, the attempt key and the provider's reference), and its record
+    // holds the one reference sent. The newer attempt names the person, and the replaced one is gone.
     const numberTag = tag(KEYS, '+6581234567')
-    const storedMac = scripts.find(
-      ([key, attemptKey]) => key === NAMES.otp(numberTag) && attemptKey === secondAttempt.attemptKey,
-    )?.[2]
-    expect(storedMac).toBeDefined()
-    expect(otpMac(KEYS, secondAttempt.attemptKey, numberTag, sms.sent[0]?.code ?? '')).toBe(storedMac)
+    const attached = scripts.filter(([key, , ref]) => key === NAMES.otp(numberTag) && typeof ref === 'string')
+    expect(attached).toEqual([[NAMES.otp(numberTag), secondAttempt.attemptKey, sms.sent[0]?.ref]])
     expect(store.has(firstAttempt.stored)).toBe(false)
     expect(JSON.parse(store.get(secondAttempt.stored) ?? 'null')).toMatchObject({
       step: 'code_sent',

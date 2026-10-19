@@ -14,7 +14,7 @@ import type { Pool } from 'pg'
 import type { ApiDeps } from '#src/api.ts'
 import { buildApp } from '#src/app.ts'
 import { deriveKeys } from '#src/auth/crypto.ts'
-import { createLogSmsProvider } from '#src/auth/sms/log.ts'
+import { createFakeVerify } from '#src/auth/sms/fake.ts'
 import { valkeyKeys, valkeyPrefix } from '#src/auth/valkey-keys.ts'
 import { ConfigError, loadConfig } from '#src/config.ts'
 import { createDatabase } from '#src/db/database.ts'
@@ -100,8 +100,8 @@ if (config.role === 'api' && flags !== undefined) {
     keys: deriveKeys(config.auth.secret),
     // Unset: no code can be sent, so code requests answer 503 unavailable.
     sms:
-      config.auth.smsProvider === 'log'
-        ? createLogSmsProvider({ deployEnv: config.deployEnv, appOrigin: config.appOrigin })
+      config.auth.smsProvider === 'fake'
+        ? createFakeVerify({ deployEnv: config.deployEnv, appOrigin: config.appOrigin })
         : undefined,
     keyPrefix,
     flags,

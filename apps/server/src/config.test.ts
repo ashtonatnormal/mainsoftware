@@ -175,17 +175,25 @@ describe('C0.5 T14 sign-in settings', () => {
     expect(problems(() => loadConfig({ ...local, ROLE: 'realtime', DEPLOY_ENV: 'prod' }))).toMatch(/AUTH_SECRET:/)
   })
 
-  it('runs the log SMS provider only with DEPLOY_ENV local and a localhost origin', () => {
-    expect(loadConfig({ ...env, SMS_PROVIDER: 'log' }).auth).toEqual({ secret: SECRET, smsProvider: 'log' })
-    for (const deployEnv of ['test', 'nonprod', 'prod']) {
-      expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'log', DEPLOY_ENV: deployEnv }))).toMatch(
-        /SMS_PROVIDER: log prints sign-in codes/,
+  it('T20: runs the fake SMS provider only with DEPLOY_ENV local or test and a localhost origin', () => {
+    for (const deployEnv of ['local', 'test']) {
+      expect(loadConfig({ ...env, SMS_PROVIDER: 'fake', DEPLOY_ENV: deployEnv }).auth).toEqual({
+        secret: SECRET,
+        smsProvider: 'fake',
+      })
+    }
+    for (const deployEnv of ['nonprod', 'prod']) {
+      expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'fake', DEPLOY_ENV: deployEnv }))).toMatch(
+        /SMS_PROVIDER: fake prints codes/,
       )
     }
-    expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'log', APP_ORIGIN: 'https://hearth.example' }))).toMatch(
+    expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'fake', APP_ORIGIN: 'https://hearth.example' }))).toMatch(
       /SMS_PROVIDER:/,
     )
-    expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'aws' }))).toMatch(/SMS_PROVIDER:/)
+    // The C0.5 log provider is gone.
+    for (const provider of ['log', 'aws']) {
+      expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: provider }))).toMatch(/SMS_PROVIDER:/)
+    }
   })
 
   it('reads TRUST_PROXY as a list of addresses and CIDR ranges, never a hop count', () => {
@@ -226,7 +234,7 @@ describe('C0.5 T14 sign-in settings', () => {
   it('loads .env.example for every role, and only the api role reads its secret (T14)', () => {
     const example = parseEnv(readFileSync(new URL('../../../.env.example', import.meta.url), 'utf8'))
     expect(example.AUTH_SECRET).toBe(LOCAL_AUTH_SECRET)
-    expect(loadConfig({ ...example, ROLE: 'api' }).auth).toEqual({ secret: LOCAL_AUTH_SECRET, smsProvider: 'log' })
+    expect(loadConfig({ ...example, ROLE: 'api' }).auth).toEqual({ secret: LOCAL_AUTH_SECRET, smsProvider: 'fake' })
     for (const role of ['realtime', 'worker']) {
       const config = loadConfig({ ...example, ROLE: role })
       expect(config.auth).toBeUndefined()

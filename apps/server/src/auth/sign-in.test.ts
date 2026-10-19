@@ -2,6 +2,7 @@ import type { Redis } from 'ioredis'
 import { describe, expect, it, vi } from 'vitest'
 import type { Api } from '#src/api.ts'
 import type { Attempt } from '#src/auth/attempts.ts'
+import { ATTACH, OPEN, RESERVE, SETTLE } from '#src/auth/codes.ts'
 import { deriveKeys, hashPin, keyName } from '#src/auth/crypto.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { SLIDING_WINDOW } from '#src/auth/limiter.ts'
@@ -15,12 +16,12 @@ import {
   verifyCode,
   verifyPinStep,
 } from '#src/auth/sign-in.ts'
-import type { SmsProvider } from '#src/auth/sms/provider.ts'
+import { FakeVerify } from '#src/auth/sms/fake.ts'
+import type { SmsProvider, Verdict } from '#src/auth/sms/provider.ts'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { AfterResponse, type ReqInfo } from '#src/http.ts'
 import { staticFlags } from '#src/testing/flags.ts'
 import { type Statement, scriptedPool, systemPrincipal } from '#src/testing/pool.ts'
-import { MemorySms } from '#src/testing/sms.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const PERSON = 'b0000000-0000-4000-8000-000000000001'
@@ -31,10 +32,19 @@ const ATTEMPT_ID = 'i'.repeat(43)
 const names = valkeyKeys(PREFIX)
 const named = { orgId: ORG, personId: PERSON, phoneNumberId: NUMBER }
 
-// Valkey holding one attempt; the code check script answers `check`, the limiter allows.
-function valkeyWith(attempt: Attempt | undefined, check: [string, number] = ['wrong', 1]) {
+// Valkey holding one attempt; the challenge's RESERVE answers `reserve` and SETTLE `settle` (both
+// run against Valkey in codes.integration.test.ts), OPEN records its owner for the deliverer's
+// owner check, any other script answers 'attached', and the limiter allows.
+function valkeyWith(
+  attempt: Attempt | undefined,
+  reserve: unknown[] = ['wrong', 1],
+  settle: unknown[] = ['approved', 1],
+  replaced?: string,
+) {
   const store = new Map<string, string>()
   if (attempt) store.set(names.attempt(keyName(ATTEMPT_ID)), JSON.stringify(attempt))
+  let owner: string | null = null
+  const calls: { sha: string; args: (string | number)[] }[] = []
   const valkey = {
     get: async (key: string) => store.get(key) ?? null,
     set: async (key: string, value: string, ...options: string[]) => {
@@ -43,9 +53,46 @@ function valkeyWith(attempt: Attempt | undefined, check: [string, number] = ['wr
       return 'OK'
     },
     del: async (key: string) => (store.delete(key) ? 1 : 0),
-    evalsha: async (sha: string) => (sha === SLIDING_WINDOW.sha ? [1, 0] : check),
+    hget: async () => owner,
+    evalsha: async (sha: string, _n: number, ..._args: (string | number)[]) => {
+      calls.push({ sha, args: _args })
+      if (sha === SLIDING_WINDOW.sha) return [1, 0]
+      if (sha === RESERVE.sha) return reserve
+      if (sha === SETTLE.sha) return settle
+      if (sha === OPEN.sha) {
+        owner = String(_args[1])
+        return replaced ?? ''
+      }
+      return 'attached'
+    },
   }
-  return { valkey: valkey as unknown as Redis, store }
+  return {
+    valkey: valkey as unknown as Redis,
+    store,
+    calls,
+    // Another request takes the record (as OPEN would for a newer attempt).
+    displace: () => {
+      owner = 'someone-else'
+    },
+  }
+}
+
+// A provider whose check answers `verdict` (or throws), recording cancels.
+function checking(verdict: Verdict | Error) {
+  const cancels: string[] = []
+  const sms: SmsProvider = {
+    name: 'fake',
+    transfer: null,
+    start: async () => ({ ref: 'VE1', foreign: false }),
+    check: async () => {
+      if (verdict instanceof Error) throw verdict
+      return verdict
+    },
+    cancel: async ref => {
+      cancels.push(ref)
+    },
+  }
+  return { sms, cancels }
 }
 
 // The org's rows a code check reads: the person (left or not), the number the code went to (still
@@ -77,7 +124,8 @@ function orgPool(
   })
 }
 
-function context(valkey: Redis, pool = scriptedPool(), sms?: SmsProvider) {
+// The provider approves every code unless a test gives another.
+function context(valkey: Redis, pool = scriptedPool(), sms: SmsProvider = checking('approved').sms) {
   const tasks: (() => Promise<void>)[] = []
   const api: Api = {
     db: pool.db,
@@ -128,36 +176,107 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
   })
 
   it('answers wrong, dead and expired codes with tries left, and audits only an attempt that names someone', async () => {
-    for (const [check, answer] of [
-      [['wrong', 1], { status: 401, code: 'code_wrong', extra: { triesLeft: 4 } }],
-      [['wrong', 4], { status: 401, code: 'code_wrong', extra: { triesLeft: 1 } }],
-      [['dead', 5], { status: 401, code: 'code_dead' }],
-      [['expired', 0], { status: 401, code: 'code_expired' }],
+    for (const [reserve, settle, answer] of [
+      [['wrong', 1], [], { status: 401, code: 'code_wrong', extra: { triesLeft: 4 } }],
+      [['dead', 5], [], { status: 401, code: 'code_dead' }],
+      [['expired', ''], [], { status: 401, code: 'code_expired' }],
+      [['check', 'VE1', 1], ['wrong', 1], { status: 401, code: 'code_wrong', extra: { triesLeft: 4 } }],
+      [['check', 'VE1', 4], ['wrong', 4], { status: 401, code: 'code_wrong', extra: { triesLeft: 1 } }],
+      [['check', 'VE1', 5], ['dead', 5], { status: 401, code: 'code_dead' }],
+      [['check', 'VE1', 2], ['expired', 2], { status: 401, code: 'code_expired' }],
     ] as const) {
-      const nobody = context(valkeyWith({ v: 1, numberTag: 't', step: 'code_sent' }, [...check]).valkey)
+      const sms = checking('wrong').sms
+      const nobody = context(valkeyWith({ v: 1, numberTag: 't', step: 'code_sent' }, [...reserve], [...settle]).valkey)
+      nobody.api.sms = sms
       expect(await refusal(verifyCode(nobody.api, code, ATTEMPT_ID, nobody.info))).toMatchObject(answer)
-      expect(nobody.tasks).toHaveLength(0)
-      const someone = context(valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, [...check]).valkey)
+      const someone = context(
+        valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, [...reserve], [...settle]).valkey,
+      )
+      someone.api.sms = sms
       expect(await refusal(verifyCode(someone.api, code, ATTEMPT_ID, someone.info))).toMatchObject(answer)
-      expect(someone.tasks).toHaveLength(1)
+      // The audit row, and for a dead code its cancel, run after the reply.
+      const cancels = settle[0] === 'dead' ? 1 : 0
+      expect(nobody.tasks).toHaveLength(cancels)
+      expect(someone.tasks).toHaveLength(1 + cancels)
     }
   })
 
-  it('answers the right code on an attempt that names nobody exactly as a wrong guess at that count', async () => {
-    const first = context(valkeyWith({ v: 1, numberTag: 't', step: 'code_sent' }, ['ok', 0]).valkey)
+  it("T20: cancels a caller's own expired or dead code after the reply, and nothing of another owner's", async () => {
+    const expired = checking('wrong')
+    const own = context(valkeyWith({ v: 1, numberTag: 't', step: 'code_sent' }, ['expired', 'VE9']).valkey)
+    own.api.sms = expired.sms
+    expect(await refusal(verifyCode(own.api, code, ATTEMPT_ID, own.info))).toMatchObject({ code: 'code_expired' })
+    expect(expired.cancels).toEqual([])
+    for (const task of own.tasks) await task()
+    expect(expired.cancels).toEqual(['VE9'])
+
+    const dead = checking('wrong')
+    const fifth = context(
+      valkeyWith({ v: 1, numberTag: 't', step: 'code_sent' }, ['check', 'VE1', 5], ['dead', 5]).valkey,
+    )
+    fifth.api.sms = dead.sms
+    expect(await refusal(verifyCode(fifth.api, code, ATTEMPT_ID, fifth.info))).toMatchObject({ code: 'code_dead' })
+    for (const task of fifth.tasks) await task()
+    expect(dead.cancels).toEqual(['VE1'])
+
+    // T14 item 4: a newer request replaced the record during the check. The newest request wins:
+    // code_expired even though the provider approved, and nothing is cancelled.
+    const displaced = checking('approved')
+    const stale = context(
+      valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1], ['displaced', 0]).valkey,
+      orgPool(),
+    )
+    stale.api.sms = displaced.sms
+    expect(await refusal(verifyCode(stale.api, code, ATTEMPT_ID, stale.info))).toMatchObject({ code: 'code_expired' })
+    for (const task of stale.tasks) await task()
+    expect(displaced.cancels).toEqual([])
+    expect(stale.pool.texts().some(text => text.includes('pin_hash'))).toBe(false)
+  })
+
+  it('T20: answers 503 when the provider cannot check, giving the try back, and the attempt stays at the code', async () => {
+    const down = checking(new Error('cut off'))
+    const settles: unknown[][] = []
+    const valkey = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1], ['failed', 0])
+    const evalsha = (valkey.valkey as unknown as { evalsha: (...a: unknown[]) => Promise<unknown> }).evalsha
+    ;(valkey.valkey as unknown as { evalsha: (...a: unknown[]) => Promise<unknown> }).evalsha = async (...a) => {
+      if (a[0] === SETTLE.sha) settles.push(a.slice(2))
+      return evalsha(...a)
+    }
+    const failed = context(valkey.valkey)
+    failed.api.sms = down.sms
+    expect(await refusal(verifyCode(failed.api, code, ATTEMPT_ID, failed.info))).toMatchObject({
+      status: 503,
+      code: 'unavailable',
+    })
+    expect(settles).toEqual([[names.otp('t'), keyName(ATTEMPT_ID), 'VE1', 'failed', 1, 5]])
+    expect(failed.tasks).toHaveLength(0)
+    expect(JSON.parse(valkey.store.get(names.attempt(keyName(ATTEMPT_ID))) ?? '{}')).toMatchObject({
+      step: 'code_sent',
+    })
+  })
+
+  it('answers an approved code on an attempt that names nobody exactly as a wrong guess at that count', async () => {
+    const first = context(valkeyWith({ v: 1, numberTag: 't', step: 'code_sent' }, ['check', 'VE1', 1]).valkey)
+    first.api.sms = checking('approved').sms
     expect(await refusal(verifyCode(first.api, code, ATTEMPT_ID, first.info))).toMatchObject({
       status: 401,
       code: 'code_wrong',
       extra: { triesLeft: 4 },
     })
-    const fifth = context(valkeyWith({ v: 1, numberTag: 't', step: 'code_sent' }, ['ok', 4]).valkey)
+    const fifth = context(
+      valkeyWith({ v: 1, numberTag: 't', step: 'code_sent' }, ['check', 'VE1', 5], ['approved', 5]).valkey,
+    )
+    fifth.api.sms = checking('approved').sms
     expect(await refusal(verifyCode(fifth.api, code, ATTEMPT_ID, fifth.info))).toMatchObject({ code: 'code_dead' })
     expect(first.pool.statements).toEqual([])
   })
 
   it('ACC-05: answers the right code for someone who has left as a wrong one, and audits it with left', async () => {
     const pool = orgPool({ left: true, pinHash: null })
-    const left = context(valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['ok', 0]).valkey, pool)
+    const left = context(
+      valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1]).valkey,
+      pool,
+    )
     expect(await refusal(verifyCode(left.api, code, ATTEMPT_ID, left.info))).toMatchObject({
       code: 'code_wrong',
       extra: { triesLeft: 4 },
@@ -172,7 +291,7 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
   it('ACC-03 T14: answers the right code sent to a number removed or moved since as a wrong one, shows nothing of the account, and audits it', async () => {
     const pin = `$argon2id$v=19$m=19456,t=2,p=1$${'A'.repeat(22)}$${'B'.repeat(43)}`
     const pool = orgPool({ numberRemoved: true, pinHash: pin, passkeys: 1 })
-    const stale = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['ok', 0])
+    const stale = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1])
     const removed = context(stale.valkey, pool)
     expect(await refusal(verifyCode(removed.api, code, ATTEMPT_ID, removed.info))).toMatchObject({
       code: 'code_wrong',
@@ -192,14 +311,18 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
   })
 
   it('moves a first sign-in to set_pin, and someone with a PIN to the step-up with their PIN state', async () => {
-    const first = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['ok', 0])
+    const first = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1])
     const firstContext = context(first.valkey, orgPool())
     expect(await verifyCode(firstContext.api, code, ATTEMPT_ID, firstContext.info)).toEqual({
       body: { status: 'code_verified', next: 'set_pin' },
     })
     expect(JSON.parse(first.store.get(names.attempt(keyName(ATTEMPT_ID))) ?? '{}')).toMatchObject({ step: 'set_pin' })
 
-    const again = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['ok', 2])
+    const again = valkeyWith(
+      { v: 1, numberTag: 't', step: 'code_sent', ...named },
+      ['check', 'VE1', 3],
+      ['approved', 3],
+    )
     const hash = `$argon2id$v=19$m=19456,t=2,p=1$${'A'.repeat(22)}$${'B'.repeat(43)}`
     const againContext = context(again.valkey, orgPool({ pinHash: hash, passkeys: 1 }))
     expect(await verifyCode(againContext.api, code, ATTEMPT_ID, againContext.info)).toEqual({
@@ -219,7 +342,7 @@ describe('ACC-03 T14 sending a code after the reply', () => {
   // audit row's details.
   async function delivered(person: { left?: boolean; numberRemoved?: boolean }) {
     const pool = orgPool({ ...person, roster: true })
-    const sms = new MemorySms()
+    const sms = new FakeVerify()
     const { api, info, tasks } = context(valkeyWith(undefined).valkey, pool, sms)
     const reply = await requestCode(api, { phone: '+6591234567' }, undefined, info)
     expect(reply.body).toEqual({ status: 'code_sent', expiresInSeconds: 300, codeLength: 6 })
@@ -241,6 +364,70 @@ describe('ACC-03 T14 sending a code after the reply', () => {
 
   it('texts nothing to someone who left after the roster lookup, and audits it skipped_left', async () => {
     expect(await delivered({ left: true })).toEqual({ sent: [], audit: { send: 'skipped_left' } })
+  })
+
+  // A code request for the seed-range number +65 8000 0001 with a provider that has `pending`
+  // verifications for it already (foreign ones Hearth didn't start), and its after-reply work run.
+  async function started(options: { pending?: number; replaced?: string; displaceAfterStart?: boolean } = {}) {
+    const pool = orgPool({ roster: true })
+    const sms = new FakeVerify()
+    const valkey = valkeyWith(undefined, undefined, undefined, options.replaced)
+    const { api, info, tasks } = context(valkey.valkey, pool, sms)
+    const before: string[] = []
+    for (let i = 0; i < (options.pending ?? 0); i++) {
+      const { ref } = await sms.start('+6580000001')
+      before.push(ref)
+    }
+    if (options.displaceAfterStart) {
+      const start = sms.start.bind(sms)
+      sms.start = async to => {
+        const result = await start(to)
+        valkey.displace()
+        return result
+      }
+    }
+    await requestCode(api, { phone: '+65 8000 0001' }, undefined, info)
+    for (const task of tasks) await task()
+    const attached = valkey.calls.filter(call => call.sha === ATTACH.sha).map(call => call.args[2])
+    return { sms, before, attached, info }
+  }
+
+  it("T20: cancels the replaced code first, then attaches the new reference to the owner's record", async () => {
+    const { sms, attached } = await started({ replaced: 'VE-replaced' })
+    expect(sms.cancels).toEqual([{ ref: 'VE-replaced' }])
+    expect(attached).toEqual([sms.sent.at(-1)?.ref])
+  })
+
+  it('T20: a foreign verification is cancelled and started once more while the owner still holds the record', async () => {
+    const { sms, before, attached } = await started({ pending: 1 })
+    expect(sms.cancels.map(c => c.ref)).toEqual(before)
+    const fresh = sms.sent.at(-1)?.ref
+    expect(fresh).not.toBe(before[0])
+    expect(attached).toEqual([fresh])
+  })
+
+  it('T20: a second foreign reply is cancelled too, nothing is attached, and it is logged without the number', async () => {
+    const pool = orgPool({ roster: true })
+    const sms = new FakeVerify()
+    // Every start hands back a verification with more sends than Hearth made.
+    sms.start = async () => ({ ref: `VE${'f'.repeat(32)}`, foreign: true })
+    const valkey = valkeyWith(undefined)
+    const { api, info, tasks } = context(valkey.valkey, pool, sms)
+    await requestCode(api, { phone: '+65 8000 0001' }, undefined, info)
+    for (const task of tasks) await task()
+    expect(sms.cancels).toHaveLength(2)
+    expect(valkey.calls.filter(call => call.sha === ATTACH.sha)).toEqual([])
+    expect(info.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'provider_foreign_verification', personId: PERSON }),
+      expect.any(String),
+    )
+    expect(JSON.stringify(vi.mocked(info.log.warn).mock.calls)).not.toContain('80000001')
+  })
+
+  it('T20: a request that lost the record to a newer one leaves its verification alone, even a foreign one', async () => {
+    const { sms, attached } = await started({ pending: 1, displaceAfterStart: true })
+    expect(sms.cancels).toEqual([])
+    expect(attached).toEqual([])
   })
 })
 

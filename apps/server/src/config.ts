@@ -100,8 +100,9 @@ const schema = z.object({
   DEPLOY_ENV: z.enum(DEPLOY_ENVS),
   // The api role's sign-in secret; every sign-in key is derived from it (auth/crypto.ts).
   AUTH_SECRET: z.string().min(32, 'must be at least 32 characters').optional(),
-  // How sign-in codes are sent: log (this machine only) or unset (none can be sent). C0.12 adds AWS.
-  SMS_PROVIDER: z.enum(['log']).optional(),
+  // How sign-in codes are sent: fake (this machine only: auth/sms/fake.ts) or unset (none can be
+  // sent). Twilio Verify follows in C0.8 (TECH-SPEC T20).
+  SMS_PROVIDER: z.enum(['fake']).optional(),
   // IPs or CIDR ranges of the proxies in front of the server, comma-separated; unset or empty: none.
   TRUST_PROXY: z.string().optional(),
 })
@@ -127,7 +128,7 @@ export interface Config {
   // The proxies to trust for X-Forwarded-For; false when there are none (locally).
   trustProxy: string[] | false
   // The api role's sign-in settings; undefined for realtime and worker, which never read the secret.
-  auth: { secret: string; smsProvider: 'log' | undefined } | undefined
+  auth: { secret: string; smsProvider: 'fake' | undefined } | undefined
   // The worker role's settings; undefined for api and realtime.
   worker: { concurrency: number } | undefined
 }
@@ -155,10 +156,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
           "the local stack's value from .env.example works only on this machine (DEPLOY_ENV local or test, and a localhost APP_ORIGIN)",
         )
       }
-      if (e.SMS_PROVIDER === 'log' && !(e.DEPLOY_ENV === 'local' && onThisMachine)) {
+      if (e.SMS_PROVIDER === 'fake' && !(localOrTest && onThisMachine)) {
         problem(
           'SMS_PROVIDER',
-          'log prints sign-in codes, so it runs only on this machine (DEPLOY_ENV local and a localhost APP_ORIGIN)',
+          'fake prints codes, so it runs only on this machine (DEPLOY_ENV local or test, and a localhost APP_ORIGIN)',
         )
       }
       if (!proxyList(e.TRUST_PROXY).every(isProxyEntry)) {

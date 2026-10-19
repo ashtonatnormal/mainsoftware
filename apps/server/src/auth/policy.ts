@@ -4,8 +4,10 @@
 // and the PIN hash's cost (0006, users_pin_hash). Change those with a migration, never here alone.
 import { GATEWAY_CLOSE } from '@hearth/shared'
 
-// A sign-in code: 6 digits, valid 5 minutes, dead after 5 wrong tries (PRD-53).
-export const OTP = { length: 6, ttlMs: 300_000, maxTries: 5 } as const
+// A sign-in code: 6 digits, valid 5 minutes, dead after 5 wrong tries (PRD-53). Its challenge record
+// (codes.ts) is kept 10 minutes, so a check after the 5 minutes finds it and cancels the provider's
+// code; checks are refused from 5 minutes after the request, on Valkey's clock.
+export const OTP = { length: 6, ttlMs: 300_000, maxTries: 5, recordTtlMs: 600_000 } as const
 
 // A sign-in attempt (the steps between asking for a code and signing in) lasts 10 minutes from
 // the code request, never extended.
