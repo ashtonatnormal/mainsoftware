@@ -184,6 +184,24 @@ describe('T7 T20 Twilio Verify adapter, against a loopback fake', () => {
     expect(twilio.requests.length - before).toBe(3)
   })
 
+  it('reads a check answered 201 or 200 alike: approved only for status approved, else wrong (T7, T20)', async () => {
+    const sms = verify()
+    const { ref } = await sms.start(A)
+    // Twilio's spec lists 201 first for CreateVerificationCheck, then 200.
+    for (const http of [201, 200]) {
+      twilio.script('check', { status: http, body: { sid: ref, status: 'approved', valid: true } })
+      expect(await sms.check(ref, '123456'), `${http} approved`).toBe('approved')
+      twilio.script('check', { status: http, body: { sid: ref, status: 'pending', valid: false } })
+      expect(await sms.check(ref, '123456'), `${http} pending`).toBe('wrong')
+    }
+    // A 2xx is still parsed: one with no status is a bug, not an approval.
+    twilio.script('check', { status: 201, body: { sid: ref } })
+    expect((await refusal(sms.check(ref, '123456'))).kind).toBe('bug')
+    // The fake answers its own checks with 201, as the spec's first response does.
+    const code = twilio.sent[0]?.code ?? ''
+    expect(await sms.check(ref, code)).toBe('approved')
+  })
+
   it('treats any status but approved as wrong, and an unparseable reply as a bug', async () => {
     const sms = verify()
     const { ref } = await sms.start(A)

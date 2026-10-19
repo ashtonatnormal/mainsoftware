@@ -125,7 +125,8 @@ export async function startFakeTwilio(): Promise<FakeTwilio> {
       if (v.checks >= MAX) return { status: 429, body: twilioError(429, 60202, 'Max check attempts reached') }
       v.checks++
       if (form.Code === v.code) v.status = 'approved'
-      return { status: 200, body: { ...verificationJson(v), status: v.status === 'approved' ? 'approved' : 'pending' } }
+      // 201, the first success response Twilio's spec lists for a check (it lists 200 too).
+      return { status: 201, body: { ...verificationJson(v), status: v.status === 'approved' ? 'approved' : 'pending' } }
     }
     const sid = decodeURIComponent(path.slice(`${prefix}/Verifications/`.length))
     const v = verifications.get(sid)

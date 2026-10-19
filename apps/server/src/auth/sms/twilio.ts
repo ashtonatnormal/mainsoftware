@@ -129,7 +129,9 @@ export class TwilioVerify implements SmsProvider {
       throw unavailable(error)
     }
     if (reply.status === 404 || codeOf(reply) === 60202) return 'gone'
-    if (reply.status !== 200) throw failure(reply)
+    // Twilio's spec lists 201 and 200 for a check, so any 2xx is an answer. Reading a 201 as a
+    // failure would give the try back on a check that approved and used up the verification.
+    if (reply.status < 200 || reply.status > 299) throw failure(reply)
     const parsed = checkReply.safeParse(reply.body)
     if (!parsed.success) throw new SmsProviderError('bug', undefined, reply.status)
     return parsed.data.status === 'approved' ? 'approved' : 'wrong'
