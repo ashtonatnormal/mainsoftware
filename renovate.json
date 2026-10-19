@@ -37,9 +37,39 @@
       "enabled": false
     },
     {
-      "description": "Vite is pinned in the root and in demo/ so they share one copy; update both together.",
+      "description": "Vite is pinned in the root, apps/web and demo/ so they share one copy; update them together.",
       "matchDepNames": ["vite"],
       "groupName": "vite"
+    },
+    {
+      "description": "React and its types move together, in apps/web and demo/ alike, so npm keeps one copy (T21).",
+      "matchPackageNames": ["react", "react-dom", "@types/react", "@types/react-dom"],
+      "groupName": "react"
+    },
+    {
+      "description": "TanStack Router and Query in apps/web: the router's packages are released together (T21).",
+      "matchPackageNames": ["@tanstack/react-router", "@tanstack/router-*", "@tanstack/react-query"],
+      "groupName": "tanstack"
+    },
+    {
+      "description": "Playwright and its axe integration, in apps/web and demo/. A new browser build can change how pages render, so the visual baselines are re-adopted from this PR's check artifact (T21).",
+      "matchPackageNames": ["playwright", "@playwright/test", "@axe-core/playwright"],
+      "groupName": "playwright"
+    },
+    {
+      "description": "Tailwind and its Vite plugin, in apps/web and demo/ (T21).",
+      "matchPackageNames": ["tailwindcss", "@tailwindcss/vite"],
+      "groupName": "tailwind"
+    },
+    {
+      "description": "The self-hosted fonts in apps/web. A font change moves text in every screenshot, so the visual baselines are re-adopted from this PR's check artifact (T21).",
+      "matchPackageNames": ["@fontsource-variable/*"],
+      "groupName": "fontsource"
+    },
+    {
+      "description": "lucide-react is pinned in apps/web and demo/ so they share one copy; update both together.",
+      "matchPackageNames": ["lucide-react"],
+      "groupName": "lucide-react"
     }
   ]
 }

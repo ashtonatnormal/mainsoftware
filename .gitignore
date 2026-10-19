@@ -9,6 +9,9 @@ cdk.out/
 test-results/
 playwright-report/
 blob-report/
+# the e2e suite's per-run state: storage state, server logs (which hold sign-in codes) and its
+# throwaway TLS certificate (T21)
+apps/web/playwright/
 
 # env & secrets (every .env file except the template)
 .env*
