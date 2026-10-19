@@ -9,9 +9,8 @@
 // 5. render the app into #root, with React's error hooks logging what it catches (C0.13 adds RUM).
 // When anything here throws, #root says "Can't reach Hearth" in plain text.
 //
-// zod-jitless.ts comes first, before anything that loads @hearth/shared or builds a schema: zod reads
-// the flag when a schema is built, and without it every page load would trip the CSP once.
-import '@/app/zod-jitless.ts'
+// zod builds no code from strings here: main.ts's preBoot() set its jitless setting before this
+// module, or zod, loaded (boot/pre-boot.ts item 4).
 import type { RouterHistory } from '@tanstack/react-router'
 import type { ReactElement } from 'react'
 import { createRoot } from 'react-dom/client'

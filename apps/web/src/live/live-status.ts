@@ -23,6 +23,9 @@ export interface LiveStore extends LiveSource {
   set(change: Partial<LiveState>): void
 }
 
+// Where every document's live state starts (session/runtime.ts makes its store connecting).
+export const LIVE_START: LiveState = { status: 'connecting', updateBlocked: false }
+
 export function createLiveStore(status: LiveStatus): LiveStore {
   let state: LiveState = { status, updateBlocked: false }
   const listeners = new Set<() => void>()

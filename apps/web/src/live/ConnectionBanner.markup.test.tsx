@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { LIVE } from '@/strings/live.ts'
 import { ConnectionBanner } from './ConnectionBanner.tsx'
 import type { LiveStatus } from './gateway-client.ts'
-import { createLiveStore, type LiveState, liveAnnouncement } from './live-status.ts'
+import { createLiveStore, LIVE_START, type LiveState, liveAnnouncement } from './live-status.ts'
 
 const STATUSES: LiveStatus[] = ['connecting', 'live', 'reconnecting', 'stalled', 'paused', 'stopped']
 
@@ -45,6 +45,13 @@ describe('T21 OD-42: the connection banner (live/ConnectionBanner.tsx)', () => {
     expect(liveAnnouncement(state('stalled'), state('stopped'))).toBeUndefined()
     expect(liveAnnouncement(state('live'), state('paused', true))).toBe(LIVE.updated)
     expect(liveAnnouncement(state('paused', true), state('paused', true))).toBeUndefined()
+  })
+
+  it('CB-05 X11 K-42: the banner compares with where every document starts (LIVE_START), so a held-back reload or a stall reached before it mounted is still said once', () => {
+    expect(createLiveStore('connecting').snapshot()).toEqual(LIVE_START)
+    expect(liveAnnouncement(LIVE_START, state('paused', true))).toBe(LIVE.updated)
+    expect(liveAnnouncement(LIVE_START, state('stalled'))).toBe(LIVE.reconnecting)
+    expect(liveAnnouncement(LIVE_START, state('live'))).toBeUndefined()
   })
 
   it('CB-04: the store keeps its snapshot until something changes, and tells its listeners only then', () => {

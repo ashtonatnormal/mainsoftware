@@ -3,7 +3,9 @@
 // current entry is marked three ways, never by colour alone: aria-current="page", a pill behind the
 // icon (accent-soft) and a heavier label in accent-ink, plus an outline under forced colours
 // (app.css). The focus ring sits inside the cell (QA-05), so a neighbour or the screen edge never
-// hides it. Labels wrap at large text sizes, and the bar grows with them.
+// hides it. Labels wrap at large text sizes, and the bar grows with them; the pill behind the icon,
+// sized in rem, never grows past its cell, so 200 % text scrolls nothing sideways (WCAG 1.4.4,
+// nfr02.spec.ts NF-09).
 //
 // Which entry is current is nav.ts's decision (activeTab), not the router's own: on a phone,
 // Calendar and Drive mark More. The router's own active state is kept to an exact match, so it
@@ -35,7 +37,7 @@ export function NavLink({ entry, current, layout }: NavLinkProps) {
       <span
         aria-hidden
         className={cx(
-          'grid h-7 w-12 shrink-0 place-items-center rounded-full transition',
+          'grid h-7 w-12 max-w-full shrink-0 place-items-center rounded-full transition',
           current ? 'bg-accent-soft' : 'group-hover:bg-surface-2',
         )}
       >

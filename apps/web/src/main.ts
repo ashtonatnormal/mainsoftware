@@ -4,7 +4,8 @@
 // faces (Figtree and Bricolage Grotesque, the upright weight axis only; R-17, OD-27) and the app's
 // stylesheet, which Vite links in index.html's head before any script runs; boot/pre-boot.ts;
 // session/document.ts (with router/paths.ts); and strings/boot.ts. Then preBoot() removes the
-// router's scroll cache, and only after that does the one dynamic import load the app. By ES module
+// router's scroll cache and sets zod's jitless before zod loads (boot/pre-boot.ts), and only after
+// that does the one dynamic import load the app. By ES module
 // semantics nothing in that import's graph (React, the router, Query, zod) evaluates before the
 // call, however the bundler splits chunks, so router-core never reads a scroll cache a previous
 // person left (K-08, K-61). scripts/guards/web-source.test.ts (WS-10) holds this file and its static
