@@ -1,6 +1,7 @@
 // The one builder of the web app's document headers and Content Security Policy (T21 item 7, D-04,
-// OD-40). Vite's dev server, the e2e preview and, from C0.12, CloudFront's response-headers policy
-// all serve documentHeaders(appOrigin), so what the tests see is what people get. Every source is
+// OD-40). Vite's dev server serves documentHeaders(…, { dev: true }) (apps/web/vite.config.ts); the
+// e2e preview and, from C0.12, CloudFront's response-headers policy will serve
+// documentHeaders(appOrigin), so what the tests see is what people get. Every source is
 // derived from the app's own origin: the browser talks to nothing else, so no CDN or model host can
 // enter the policy (R-59–R-61). scripts/guards/csp.test.ts parses the result against its own
 // allow-list, and a new source (C0.13's RUM endpoint, C2's LiveKit host) changes both in one PR.
@@ -32,17 +33,27 @@ const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]']
 const LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
 const ORIGIN = new RegExp(`^(https?)://(localhost|127\\.0\\.0\\.1|\\[::1\\]|${LABEL}(?:\\.${LABEL})*)(?::(\\d{1,5}))?$`)
 const DEFAULT_PORTS = { http: 80, https: 443 } as const
+// An IPv6 address in brackets, as the browser serialises one. [::1] matches ORIGIN first.
+const BRACKETED_IP = /^https?:\/\/\[[0-9a-f:.]+\](?::\d+)?$/
 
-// Reads an origin such as https://hearth.example.com: a scheme, a host and an optional port, as
-// the browser sends it in the Origin header, which the server compares with APP_ORIGIN exactly
-// (apps/server/src/config.ts). So it refuses what the browser would never send: a path, a trailing
-// slash, a user name, upper case, a default or zero-padded port, and a host the browser would
-// rewrite as an IPv4 address. Plain http is allowed only on this machine: anywhere else every
-// request would cross the network in the clear, and the browser would refuse the Secure session
-// cookie anyway.
+// Reads an origin such as https://hearth.example.com: a scheme, a host and an optional port. The
+// server compares the browser's Origin header with APP_ORIGIN exactly (apps/server/src/config.ts),
+// so this refuses what the browser would never send as an Origin: upper case, a path, a trailing
+// slash, a user name, a default, zero-padded or zero port, and a host the URL parser rewrites or
+// refuses because its last label is a number (10.1 is sent as 10.0.0.1).
+//
+// The rest is policy, not the browser: the app's origin is a DNS host name (lower-case letters,
+// digits and inner hyphens, labels of 1 to 63 characters, at most 253 in all) or this machine
+// (localhost, 127.0.0.1 or [::1]). So an IP address other than this machine's, a wildcard, an
+// underscore, an empty label or a trailing dot is refused, though the browser would send each
+// unchanged. Plain http is allowed only on this machine: anywhere else every request would cross
+// the network in the clear, and the browser would refuse the Secure session cookie anyway.
 export function parseAppOrigin(appOrigin: string): AppOrigin {
   const match = ORIGIN.exec(appOrigin)
   if (!match) {
+    if (BRACKETED_IP.test(appOrigin)) {
+      throw new Error(`${JSON.stringify(appOrigin)} names an IP address: the app's origin is a host name`)
+    }
     throw new Error(
       `${JSON.stringify(appOrigin)} is not an origin: write it as https://host or https://host:port, in lower case, with no path, trailing slash or user name`,
     )
@@ -51,7 +62,9 @@ export function parseAppOrigin(appOrigin: string): AppOrigin {
   const host = match[2] ?? ''
   const loopback = LOOPBACK_HOSTS.includes(host)
   if (host.length > 253) throw new Error(`${JSON.stringify(appOrigin)} has a host longer than 253 characters`)
-  // The URL parser reads a host whose last label is a number as an IPv4 address and rewrites it.
+  // A host whose last label is a number is an IPv4 address to the URL parser, which rewrites it
+  // (10.1 is sent as 10.0.0.1) or refuses it (hearth.0x1f). An address it keeps as written, such as
+  // 10.0.0.5, is refused by policy: the app's origin is a host name, or this machine.
   if (!loopback && /(?:^|\.)(?:\d+|0x[0-9a-f]*)$/.test(host)) {
     throw new Error(`${JSON.stringify(appOrigin)} names an IP address: the app's origin is a host name`)
   }
@@ -76,8 +89,8 @@ function socketOrigin({ scheme, host, port }: AppOrigin): string {
   return `${scheme === 'https' ? 'wss' : 'ws'}://${host}${port === undefined ? '' : `:${port}`}`
 }
 
-// The policy as directives and their sources, in the order they're sent. Production (the e2e
-// preview and CloudFront alike):
+// The policy as directives and their sources, in the order they're sent. Production (what the e2e
+// preview and CloudFront will serve):
 //   default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self';
 //   connect-src 'self' wss://<host[:port]>; base-uri 'none'; form-action 'none';
 //   frame-ancestors 'none'; object-src 'none'; report-uri /api/csp-report

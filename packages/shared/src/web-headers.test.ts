@@ -62,7 +62,7 @@ describe('T21 item 7: the Content Security Policy', () => {
 })
 
 describe('T21 item 7: the document headers', () => {
-  test('K-30: no HSTS for localhost, 127.0.0.1 or [::1]; HSTS for https hosts (WH-03)', () => {
+  test('WH-03 K-30: no HSTS for localhost, 127.0.0.1 or [::1]; HSTS for https hosts', () => {
     for (const origin of [
       'https://localhost:5180',
       'https://127.0.0.1:5180',
@@ -142,7 +142,9 @@ describe('T21 item 7: reading the app origin', () => {
     }
   })
 
-  test('parseAppOrigin refuses whatever the browser would never send as an Origin (config.ts compares exactly)', () => {
+  // config.ts compares the browser's Origin with APP_ORIGIN exactly, so none of these could ever
+  // match: the URL parser rewrites or refuses each, or no page is served from it.
+  test('parseAppOrigin refuses what the browser would never send as an Origin (config.ts compares exactly)', () => {
     for (const origin of [
       '',
       'hearth.example.com',
@@ -157,24 +159,42 @@ describe('T21 item 7: reading the app origin', () => {
       'https://hearth.example.com:08443',
       'https://hearth.example.com:65536',
       'https://hearth.example.com:',
+      'https://10.1',
+      'https://0x7f.1',
+      'https://hearth.0x1f',
+      ' https://hearth.example.com',
+      'https://hearth.example.com\n',
+    ]) {
+      expect(() => parseAppOrigin(origin), JSON.stringify(origin)).toThrow()
+    }
+    expect(() => parseAppOrigin('https://10.1')).toThrow(/names an IP address/)
+    expect(parseAppOrigin('https://hearth.example.com:65535').port).toBe(65_535)
+    expect(parseAppOrigin('http://localhost:443').port).toBe(443)
+  })
+
+  // The browser would send each of these unchanged, and config.ts's exact comparison would accept
+  // it: the refusal is policy. The app's origin is a DNS host name, or this machine.
+  test('parseAppOrigin refuses by policy an IP address other than this machine and a host that is not a DNS host name', () => {
+    for (const origin of [
+      'https://10.0.0.5',
+      'https://192.0.2.1:8443',
+      'https://[2001:db8::1]',
+      'https://[::ffff:a00:5]',
+    ]) {
+      expect(() => parseAppOrigin(origin), origin).toThrow(/names an IP address: the app's origin is a host name/)
+    }
+    for (const origin of [
       'https://*.example.com',
       'https://hearth..example.com',
       'https://-hearth.example.com',
       'https://hearth-.example.com',
       'https://hearth_app.example.com',
       'https://hearth.example.com.',
-      'https://10.0.0.5',
-      'https://hearth.0x1f',
-      'https://[2001:db8::1]',
-      ' https://hearth.example.com',
-      'https://hearth.example.com\n',
       `https://${'a'.repeat(64)}.example.com`,
       `https://${['a'.repeat(63), 'b'.repeat(63), 'c'.repeat(63), 'd'.repeat(63)].join('.')}`,
     ]) {
       expect(() => parseAppOrigin(origin), JSON.stringify(origin)).toThrow()
     }
-    expect(parseAppOrigin('https://hearth.example.com:65535').port).toBe(65_535)
-    expect(parseAppOrigin('http://localhost:443').port).toBe(443)
   })
 
   test('every builder refuses a bad origin rather than emit a policy for it', () => {
