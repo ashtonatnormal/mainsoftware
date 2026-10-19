@@ -28,7 +28,9 @@
 -- data_access_events_2026_10 is listed as data_access_events_yyyy_mm, with its name folded the
 -- same way wherever it appears in the names and text of its rules, indexes, triggers, rewrite rules
 -- and policies, and its bound reads yyyy-mm-01 for the first of its month and yyyy-mm+1-01 for the
--- next. Its copies of the parent's indexes and of its primary key, unique,
+-- next. The fold is reversible: text that already reads yyyy_mm (or, in a bound, yyyy-mm) is
+-- escaped first (\yyyy_mm), so a literal 'data_access_events_yyyy_mm' can't pass for a folded
+-- month, while a rule naming its own month folds alike in every month. Its copies of the parent's indexes and of its primary key, unique,
 -- exclusion and foreign key rules are listed by the parent's names
 -- (data_access_events_yyyy_mm.data_access_events_pkey), however Postgres named them (it shortens
 -- long index names), and a copy left unattached reads differently: an index of a month's own is
@@ -85,13 +87,20 @@ with rel as (
   -- Every relation in public, under the name it's listed by: a partition's month, if its name ends
   -- in one, folded to yyyy_mm, and the month kept (as a date) to fold its bound. A name ending in
   -- something that isn't a month (_2026_13) gives no month, so it stays as it is.
-  select c.*, m.month,
-         case when m.month is null then c.relname else regexp_replace(c.relname, '_[0-9]{4}_[0-9]{2}$', '_yyyy_mm') end as folded
+  -- The fold is reversible. Wherever it applies (this name, and the names and text of what belongs
+  -- to the relation, as replace(replace(<text>, 'yyyy_mm', E'\\yyyy_mm'), escaped, folded)), any
+  -- yyyy_mm already there is first escaped as \yyyy_mm, and only then is the relation's name, so
+  -- escaped, replaced by its folded name. A folded month always follows an underscore, never a
+  -- backslash, so text that merely reads like a folded name (a literal 'p_yyyy_mm') can't pass for
+  -- one, while text naming the partition itself folds alike in every month.
+  select c.*, m.month, e.escaped,
+         case when m.month is null then e.escaped else regexp_replace(e.escaped, '_[0-9]{4}_[0-9]{2}$', '_yyyy_mm') end as folded
   from pg_class c join pg_namespace n on n.oid = c.relnamespace
   cross join lateral (
     select case when c.relispartition
                 then to_date(substring(c.relname from '_([0-9]{4}_(?:0[1-9]|1[0-2]))$'), 'YYYY_MM') end as month
   ) m
+  cross join lateral (select replace(c.relname, 'yyyy_mm', E'\\yyyy_mm') as escaped) e
   where n.nspname = 'public'
 ),
 -- The rules whose NOT VALID the calling check leaves out.
@@ -118,7 +127,8 @@ lines as (
                 (select string_agg(coalesce(format('%I', p.folded), i.inhparent::regclass::text), ',' order by i.inhseqno)
                  from pg_inherits i left join rel p on p.oid = i.inhparent where i.inhrelid = c.oid),
                 case when c.month is null then pg_get_expr(c.relpartbound, c.oid)
-                     else replace(replace(pg_get_expr(c.relpartbound, c.oid), to_char(c.month, 'YYYY-MM-DD'), 'yyyy-mm-01'),
+                     else replace(replace(replace(pg_get_expr(c.relpartbound, c.oid), 'yyyy-mm', E'\\yyyy-mm'),
+                                          to_char(c.month, 'YYYY-MM-DD'), 'yyyy-mm-01'),
                                   to_char(c.month + interval '1 month', 'YYYY-MM-DD'), 'yyyy-mm+1-01') end,
                 pg_get_partkeydef(c.oid)), c.oid
   from rel c
@@ -175,14 +185,14 @@ lines as (
   -- by the parent's rule's name, so it reads alike in every month however Postgres named it, and
   -- one left unattached reads differently. not_valid names a rule as it's listed.
   select 'constraint', l.name,
-         replace(case when l.name = any (skip.names) then regexp_replace(pg_get_constraintdef(k.oid), ' NOT VALID$', '')
-                      else pg_get_constraintdef(k.oid) end, c.relname, c.folded), c.oid
+         replace(replace(case when l.name = any (skip.names) then regexp_replace(pg_get_constraintdef(k.oid), ' NOT VALID$', '')
+                              else pg_get_constraintdef(k.oid) end, 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded), c.oid
   from pg_constraint k join rel c on c.oid = k.conrelid
   cross join lateral (
     select format('%I.%I', c.folded,
-                  coalesce((select replace(pk.conname, pc.relname, pc.folded)
+                  coalesce((select replace(replace(pk.conname, 'yyyy_mm', E'\\yyyy_mm'), pc.escaped, pc.folded)
                             from pg_constraint pk join rel pc on pc.oid = pk.conrelid where pk.oid = k.conparentid),
-                           replace(k.conname, c.relname, c.folded))) as name
+                           replace(replace(k.conname, 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded))) as name
   ) l
   cross join skip
   union all
@@ -191,32 +201,37 @@ lines as (
   -- shortens long names). A month partition's own index, attached to none, is listed as
   -- <partition>.(local): Postgres may have shortened its name past the month and numbered it to
   -- keep it unique, so its name says nothing stable; its definition and the month's hash still
-  -- count it. A partitioned index is valid only once every partition's index is attached.
+  -- count it. A partitioned index is valid only once every partition's index is attached. Its
+  -- definition is folded first and its own name, folded the same way, then read as it's listed.
   select 'index', x.name,
-         format('%s valid=%s', replace(replace(pg_get_indexdef(i.indexrelid), 'INDEX ' || quote_ident(x.relname) || ' ON ',
-                                               'INDEX ' || x.name || ' ON '), c.relname, c.folded),
+         format('%s valid=%s',
+                replace(replace(replace(pg_get_indexdef(i.indexrelid), 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded),
+                        'INDEX ' || replace(replace(quote_ident(x.relname), 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded) || ' ON ',
+                        'INDEX ' || x.name || ' ON '),
                 i.indisvalid), c.oid
   from pg_index i join rel c on c.oid = i.indrelid
   cross join lateral (
     select ix.relname,
-           coalesce((select format('%I.%I', c.folded, replace(px.relname, pc.relname, pc.folded))
+           coalesce((select format('%I.%I', c.folded, replace(replace(px.relname, 'yyyy_mm', E'\\yyyy_mm'), pc.escaped, pc.folded))
                      from pg_inherits h join pg_class px on px.oid = h.inhparent
                      join pg_index pi on pi.indexrelid = px.oid join rel pc on pc.oid = pi.indrelid
                      where h.inhrelid = i.indexrelid),
                     case when c.month is not null then format('%I.(local)', c.folded) end,
-                    format('%I', replace(ix.relname, c.relname, c.folded))) as name
+                    format('%I', replace(replace(ix.relname, 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded))) as name
     from pg_class ix where ix.oid = i.indexrelid
   ) x
   union all
-  select 'trigger', format('%I.%I', c.folded, replace(t.tgname, c.relname, c.folded)),
-         format('%s enabled=%s', replace(pg_get_triggerdef(t.oid), c.relname, c.folded), t.tgenabled), c.oid
+  select 'trigger', format('%I.%I', c.folded, replace(replace(t.tgname, 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded)),
+         format('%s enabled=%s', replace(replace(pg_get_triggerdef(t.oid), 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded),
+                t.tgenabled), c.oid
   from pg_trigger t join rel c on c.oid = t.tgrelid
   where not t.tgisinternal
   union all
   -- Rewrite rules (CREATE RULE), apart from the _RETURN rule a view is made of, and whether each is
   -- on. scripts/check-migrations.sh refuses them, but only on fresh and partial builds.
-  select 'rewrite_rule', format('%I.%I', c.folded, replace(r.rulename, c.relname, c.folded)),
-         format('%s enabled=%s', md5(replace(pg_get_ruledef(r.oid), c.relname, c.folded)), r.ev_enabled), c.oid
+  select 'rewrite_rule', format('%I.%I', c.folded, replace(replace(r.rulename, 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded)),
+         format('%s enabled=%s', md5(replace(replace(pg_get_ruledef(r.oid), 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded)),
+                r.ev_enabled), c.oid
   from pg_rewrite r join rel c on c.oid = r.ev_class
   where not (r.rulename = '_RETURN' and c.relkind in ('v', 'm'))
   union all
@@ -243,10 +258,11 @@ lines as (
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace join pg_aggregate a on a.aggfnoid = p.oid
   where n.nspname = 'public' and p.prokind = 'a'
   union all
-  select 'policy', format('%I.%I', c.folded, replace(pol.polname, c.relname, c.folded)),
+  select 'policy', format('%I.%I', c.folded, replace(replace(pol.polname, 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded)),
          format('%s %s %s using=%s check=%s', pol.polcmd, pol.polpermissive, pol.polroles::regrole[],
-                replace(pg_get_expr(pol.polqual, pol.polrelid), c.relname, c.folded),
-                replace(pg_get_expr(pol.polwithcheck, pol.polrelid), c.relname, c.folded)), c.oid
+                replace(replace(pg_get_expr(pol.polqual, pol.polrelid), 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded),
+                replace(replace(pg_get_expr(pol.polwithcheck, pol.polrelid), 'yyyy_mm', E'\\yyyy_mm'), c.escaped, c.folded)),
+         c.oid
   from pg_policy pol join rel c on c.oid = pol.polrelid
 )
 select distinct line collate "C" as line from (

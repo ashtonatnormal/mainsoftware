@@ -9,7 +9,8 @@
 # - a partition's row level security, grants, column grants, owner, policies, indexes, rules,
 #   triggers or bound; a month lacking an index, policy or trigger the other months have; a
 #   partitioned index left invalid; a month's primary key not attached to the parent's; a parent's
-#   partition key; a DEFAULT partition;
+#   partition key; a DEFAULT partition; a rule literal or list bound that reads like the folded name
+#   or month, which the fold escapes rather than lets pass for a month;
 # - a domain's default; a view's or table's options; whether a table is unlogged;
 # - a sequence's type, start, increment, bounds, cache, cycling and owning column;
 # - identity and generated columns; a column's storage; a column's, a domain's and a custom
@@ -20,7 +21,8 @@
 #   declared arguments.
 # The others are equivalent and must compare equal: partitions made in different months, including
 # months whose index names Postgres shortened (copies of the parent's, and indexes of their own,
-# which it also numbers) and months with policies named for them; a database set to New York, or to other date,
+# which it also numbers), months with policies named for them, and months whose rules name their
+# own month; a database set to New York, or to other date,
 # interval, float, bytea, string-escape, identifier-quoting or search_path settings, against the
 # defaults; a domain made in a New York session against one made in UTC; NOT VALID rules the caller
 # names, a month's rule among them. Then, against the real migrations (copies of the full build,
@@ -150,6 +152,20 @@ probe 'partitions: a month whose bound starts at New York midnight' differs "^ta
   "$partitioned; $(months 2026-01-01)" "$(months 2026-02-01)" \
   "create table p_2026_02 partition of p for values from ('2026-02-01 00:00-05') to ('2026-03-01 00:00-05');
    alter table p_2026_02 enable row level security"
+# The fold is reversible: text that already reads like a folded name or bound is escaped first, so
+# it can't pass for a month folded, while each month's rule naming its own month still compares
+# equal.
+probe 'partitions: a rule whose literal reads like the folded name' differs "^constraint p_yyyy_mm\\.own: CHECK \\(\\(\\(id\\)::text <> 'p_\\\\yyyy_mm'::text\\)\\)" \
+  "$partitioned; $two" "alter table p_2026_01 add constraint own check (id::text <> 'p_2026_01')" \
+  "alter table p_2026_01 add constraint own check (id::text <> 'p_yyyy_mm')"
+probe 'partitions: months whose rules name their own month' same '' \
+  "$partitioned" "$two; alter table p_2026_01 add constraint own check (id::text <> 'p_2026_01');
+   alter table p_2026_02 add constraint own check (id::text <> 'p_2026_02')" \
+  "$(months 2026-05-01 2026-06-01); alter table p_2026_05 add constraint own check (id::text <> 'p_2026_05');
+   alter table p_2026_06 add constraint own check (id::text <> 'p_2026_06')"
+probe 'partitions: a list bound that reads like the folded month' differs "^table l_yyyy_mm: .*bound=FOR VALUES IN \\('\\\\yyyy-mm-01'\\)" \
+  "create table l (d text) partition by list (d)" "create table l_2026_01 partition of l for values in ('2026-01-01')" \
+  "create table l_2026_01 partition of l for values in ('yyyy-mm-01')"
 probe 'partitions: the partition key' differs '^table k: .*partkey=LIST \(a\)' \
   "" "create table k (a int, b int) partition by range (a)" "create table k (a int, b int) partition by list (a)"
 probe 'partitions: a DEFAULT partition' differs '^table p_rest: .*parent=p bound=DEFAULT' \
