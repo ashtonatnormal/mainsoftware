@@ -1,11 +1,13 @@
 // What happens when someone leaves (ACC-05), after their deactivation has committed. The
 // deactivation itself ends their sessions and signs their devices out in the same transaction
-// (0006, people_end_sessions), appends person.deactivated to the outbox, and, once committed, the
-// api publishes the sessions it ended, so their sockets close at once (admin/people.ts).
-// Everything else a leaver's departure touches registers a handler here, so the admin service
-// needn't know them all: C0.5's closes the leaver's live sockets; later steps add theirs (A2 the
-// index, A4 their agents and assistant, C2.2 their rooms, C4.1 and C4.3 their Drive items), each
-// with a name in OFFBOARDING_HANDLERS.
+// (0006, people_end_sessions), and appends person.deactivated, signin.ended and acl.changed to the
+// outbox; once committed, the api publishes the sessions it ended, so their sockets close at once
+// (admin/people.ts). Closing a leaver's live connections durably is the revocation registry's work
+// from C0.7 (revocation/registry.ts; TECH-SPEC T19 item 2), which hears signin.ended and
+// acl.changed for any reason, deactivation included. Everything else a departure does to someone's
+// things registers a handler here, so the admin service needn't know them all: later steps add
+// theirs (A2 the index, A4 their agents and assistant, C2.2 their rooms, C4.1 and C4.3 their Drive
+// items), each with a name in OFFBOARDING_HANDLERS. C0.7 has none.
 //
 // The registry runs in the worker, durably (TECH-SPEC T14 item 13, T16 item 9):
 //   - the offboarding consumer reads person.deactivated from the outbox and checks that the person
@@ -15,21 +17,23 @@
 //     lasts;
 //   - each offboarding.handler job reads the person again before it runs, and takes who deactivated
 //     them from their row, never from the payload, then runs its handler, retried with back-off;
-//     one that keeps failing goes dead and logs offboarding_handler_dead (C0.13 alarms on it).
-// Deactivation can't be undone (0002's keep_history on deactivated_at), so a person once read as
-// gone stays gone, and a plain read is enough.
-import type { Redis } from 'ioredis'
+//     one that keeps failing goes dead and logs offboarding_handler_dead (C0.13 alarms on it). A job
+//     whose handler is no longer registered (one queued before C0.7 for the retired sockets handler)
+//     finishes with offboarding_handler_unregistered.
+// The consumer isn't protective (outbox/consumers.ts): offboarding processes a leaver's things, so a
+// processing switch may still withhold it. Deactivation can't be undone (0002's keep_history on
+// deactivated_at), so a person once read as gone stays gone, and a plain read is enough.
 import { sql } from 'kysely'
-import type { Logger } from 'pino'
 import { z } from 'zod'
 import type { JobContext } from '#src/jobs/context.ts'
 import { enqueue } from '#src/jobs/enqueue.ts'
 import { PermanentJobError } from '#src/jobs/errors.ts'
 import { defineJob, type JobKind } from '#src/jobs/kinds.ts'
 import type { OutboxConsumer } from '#src/outbox/consumers.ts'
-import { publishRevoked } from '#src/revocation.ts'
 
 // Every handler's name: a job's payload names one, and a payload holds codes, never free text.
+// 'sockets' was retired in C0.7 (TECH-SPEC T19 item 2): kept so a job queued before it parses,
+// finds no handler and finishes (offboarding_handler_unregistered); C2.2 adds the first new one.
 export const OFFBOARDING_HANDLERS = ['sockets'] as const
 export type OffboardingHandlerName = (typeof OFFBOARDING_HANDLERS)[number]
 
@@ -139,41 +143,9 @@ export function offboardingConsumer(registry: OffboardingRegistry, job: JobKind<
   }
 }
 
-// C0.5's one handler: tells the realtime role to close the leaver's sockets (T5's 60 s). It reads
-// the sessions their deactivation ended, so it can run again from the context alone, and publishing
-// them again closes nothing more.
-export function socketsHandler(deps: {
-  valkey: Pick<Redis, 'publish'>
-  keyPrefix: string
-  logger: Pick<Logger, 'warn' | 'error'>
-}): OffboardingHandler {
-  return {
-    name: 'sockets',
-    async run({ orgId, personId }, job) {
-      const rows = await job.read(trx =>
-        trx
-          .selectFrom('sessions')
-          .select('id')
-          .where('org_id', '=', orgId)
-          .where('user_id', '=', personId)
-          .where('revoke_reason', '=', 'deactivated')
-          .execute(),
-      )
-      // A failed publish fails the job, which is tried again (T16 item 9).
-      await publishRevoked(
-        deps.valkey,
-        deps.keyPrefix,
-        rows.map(row => row.id),
-        deps.logger,
-        { rethrow: true },
-      )
-    },
-  }
-}
-
-// The registry the worker runs, with every handler of this version.
-export function offboardingRegistry(deps: Parameters<typeof socketsHandler>[0]): OffboardingRegistry {
-  const registry = new OffboardingRegistry()
-  registry.register(socketsHandler(deps))
-  return registry
+// The registry the worker runs, with every handler of this version: none from C0.7, whose
+// revocation registry closes a leaver's sockets. The consumer and job kind stay registered, for
+// C2.2 onwards and for jobs queued before C0.7.
+export function offboardingRegistry(): OffboardingRegistry {
+  return new OffboardingRegistry()
 }

@@ -130,7 +130,8 @@ do $$
 declare
   r text;
 begin
-  foreach r in array array['hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge', 'hearth_worker'] loop
+  foreach r in array array['hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge',
+                           'hearth_job_revocation', 'hearth_worker'] loop
     perform pg_temp.act_as_job('1', r);
     perform pg_temp.expect_error($f$select public.set_feature_flag('t', false, 'org', '{}', '{}', null, null, null)$f$, '42501');
     perform set_config('role', 'none', true);
@@ -235,6 +236,12 @@ select pg_temp.expect_error($$select public.feature_fence('t', '{5}')$$, 'HF001'
 select pg_temp.expect_error($$select public.feature_fence('t', null)$$, 'HF001', '%changed since%');
 select pg_temp.expect_error($$select public.feature_fence('no.such_flag', '{1}')$$, 'HF001', '%no feature flag%');
 select pg_temp.expect_error($$select public.feature_fence('ai.ask', '{1,1}')$$, 'HF001', '%switched off (ai)%');
+reset role;
+-- From 0008 the revocation consumer's role may call it too, held to the same revisions.
+select pg_temp.act_as_job('1', 'hearth_job_revocation');
+select public.feature_fence('core.system', '{1}');
+select public.feature_fence('t', '{6}');
+select pg_temp.expect_error($$select public.feature_fence('t', '{5}')$$, 'HF001', '%changed since%');
 reset role;
 select pg_temp.act_as('1', 'a1');
 select pg_temp.check(pg_temp.set_flag('t', false, 'org', '{}', '{}') = 7, 'switching off did not make revision 7');

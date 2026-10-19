@@ -31,10 +31,12 @@ export interface ApiDeps {
   // and the flags route takes the keys it accepts and their purposes from the cache's registry,
   // FLAGS in production (a test adds its own it.* flags, A5).
   flags: Pick<FlagCache, 'registry' | 'track' | 'reload'>
-  // Whether a deactivation publishes the leaver's ended sessions on Valkey as soon as it commits,
-  // so their sockets close at once (true unless set false). The outbox carries the same news to
-  // the worker regardless (T16); a test turns this off to see that path alone (A6).
-  publishDeactivated?: boolean
+  // Whether the api publishes the sessions a commit ended on Valkey's revoked channel as soon as it
+  // commits (a deactivation, a PIN reset, an admin's or your own device sign-out, a sign-out), so
+  // their sockets close at once: the push path (true unless set false). The outbox carries the
+  // same news to the worker's revocation consumer regardless (T16, T19 item 4); a test turns this
+  // off to see the durable path alone (A6).
+  publishRevoked?: boolean
   // The after-response queue. registerApi makes one if none is given; the integration harness
   // passes its own, to await its idle() after each request.
   afterResponse?: AfterResponse

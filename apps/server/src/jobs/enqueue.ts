@@ -3,9 +3,10 @@
 // the acting principal as created_by, which no producer chooses. The job's feature and purpose are
 // its kind's, and its payload must pass the kind's schema (ids only) before any SQL.
 //
-// In C0.6 only the worker's own roles queue jobs: hearth_queue for scheduled runs and
-// hearth_job_offboarding for offboarding. hearth_app has no INSERT on jobs until C0.14 gives the
-// api its first producer, with a database check of which role may queue which kind.
+// Only the worker's own roles queue jobs: hearth_queue for scheduled runs, hearth_job_offboarding
+// for offboarding, and from C0.7 hearth_job_revocation for revocation (0008). hearth_app has no
+// INSERT on jobs until C0.14 gives the api its first producer, with a database check of which role
+// may queue which kind.
 //
 // Producers may insert but not read the queue, so this is a plain INSERT with the id chosen here,
 // and ON CONFLICT DO NOTHING without a target, which needs only INSERT (0007): adding the same

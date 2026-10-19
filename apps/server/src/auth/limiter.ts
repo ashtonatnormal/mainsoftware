@@ -28,7 +28,7 @@ export function script(lua: string): Script {
 // Runs a script by its SHA-1, sending the source once if Valkey doesn't have it yet (after a
 // restart or a failover). Throws whatever else Valkey answers.
 export async function runScript(
-  valkey: Redis,
+  valkey: Pick<Redis, 'evalsha' | 'eval'>,
   { lua, sha }: Script,
   keys: readonly string[],
   args: readonly (string | number)[],

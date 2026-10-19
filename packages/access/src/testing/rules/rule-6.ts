@@ -15,7 +15,10 @@ import {
   type Request,
   type RequestContext,
   type ResourceKind,
-  type World,
+  type Topic,
+  type TopicKind,
+  topicToken,
+  World,
 } from '../../index.ts'
 import {
   AG,
@@ -30,6 +33,10 @@ import {
   FI,
   human,
   M,
+  ORG,
+  ORG_2,
+  ORG_2_PEOPLE,
+  otherOrgFacts,
   P,
   R,
   ref,
@@ -122,6 +129,20 @@ const editFolder =
   (id: Id, change: (folder: FolderFact) => FolderFact): Change =>
   f => ({ ...f, folders: f.folders.map(x => (x.id === id ? change(x) : x)) })
 const person = (id: Id) => ({ kind: 'person' as const, id })
+// A live topic on the realtime gateway (T19 item 7), and the request for it.
+const subscribe = (topic: Topic): Request => ({ action: 'topic.subscribe', topic })
+const topic = (kind: TopicKind, id: Id): Request => subscribe({ kind, id })
+const UNKNOWN_TEAM = 'd0000000-0000-4000-8000-0000000000ff'
+// Every topic the fixture can name: everyone's person topic, both orgs', every team's (the
+// archived Night shift included) and a team that doesn't exist.
+const TOPICS: readonly Topic[] = [
+  ...everyone.map(id => ({ kind: 'person' as const, id })),
+  { kind: 'org', id: ORG },
+  { kind: 'org', id: ORG_2 },
+  ...Object.values(T).map(id => ({ kind: 'team' as const, id })),
+  { kind: 'team', id: UNKNOWN_TEAM },
+]
+const topicName = (t: Topic) => `${t.kind}:${t.id}`
 
 const keyOf = (r: Ref) => `${r.kind}:${r.id}`
 
@@ -433,6 +454,14 @@ export const RULE_6: readonly RuleCase[] = [
     expect(beforeAfter(world, gone, P.arjun, { action: 'devices.sign_out_own' }, {})).toEqual([true, false])
     expect(beforeAfter(world, gone, P.arjun, { action: 'devices.list_own' }, {})).toEqual([true, false])
     expect(beforeAfter(world, gone, P.arjun, { action: 'passkeys.add_own' })).toEqual([true, false])
+    // And their live topics: their own, the org's and their team's (T19 item 7).
+    for (const [label, request] of [
+      ['person', topic('person', P.arjun)],
+      ['org', topic('org', ORG)],
+      ['team', topic('team', T.it)],
+    ] as const) {
+      expect(beforeAfter(world, gone, P.arjun, request, {}), label).toEqual([true, false])
+    }
     // Ashton, Owner and DPO, is offboarded: their assistant goes dark and the DPO console closes to them.
     const ownerGone = changed(deactivate(P.ashton))
     expect(keysOf(world, assistant(AS.ashton)).length).toBeGreaterThan(0)
@@ -493,6 +522,9 @@ export const RULE_6: readonly RuleCase[] = [
     expect(reads(kelvin, P.kelvin, ref.file(FI.otRoster))).toBe(true)
     expect(reads(world, P.kelvin, ref.task(TK.ot))).toBe(true)
     expect(reads(kelvin, P.kelvin, ref.task(TK.ot))).toBe(false)
+    // The team's live topic goes with it; the org's stays (T19 item 7).
+    expect(beforeAfter(world, kelvin, P.kelvin, topic('team', T.operations), {})).toEqual([true, false])
+    expect(beforeAfter(world, kelvin, P.kelvin, topic('org', ORG), {})).toEqual([true, true])
     // Wei Ling leaves the Q4 launch team: the Q4 folder's grant no longer reaches them, though they
     // still own their forecast in it.
     const weiling = changed(leaveTeam(T.q4, P.weiling))
@@ -697,6 +729,14 @@ export const RULE_6: readonly RuleCase[] = [
         const w1 = changed(steps(before, after))
         expect(reads(w1, who, flips), input).not.toBe(reads(w0, who, flips))
         expect(keysOf(w1, human(who)), input).not.toEqual(keysOf(w0, human(who)))
+        // Live topics follow the key change: each is allowed, before and after, exactly while its
+        // token is held (T19 item 7).
+        const held = [new Set(keysOf(w0, human(who))), new Set(keysOf(w1, human(who)))]
+        for (const t of TOPICS) {
+          expect([allows(w0, who, subscribe(t)), allows(w1, who, subscribe(t))], `${input}: ${topicName(t)}`).toEqual(
+            held.map(keys => keys.has(topicToken(t))),
+          )
+        }
         const keys = new Map(everyone.map(p => [p, keysOf(w1, human(p))]))
         for (const r of refs) {
           // No stored row changes, so no re-ACL is needed ...
@@ -736,7 +776,74 @@ export const RULE_6: readonly RuleCase[] = [
       }
     },
   ),
-  core('R6-10', 'C0.7', 'Rule 6 ACC-05: sockets and topics drop within 60 s of losing access'),
+  c0(
+    'R6-10',
+    'Rule 6 ACC-05 PRD-80: a topic is allowed only while its token is among the subscriber’s keys, so deactivation, leaving a team and each key input refuse it at the next decision; apps/server’s R6-10 tests drop it within 60 s',
+    () => {
+      // Arjun (Admin and AI Admin, in IT) is deactivated: their person, org and every team topic go.
+      const gone = changed(deactivate(P.arjun))
+      const arjuns = [
+        { kind: 'person', id: P.arjun },
+        { kind: 'org', id: ORG },
+        ...world.teamsOf(P.arjun).map(id => ({ kind: 'team' as const, id })),
+      ] as const satisfies readonly Topic[]
+      expect(arjuns.length).toBeGreaterThan(2)
+      for (const t of arjuns) {
+        expect(beforeAfter(world, gone, P.arjun, subscribe(t), {}), topicName(t)).toEqual([true, false])
+      }
+      // Kelvin leaves Operations: that topic goes; their own, the org's and their other teams' stay.
+      const left = changed(leaveTeam(T.operations, P.kelvin))
+      expect(beforeAfter(world, left, P.kelvin, topic('team', T.operations), {})).toEqual([true, false])
+      for (const t of [
+        { kind: 'person', id: P.kelvin },
+        { kind: 'org', id: ORG },
+        { kind: 'team', id: T.fleet },
+        { kind: 'team', id: T.nightShift },
+      ] as const) {
+        expect(beforeAfter(world, left, P.kelvin, subscribe(t), {}), topicName(t)).toEqual([true, true])
+      }
+      // Every key input (R6-09's): for everyone, each topic's decision is its token's presence
+      // among their keys, before and after, so whatever changes keys changes topics with them.
+      let flipped = 0
+      for (const { input, before, after } of KEY_INPUTS) {
+        const w0 = changed(before)
+        const w1 = changed(steps(before, after))
+        for (const p of everyone) {
+          const [d0, d1] = [w0, w1].map(w => {
+            const keys = new Set(keysOf(w, human(p)))
+            const decisions = TOPICS.map(t => allows(w, p, subscribe(t)))
+            expect(decisions, `${input}: ${p}`).toEqual(TOPICS.map(t => keys.has(topicToken(t))))
+            return decisions
+          })
+          flipped += TOPICS.filter((_, i) => d0?.[i] !== d1?.[i]).length
+        }
+      }
+      // Leaving or joining a team and deactivation each flip at least one topic.
+      expect(flipped).toBeGreaterThanOrEqual(3)
+      // Nobody holds another person's person topic, nor another org's org topic.
+      for (const p of everyone) {
+        for (const q of everyone) {
+          expect(allows(world, p, topic('person', q)), `${p} person:${q}`).toBe(p === q && world.isActivePerson(p))
+        }
+        expect(allows(world, p, topic('org', ORG_2)), p).toBe(false)
+      }
+      const theirs = new World(otherOrgFacts())
+      expect(allows(theirs, ORG_2_PEOPLE.owner, topic('org', ORG_2))).toBe(true)
+      expect(allows(theirs, ORG_2_PEOPLE.owner, topic('org', ORG))).toBe(false)
+      expect(allows(world, ORG_2_PEOPLE.owner, topic('org', ORG))).toBe(false)
+      expect(allows(theirs, P.ashton, topic('person', P.ashton))).toBe(false)
+      // An unknown team answers as a forbidden one does: refused, with nothing to tell them apart.
+      for (const p of everyone) {
+        expect(allows(world, p, topic('team', UNKNOWN_TEAM)), p).toBe(false)
+        if (!world.isTeamMember(p, T.finance)) expect(allows(world, p, topic('team', T.finance)), p).toBe(false)
+      }
+    },
+  ),
+  core(
+    'R6-10b',
+    'C1.1',
+    'Rule 6 PRD-80 CHAT-01 PRD-79: a member removed from a channel, DM or room loses its topic within 60 s, and catching up after a reconnect (over REST, T19 item 9) never returns what was posted outside their era',
+  ),
   core('R6-11', 'C1.8', 'Rule 6 PRD-74: offline stores on the device are wiped on revocation'),
   core(
     'R6-12',

@@ -98,19 +98,26 @@ export interface Registries {
 const KIND = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/
 const SCHEDULE_KEY = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/
 const CONSUMER = /^[a-z][a-z0-9_]{0,62}$/
-// The roles that may fence and finish a job (0007's grants); hearth_queue runs the queue itself.
-const JOB_RUN_ROLES: readonly JobRole[] = ['hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge']
-// The roles that may move an outbox checkpoint (0007's grants).
-const CONSUMER_ROLES: readonly JobRole[] = ['hearth_job_offboarding']
+// The roles that may fence and finish a job (0007's and 0008's grants); hearth_queue runs the queue
+// itself.
+const JOB_RUN_ROLES: readonly JobRole[] = [
+  'hearth_job_offboarding',
+  'hearth_job_partitions',
+  'hearth_job_purge',
+  'hearth_job_revocation',
+]
+// The roles that may move an outbox checkpoint (0007's and 0008's grants).
+const CONSUMER_ROLES: readonly JobRole[] = ['hearth_job_offboarding', 'hearth_job_revocation']
 
 export const isRetired = (schedule: ScheduleDef | RetiredSchedule): schedule is RetiredSchedule => 'retired' in schedule
 
 // Throws, naming every problem, unless the registries keep the rules (T15 items 1, 8, 10 and 13;
 // T16 item 15): each kind's and consumer's flag, purpose, role and providers registered, its
 // purpose one of its flag's, no two of anything with one name, every schedule naming a known kind,
-// a cron that can fire and a payload its kind accepts, every consumer naming known event types, and
-// every payload and ids schema ids only. Until A0 nothing may serve an AI purpose or an ai.* flag
-// (D41): C0.9's purpose gate is the second lock.
+// a cron that can fire and a payload its kind accepts, every consumer naming known event types, only
+// core.system's accounts work protective (T19 item 4), and every payload and ids schema ids only.
+// Until A0 nothing may serve an AI purpose or an ai.* flag (D41): C0.9's purpose gate is the second
+// lock.
 export function validateRegistries(registries: Registries, flags: Readonly<Record<string, FlagSpec>>): void {
   const problems: string[] = []
   const flagOf = (key: string) => (Object.hasOwn(flags, key) ? flags[key] : undefined)
@@ -191,6 +198,11 @@ export function validateRegistries(registries: Registries, flags: Readonly<Recor
       problems.push(`${what}: a batch is 1 to 10,000 events`)
     }
     if (!(consumer.lagBudgetMs > 0)) problems.push(`${what}: lagBudgetMs must be positive`)
+    // A protective consumer's events are never withheld for a subject's processing switch, so only
+    // Hearth's own account work may be one: revocation (T19 item 4, S8).
+    if (consumer.protective !== undefined && (consumer.feature !== 'core.system' || consumer.purpose !== 'accounts')) {
+      problems.push(`${what}: only a consumer under core.system with purpose accounts may be protective`)
+    }
   }
 
   if (problems.length > 0) throw new Error(`The worker's registries break its rules:\n  ${problems.join('\n  ')}`)

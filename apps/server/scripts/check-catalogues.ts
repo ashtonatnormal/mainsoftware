@@ -15,7 +15,12 @@
 //   2. packages/shared EVENTS' names equal migration 0007's outbox_events_type list;
 //   3. packages/shared FLAGS equals feature_flag_defaults() (keys, defaults and locks), with every
 //      ai.* flag off and locked in both;
-//   4. apps/server/src/db/roles.ts JOB_ROLES equals the job roles hearth_worker may SET.
+//   4. apps/server/src/db/roles.ts JOB_ROLES equals the job roles hearth_worker may SET;
+//   5. every outbox consumer the worker runs (apps/server/src/worker/index.ts productionRegistries)
+//      is bound in outbox_checkpoints_own_row() to exactly the role it runs as, and every name bound
+//      there is one of them (0008, T16 item 3): read from the function's body, and tried in a
+//      transaction it rolls back (a scratch org's checkpoint naming another job role must be
+//      refused, one naming the consumer's own role accepted).
 // The runtime roles are found as scripts/check-migrations.sh finds them: every role granted
 // something in the database (the owner aside), and every role that can use one of them by SET or
 // INHERIT. The integration suites' sweep (apps/server/src/testing/writes.ts) checks the writes the
@@ -29,8 +34,12 @@ import { EVENT_TYPES, FLAGS } from '@hearth/shared'
 import { Client } from 'pg'
 import { JOB_ROLES } from '#src/db/roles.ts'
 import { MATCH, WRITES } from '#src/outbox/coverage.ts'
+import { productionRegistries } from '#src/worker/index.ts'
 import {
+  type BindingProbe,
+  bindingProblems,
   bodyProblems,
+  checkpointBindings,
   contentProblems,
   coverageProblems,
   eventProblems,
@@ -40,6 +49,15 @@ import {
   matchProblems,
   roleProblems,
 } from './catalogues.ts'
+
+// The worker's consumers, by name and role. Building the registries publishes nothing: the
+// handlers' publisher is only called when a job runs, which never happens here.
+const NO_PUBLISH = {
+  valkey: { publish: async () => 0 },
+  keyPrefix: 'check-catalogues:',
+  logger: { warn: () => {}, error: () => {} },
+}
+const consumers = productionRegistries(NO_PUBLISH).consumers.map(({ name, role }) => ({ name, role }))
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
 const host = process.env.PGHOST ?? '127.0.0.1'
@@ -156,6 +174,14 @@ try {
       order by 1`)
   ).rows.map(row => row.role)
 
+  const ownRow = (
+    await client.query<{ source: string }>(`
+      select p.prosrc as source from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname = 'outbox_checkpoints_own_row'`)
+  ).rows
+  const bound = ownRow.length === 1 ? checkpointBindings(ownRow[0]?.source ?? '') : undefined
+  const probes = await probeBindings()
+
   const problems = [
     ...coverageProblems(WRITES, grants, functions),
     ...bodyProblems(WRITES, functions, grants),
@@ -164,15 +190,55 @@ try {
     ...(check === undefined ? ['outbox_events has no outbox_events_type check'] : eventProblems(EVENT_TYPES, types)),
     ...flagProblems(FLAGS, defaults),
     ...roleProblems(JOB_ROLES, settable),
+    ...bindingProblems(consumers, bound, probes),
   ]
   if (problems.length > 0) {
     process.stderr.write(`The catalogues and the database disagree:\n${problems.map(p => `  - ${p}`).join('\n')}\n`)
     process.exitCode = 1
   } else {
     process.stdout.write(
-      `OK: ${grants.length} write grants and ${functions.length} functions covered; ${types.length} event types, ${defaults.length} flags and ${settable.length} job roles match.\n`,
+      `OK: ${grants.length} write grants and ${functions.length} functions covered; ${types.length} event types, ${defaults.length} flags, ${settable.length} job roles and ${consumers.length} consumers' checkpoint bindings match.\n`,
     )
   }
 } finally {
   await client.end()
+}
+
+// Tries each consumer's checkpoint in a scratch org, as this superuser (who may use every role, so
+// only the binding can refuse), in one transaction it rolls back: nothing it writes stays.
+async function probeBindings(): Promise<BindingProbe[]> {
+  const probes: BindingProbe[] = []
+  await client.query('begin')
+  try {
+    const org = (
+      await client.query<{ id: string }>(`insert into public.orgs (name) values ('check-catalogues') returning id`)
+    ).rows[0]?.id
+    const accepted = async (consumer: string, role: string): Promise<boolean> => {
+      await client.query('savepoint probe')
+      try {
+        await client.query('insert into public.outbox_checkpoints (org_id, consumer, role_name) values ($1, $2, $3)', [
+          org,
+          consumer,
+          role,
+        ])
+        return true
+      } catch (error) {
+        if ((error as { code?: unknown }).code === '42501') return false
+        throw error
+      } finally {
+        await client.query('rollback to savepoint probe')
+      }
+    }
+    for (const { name, role } of consumers) {
+      const other = JOB_ROLES.find(r => r !== role) ?? 'hearth_queue'
+      probes.push({
+        consumer: name,
+        otherRefused: !(await accepted(name, other)),
+        ownAccepted: await accepted(name, role),
+      })
+    }
+  } finally {
+    await client.query('rollback')
+  }
+  return probes
 }

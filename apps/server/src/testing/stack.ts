@@ -18,8 +18,18 @@
 // the test's own, and the production schedules only when a test asks for them (so the 03:17 and
 // 03:47 schedules can't fire mid-run), at the test policy's short intervals.
 //
+// From C0.7 each realtime app (the stack's, and each startRealtime() makes) is built as main.ts
+// builds the role, with /ready (postgres, valkey and the gateway's own check) and /ready/local, and
+// logs with its instance name; one given its own Valkey or Postgres URL (through a proxy,
+// testing/proxy.ts) gets its own connections and pool, so a test can cut or freeze them alone.
+// gatewaySocket() opens a socket that speaks the gateway's protocol and keeps every frame; team(),
+// addMember() and removeMember() write teams as the superuser (whose writes the outbox sweep skips:
+// C0.16 brings the runtime write path), and appendEvent() appends an outbox event as Hearth. stop()
+// fails on any MaxListenersExceededWarning or TimeoutNegativeWarning the process emitted (P9).
+//
 // The org has nobody in it at the start: each test makes its own people, so a test reads no
-// other test's state, and `-t` on one test works. Requests go through Fastify's inject from
+// other test's state, and `-t` on one test works. newOrg() makes another, for a test that needs an
+// org of its own (an empty event stream, say). Requests go through Fastify's inject from
 // 127.0.0.1, the one trusted proxy, so each client's X-Forwarded-For sets request.ip. Sockets go
 // to the realtime app listening on a random local port. Every log line both apps write is kept,
 // and so is every reply, every secret the clients were given and every PIN they typed, for the
@@ -40,7 +50,7 @@ import { SOCKET_RECHECK_MS } from '#src/auth/policy.ts'
 import { type ValkeyKeys, valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { createDatabase, type Database } from '#src/db/database.ts'
 import { migrate } from '#src/db/migrations.ts'
-import { createPool } from '#src/db/pool.ts'
+import { appRoleCheck, createPool } from '#src/db/pool.ts'
 import type { JobRole } from '#src/db/roles.ts'
 import { FlagCache } from '#src/flags/cache.ts'
 import { AfterResponse } from '#src/http.ts'
@@ -49,11 +59,14 @@ import { JOB_POLICY, SCHEDULER_POLICY, WORKER_POLICY, type WorkerPolicy } from '
 import { createLogger } from '#src/logger.ts'
 import type { OutboxConsumer } from '#src/outbox/consumers.ts'
 import { Subscriptions } from '#src/pubsub.ts'
-import { registerRealtime } from '#src/realtime/index.ts'
-import type { SocketServer } from '#src/realtime/socket.ts'
+import type { CheckOrg } from '#src/realtime/checks.ts'
+import { type Gateway, registerRealtime } from '#src/realtime/index.ts'
+import { GATEWAY_POLICY, type GatewayPolicy } from '#src/realtime/policy.ts'
+import { TestClient } from '#src/testing/gateway.ts'
+import { startProxy, type TcpProxy } from '#src/testing/proxy.ts'
 import { MemorySms } from '#src/testing/sms.ts'
 import { installWriteTracking } from '#src/testing/writes.ts'
-import { closeValkey, createSubscriber, createValkey } from '#src/valkey.ts'
+import { closeValkey, createBlockingReader, createSubscriber, createValkey, valkeyCheck } from '#src/valkey.ts'
 import { CONTROL_POOL_SIZE, productionRegistries, startWorker, type Worker, workPoolSize } from '#src/worker/index.ts'
 
 // The app's origin in every test. Passkeys are bound to its host name, hearth.test.
@@ -68,16 +81,26 @@ const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
 // secret.
 const APP_PASSWORD = 'hearth-local'
 
-// The flags only tests have (A5): the harness inserts each org's rows at these defaults (it.optional
-// and it.essential on, it.ai off, none locked), and every flag cache in the run knows them, the
-// flags route included. it.ai names an AI purpose outside ai.*, which only a test registry can:
-// the purpose gate refuses to turn it on.
+// The flags only tests have (A5): the harness inserts each org's rows at these defaults (it.optional,
+// it.essential and it.client on, it.ai off, none locked), and every flag cache in the run knows them,
+// the flags route included. it.ai names an AI purpose outside ai.*, which only a test registry can:
+// the purpose gate refuses to turn it on. it.client is the one the browser may see (client: true), so
+// a change to it nudges the gateway's sockets (C0.7, T19 item 10); no production flag is one yet.
 const testFlag = (
   description: string,
   flagClass: FlagSpec['class'],
   purposes: FlagSpec['purposes'],
   on: boolean,
-): FlagSpec => ({ description, class: flagClass, default: on, locked: false, purposes, client: false, stage: 'C0.6' })
+  client = false,
+): FlagSpec => ({
+  description,
+  class: flagClass,
+  default: on,
+  locked: false,
+  purposes,
+  client,
+  stage: client ? 'C0.7' : 'C0.6',
+})
 export const TEST_FLAGS: Readonly<Record<string, FlagSpec>> = {
   'it.optional': testFlag(
     'A test feature whose work is dropped when it is off',
@@ -91,6 +114,13 @@ export const TEST_FLAGS: Readonly<Record<string, FlagSpec>> = {
     'optional',
     ['org_brain'],
     false,
+  ),
+  'it.client': testFlag(
+    'A test feature the browser may see, whose changes nudge the gateway’s sockets',
+    'optional',
+    ['service_operation'],
+    true,
+    true,
   ),
 }
 export const TEST_REGISTRY: Readonly<Record<string, FlagSpec>> = { ...FLAGS, ...TEST_FLAGS }
@@ -117,7 +147,8 @@ export interface WorkerInstanceOptions {
   schedules?: readonly (ScheduleDef | RetiredSchedule)[]
   // Whether the production schedules (03:17 partitions, 03:47 clean-up) are written too.
   productionSchedules?: boolean
-  // Whether the production consumers (offboarding) run too: true unless a test turns them off.
+  // Whether the production consumers (offboarding and revocation) run too: true unless a test turns
+  // them off.
   productionConsumers?: boolean
   policy?: WorkerPolicy
   // The worker's flag cache's poll and staleness.
@@ -185,10 +216,118 @@ export interface Closed {
 
 export type Opened = { status: 101; ws: WebSocket; closed: Promise<Closed> } | { status: number }
 
+// An org of the run, and its Hearth system principal.
+export interface Org {
+  id: string
+  system: string
+}
+
+export interface Readiness {
+  status: number
+  body: { status: string; checks: Record<string, string> }
+}
+
 export interface RealtimeApp {
   app: FastifyInstance
   url: string
-  server: SocketServer
+  // The gateway: its counts and its readiness checks.
+  server: Gateway
+  // The name its log lines carry (instance), realtime-1 being the stack's own.
+  instance: string
+  // Its blocking reader's connection: disconnect() stops its reads for good.
+  reader: Redis
+  // GET /ready (postgres, valkey and the gateway) and GET /ready/local (gateway_local), as main.ts
+  // serves them for the realtime role.
+  readiness(path: '/ready' | '/ready/local'): Promise<Readiness>
+}
+
+export interface RealtimeOptions {
+  // How often every socket is checked.
+  recheckMs: number
+  // Whether it listens on the revocation channels (revoked and access) and the flags channel.
+  subscribe: boolean
+  // Its own Valkey and Postgres (through a proxy, say): with valkeyUrl it gets its own command,
+  // subscriber and reader connections; with databaseUrl its own pool of GATEWAY_POLICY.poolSize, as
+  // hearth_app. Its flag cache reads through the stack's pool.
+  valkeyUrl?: string
+  databaseUrl?: string
+  // Shorter timings (realtime/index.ts RealtimeDeps).
+  policy?: Partial<GatewayPolicy>
+  revokeWithinMs?: number
+  recheckTimeoutMs?: number
+  // Wraps each org's check, so a test can hold a decision after its read.
+  wrapCheck?: (check: CheckOrg) => CheckOrg
+}
+
+// For a test that proves one path alone by its counter (counts().closedDurable, dropped.durable):
+// timings under which a realtime app's periodic re-check never runs during the test, its first tick
+// coming ten minutes after the app starts, past the integration mode's 120 s test timeout. The
+// stack's own app ticks every SOCKET_RECHECK_MS from the suite's start, at a phase the earlier tests
+// set, and a tick whose read lands between the revoking commit and that path's message closes the
+// socket, or drops the topic, as its own (recheck) first. The deadline is lengthened with it, since
+// the start-up guard holds the interval plus its timeout under it (socket.ts timings); with no
+// periodic check to fail, nothing else reads it. The same tick's pruning and refusal summary wait
+// too, which no such test reads. The targeted re-checks a message queues still run, counted under
+// that message's path.
+export const NO_PERIODIC_RECHECK = { recheckMs: 10 * 60_000, revokeWithinMs: 11 * 60_000 } as const
+
+type Frame = TestClient['frames'][number]
+
+// A socket that speaks the gateway's protocol (testing/gateway.ts TestClient): every frame it gets,
+// parsed leniently as a client reads them (frames) and as sent (texts), and its close, with the
+// time it arrived.
+export class GatewaySocket {
+  readonly ws: WebSocket
+  readonly closed: Promise<Closed>
+  readonly texts: string[] = []
+  // The welcome hello was answered with, once it has been.
+  welcome: (Frame & { t: 'welcome' }) | undefined
+  readonly #client: TestClient
+
+  constructor(ws: WebSocket, closed: Promise<Closed>) {
+    this.ws = ws
+    this.closed = closed
+    ws.on('message', data => this.texts.push(String(data)))
+    this.#client = new TestClient(ws)
+  }
+
+  get frames(): readonly Frame[] {
+    return this.#client.frames
+  }
+
+  send(frame: unknown): void {
+    this.#client.send(frame)
+  }
+
+  async hello(versions: number[] = [1]): Promise<Frame & { t: 'welcome' }> {
+    const welcome = await this.#client.hello(versions)
+    this.welcome = welcome
+    return welcome
+  }
+
+  // The next frame not yet taken, of type t if given, within ms (3 s unless given).
+  next<T extends string>(t?: T, ms?: number): Promise<Frame & { t: T }> {
+    return this.#client.next(t, ms)
+  }
+
+  // Sends a sub and answers its ack.
+  sub(topics: string[]): Promise<Frame & { t: 'ack' }> {
+    return this.#client.sub(topics)
+  }
+
+  unsub(topics: string[]): Promise<Frame & { t: 'ack' }> {
+    return this.#client.unsub(topics)
+  }
+
+  // The frames of type t so far.
+  all(t: string): Frame[] {
+    return this.#client.all(t)
+  }
+
+  // Whether the socket is still open.
+  open(): boolean {
+    return this.ws.readyState === WebSocket.OPEN
+  }
 }
 
 // What every reply to a client looked like, for the sweeps.
@@ -233,9 +372,11 @@ export interface Stack {
     roles?: PersonRole[]
     left?: boolean
     pin?: string
-    org?: 'second'
+    org?: 'second' | Org
     e164?: string
   }): Promise<Person>
+  // Another org with its system principal and the test flags, and nobody in it.
+  newOrg(): Promise<Org>
   // A Singapore mobile number nobody in this run holds.
   number(): string
   // A PIN the policy accepts, recorded as typed.
@@ -248,14 +389,47 @@ export interface Stack {
   age(sessionId: string, interval: string): Promise<void>
   query<Row>(text: string, values?: unknown[]): Promise<Row[]>
   settled(): Promise<void>
-  openSocket(client: Client, options?: { origin?: string; url?: string; cookie?: string }): Promise<Opened>
+  openSocket(
+    client: Client,
+    options?: { origin?: string; url?: string; cookie?: string; autoPong?: boolean },
+  ): Promise<Opened>
+  // A socket on the gateway (the stack's realtime app unless url says another) that has said hello
+  // (unless hello is false; versions are the ones it says it speaks), or a failure if the upgrade is
+  // refused.
+  gatewaySocket(
+    client: Client,
+    options?: { url?: string; hello?: boolean; versions?: number[]; autoPong?: boolean },
+  ): Promise<GatewaySocket>
+  // Every frame any gateway socket of the run was sent, as sent, for the gateway suite's sweep.
+  gatewayFrames: string[]
+  // A team in the org (the stack's unless given), and memberships of it, written as the superuser.
+  team(options?: { org?: Org }): Promise<string>
+  addMember(team: string, person: Person): Promise<void>
+  removeMember(team: string, person: Person): Promise<void>
+  // Appends an outbox event as the superuser, Hearth acting, about the first subject (or entity).
+  appendEvent(
+    type: string,
+    ids: Record<string, unknown>,
+    subjects: readonly string[],
+    options?: { org?: Org; entity?: string },
+  ): Promise<void>
+  // A TCP proxy (testing/proxy.ts) in front of the stack's Postgres or Valkey, and the URL through it
+  // (as hearth_app to the run's database, for Postgres), closed when the stack stops.
+  proxy(to: 'postgres' | 'valkey'): Promise<{ proxy: TcpProxy; url: string }>
   // Another api app on the same database, with its own Valkey URL (an unreachable one, say), and
-  // optionally without its after-commit publish of a deactivation's sessions (A6).
-  startApi(options: { valkeyUrl?: string; publishDeactivated?: boolean }): Promise<FastifyInstance>
-  // Another realtime app: a shorter re-check, and optionally no revocation subscriber.
-  startRealtime(options: { recheckMs: number; subscribe: boolean }): Promise<RealtimeApp>
+  // optionally without its after-commit publish of the sessions a commit ended (A6), so only the
+  // worker's revocation consumer (C0.7) or the re-check closes their sockets.
+  startApi(options: { valkeyUrl?: string; publishRevoked?: boolean }): Promise<FastifyInstance>
+  // Another realtime app: a shorter re-check, and optionally no revocation subscriber, its own
+  // connections, shorter timings or a wrapped check.
+  startRealtime(options: RealtimeOptions): Promise<RealtimeApp>
   // A worker instance (worker/index.ts), stopped when the stack stops.
   startWorker(options?: WorkerInstanceOptions): Promise<WorkerInstance>
+  // Waits, polling as the superuser, until the outbox consumer has its checkpoint in the org. A
+  // consumer that starts at 'now' (C0.7's revocation) skips whatever committed before its checkpoint
+  // was made, and a worker can be ready before then, so a test waits for it before its first
+  // revocation (m6).
+  waitForCheckpoint(consumer: string, orgId: string, ms?: number): Promise<void>
   track(resource: { close(): Promise<unknown> }): void
   stop(): Promise<void>
 }
@@ -290,6 +464,10 @@ function captureLogs(logs: Record<string, unknown>[]): Writable {
     },
   })
 }
+
+// The warnings no suite may cause (P9): a socket that gathers close listeners, and a timer given a
+// negative delay. Node prints both as plain text, which scripts/check-server.sh refuses.
+const GUARDED_WARNINGS = new Set(['MaxListenersExceededWarning', 'TimeoutNegativeWarning'])
 
 function setCookiesOf(header: unknown): string[] {
   if (header === undefined) return []
@@ -332,6 +510,12 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
         await admin.end().catch(() => {})
       }
     }
+    const guarded = warnings.filter(warning => GUARDED_WARNINGS.has(warning.name))
+    if (guarded.length > 0) {
+      errors.push(
+        new Error(`the run emitted ${guarded.map(warning => `${warning.name}: ${warning.message}`).join('; ')}`),
+      )
+    }
     if (errors.length > 0) throw new AggregateError(errors, 'the integration stack did not stop cleanly')
   }
 
@@ -371,20 +555,24 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     const query = async <Row>(text: string, values: unknown[] = []): Promise<Row[]> =>
       (await superuser.query(text, values)).rows as Row[]
 
-    // One org and its Hearth system principal; nobody else.
-    const org: { id: string; system: string } = { id: randomUUID(), system: randomUUID() }
-    await query("insert into orgs (id, name) values ($1, 'Integration test')", [org.id])
-    await query("insert into principals (id, org_id, kind, system_key) values ($1, $2, 'system', 'hearth')", [
-      org.system,
-      org.id,
-    ])
-    const addTestFlags = (orgId: string) =>
-      query(
+    // Every org of the run, by id; the stack's own has nobody in it but its Hearth system principal.
+    const orgs = new Map<string, Org>()
+    async function newOrg(name = 'Another org'): Promise<Org> {
+      const made: Org = { id: randomUUID(), system: randomUUID() }
+      await query('insert into orgs (id, name) values ($1, $2)', [made.id, name])
+      await query("insert into principals (id, org_id, kind, system_key) values ($1, $2, 'system', 'hearth')", [
+        made.system,
+        made.id,
+      ])
+      await query(
         `insert into feature_flags (org_id, key, enabled, locked) select $1, f.key, f.enabled, false from (${TEST_FLAG_ROWS}) f (key, enabled)`,
-        [orgId],
+        [made.id],
       )
-    await addTestFlags(org.id)
-    let second: { id: string; system: string } | undefined
+      orgs.set(made.id, made)
+      return made
+    }
+    const org = await newOrg('Integration test')
+    let second: Org | undefined
 
     const logs: Record<string, unknown>[] = []
     const logger = createLogger({ logLevel: 'debug', role: 'api' }, captureLogs(logs))
@@ -458,7 +646,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     async function startApiOn(
       apiValkey: Redis,
       apiLogger: Logger,
-      o: { publishDeactivated?: boolean } = {},
+      o: { publishRevoked?: boolean } = {},
     ): Promise<{ app: FastifyInstance; flags: FlagCache }> {
       const afterResponse = new AfterResponse()
       const flags = flagCache({ logger: apiLogger })
@@ -476,7 +664,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
           keyPrefix: prefix,
           flags,
           afterResponse,
-          ...(o.publishDeactivated === undefined ? {} : { publishDeactivated: o.publishDeactivated }),
+          ...(o.publishRevoked === undefined ? {} : { publishRevoked: o.publishRevoked }),
         },
       })
       closers.push(() => app.close())
@@ -485,26 +673,83 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       return { app, flags }
     }
 
-    async function startRealtimeApp(
-      recheckMs: number,
-      subscribe: boolean,
-    ): Promise<RealtimeApp & { flags: FlagCache }> {
-      const app = buildApp({ appOrigin: APP_ORIGIN, logger: realtimeLogger, checks: {} })
-      const flags = flagCache({ logger: realtimeLogger })
-      const subscriptions = subscribe ? subscribed(valkey, flags, realtimeLogger) : undefined
-      const server = registerRealtime(app, {
+    // A realtime app, built as main.ts builds the role: /ready with postgres, valkey and the gateway's
+    // own check, and /ready/local with the gateway's local one (app.ts names them so). It is
+    // registered here rather than through buildApp's realtime option, so the harness holds the
+    // gateway; the checks reach it once it is.
+    let realtimeCount = 0
+    async function startRealtimeApp(o: RealtimeOptions): Promise<RealtimeApp & { flags: FlagCache }> {
+      realtimeCount++
+      const instance = `realtime-${realtimeCount}`
+      const appLogger = realtimeLogger.child({ instance })
+      let appValkey = valkey
+      if (o.valkeyUrl !== undefined) {
+        const own = createValkey(o.valkeyUrl, appLogger)
+        closers.push(() => closeValkey(own))
+        appValkey = own
+      }
+      let appPool = pool
+      let appDb = db
+      if (o.databaseUrl !== undefined) {
+        const own = createPool(o.databaseUrl, appLogger, {
+          max: GATEWAY_POLICY.poolSize,
+          applicationName: `hearth-${instance}-it`,
+        })
+        closers.push(() => own.end())
+        appPool = own
+        appDb = createDatabase(own)
+      }
+      let gateway: Gateway | undefined
+      const gatewayOf = (): Gateway => {
+        if (gateway === undefined) throw new Error('the gateway is not registered yet')
+        return gateway
+      }
+      const app = buildApp({
         appOrigin: APP_ORIGIN,
-        logger: realtimeLogger,
-        db,
+        logger: appLogger,
+        checks: {
+          postgres: appRoleCheck(appPool),
+          valkey: valkeyCheck(appValkey),
+          gateway: signal => gatewayOf().check(signal),
+        },
+        localChecks: { gateway_local: signal => gatewayOf().localCheck(signal) },
+      })
+      const flags = flagCache({ logger: appLogger })
+      const subscriptions = o.subscribe ? subscribed(appValkey, flags, appLogger) : undefined
+      // Its own blocking reader connection for the org streams, as main.ts makes one per process.
+      // Cut rather than quit when the app has stopped: a QUIT would wait behind the reader's XREAD.
+      const reader = createBlockingReader(appValkey, appLogger)
+      closers.push(async () => reader.disconnect())
+      gateway = registerRealtime(app, {
+        appOrigin: APP_ORIGIN,
+        logger: appLogger,
+        db: appDb,
+        valkey: appValkey,
+        reader,
         keyPrefix: prefix,
-        recheckMs,
+        recheckMs: o.recheckMs,
         flags,
         ...(subscriptions === undefined ? {} : { subscriptions }),
+        ...(o.policy === undefined ? {} : { policy: o.policy }),
+        ...(o.revokeWithinMs === undefined ? {} : { revokeWithinMs: o.revokeWithinMs }),
+        ...(o.recheckTimeoutMs === undefined ? {} : { recheckTimeoutMs: o.recheckTimeoutMs }),
+        ...(o.wrapCheck === undefined ? {} : { wrapCheck: o.wrapCheck }),
       })
       closers.push(() => app.close())
       await app.listen({ host: '127.0.0.1', port: 0 })
       const { port } = app.server.address() as AddressInfo
-      return { app, server, url: `ws://127.0.0.1:${port}/ws`, flags }
+      return {
+        app,
+        server: gateway,
+        url: `ws://127.0.0.1:${port}/ws`,
+        instance,
+        reader,
+        flags,
+        readiness: async path => {
+          const reply = await app.inject({ method: 'GET', url: path })
+          return { status: reply.statusCode, body: reply.json() }
+        },
+      }
     }
 
     // Worker instances, each on its own pools and subscriber, logging into the run's lines with its
@@ -591,13 +836,17 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     }
 
     const { app: api, flags: apiFlags } = await startApiOn(valkey, logger)
-    const realtime = await startRealtimeApp(options.recheckMs ?? SOCKET_RECHECK_MS, true)
-    // The realtime app subscribes in the background; a revocation published before it has would
-    // be caught only by the re-check.
+    const realtime = await startRealtimeApp({ recheckMs: options.recheckMs ?? SOCKET_RECHECK_MS, subscribe: true })
+    // The realtime app subscribes to both revocation channels in the background; a revocation
+    // published before it has would be caught only by the re-check. Its full readiness says when it
+    // listens on both (T19 item 12).
     for (let tries = 0; ; tries++) {
-      const reply = (await valkey.call('PUBSUB', 'NUMSUB', names.revoked)) as [string, number]
-      if (Number(reply[1]) >= 1) break
-      if (tries > 250) throw new Error('the realtime app never subscribed to the revocation channel')
+      try {
+        await realtime.server.check(new AbortController().signal)
+        break
+      } catch (error) {
+        if (tries > 250) throw new Error('the realtime app never became ready', { cause: error })
+      }
       await new Promise(resolve => setTimeout(resolve, 20))
     }
 
@@ -755,20 +1004,14 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     }
 
     async function person(
-      o: { roles?: PersonRole[]; left?: boolean; pin?: string; org?: 'second'; e164?: string } = {},
+      o: { roles?: PersonRole[]; left?: boolean; pin?: string; org?: 'second' | Org; e164?: string } = {},
     ): Promise<Person> {
       let inOrg = org
       if (o.org === 'second') {
-        if (second === undefined) {
-          second = { id: randomUUID(), system: randomUUID() }
-          await query("insert into orgs (id, name) values ($1, 'Second org')", [second.id])
-          await query("insert into principals (id, org_id, kind, system_key) values ($1, $2, 'system', 'hearth')", [
-            second.system,
-            second.id,
-          ])
-          await addTestFlags(second.id)
-        }
+        second ??= await newOrg('Second org')
         inOrg = second
+      } else if (o.org !== undefined) {
+        inOrg = o.org
       }
       const id = randomUUID()
       const e164 = o.e164 ?? number()
@@ -845,12 +1088,17 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       }
     }
 
-    function openSocket(browser: Client, o: { origin?: string; url?: string; cookie?: string } = {}): Promise<Opened> {
+    function openSocket(
+      browser: Client,
+      o: { origin?: string; url?: string; cookie?: string; autoPong?: boolean } = {},
+    ): Promise<Opened> {
       return new Promise((resolve, reject) => {
         const cookie = o.cookie ?? browser.cookieHeader()
         const ws = new WebSocket(o.url ?? realtime.url, {
           headers: { origin: o.origin ?? APP_ORIGIN, ...(cookie === '' ? {} : { cookie }) },
           perMessageDeflate: false,
+          // A client that stops answering the server's pings (the heartbeat's dead limit) sets false.
+          autoPong: o.autoPong ?? true,
         })
         // Listened for from the start, so no close is missed.
         const closed = new Promise<Closed>(done => {
@@ -867,6 +1115,101 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
           ws.terminate()
         })
       })
+    }
+
+    const gatewayFrames: string[] = []
+    async function gatewaySocket(
+      browser: Client,
+      o: { url?: string; hello?: boolean; versions?: number[]; autoPong?: boolean } = {},
+    ): Promise<GatewaySocket> {
+      const opened = await openSocket(browser, {
+        ...(o.url === undefined ? {} : { url: o.url }),
+        ...(o.autoPong === undefined ? {} : { autoPong: o.autoPong }),
+      })
+      if (!('ws' in opened)) throw new Error(`the gateway refused the upgrade: ${opened.status}`)
+      const socket = new GatewaySocket(opened.ws, opened.closed)
+      opened.ws.on('message', data => gatewayFrames.push(String(data)))
+      if (o.hello !== false) await socket.hello(o.versions)
+      return socket
+    }
+
+    const orgOf = (orgId: string): Org => {
+      const found = orgs.get(orgId)
+      if (found === undefined) throw new Error('that org is not one of the run’s')
+      return found
+    }
+
+    async function team(o: { org?: Org } = {}): Promise<string> {
+      const inOrg = o.org ?? org
+      const [made] = await query<{ id: string }>(
+        'insert into teams (org_id, name, created_by) values ($1, $2, $3) returning id',
+        [inOrg.id, `Team ${randomBytes(4).toString('hex')}`, inOrg.system],
+      )
+      if (made === undefined) throw new Error('the team was not returned')
+      return made.id
+    }
+
+    async function addMember(teamId: string, member: Person): Promise<void> {
+      await query(
+        `insert into team_memberships (org_id, team_id, person_id, created_by)
+         values ($1, $2, $3, $4)`,
+        [member.orgId, teamId, member.id, orgOf(member.orgId).system],
+      )
+    }
+
+    async function removeMember(teamId: string, member: Person): Promise<void> {
+      const removed = await query(
+        `update team_memberships set removed_at = now(), removed_by = $4
+         where org_id = $1 and team_id = $2 and person_id = $3 and removed_at is null returning id`,
+        [member.orgId, teamId, member.id, orgOf(member.orgId).system],
+      )
+      if (removed.length !== 1) throw new Error('removeMember: that person is not a member of that team')
+    }
+
+    // As the jobs suite's forged event: the superuser, acting as Hearth, in a transaction of its own.
+    async function appendEvent(
+      type: string,
+      ids: Record<string, unknown>,
+      subjects: readonly string[],
+      o: { org?: Org; entity?: string } = {},
+    ): Promise<void> {
+      const inOrg = o.org ?? org
+      const entity = o.entity ?? subjects[0]
+      if (entity === undefined) throw new Error('appendEvent: an event names its entity or a subject')
+      await query('begin')
+      try {
+        await query("select set_config('app.org_id', $1, true), set_config('app.user_id', $2, true)", [
+          inOrg.id,
+          inOrg.system,
+        ])
+        await query(
+          `insert into outbox_events (org_id, type, entity_type, entity_id, actor_id, actor_kind, subject_ids, purpose, ids)
+           values ($1, $2, 'person', $3, $4, 'system', $5::uuid[], 'accounts', $6::jsonb)`,
+          [inOrg.id, type, entity, inOrg.system, subjects, JSON.stringify(ids)],
+        )
+        await query('commit')
+      } catch (error) {
+        await query('rollback')
+        throw error
+      }
+    }
+
+    async function proxy(to: 'postgres' | 'valkey'): Promise<{ proxy: TcpProxy; url: string }> {
+      if (to === 'postgres') {
+        const made = await startProxy({ host: c.host, port: c.port })
+        closers.push(() => made.close())
+        return {
+          proxy: made,
+          url: url({ ...c, host: '127.0.0.1', port: made.port }, database, 'hearth_app', APP_PASSWORD),
+        }
+      }
+      const target = new URL(valkeyUrl)
+      const made = await startProxy({ host: target.hostname, port: Number(target.port || 6379) })
+      closers.push(() => made.close())
+      const through = new URL(valkeyUrl)
+      through.hostname = '127.0.0.1'
+      through.port = String(made.port)
+      return { proxy: made, url: through.toString() }
     }
 
     return {
@@ -895,6 +1238,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
         return cache
       },
       person,
+      newOrg: () => newOrg(),
       number,
       newPin,
       client,
@@ -904,18 +1248,37 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       query,
       settled,
       openSocket,
-      startApi: async ({ valkeyUrl, publishDeactivated }) => {
+      gatewaySocket,
+      gatewayFrames,
+      team,
+      addMember,
+      removeMember,
+      appendEvent,
+      proxy,
+      startApi: async ({ valkeyUrl, publishRevoked }) => {
         let apiValkey = valkey
         if (valkeyUrl !== undefined) {
           const other = createValkey(valkeyUrl, logger)
           closers.push(() => closeValkey(other))
           apiValkey = other
         }
-        const o = publishDeactivated === undefined ? {} : { publishDeactivated }
+        const o = publishRevoked === undefined ? {} : { publishRevoked }
         return (await startApiOn(apiValkey, logger, o)).app
       },
-      startRealtime: ({ recheckMs, subscribe }) => startRealtimeApp(recheckMs, subscribe),
+      startRealtime: startRealtimeApp,
       startWorker: startWorkerInstance,
+      waitForCheckpoint: async (consumer, orgId, ms = 10_000) => {
+        const deadline = Date.now() + ms
+        for (;;) {
+          const rows = await query('select 1 from outbox_checkpoints where consumer = $1 and org_id = $2', [
+            consumer,
+            orgId,
+          ])
+          if (rows.length > 0) return
+          if (Date.now() > deadline) throw new Error(`the ${consumer} consumer made no checkpoint in ${ms} ms`)
+          await new Promise(resolve => setTimeout(resolve, 20))
+        }
+      },
       track,
       stop: stopAll,
     }

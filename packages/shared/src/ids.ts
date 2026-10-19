@@ -2,15 +2,25 @@
 // 8, T16 item 15): outbox events' ids and job payloads hold ids, never someone's details. Each
 // event type's ids schema and each job kind's payload schema must be a z.strictObject whose every
 // field, optional or not, is named by a key as IDS_KEY says and is one of:
-//   z.uuid()                                   an id
+//   z.uuid(), or LowerUuid itself              an id (LowerUuid is the database's lower-case
+//                                              form; it is accepted by identity, so another
+//                                              pattern on a string is still refused)
 //   z.enum([...]) or z.literal(...)            codes: lower-case, dotted, under 64 characters
 //                                              (or a literal boolean)
 //   z.boolean()
 //   z.int().min(0).max(n), n ≤ 1,000,000       a bounded whole number
-//   z.array(z.uuid()).max(n), n ≤ 100          a list of ids
+//   z.array(z.uuid()).max(n), n ≤ 100          a list of ids (or of LowerUuid)
 // So a free string (a pattern included), an unbounded or negative number and a nested object are
 // refused. is_ids_only() is the database's backstop for the same rule.
-import type { z } from 'zod'
+import { z } from 'zod'
+
+// A uuid in the database's text form, lower case: what uuid columns print, and the only form
+// is_ids_only()'s uuid regex (migration 0007) and enqueue() accept. z.uuid() takes upper case too,
+// so a value read from a frame or an event that goes on to the database, or is compared with its
+// ids, is read with LowerUuid (C0.7: the gateway's topics and ev ids, the revocation consumer).
+export const UUID_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+export const UUID_PATTERN = new RegExp(`^${UUID_SOURCE}$`)
+export const LowerUuid = z.string().regex(UUID_PATTERN)
 
 // A code as is_ids_only() accepts one.
 export const CODE = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/
@@ -50,6 +60,8 @@ function checksOf(def: Def): CheckDef[] {
 
 // Why a field's schema isn't an ids leaf, or undefined if it is.
 function leafProblem(schema: Schema, optionalAllowed: boolean): string | undefined {
+  // The one pattern allowed on a string: this very schema, whose pattern is a uuid's (C0.7, m4).
+  if (schema === (LowerUuid as unknown as Schema)) return undefined
   const def = schema._zod.def
   switch (def.type) {
     case 'optional':

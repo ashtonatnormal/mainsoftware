@@ -1,13 +1,15 @@
 // The server's entry point: `node src/main.ts`, with ROLE choosing api, realtime or worker (T2).
 // All three roles come from one image and serve /health and /ready. The api role adds the
 // sign-in, device and admin routes under /api, with its SMS provider (C0.5), and the flags route
-// (C0.6); the realtime role adds the WebSocket on /ws, which closes a session's sockets when the
-// api says it has ended (C0.5; C0.7's gateway grows from it). Both keep the flags of the orgs they
+// (C0.6); the realtime role adds the gateway on /ws (C0.7, TECH-SPEC T19): topics, fan-out from each
+// org's Valkey stream on a blocking reader connection of its own, and sockets closed within 60 s of
+// their access ending, plus /ready/local for the load balancer. Both keep the flags of the orgs they
 // serve, polled and told of changes on Valkey (C0.6, T17). The worker connects as hearth_worker and
 // runs the job queue, the scheduler and the outbox consumers (C0.6, T15-T18; worker/index.ts). Each
 // role serves only its own routes (scripts/check-server.sh).
 import { performance } from 'node:perf_hooks'
 import { setTimeout as delay } from 'node:timers/promises'
+import type { Redis } from 'ioredis'
 import type { Pool } from 'pg'
 import type { ApiDeps } from '#src/api.ts'
 import { buildApp } from '#src/app.ts'
@@ -21,8 +23,9 @@ import { FlagCache } from '#src/flags/cache.ts'
 import { createLogger } from '#src/logger.ts'
 import { Subscriptions } from '#src/pubsub.ts'
 import type { RealtimeDeps } from '#src/realtime/index.ts'
+import { GATEWAY_POLICY } from '#src/realtime/policy.ts'
 import { createS3, storageCheck } from '#src/storage/s3.ts'
-import { closeValkey, createSubscriber, createValkey, valkeyCheck } from '#src/valkey.ts'
+import { closeValkey, createBlockingReader, createSubscriber, createValkey, valkeyCheck } from '#src/valkey.ts'
 import { CONTROL_POOL_SIZE, productionRegistries, startWorker, type Worker, workPoolSize } from '#src/worker/index.ts'
 
 // ECS stops a task with SIGTERM and kills it after its stop timeout (30 s by default). Requests
@@ -57,10 +60,16 @@ process.on('unhandledRejection', error => {
 // The api and realtime roles connect as hearth_app (DATABASE_URL), the worker as hearth_worker
 // (WORKER_DATABASE_URL), which takes a job role per transaction (TECH-SPEC T18). Each pool names
 // itself in pg_stat_activity. The worker's is its control pool, for its loops; its work pool, for
-// jobs' and consumers' transactions, is made below (T18 item 8).
+// jobs' and consumers' transactions, is made below (T18 item 8). Realtime's holds 12: up to 5 session
+// lookups, the decision lane, the periodic check, 3 flag reads, /ready's role check and a spare, so
+// neither /ready nor the check waits behind a storm of lookups (T19 item 11). The api's stays at 10.
 const pool = createPool(config.databaseUrl, logger, {
   applicationName: config.role === 'worker' ? 'hearth-worker-control' : `hearth-${config.role}`,
-  ...(config.role === 'worker' ? { max: CONTROL_POOL_SIZE } : {}),
+  ...(config.role === 'worker'
+    ? { max: CONTROL_POOL_SIZE }
+    : config.role === 'realtime'
+      ? { max: GATEWAY_POLICY.poolSize }
+      : {}),
 })
 const db = createDatabase(pool)
 const valkey = createValkey(config.valkeyUrl, logger)
@@ -70,6 +79,8 @@ const s3 = createS3(config.s3)
 
 let api: ApiDeps | undefined
 let realtime: RealtimeDeps | undefined
+// Realtime's blocking reader connection, only for XREAD BLOCK on the org streams (valkey.ts).
+let reader: Redis | undefined
 // The api's and realtime's pub/sub channels, on a second Valkey connection of their own, and the
 // flags they keep (T17): read as hearth_app, polled every 2 s and reloaded at once when the flags
 // channel says an org changed.
@@ -96,7 +107,8 @@ if (config.role === 'api' && flags !== undefined) {
     flags,
   }
 } else if (config.role === 'realtime' && flags !== undefined) {
-  realtime = { db, subscriptions, flags, keyPrefix }
+  reader = createBlockingReader(valkey, logger)
+  realtime = { db, valkey, reader, subscriptions, flags, keyPrefix }
 }
 
 // The worker: its work pool, its own pub/sub connection for the flags channel, and its loops: the
@@ -134,7 +146,9 @@ const app = buildApp({
       ? { postgres: workerRoleCheck(pool), worker_roles: workerRolesCheck(pool), worker: worker.check }
       : { postgres: appRoleCheck(pool) }),
     valkey: valkeyCheck(valkey),
-    storage: storageCheck(s3, config.s3.bucket),
+    // Realtime never touches object storage, so an S3 outage doesn't fail its readiness (P2); its
+    // gateway adds its own checks, and /ready/local.
+    ...(config.role === 'realtime' ? {} : { storage: storageCheck(s3, config.s3.bucket) }),
   },
   trustProxy: config.trustProxy,
   api,
@@ -159,8 +173,8 @@ async function stop(signal: NodeJS.Signals): Promise<void> {
   // rest back; anything still in flight at 5 s is left to lease expiry.
   await worker?.stop(performance.now() + WORKER_STOP_MS)
   // Stop taking requests and let those in flight finish, then close the connections they used.
-  // The api waits (at most 5 s) for work queued after its responses; the realtime role closes its
-  // sockets with 1001 first, so this returns promptly.
+  // The api waits (at most 5 s) for work queued after its responses; the realtime role drains: it
+  // refuses upgrades and closes its sockets with 1001 first, so this returns promptly.
   await app.close()
   flags?.stop()
   await Promise.race([
@@ -168,6 +182,8 @@ async function stop(signal: NodeJS.Signals): Promise<void> {
       pool.end(),
       ...(workPool === undefined ? [] : [workPool.end()]),
       closeValkey(valkey),
+      // Cut, not quit: a QUIT would wait behind the reader's XREAD, which the drain has made its last.
+      ...(reader === undefined ? [] : [Promise.resolve(reader.disconnect())]),
       ...(subscriptions === undefined ? [] : [subscriptions.close()]),
     ]),
     delay(CLOSE_TIMEOUT_MS, undefined, { ref: false }),

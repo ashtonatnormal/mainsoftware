@@ -1,11 +1,11 @@
--- T18, CLAUDE.md Database: the worker's roles (0007). The worker logs in as hearth_worker, which
+-- T18, CLAUDE.md Database: the worker's roles (0007, 0008). The worker logs in as hearth_worker, which
 -- holds nothing itself and takes one job role per transaction; each job role gets only the grants
 -- its jobs need. This pins every privilege each job role can use on every table, column, sequence
 -- and function, however it got it, as 030 does hearth_app's, so any new grant must be added here on
 -- purpose. It also pins who the roles are: hearth_worker NOINHERIT with no privilege of its own and
--- SET (never INHERIT) on exactly the four job roles; each job role NOLOGIN, owning nothing, a
--- member of nothing, and usable by hearth_worker alone. And who may add to the outbox (T16 item
--- 20), and what worker_org_ids() gives whom.
+-- SET (never INHERIT) on exactly the five job roles (0008 adds hearth_job_revocation); each job
+-- role NOLOGIN, owning nothing, a member of nothing, and usable by hearth_worker alone. And who
+-- may add to the outbox (T16 item 20), and what worker_org_ids() gives whom.
 \ir fixtures/two_orgs.sql
 
 -- Every privilege each job role holds, by any route.
@@ -65,6 +65,28 @@ select pg_temp.expect_privileges('hearth_job_offboarding', array[
   'function job_finish(uuid,uuid,bigint[]): EXECUTE'
 ]);
 
+-- The revocation consumer and its jobs (0008, T19). Offboarding's read of sessions above stays
+-- until a later migration contracts it (T3): a C0.6 worker may still run its sockets job.
+select pg_temp.expect_privileges('hearth_job_revocation', array[
+  -- The revocation consumer: read the outbox, start and move its own checkpoint, read the floors.
+  'outbox_events: SELECT', 'outbox_floors: SELECT', 'outbox_checkpoints: SELECT',
+  'outbox_checkpoints.consumer: INSERT', 'outbox_checkpoints.last_id: INSERT', 'outbox_checkpoints.last_tx: INSERT',
+  'outbox_checkpoints.org_id: INSERT', 'outbox_checkpoints.role_name: INSERT',
+  'outbox_checkpoints.last_id: UPDATE', 'outbox_checkpoints.last_tx: UPDATE', 'outbox_checkpoints.processed: UPDATE',
+  'outbox_checkpoints.updated_at: UPDATE',
+  -- One job per handler, never choosing who made it, its state or its lease.
+  'jobs.feature_key: INSERT', 'jobs.id: INSERT', 'jobs.idempotency_key: INSERT', 'jobs.kind: INSERT',
+  'jobs.max_attempts: INSERT', 'jobs.org_id: INSERT', 'jobs.payload: INSERT', 'jobs.purpose: INSERT',
+  'jobs.run_after: INSERT', 'jobs.subject_id: INSERT',
+  -- The sockets job's re-read: which sessions ended, and when.
+  'sessions.id: SELECT', 'sessions.org_id: SELECT', 'sessions.revoked_at: SELECT', 'sessions.user_id: SELECT',
+  'principals.id: SELECT', 'principals.kind: SELECT', 'principals.org_id: SELECT', 'principals.system_key: SELECT',
+  'function feature_fence(text,bigint[]): EXECUTE',
+  'function is_ids_only(jsonb): EXECUTE',
+  'function job_fence(uuid,uuid,bigint[]): EXECUTE',
+  'function job_finish(uuid,uuid,bigint[]): EXECUTE'
+]);
+
 select pg_temp.expect_privileges('hearth_job_partitions', array[
   'principals.id: SELECT', 'principals.kind: SELECT', 'principals.org_id: SELECT', 'principals.system_key: SELECT',
   'function create_data_access_partitions(integer): EXECUTE',
@@ -87,14 +109,14 @@ select pg_temp.expect_privileges('hearth_worker', '{}');
 -- None of them can create anything: no schema, no object in one, no temporary table.
 select pg_temp.check(not exists (
   select 1 from unnest(array['hearth_worker', 'hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions',
-                             'hearth_job_purge']) r
+                             'hearth_job_purge', 'hearth_job_revocation']) r
   where has_database_privilege(r, current_database(), 'CREATE') or has_database_privilege(r, current_database(), 'TEMPORARY')
      or exists (select 1 from pg_namespace n
                 where n.nspname not like 'pg\_%' and n.nspname <> 'information_schema' and has_schema_privilege(r, n.oid, 'CREATE'))),
   'a worker role can create a schema, an object in one, or a temporary table');
 
 -- hearth_worker: NOINHERIT, with no power, and a member, by SET and never INHERIT or ADMIN, of
--- exactly the four job roles (and on RDS of rds_iam, if that has no powers and belongs to nothing).
+-- exactly the five job roles (and on RDS of rds_iam, if that has no powers and belongs to nothing).
 -- Whether it can log in is set outside migrations (scripts/db-local.sh locally, IAM on RDS).
 select pg_temp.check(not (rolinherit or rolsuper or rolbypassrls or rolcreaterole or rolcreatedb or rolreplication),
                      'hearth_worker inherits, or has a power it must not have')
@@ -106,8 +128,9 @@ select pg_temp.check(
             where m.member = 'hearth_worker'::regrole
               and not (g.rolname = 'rds_iam' and not g.rolsuper and not g.rolbypassrls
                        and not exists (select 1 from pg_auth_members x where x.member = g.oid))), '{}')
-  = array['hearth_job_offboarding S', 'hearth_job_partitions S', 'hearth_job_purge S', 'hearth_queue S'],
-  'hearth_worker holds a role other than the four job roles, or holds one by INHERIT or ADMIN');
+  = array['hearth_job_offboarding S', 'hearth_job_partitions S', 'hearth_job_purge S', 'hearth_job_revocation S',
+          'hearth_queue S'],
+  'hearth_worker holds a role other than the five job roles, or holds one by INHERIT or ADMIN');
 -- Nobody may act as hearth_worker; its creator keeps only Postgres's ADMIN-only grant.
 select pg_temp.check(
   coalesce((select array_agg(distinct format('%s %s%s%s', x.rolname, case when m.admin_option then 'A' end,
@@ -125,7 +148,8 @@ declare
   r pg_roles%rowtype;
   members text[];
 begin
-  foreach job in array array['hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge'] loop
+  foreach job in array array['hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge',
+                             'hearth_job_revocation'] loop
     select * into r from pg_roles where rolname = job;
     perform pg_temp.check(found, format('%s does not exist', job));
     perform pg_temp.check(not (r.rolcanlogin or r.rolsuper or r.rolbypassrls or r.rolcreaterole or r.rolcreatedb or r.rolreplication),
@@ -191,7 +215,8 @@ do $$
 declare
   r text;
 begin
-  foreach r in array array['hearth_app', 'hearth_worker', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge'] loop
+  foreach r in array array['hearth_app', 'hearth_worker', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge',
+                           'hearth_job_revocation'] loop
     perform set_config('role', r, true);
     perform pg_temp.expect_error('select count(*) from public.worker_org_ids()', '42501');
     perform set_config('role', 'none', true);

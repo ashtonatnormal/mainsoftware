@@ -1,6 +1,9 @@
 // Readiness: whether this process can serve, checked against everything it depends on. /health
-// only says the process is up; /ready also checks Postgres, Valkey and object storage, so a
-// deploy waits for it and a load balancer can stop sending traffic while a dependency is down.
+// only says the process is up; /ready also checks Postgres, Valkey and object storage (realtime,
+// which never uses storage, its gateway instead), so a deploy waits for it and a load balancer can
+// stop sending traffic while a dependency is down. Realtime's load balancer checks /ready/local
+// instead, which fails only for reasons local to the process, so an outage of a shared dependency
+// doesn't get every realtime task replaced at once (TECH-SPEC T19 item 12).
 
 // A dependency check resolves when the dependency answers and rejects otherwise. The signal
 // aborts it when the time allowed runs out, so it doesn't leave a request hanging.

@@ -72,6 +72,34 @@ reset role;
 select pg_temp.check(count(*) = 1 and min(created_by::text) = pg_temp.id('1', 'a0')::text,
                      'the same key queued two jobs, or one not made by Hearth')
 from public.jobs where idempotency_key = 'f1000000-0000-4000-8000-0000000000a9:sockets';
+-- The revocation consumer's role (0008) queues the same way, by key and with no subject, in its own
+-- org and never in another (42501); it can't read, change or delete a job, or choose who made one.
+select pg_temp.act_as_job('1', 'hearth_job_revocation');
+select pg_temp.expect_rows($$insert into public.jobs (org_id, kind, feature_key, purpose, payload, idempotency_key, max_attempts)
+  values ('f1000000-0000-4000-8000-000000000000', 'revocation.handler', 'core.system', 'accounts',
+          '{"handler": "sockets", "cause": "sessions_ended", "person": "f1000000-0000-4000-8000-0000000000a8",
+            "sessions": ["f1000000-0000-4000-8000-0000000000e2"]}',
+          'sockets:f1000000-0000-4000-8000-0000000000e2', 20) on conflict do nothing$$, 1);
+select pg_temp.expect_rows($$insert into public.jobs (org_id, kind, feature_key, purpose, payload, idempotency_key, max_attempts)
+  values ('f1000000-0000-4000-8000-000000000000', 'revocation.handler', 'core.system', 'accounts',
+          '{"handler": "sockets", "cause": "sessions_ended", "person": "f1000000-0000-4000-8000-0000000000a8",
+            "sessions": ["f1000000-0000-4000-8000-0000000000e2"]}',
+          'sockets:f1000000-0000-4000-8000-0000000000e2', 20) on conflict do nothing$$, 0);
+select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose, payload)
+  values ('f2000000-0000-4000-8000-000000000000', 'revocation.handler', 'core.system', 'accounts',
+          '{"handler": "topics", "cause": "keys_changed", "people": ["f2000000-0000-4000-8000-0000000000a8"]}')$$, '42501');
+select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose, created_by)
+  values ('f1000000-0000-4000-8000-000000000000', 'revocation.handler', 'core.system', 'accounts',
+          'f1000000-0000-4000-8000-0000000000a5')$$, '42501');
+select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose, state)
+  values ('f1000000-0000-4000-8000-000000000000', 'revocation.handler', 'core.system', 'accounts', 'succeeded')$$, '42501');
+select pg_temp.expect_error($$select count(*) from public.jobs$$, '42501');
+select pg_temp.expect_error($$update public.jobs set run_after = now()$$, '42501');
+select pg_temp.expect_error($$delete from public.jobs$$, '42501');
+reset role;
+select pg_temp.check(count(*) = 1 and min(created_by::text) = pg_temp.id('1', 'a0')::text and bool_and(subject_id is null),
+                     'the revocation role queued two jobs for one key, or one not made by Hearth')
+from public.jobs where kind = 'revocation.handler';
 -- The same key in another org, or for another kind, is another job.
 select pg_temp.act_as_job('2', 'hearth_job_offboarding');
 select pg_temp.expect_rows($$insert into public.jobs (org_id, kind, feature_key, purpose, idempotency_key)
@@ -207,12 +235,37 @@ begin
   end loop;
 end
 $$;
-select set_config('app.org_id', '', true), set_config('app.user_id', pg_temp.id('1', 'a0')::text, true);
-set local role hearth_job_offboarding;
-select pg_temp.expect_error($$select public.feature_fence('core.system', '{1}')$$, '42501');
-select pg_temp.expect_error($$select public.job_fence('f1000000-0000-4000-8000-0000000000c3', 'f1000000-0000-4000-8000-0000000000c1', '{3,4}')$$, '42501');
-select pg_temp.expect_error($$select public.job_finish('f1000000-0000-4000-8000-0000000000c3', 'f1000000-0000-4000-8000-0000000000c1', '{3,4}')$$, '42501');
+-- The revocation role (0008) runs a consumer and its jobs, so it may call all three: the fence
+-- passes on the right lease and revisions and refuses as it does for offboarding's role (HF002,
+-- HF001), and job_finish ends the fixture's running job b4 (core.system, lease b5).
+select pg_temp.act_as_job('1', 'hearth_job_revocation');
+select public.job_fence(pg_temp.id('1', 'c3'), pg_temp.id('1', 'c1'), '{3,4}');
+select public.feature_fence('core.system', '{1}');
+select pg_temp.expect_error($$select public.job_fence('f1000000-0000-4000-8000-0000000000c3', gen_random_uuid(), '{3,4}')$$, 'HF002');
+select pg_temp.expect_error($$select public.job_fence('f2000000-0000-4000-8000-0000000000b4', 'f2000000-0000-4000-8000-0000000000b5', '{1}')$$,
+  'HF002');
+select pg_temp.expect_error($$select public.job_fence('f1000000-0000-4000-8000-0000000000c3', 'f1000000-0000-4000-8000-0000000000c1', '{3,3}')$$,
+  'HF001', '%changed since%');
+select public.job_finish(pg_temp.id('1', 'b4'), pg_temp.id('1', 'b5'), '{1}');
 reset role;
+select pg_temp.check(state = 'succeeded' and lease_token is null, 'the revocation role''s job_finish did not end the job')
+from public.jobs where id = pg_temp.id('1', 'b4');
+-- With no org, every fence refuses (42501).
+do $$
+declare
+  r text;
+begin
+  perform set_config('app.org_id', '', true);
+  perform set_config('app.user_id', pg_temp.id('1', 'a0')::text, true);
+  foreach r in array array['hearth_job_offboarding', 'hearth_job_revocation'] loop
+    perform set_config('role', r, true);
+    perform pg_temp.expect_error($f$select public.feature_fence('core.system', '{1}')$f$, '42501');
+    perform pg_temp.expect_error($f$select public.job_fence('f1000000-0000-4000-8000-0000000000c3', 'f1000000-0000-4000-8000-0000000000c1', '{3,4}')$f$, '42501');
+    perform pg_temp.expect_error($f$select public.job_finish('f1000000-0000-4000-8000-0000000000c3', 'f1000000-0000-4000-8000-0000000000c1', '{3,4}')$f$, '42501');
+    perform set_config('role', 'none', true);
+  end loop;
+end
+$$;
 
 -- 7. job_finish ends the job (succeeded, lease gone) and its schedule run in one go, and a second
 -- finish, or one under a lease that has gone, is refused (HF002).
@@ -289,7 +342,8 @@ do $$
 declare
   r text;
 begin
-  foreach r in array array['hearth_app', 'hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_worker'] loop
+  foreach r in array array['hearth_app', 'hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_revocation',
+                           'hearth_worker'] loop
     perform pg_temp.act_as_job('1', r);
     perform pg_temp.expect_error('select public.purge_jobs(10)', '42501');
     perform set_config('role', 'none', true);

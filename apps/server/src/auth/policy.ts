@@ -2,6 +2,7 @@
 // rest are T14's defaults for the owner to confirm. The database keeps its own copies of two of
 // them, which no code path may exceed: a session's 90-day cap (0006, sessions_at_most_90_days)
 // and the PIN hash's cost (0006, users_pin_hash). Change those with a migration, never here alone.
+import { GATEWAY_CLOSE } from '@hearth/shared'
 
 // A sign-in code: 6 digits, valid 5 minutes, dead after 5 wrong tries (PRD-53).
 export const OTP = { length: 6, ttlMs: 300_000, maxTries: 5 } as const
@@ -68,5 +69,6 @@ export const SOCKET_REVOKE_MS = 60_000
 export const SOCKET_RECHECK_MS = 15_000
 export const SOCKETS_PER_SESSION = 8
 
-// The close a socket gets when its session ends: the client doesn't reconnect.
-export const SIGNED_OUT_CLOSE = { code: 4401, reason: 'signed_out' } as const
+// The close a socket gets when its session ends: the client doesn't reconnect. The gateway's
+// protocol owns every close code (packages/shared GATEWAY_CLOSE, TECH-SPEC T19 item 10).
+export const SIGNED_OUT_CLOSE = GATEWAY_CLOSE.signedOut

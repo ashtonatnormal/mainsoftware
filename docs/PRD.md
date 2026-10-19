@@ -195,7 +195,7 @@ For scheduled or event-triggered runs, which have no asker: `AgentScope ∩ Acce
 
 **Rule 5 — Restricted rooms are not indexed.** Sessions in restricted rooms (D11, e.g. HR, performance 1:1s) are still recorded, transcribed, and summarized, but are visible only to participants; the only other access is privileged access (Rule 9). They are never added to the Org Brain. A participant's assistant can use one only when the participant explicitly opens it and asks about it. Anything derived from a restricted session (notes, action items, suggested tasks, decisions, entities) inherits the restriction: suggested tasks are visible only to their owner; an accepted task stays private and unindexed unless the owner shares it; meeting prep briefs (PA-06) never include restricted-session content automatically; and agents cannot be invited to restricted rooms. When a participant accepts AI output drawn from a restricted session (e.g. DOC-10, SLIDE-31), it goes into a new item shared only with them by default. Inserting it into an item shared beyond the session's participants needs an explicit confirmation that names the restricted source, and is logged (ADM-06).
 
-**Rule 6 — Revocation is fast.** When someone loses access (leaves a channel, is removed from a doc, sheet, or deck, is offboarded), the AI stops using that content for them within **60 seconds**. Access is re-checked against live permissions at answer time, not only at index time.
+**Rule 6 — Revocation is fast.** When someone loses access (leaves a channel, is removed from a doc, sheet, or deck, is offboarded), the AI stops using that content for them within **60 seconds**, and so do their live connections: its live updates stop, and they leave its room, open doc, sheet or deck, and any presentation of it, within the same 60 seconds. Signing someone out or offboarding them closes all their live connections within 60 seconds (ACC-05). Access is re-checked against live permissions at answer time, not only at index time.
 
 **Rule 7 — Deletion propagates.** Deleted or edited content is removed or updated in the Org Brain within **5 minutes**, and derived content that depended on it is regenerated or withdrawn. Slide copies kept in a session record (SLIDE-19) belong to the session, not the deck: editing or deleting the deck doesn't change them. They follow the session's retention and can be removed only by redaction (REC-18) or by the DPO (SLIDE-19, REC-23).
 
@@ -788,6 +788,7 @@ Maximum financial penalties are 10% of annual Singapore turnover (for organizati
 | AI answer: first words, p95 | < 3 s |
 | Transcript + notes after session ends | < 5 min (transcript typically < 1 min) |
 | Access revocation effective in AI | < 60 s |
+| Access revocation effective on live connections | < 60 s |
 | Sheet size (SHEET-33) | Up to 100 tabs and 250,000 non-empty cells per sheet (P0), 1,000,000 (P1); up to 100,000 rows and 200 columns per tab. Larger data stays an uploaded file with a preview (FILE-04). |
 | Deck size (SLIDE-02) | Up to 250 slides |
 | Simultaneous editors per sheet or deck | 50 (P0); 100 per sheet (P1, SHEET-25) |

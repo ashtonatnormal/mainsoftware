@@ -342,6 +342,53 @@ describe('C0.6 T18 item 4 /ready: each login is held to its role’s rule', () =
     ).toBe('hearth_worker already exists and is a member of hearth_future; it may only hold job roles, by SET')
   })
 
+  it('m7 CLAUDE.md: 0008 refuses an existing hearth_job_revocation with LOGIN, a membership of hearth_app, an INHERIT or ADMIN grant to hearth_worker, a grant to another login, or a table it owns, and passes it as it is', async () => {
+    // Roles belong to the whole server, so every build after the first one on it (CI's scratch
+    // database, these suites' throwaway ones, db:reset) takes the block's checks rather than its
+    // create. The block runs as the migration has it, over the role this file's migrate made, in
+    // transactions rolled back afterwards, so nothing here outlives its run.
+    const migration = await readFile(
+      new URL('../../../../db/migrations/0008_revocation_role.sql', import.meta.url),
+      'utf8',
+    )
+    const block = /^do \$\$\n[\s\S]*?^\$\$;$/m.exec(migration)?.[0]
+    expect(block).toContain('hearth_job_revocation already exists and owns something')
+    const run = async (change: string): Promise<string> => {
+      await admin.query('begin')
+      try {
+        if (change !== '') await admin.query(change)
+        await admin.query(block ?? '')
+        return 'passed'
+      } catch (error) {
+        return (error as Error).message
+      } finally {
+        await admin.query('rollback')
+      }
+    }
+    const actsAs = (who: string) =>
+      `hearth_job_revocation already exists and ${who} may act as it; only hearth_worker may (SET, never INHERIT)`
+    const login = `roles_it_revocation_${randomBytes(3).toString('hex')}`
+    expect(await run('')).toBe('passed')
+    expect(await run('alter role hearth_job_revocation login')).toBe(
+      'hearth_job_revocation already exists with a power it must not have (login, superuser, bypassrls, createrole, createdb or replication)',
+    )
+    expect(await run('grant hearth_app to hearth_job_revocation')).toBe(
+      'hearth_job_revocation already exists and is a member of hearth_app; a job role must be a member of no role',
+    )
+    expect(await run('grant hearth_job_revocation to hearth_worker with inherit true, set true')).toBe(
+      actsAs('hearth_worker'),
+    )
+    expect(await run('grant hearth_job_revocation to hearth_worker with inherit false, set true, admin true')).toBe(
+      actsAs('hearth_worker'),
+    )
+    expect(
+      await run(`create role ${login} login; grant hearth_job_revocation to ${login} with inherit false, set true`),
+    ).toBe(actsAs(login))
+    expect(await run(`create table ${login}_t (); alter table ${login}_t owner to hearth_job_revocation`)).toBe(
+      'hearth_job_revocation already exists and owns something; a job role owns nothing',
+    )
+  })
+
   it('Round 3: a forced drop that ends this file’s connections, the migrator’s included, is never an unhandled error', async () => {
     const doomed = `roles_it_drop_${randomBytes(4).toString('hex')}`
     const server = pgClient({ ...superuser, database: 'postgres' })

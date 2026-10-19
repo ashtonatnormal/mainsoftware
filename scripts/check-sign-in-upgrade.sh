@@ -238,52 +238,10 @@ begin
 end
 \$\$"
 
-# The upgraded schema matches a fresh build: tables, columns and their defaults, rules (apart from
-# whether each was validated, which the checks above cover), indexes, triggers and whether each is
-# on, functions, policies, owners and grants. Monthly partitions are left out: they are named for the month each build ran in.
-digest="
-select format('%s %s: %s', kind, name, detail) from (
-  select 'table' as kind, format('%I', c.relname) as name,
-         format('kind=%s owner=%s rls=%s force=%s acl=%s', c.relkind, pg_get_userbyid(c.relowner), c.relrowsecurity,
-                c.relforcerowsecurity, c.relacl) as detail
-  from pg_class c join pg_namespace n on n.oid = c.relnamespace
-  where n.nspname = 'public' and c.relkind in ('r', 'p', 'v', 'm', 'f', 'S') and not c.relispartition
-  union all
-  select 'column', format('%I.%I', c.relname, a.attname),
-         format('%s notnull=%s default=%s acl=%s', format_type(a.atttypid, a.atttypmod), a.attnotnull,
-                pg_get_expr(d.adbin, d.adrelid), a.attacl)
-  from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace
-  left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
-  where n.nspname = 'public' and c.relkind in ('r', 'p', 'v', 'm', 'f') and not c.relispartition
-    and a.attnum > 0 and not a.attisdropped
-  union all
-  select 'constraint', format('%I.%I', c.relname, k.conname), replace(pg_get_constraintdef(k.oid), ' NOT VALID', '')
-  from pg_constraint k join pg_class c on c.oid = k.conrelid join pg_namespace n on n.oid = c.relnamespace
-  where n.nspname = 'public' and not c.relispartition
-  union all
-  select 'index', format('%I', i.indexrelid::regclass::text), pg_get_indexdef(i.indexrelid)
-  from pg_index i join pg_class c on c.oid = i.indrelid join pg_namespace n on n.oid = c.relnamespace
-  where n.nspname = 'public' and not c.relispartition
-  union all
-  select 'trigger', format('%I.%I', c.relname, t.tgname), format('%s enabled=%s', pg_get_triggerdef(t.oid), t.tgenabled)
-  from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace
-  where n.nspname = 'public' and not t.tgisinternal and not c.relispartition
-  union all
-  select 'function', p.oid::regprocedure::text,
-         format('%s owner=%s definer=%s config=%s acl=%s', md5(pg_get_functiondef(p.oid)), pg_get_userbyid(p.proowner),
-                p.prosecdef, p.proconfig, p.proacl)
-  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-  where n.nspname = 'public' and p.prokind in ('f', 'p')
-  union all
-  select 'policy', format('%I.%I', c.relname, pol.polname),
-         format('%s %s %s using=%s check=%s', pol.polcmd, pol.polpermissive, pol.polroles::regrole[],
-                pg_get_expr(pol.polqual, pol.polrelid), pg_get_expr(pol.polwithcheck, pol.polrelid))
-  from pg_policy pol join pg_class c on c.oid = pol.polrelid join pg_namespace n on n.oid = c.relnamespace
-  where n.nspname = 'public' and not c.relispartition
-) as objects
-order by 1"
-upgraded=$(sql -d "$db" -At -c "$digest")
-fresh=$(sql -d "$base" -At -c "$digest")
+# The upgraded schema matches a fresh build (scripts/schema-digest.sql), apart from whether each rule
+# was validated, which the checks above cover.
+upgraded=$(sql -d "$db" -At -f scripts/schema-digest.sql)
+fresh=$(sql -d "$base" -At -f scripts/schema-digest.sql)
 if [ "$upgraded" != "$fresh" ]; then
   echo "The upgraded schema ($db) differs from a fresh build ($base):" >&2
   diff <(printf '%s\n' "$fresh") <(printf '%s\n' "$upgraded") | sed 's/^/  /' >&2 || true

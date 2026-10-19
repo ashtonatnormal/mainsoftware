@@ -51,9 +51,10 @@ function aiFlag(
 }
 
 export const FLAGS = {
-  // Hearth's own maintenance: partitions, the outbox and queue clean-up, offboarding. Locked on.
+  // Hearth's own maintenance: partitions, the outbox and queue clean-up, offboarding, and from C0.7
+  // durable revocation (TECH-SPEC T19 item 4). Locked on, so nothing can switch revocation off.
   'core.system': {
-    description: 'Hearth’s own maintenance: partitions, clean-up and offboarding',
+    description: 'Hearth’s own maintenance: partitions, clean-up, offboarding and revocation',
     class: 'essential',
     default: true,
     locked: true,

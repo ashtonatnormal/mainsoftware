@@ -41,7 +41,7 @@ import type { InOrg } from '#src/db/database.ts'
 import { endDevices } from '#src/devices/routes.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
 import { appendOutbox } from '#src/outbox/append.ts'
-import { publishRevoked } from '#src/revocation.ts'
+import { publishRevoked } from '#src/revocation/channels.ts'
 
 const reauthenticated: Answer = { body: { status: 'reauthenticated', validForSeconds: REAUTH.windowSeconds } }
 
@@ -306,6 +306,6 @@ export async function signOut(api: Api, session: SessionIds | undefined, info: R
     if (error instanceof ApiError && error.code === 'signed_out') return done
     throw error
   }
-  await publishRevoked(api.valkey, api.keyPrefix, revoked, info.log)
+  if (api.publishRevoked !== false) await publishRevoked(api.valkey, api.keyPrefix, revoked, info.log)
   return done
 }

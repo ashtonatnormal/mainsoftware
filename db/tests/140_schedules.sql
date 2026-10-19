@@ -155,7 +155,8 @@ do $$
 declare
   r text;
 begin
-  foreach r in array array['hearth_app', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge', 'hearth_worker'] loop
+  foreach r in array array['hearth_app', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge',
+                           'hearth_job_revocation', 'hearth_worker'] loop
     perform pg_temp.act_as_job('1', r);
     perform pg_temp.expect_error('select count(*) from public.schedules', '42501');
     perform pg_temp.expect_error('select count(*) from public.schedule_runs', '42501');
@@ -235,7 +236,8 @@ do $$
 declare
   r text;
 begin
-  foreach r in array array['hearth_app', 'hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_worker'] loop
+  foreach r in array array['hearth_app', 'hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_revocation',
+                           'hearth_worker'] loop
     perform pg_temp.act_as_job('1', r);
     perform pg_temp.expect_error('select public.purge_schedule_runs(10)', '42501');
     perform set_config('role', 'none', true);

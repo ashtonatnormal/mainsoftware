@@ -8,6 +8,7 @@ import {
   type Facts,
   type Id,
   isOwner,
+  keysOf,
   listAccessible,
   type OrgRole,
   type Ref,
@@ -17,6 +18,7 @@ import {
   type RoleProposalFact,
   type SelfRequest,
   type Subject,
+  type TopicRequest,
   type World,
 } from '../../index.ts'
 import * as accessSql from '../../sql.ts'
@@ -128,6 +130,12 @@ const SELF_REQUESTS: readonly SelfRequest[] = [
   { action: 'passkeys.add_own' },
   { action: 'passkeys.remove_own', passkey: PK.marcus },
 ]
+// The live topics Marcus holds (T19 item 7): their own, the org's and Operations'.
+const TOPIC_REQUESTS: readonly TopicRequest[] = [
+  { kind: 'person' as const, id: P.marcus },
+  { kind: 'org' as const, id: world.orgId },
+  { kind: 'team' as const, id: T.operations },
+].map(topic => ({ action: 'topic.subscribe', topic }))
 const DPO_CONSOLE = { action: 'privileged_console.open', console: 'dpo' } as const
 const COMPLIANCE_CONSOLE = { action: 'privileged_console.open', console: 'compliance' } as const
 
@@ -262,7 +270,7 @@ export const RULE_9: readonly RuleCase[] = [
   ),
   c0(
     'R9-03',
-    'Rule 9 D16 PA-03 ACC-10 ACC-04: only people hold roles; the Owner’s assistant, agents and system jobs are refused every admin request and every request about a person’s own devices and passkeys',
+    'Rule 9 D16 PA-03 ACC-10 ACC-04 T19: only people hold roles; the Owner’s assistant, agents and system jobs are refused every admin request, every request about a person’s own devices and passkeys, and every live topic',
     () => {
       // Ashton, Owner and DPO, may make most of these themselves, so their assistant's refusals matter.
       const ashtons = ADMIN_REQUESTS.filter(r => can(world, human(P.ashton), r, reauthenticated))
@@ -272,6 +280,8 @@ export const RULE_9: readonly RuleCase[] = [
         for (const r of ADMIN_REQUESTS) expect(can(world, s, r, reauthenticated), `${s.id} ${r.action}`).toBe(false)
         // Nor any request about a person's own devices and passkeys (ACC-02, ACC-04).
         for (const r of SELF_REQUESTS) expect(can(world, s, r, reauthenticated), `${s.id} ${r.action}`).toBe(false)
+        // Nor any live topic (T19 item 7).
+        for (const r of TOPIC_REQUESTS) expect(can(world, s, r), `${s.id} ${r.topic.kind}`).toBe(false)
       }
       // Marcus may make each of those, so the refusals aren't for a missing device or passkey; a
       // non-human subject carrying Marcus's id is still refused, never treated as Marcus.
@@ -281,6 +291,18 @@ export const RULE_9: readonly RuleCase[] = [
           expect(can(world, s, r, reauthenticated), `${s.kind} ${r.action}`).toBe(false)
         }
       }
+      for (const r of TOPIC_REQUESTS) {
+        expect(can(world, human(P.marcus), r), r.topic.kind).toBe(true)
+        for (const s of [assistant(P.marcus), agent(P.marcus), { kind: 'system', id: P.marcus } as const]) {
+          expect(can(world, s, r), `${s.kind} ${r.topic.kind}`).toBe(false)
+        }
+      }
+      // Ashton's assistant holds Ashton's keys (PA-02), so it is the subject's kind, not its keys,
+      // that refuses it Ashton's topic.
+      const ashtonsTopic: TopicRequest = { action: 'topic.subscribe', topic: { kind: 'person', id: P.ashton } }
+      expect(keysOf(world, assistant(AS.ashton))).toContain(`p:${P.ashton}`)
+      expect(can(world, human(P.ashton), ashtonsTopic)).toBe(true)
+      expect(can(world, assistant(AS.ashton), ashtonsTopic)).toBe(false)
       // A role row that names an assistant or an agent gives it nothing, whichever kind of subject
       // it is asked as.
       const w = changed(steps(withRole(AS.ashton, 'dpo'), withRole(AS.daniel, 'owner'), withRole(AG.it, 'admin')))

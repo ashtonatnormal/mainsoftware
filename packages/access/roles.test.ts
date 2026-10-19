@@ -29,9 +29,11 @@ import {
   type RoleProposalFact,
   type SelfRequest,
   type Subject,
+  type Topic,
+  type TopicRequest,
   World,
 } from './src/index.ts'
-import { ADMIN_ACTIONS as ROUTED_ADMIN_ACTIONS, SELF_ACTIONS } from './src/requests.ts'
+import { ADMIN_ACTIONS as ROUTED_ADMIN_ACTIONS, SELF_ACTIONS, TOPIC_ACTIONS } from './src/requests.ts'
 import {
   AG,
   AS,
@@ -42,6 +44,7 @@ import {
   fixtureFacts,
   human,
   M,
+  ORG_2,
   ORG_2_PEOPLE,
   otherOrgFacts,
   P,
@@ -1259,6 +1262,13 @@ const SELF_ACTION_IDS: Record<SelfRequest['action'], string> = {
 const SELF_KINDS = Object.keys(SELF_ACTION_IDS) as SelfRequest['action'][]
 const PASSKEY_ACTIONS: readonly SelfRequest['action'][] = ['passkeys.add_own', 'passkeys.remove_own']
 
+// Every live-topic request kind (T19 item 7), the same way.
+const TOPIC_ACTION_IDS: Record<TopicRequest['action'], string> = {
+  'topic.subscribe': 'ACC-05 T19 PRD-108',
+}
+const TOPIC_KINDS = Object.keys(TOPIC_ACTION_IDS) as TopicRequest['action'][]
+const subscribe = (kind: Topic['kind'], id: Id): TopicRequest => ({ action: 'topic.subscribe', topic: { kind, id } })
+
 // Rows whose world puts a role on the audit-log readers list: there the log is read through the
 // list, not through the role's own powers (D45).
 const listsReader = (row: Row, role: OrgRole) =>
@@ -1290,6 +1300,14 @@ describe('ACC-10 CLAUDE.md Database: the matrix', () => {
     // A kind added to a type but not to the set can() routes by would be decided as content.
     expect([...ROUTED_ADMIN_ACTIONS].sort()).toEqual([...ADMIN_ACTIONS].sort())
     expect([...SELF_ACTIONS].sort()).toEqual([...SELF_KINDS].sort())
+  })
+
+  test('ACC-05 T19: can() routes exactly the topic actions the request type names', () => {
+    // A topic names no resource, so one missing from the set would be decided as content.
+    expect([...TOPIC_ACTIONS].sort()).toEqual([...TOPIC_KINDS].sort())
+    for (const action of TOPIC_KINDS) {
+      expect(() => can(W, human(P.marcus), { action, topic: { kind: 'person', id: P.marcus } }), action).not.toThrow()
+    }
   })
 
   test('ACC-10 ADM-02 ACC-04: the matrix decides every admin request kind, the create request and every request about your own devices and passkeys', () => {
@@ -1628,6 +1646,68 @@ describe('T13 ACC-05 Rule 6: ended roles and ended teams confer nothing', () => 
       people: f.people.map(p => (p.id === P.formerDpo ? { ...p, deactivatedAt: null } : p)),
     }))
     expect(can(back, human(P.formerDpo), { action: 'privileged_console.open', console: 'dpo' }, REAUTH)).toBe(true)
+  })
+})
+
+describe('T19 PRD-108 ACC-05: live topics are decided by keys, never by a role', () => {
+  test('T19 PRD-108: topic.subscribe is decided by keys, never by a role', () => {
+    // An Owner and an Admin, alone or with other roles, are refused another person's person topic
+    // and a team they aren't in, as a Member is; each holds their own and the org's.
+    for (const key of ['owner', 'admin', 'ashton', 'arjun'] as const) {
+      const subject = subjectOf(key)
+      expect(can(W, subject, subscribe('person', P.nadia)), key).toBe(false)
+      expect(can(W, subject, subscribe('team', T.operations)), key).toBe(false)
+      expect(can(W, subject, subscribe('person', subject.id)), key).toBe(true)
+      expect(can(W, subject, subscribe('org', W.orgId)), key).toBe(true)
+    }
+    // Over every actor: a person topic is its person's alone, the org's every active person's in it,
+    // and a team's its members', whatever roles they hold. An unknown team and another org are
+    // nobody's.
+    expect(allowedIn(W, subscribe('person', P.marcus))).toEqual(['marcus'])
+    expect(allowedIn(W, subscribe('org', W.orgId))).toEqual(inOrder(ACTIVE_PEOPLE))
+    expect(allowedIn(W, subscribe('team', T.operations))).toEqual(inOrder(['teamAdmin', 'marcus', 'farah']))
+    expect(allowedIn(W, subscribe('team', T.people))).toEqual(['huimin'])
+    expect(allowedIn(W, subscribe('team', X.unknownTeam))).toEqual(NOBODY)
+    expect(allowedIn(W, subscribe('person', X.unknownPerson))).toEqual(NOBODY)
+    expect(allowedIn(W, subscribe('org', ORG_2))).toEqual(NOBODY)
+    // Keys both ways: the Team Admin of Operations taken out of the team, role kept, is refused its
+    // topic; a Member put in it, with no role, holds it.
+    const out = matrixWorld(f => ({
+      ...f,
+      teamMembers: f.teamMembers.filter(m => !(m.personId === ONE.teamAdmin && m.teamId === T.operations)),
+    }))
+    expect(out.isTeamAdminOf(ONE.teamAdmin, T.operations)).toBe(true)
+    expect(can(out, human(ONE.teamAdmin), subscribe('team', T.operations))).toBe(false)
+    const joined = matrixWorld(f => ({
+      ...f,
+      teamMembers: [...f.teamMembers, { teamId: T.operations, personId: ONE.member, removedAt: null }],
+    }))
+    expect(can(W, human(ONE.member), subscribe('team', T.operations))).toBe(false)
+    expect(can(joined, human(ONE.member), subscribe('team', T.operations))).toBe(true)
+  })
+
+  test('T13 item 14 T19: a Team Admin of an archived team still holds the team topic while a member', () => {
+    // Farah is in the archived Night shift and its Team Admin. The role gives nothing while the team
+    // is archived (T13), but membership still holds the topic, as it does for Kelvin, with no role.
+    expect(W.isLiveTeam(T.nightShift)).toBe(false)
+    expect(W.isTeamAdminOf(P.farah, T.nightShift)).toBe(false)
+    expect(can(W, human(P.farah), subscribe('team', T.nightShift))).toBe(true)
+    expect(can(W, human(P.kelvin), subscribe('team', T.nightShift))).toBe(true)
+    // Removed from the team, with the Team Admin row still unrevoked, Farah no longer holds it.
+    const removed = matrixWorld(f => ({
+      ...f,
+      teamMembers: f.teamMembers.map(m =>
+        m.personId === P.farah && m.teamId === T.nightShift ? { ...m, removedAt: 2 } : m,
+      ),
+    }))
+    expect(removed.facts.roles).toContainEqual({
+      personId: P.farah,
+      role: 'team_admin',
+      teamId: T.nightShift,
+      revokedAt: null,
+    })
+    expect(can(removed, human(P.farah), subscribe('team', T.nightShift))).toBe(false)
+    expect(can(removed, human(P.kelvin), subscribe('team', T.nightShift))).toBe(true)
   })
 })
 

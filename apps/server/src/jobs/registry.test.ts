@@ -54,15 +54,16 @@ function problemsOf(registries: Registries): string {
 const quiet = { valkey: { publish: async () => 0 }, keyPrefix: 'it:unit:', logger: { warn: () => {}, error: () => {} } }
 
 describe('C0.6 T15 the job registries', () => {
-  it('passes the production registries: maintenance, offboarding and the two schedules', () => {
+  it('passes the production registries: maintenance, offboarding, revocation (C0.7) and the two schedules', () => {
     const production = productionRegistries(quiet)
     expect(() => validateRegistries(production, FLAGS)).not.toThrow()
     expect(production.kinds.map(k => k.kind)).toEqual([
       'maintenance.data_access_partitions',
       'maintenance.purge',
       'offboarding.handler',
+      'revocation.handler',
     ])
-    expect(production.consumers.map(c => c.name)).toEqual(['offboarding'])
+    expect(production.consumers.map(c => c.name)).toEqual(['offboarding', 'revocation'])
     expect(production.schedules).toBe(SCHEDULES)
   })
 
@@ -198,6 +199,24 @@ describe('C0.6 T15 the job registries', () => {
     ).toMatch(/not a registered flag/)
   })
 
+  it('C0.7 S8 T19 item 4: refuses a protective consumer unless it is under core.system with purpose accounts', () => {
+    expect(problemsOf({ ...valid(), consumers: [consumer({ protective: true })] })).toBe('')
+    expect(
+      problemsOf({ ...valid(), consumers: [consumer({ protective: true, purpose: 'service_operation' })] }),
+    ).toMatch(/only a consumer under core.system with purpose accounts may be protective/)
+    expect(
+      problemsOf({
+        ...valid(),
+        consumers: [consumer({ protective: true, feature: 'it.optional', purpose: 'service_operation' })],
+      }),
+    ).toMatch(/only a consumer under core.system with purpose accounts may be protective/)
+  })
+
+  it('C0.7 T19: hearth_job_revocation (0008) may run jobs and move a checkpoint, as its grants allow', () => {
+    expect(problemsOf({ ...valid(), kinds: [kind({ role: 'hearth_job_revocation' })] })).toBe('')
+    expect(problemsOf({ ...valid(), consumers: [consumer({ role: 'hearth_job_revocation' })] })).toBe('')
+  })
+
   it('names every problem at once', () => {
     const message = problemsOf({
       kinds: [kind({ maxAttempts: 0 }), kind({ kind: 'it.other', feature: 'it.nothing' })],
@@ -208,6 +227,7 @@ describe('C0.6 T15 the job registries', () => {
   })
 
   it('C0.6 T16 item 9: the offboarding payload names a person and a listed handler, ids only', () => {
+    // C0.7 T19 item 2: the retired sockets handler's name stays, so a job queued before C0.7 parses.
     expect(OFFBOARDING_HANDLERS).toEqual(['sockets'])
     expect(
       OffboardingPayload.safeParse({ person: 'b0000000-0000-4000-8000-000000000001', handler: 'sockets' }).success,

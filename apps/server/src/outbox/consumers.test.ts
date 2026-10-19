@@ -256,6 +256,41 @@ describe('C0.6 T16 one round of an outbox consumer', () => {
     ])
   })
 
+  it('C0.7 S8 T19 item 4: withholds none of a protective consumer’s events for a subject’s switch, while it withholds another’s', async () => {
+    const batch = [eventRow(4, 'signin.ended', [OTHER]), eventRow(5, 'person.deactivated', [PERSON, OTHER])]
+    const refusing: Gate = { ...C06_GATE, processingAllowed: () => false }
+    const protective = consumer({ name: 'it_protective', role: 'hearth_job_revocation', protective: true })
+    const plain = consumer()
+    const p = pool({ batch })
+    const { run, log } = runner(p, [protective.spec, plain.spec], { gate: refusing })
+    expect(await run.round(protective.spec, ORG)).toBe('idle')
+    expect(protective.handled.map(events => events.map(event => event.id))).toEqual([['4', '5']])
+    expect(log.events('outbox_event_withheld')).toEqual([])
+    expect(await run.round(plain.spec, ORG)).toBe('idle')
+    expect(plain.handled).toEqual([])
+    expect(log.events('outbox_event_withheld').map(line => line.eventId)).toEqual(['4', '5'])
+    // The purpose gate still applies to a protective consumer.
+    const ai = consumer({ name: 'it_protective_ai', purpose: 'org_brain', protective: true })
+    const refused = runner(pool({ batch }), [ai.spec])
+    expect(await refused.run.round(ai.spec, ORG)).toBe('refused')
+    expect(refused.log.events('outbox_consumer_refused')).toEqual([
+      expect.objectContaining({ consumer: 'it_protective_ai', reason: 'purpose_refused' }),
+    ])
+    expect(ai.handled).toEqual([])
+  })
+
+  it('C0.7 m4: moves the checkpoint past a round whose handle() passed over every event', async () => {
+    const p = pool({ batch: [eventRow(4, 'signin.ended'), eventRow(5, 'signin.ended')] })
+    const { spec } = consumer({ handle: async () => {} })
+    expect(await runner(p, [spec]).run.round(spec, ORG)).toBe('idle')
+    expect(p.statements.find(s => s.text.startsWith('update outbox_checkpoints'))?.values.slice(0, 3)).toEqual([
+      '1005',
+      '5',
+      2,
+    ])
+    expect(p.texts().at(-1)).toBe('commit')
+  })
+
   it('rolls back when a reset moved the checkpoint during the round, so the reset stands', async () => {
     const p = pool({ batch: [eventRow(4, 'person.deactivated')], moved: true })
     const { spec } = consumer()
