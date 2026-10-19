@@ -26,7 +26,8 @@ export type Scripted =
   | { status: number; body: unknown; delayMs?: number }
   | { drop: true; delayMs?: number }
   | { redirect: string }
-  | { status: number; raw: string }
+  // A raw body; `length` sends its Content-Length, which a reply otherwise goes without (chunked).
+  | { status: number; raw: string; length?: boolean }
 
 interface Verification {
   sid: string
@@ -157,8 +158,11 @@ export async function startFakeTwilio(): Promise<FakeTwilio> {
         authorised: request.headers.authorization === expectedAuth,
         form,
       })
-      const send = (status: number, body: string) => {
-        response.writeHead(status, { 'content-type': 'application/json' })
+      const send = (status: number, body: string, length = false) => {
+        response.writeHead(status, {
+          'content-type': 'application/json',
+          ...(length ? { 'content-length': Buffer.byteLength(body) } : {}),
+        })
         response.end(body)
       }
       if (request.method !== 'POST' || op === 'unknown') {
@@ -184,7 +188,7 @@ export async function startFakeTwilio(): Promise<FakeTwilio> {
           response.writeHead(307, { location: scripted.redirect })
           response.end()
         } else if ('raw' in scripted) {
-          send(scripted.status, scripted.raw)
+          send(scripted.status, scripted.raw, scripted.length)
         } else {
           send(scripted.status, JSON.stringify(scripted.body))
         }

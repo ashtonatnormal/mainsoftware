@@ -176,10 +176,35 @@ describe('T7 T20 Twilio Verify adapter, against a loopback fake', () => {
     expect((await refusal(sms.start(A))).kind).toBe('bug')
   })
 
-  it('refuses a reply over the size cap before parsing it', async () => {
+  it('refuses a reply over the size cap before parsing it, whether or not it declares its length', async () => {
     const sms = verify()
-    twilio.script('start', { status: 201, raw: `{"pad":"${'x'.repeat(70 * 1024)}"}` })
+    const big = `{"pad":"${'x'.repeat(70 * 1024)}"}`
+    twilio.script('start', { status: 201, raw: big })
     expect((await refusal(sms.start(A))).kind).toBe('bug')
+    twilio.script('start', { status: 201, raw: big, length: true })
+    expect((await refusal(sms.start(A))).kind).toBe('bug')
+  })
+
+  it('times out each start try at its limit, retries once, then answers unavailable', async () => {
+    const sms = verify({ startMs: 300 })
+    const before = twilio.requests.length
+    twilio.script('start', { status: 201, body: {}, delayMs: 1000 })
+    twilio.script('start', { status: 201, body: {}, delayMs: 1000 })
+    const error = await refusal(sms.start(A))
+    expect([error.kind, error.providerCode, error.httpStatus]).toEqual(['unavailable', undefined, undefined])
+    expect(twilio.requests.length - before).toBe(2)
+    // A first try cut off by its timeout and a second that lands: the call's own two tries.
+    twilio.script('start', { status: 201, body: {}, delayMs: 1000 })
+    expect(await sms.start(B)).toEqual({ ref: expect.stringMatching(/^VE[0-9a-f]{32}$/), foreign: false })
+  })
+
+  it('times out a cancel at its limit without retrying it', async () => {
+    const sms = verify({ cancelMs: 300 })
+    const { ref } = await sms.start(A)
+    const before = twilio.requests.length
+    twilio.script('cancel', { status: 200, body: {}, delayMs: 1000 })
+    expect((await refusal(sms.cancel(ref))).kind).toBe('unavailable')
+    expect(twilio.requests.length - before).toBe(1)
   })
 
   it('never follows a redirect', async () => {

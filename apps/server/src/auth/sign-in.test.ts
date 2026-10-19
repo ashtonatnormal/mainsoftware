@@ -17,7 +17,7 @@ import {
   verifyPinStep,
 } from '#src/auth/sign-in.ts'
 import { FakeVerify } from '#src/auth/sms/fake.ts'
-import type { SmsProvider, Verdict } from '#src/auth/sms/provider.ts'
+import { type SmsProvider, SmsProviderError, type Verdict } from '#src/auth/sms/provider.ts'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { AfterResponse, type ReqInfo } from '#src/http.ts'
 import { staticFlags } from '#src/testing/flags.ts'
@@ -356,13 +356,18 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
 describe('ACC-03 T14 sending a code after the reply', () => {
   // A code request for a roster number, with its after-reply work run: what was texted, and the
   // audit row's details.
-  async function delivered(person: { left?: boolean; numberRemoved?: boolean }) {
+  async function delivered(
+    person: { left?: boolean; numberRemoved?: boolean },
+    options: { sms?: FakeVerify; gate?: Api['gate']; info?: (info: ReqInfo) => void } = {},
+  ) {
     const pool = orgPool({ ...person, roster: true })
-    const sms = new FakeVerify()
+    const sms = options.sms ?? new FakeVerify()
     const { api, info, tasks } = context(valkeyWith(undefined).valkey, pool, sms)
+    if (options.gate !== undefined) api.gate = options.gate
     const reply = await requestCode(api, { phone: '+6591234567' }, undefined, info)
     expect(reply.body).toEqual({ status: 'code_sent', expiresInSeconds: 300, codeLength: 6 })
     for (const task of tasks) await task()
+    options.info?.(info)
     const audit = pool.statements.find(s => s.text.startsWith('insert into "audit_events"'))
     return {
       sent: sms.sent.map(entry => entry.to),
@@ -380,6 +385,55 @@ describe('ACC-03 T14 sending a code after the reply', () => {
 
   it('texts nothing to someone who left after the roster lookup, and audits it skipped_left', async () => {
     expect(await delivered({ left: true })).toEqual({ sent: [], audit: { send: 'skipped_left' } })
+  })
+
+  it('PDPA-10 T20: texts nothing through a provider the transfer register has not cleared, and audits it skipped_not_cleared', async () => {
+    // No gate given: C06_GATE, which clears no provider until C0.9.
+    const unset = await delivered({}, { sms: new FakeVerify({ transfer: 'twilio' }) })
+    expect(unset).toEqual({ sent: [], audit: { send: 'skipped_not_cleared' } })
+    const asked: [string, string][] = []
+    const cleared = await delivered(
+      {},
+      {
+        sms: new FakeVerify({ transfer: 'twilio' }),
+        gate: {
+          providerCleared: (orgId, provider) => {
+            asked.push([orgId, provider])
+            return true
+          },
+        },
+      },
+    )
+    expect(cleared).toEqual({ sent: ['+6591234567'], audit: { send: 'attempted' } })
+    expect(asked).toEqual([[ORG, 'twilio']])
+    // The local fake needs no entry: it sends nothing anywhere, so no gate is asked.
+    expect(await delivered({}, { gate: { providerCleared: () => false } })).toEqual({
+      sent: ['+6591234567'],
+      audit: { send: 'attempted' },
+    })
+  })
+
+  it("T7 T20: logs a failed send with the provider's code and HTTP status, never the number", async () => {
+    const sms = new FakeVerify()
+    sms.failNext('start', new SmsProviderError('blocked', 60410, 403))
+    let logged: unknown[][] = []
+    const result = await delivered({}, { sms, info: info => (logged = vi.mocked(info.log.error).mock.calls) })
+    expect(result).toEqual({ sent: [], audit: { send: 'attempted' } })
+    expect(logged).toEqual([
+      [
+        {
+          event: 'sms_send_failed',
+          provider: 'fake',
+          error: 'SmsProviderError',
+          kind: 'blocked',
+          providerCode: 60410,
+          httpStatus: 403,
+          personId: PERSON,
+        },
+        'a code could not be sent',
+      ],
+    ])
+    expect(JSON.stringify(logged)).not.toContain('91234567')
   })
 
   // A code request for the seed-range number +65 8000 0001 with a provider that has `pending`

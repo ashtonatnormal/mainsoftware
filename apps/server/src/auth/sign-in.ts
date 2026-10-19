@@ -393,8 +393,7 @@ async function deliverCode(
       {
         event: 'sms_send_failed',
         provider: sms.name,
-        error: error instanceof Error ? error.name : 'unknown',
-        kind: error instanceof SmsProviderError ? error.kind : undefined,
+        ...providerFailure(error),
         personId,
       },
       'a code could not be sent',
@@ -436,6 +435,14 @@ async function startCode(
   await attachCode(api.valkey, api.names, numberTag, owner, started.ref)
 }
 
+// What a provider's failure puts in a log line: the error's name, and for an SmsProviderError its
+// kind, the provider's numeric code and the HTTP status (TECH-SPEC T7, T20), so a refusal such as
+// Twilio's 60410 can be told from 60605. Never its message, which can quote the number.
+function providerFailure(error: unknown) {
+  if (!(error instanceof SmsProviderError)) return { error: error instanceof Error ? error.name : 'unknown' }
+  return { error: error.name, kind: error.kind, providerCode: error.providerCode, httpStatus: error.httpStatus }
+}
+
 // Cancels a provider reference, best effort: a failure is logged (without the reference) and
 // otherwise ignored, since the record no longer accepts that code anyway.
 async function cancelQuietly(sms: SmsProvider, info: ReqInfo, ref: string): Promise<void> {
@@ -446,8 +453,7 @@ async function cancelQuietly(sms: SmsProvider, info: ReqInfo, ref: string): Prom
       {
         event: 'sms_cancel_failed',
         provider: sms.name,
-        error: error instanceof Error ? error.name : 'unknown',
-        kind: error instanceof SmsProviderError ? error.kind : undefined,
+        ...providerFailure(error),
       },
       'the SMS provider could not cancel a code',
     )
@@ -485,8 +491,7 @@ export async function verifyCode(
           {
             event: 'sms_check_failed',
             provider: sms.name,
-            error: error instanceof Error ? error.name : 'unknown',
-            kind: error instanceof SmsProviderError ? error.kind : undefined,
+            ...providerFailure(error),
           },
           'the SMS provider could not check a code',
         )
