@@ -8,7 +8,9 @@
 //   said once when it can be used (the model's tick); no countdown every second (X11). A code that
 //   can no longer be used (code_dead, code_expired) clears and disables the field and enables it at
 //   once, with the message above it as its description, and focus moves to it.
-// - "Use a different number": back to the phone step with the number kept.
+// - "Use a different number": back to the phone step with the number kept. While the code is being
+//   checked it is held, with the busy text as its reason (startAgainHeld): the answer may sign the
+//   person in.
 import { CircleAlert, LoaderCircle } from 'lucide-react'
 import { useId } from 'react'
 import { SIGN_IN } from '@/strings/sign-in.ts'
@@ -16,7 +18,7 @@ import { Button } from '@/ui/Button.tsx'
 import { CodeField } from '@/ui/CodeField.tsx'
 import type { StepProps } from './PhoneStep.tsx'
 import { errorOn, Notice, StepForm, StepFrame, SubmitButton } from './StepFrame.tsx'
-import { codeStepText, resendHeld, type Step, submitHeld } from './sign-in-model.ts'
+import { codeStepText, resendHeld, type Step, startAgainHeld, submitHeld } from './sign-in-model.ts'
 
 export function CodeStep({ state, step, controller, refs }: StepProps & { step: Extract<Step, { kind: 'code' }> }) {
   const deadId = useId()
@@ -57,7 +59,12 @@ export function CodeStep({ state, step, controller, refs }: StepProps & { step: 
           {resending && <LoaderCircle aria-hidden size={18} className="shrink-0 animate-spin" />}
           {SIGN_IN.resend}
         </Button>
-        <Button variant="ghost" className="w-full" onClick={controller.startAgain}>
+        <Button
+          variant="ghost"
+          className="w-full"
+          disabledReason={startAgainHeld(state)}
+          onClick={controller.startAgain}
+        >
           {SIGN_IN.differentNumber}
         </Button>
       </div>

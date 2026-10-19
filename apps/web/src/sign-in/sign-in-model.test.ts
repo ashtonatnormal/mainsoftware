@@ -18,6 +18,7 @@ import {
   type SignInEvent,
   type SignInState,
   showsTriesFirst,
+  startAgainHeld,
   submitHeld,
   transition,
 } from './sign-in-model.ts'
@@ -443,20 +444,60 @@ describe('T20 T21: the sign-in model (sign-in/sign-in-model.ts)', () => {
     expect(back.cue).toEqual({ focus: 'h1' })
   })
 
-  it('X6: Use a different number and Start again go back to the phone step with the number kept, focus its h1, and make an answer still in flight stale', () => {
-    const inFlight = verifying()
-    const back = transition(inFlight, { kind: 'start_again' })
+  it('X6: Use a different number and Start again go back to the phone step with the number kept and focus its h1', () => {
+    const code = last(run(atCode(), { kind: 'input', field: 'code', value: '12' }))
+    expect(startAgainHeld(code.state)).toBeUndefined()
+    const back = transition(code.state, { kind: 'start_again' })
     expect(back.state.step).toEqual({ kind: 'phone' })
     expect(back.state.values).toEqual({ phone: MARCUS, code: '', pin: '', pin2: '' })
     expect(back.cue).toEqual({ focus: 'h1' })
-    // The verify that was in flight answers: nothing changes.
-    const id = inFlight.pending?.id ?? 0
-    const late = transition(back.state, { kind: 'answer', id, now: T0, answer: { kind: 'verified', reply: SIGNED_IN } })
+    for (const state of [atSetPin(), atEnterPin()]) {
+      expect(startAgainHeld(state)).toBeUndefined()
+      expect(transition(state, { kind: 'start_again' }).state.step).toEqual({ kind: 'phone' })
+    }
+  })
+
+  it('X6 auth-research-web §3.8: while a code or PIN is being checked, Use a different number and Start again are held with the busy text, so an answer that signs in still opens the app', () => {
+    // The answer may set the session cookie, so leaving the step would orphan a live session.
+    const inFlight = [verifying(), pinSent(atSetPin(), '482913', '482913'), pinSent(atEnterPin(), '482913')]
+    for (const state of inFlight) {
+      const kind = state.pending?.kind
+      expect(startAgainHeld(state), kind).toBe(SIGN_IN.busy.checking)
+      const pressed = transition(state, { kind: 'start_again' })
+      expect(pressed.state, kind).toBe(state)
+      expect(pressed.cue, kind).toBeUndefined()
+      // The call answers signed in: the app opens, as it would have without the press.
+      const reply: Answer = kind === 'verify_code' ? { kind: 'verified', reply: SIGNED_IN } : { kind: 'signed_in' }
+      const done = answer(pressed.state, reply)
+      expect(done.enter, kind).toBe(true)
+      expect(done.state.step, kind).toEqual({ kind: 'signed_in' })
+      // A refusal frees them again.
+      const refused = fail(pressed.state, failure('unavailable'))
+      expect(startAgainHeld(refused.state), kind).toBeUndefined()
+      expect(transition(refused.state, { kind: 'start_again' }).state.step, kind).toEqual({ kind: 'phone' })
+    }
+  })
+
+  it('X6: a code request in flight holds nothing: Use a different number goes back, and its late answer is stale and changes nothing', () => {
+    const ready = transition(atCode(), { kind: 'tick', now: T0 + RESEND_WAIT_MS }).state
+    const resending = transition(ready, { kind: 'resend', now: T0 + 40_000 }).state
+    expect(resending.pending?.kind).toBe('request_code')
+    expect(startAgainHeld(resending)).toBeUndefined()
+    const back = transition(resending, { kind: 'start_again' })
+    expect(back.state.step).toEqual({ kind: 'phone' })
+    expect(back.state.pending).toBeUndefined()
+    const id = resending.pending?.id ?? 0
+    const late = transition(back.state, {
+      kind: 'answer',
+      id,
+      now: T0 + 41_000,
+      answer: { kind: 'code_sent', reply: CODE_SENT },
+    })
     expect(late.state).toBe(back.state)
-    expect(late.enter).toBeUndefined()
-    expect(transition(back.state, { kind: 'failed', id, now: T0, failure: failure('code_wrong') }).state).toBe(
-      back.state,
-    )
+    expect(late.cue).toBeUndefined()
+    expect(
+      transition(back.state, { kind: 'failed', id, now: T0 + 41_000, failure: failure('too_many_requests') }).state,
+    ).toBe(back.state)
   })
 
   it('auth-research-web §3.1: one call at a time: a second submit or a resend while one is in flight does nothing, and the busy text names it', () => {

@@ -10,7 +10,8 @@
 //                         │ ──code_verified{step_up, locked}──▶ pin_locked
 //                         enter_pin ──pin_locked | pin_reset_needed──▶ pin_locked
 //   any step ──attempt_expired | wrong_step | pin_already_set──▶ phone (the number kept, the notice focused)
-//   any step ──"Use a different number" / "Start again"──▶ phone (the number kept)
+//   any step ──"Use a different number" / "Start again"──▶ phone (the number kept; held while a
+//                                                           code or PIN is being checked)
 //
 // The step lives here and in component state only: never in the URL, storage or history (R-44),
 // so a reload starts again at the phone step. The attempt cookie carries the server's side. Which
@@ -479,7 +480,7 @@ export function transition(state: SignInState, event: SignInEvent): Outcome {
     case 'resend':
       return resend(state, event.now)
     case 'start_again':
-      if (state.step.kind === 'signed_in') return { state }
+      if (state.step.kind === 'signed_in' || startAgainHeld(state) !== undefined) return { state }
       return { state: toPhone(state), cue: { focus: 'h1' } }
     case 'answer':
       if (state.pending?.id !== event.id) return { state }
@@ -506,6 +507,19 @@ export function resendHeld(state: SignInState): string | undefined {
   if (state.step.kind !== 'code') return undefined
   if (state.pending !== undefined) return busyText(state)
   return state.step.resend.ready ? undefined : state.step.resend.reason
+}
+
+// What "Use a different number" and "Start again" say while they can't act: a code or a PIN being
+// checked. Either answer may sign the person in, and a signed-in answer sets the session cookie
+// (the server's sign-in.ts), which the browser keeps whatever the script makes of the reply. Leaving
+// the step then would show the phone step over a live session the tab doesn't know about, and a
+// second sign-in would leave the first session and its device orphaned until they expire, a second
+// signin.started included (auth-research-web §3.8). So they wait for the answer, at most 20 s
+// (sign-in/api.ts AUTH_TIMEOUT_MS). A code request signs nobody in, so it never holds them: its late
+// answer is stale and changes nothing.
+export function startAgainHeld(state: SignInState): string | undefined {
+  if (state.pending === undefined || state.pending.kind === 'request_code') return undefined
+  return busyText(state)
 }
 
 // The busy text for the call in flight: sending a code, or checking one or a PIN.

@@ -10,9 +10,11 @@ import {
   ABSOLUTE_URL,
   ARBITRARY_COLOUR,
   ARBITRARY_TEXT,
+  CLIPBOARD_FIELD_FILES,
   CODE_FROM_STRINGS,
   COLOUR_LITERAL,
   COLOUR_LITERAL_FILES,
+  clipboardHandlers,
   codeOf,
   DEFAULT_PALETTE,
   ENTRY_APP,
@@ -42,6 +44,7 @@ import {
   specifiersOf,
   srcTarget,
   stringsOf,
+  takesAuthInput,
   textOpacity,
   WEB_DIR,
   WEB_SRC,
@@ -507,5 +510,52 @@ describe('T21: the web source guard (apps/web/src)', () => {
     expect(scripts.flatMap(path => webAuthnUses(path, sources.get(path) ?? '').map(use => `${path}: ${use}`))).toEqual(
       [],
     )
+  })
+
+  it('WS-13 WCAG 3.3.8 SHL-49 AUTH-DESIGN §10.4: the code and PIN fields, the sign-in steps and whatever renders the fields block no paste or copy: no onPaste, onCopy, onCut or onBeforeInput, and no paste, copy, cut or beforeinput listener', () => {
+    const handlers = (source: string) => clipboardHandlers('fixture.tsx', source)
+    // Planted: every way a handler could reach an input.
+    expect(
+      handlers('<input onPaste={e => e.preventDefault()} onCopyCapture={stop} onCut={stop} onBeforeInput={stop} />'),
+    ).toEqual(['onPaste', 'onCopyCapture', 'onCut', 'onBeforeInput'])
+    expect(
+      handlers(
+        "input.onpaste = stop\ninput.addEventListener('paste', stop)\nel.addEventListener(\"beforeinput\", stop, true)\nconst p = { ['onCopy']: stop }",
+      ),
+    ).toEqual(['onpaste', "'paste'", "'beforeinput'", "'onCopy'"])
+    // Comments hold nothing, and the words inside longer text or names are no handler.
+    expect(
+      handlers(
+        "// onPaste={stop} addEventListener('paste')\nconst text = 'Paste the code'\nconst pasted = normaliseCode(v)\n<p>Copy it</p>",
+      ),
+    ).toEqual([])
+
+    // Which files the rule reads: the fields, sign-in/, and any file that renders a field, however
+    // it imports it; a file that only names a field in a comment isn't one.
+    expect(takesAuthInput('ui/PinField.tsx', '')).toBe(true)
+    expect(takesAuthInput('sign-in/sign-in-model.ts', '')).toBe(true)
+    expect(takesAuthInput('shell/ReauthSheet.tsx', "import { CodeField } from '@/ui/CodeField.tsx'")).toBe(true)
+    expect(takesAuthInput('ui/Sheet.tsx', "import { PinField } from './PinField.tsx'")).toBe(true)
+    expect(takesAuthInput('api/reauth.ts', '// the fields the sheet reuses (ui/CodeField.tsx)')).toBe(false)
+
+    // The files it reads, pinned so it can't read nothing unnoticed: a new file that renders a field
+    // fails this line until it is named.
+    const guarded = runtime.filter(path => takesAuthInput(path, sources.get(path) ?? ''))
+    expect([...guarded].sort()).toEqual(
+      [
+        ...CLIPBOARD_FIELD_FILES,
+        'sign-in/CodeStep.tsx',
+        'sign-in/PhoneStep.tsx',
+        'sign-in/PinStep.tsx',
+        'sign-in/SignInScreen.tsx',
+        'sign-in/StepFrame.tsx',
+        'sign-in/api.ts',
+        'sign-in/controller.ts',
+        'sign-in/sign-in-model.ts',
+      ].sort(),
+    )
+    expect(
+      guarded.flatMap(path => clipboardHandlers(path, sources.get(path) ?? '').map(handler => `${path}: ${handler}`)),
+    ).toEqual([])
   })
 })

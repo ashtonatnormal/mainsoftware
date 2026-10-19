@@ -77,6 +77,12 @@ const textOfId = (markup: string, id: string) =>
   markup
     .match(new RegExp(`id="${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>(.*?)</(?:p|span)>`))?.[1]
     ?.replace(/<[^>]+>/g, '')
+// The attributes of the button whose text ends with this label.
+function buttonNamed(markup: string, label: string): Map<string, string> | undefined {
+  const index = markup.split('<button').findIndex(part => part.includes(`${label}</button>`))
+  return index < 1 ? undefined : tags(markup, 'button')[index - 1]
+}
+
 // Every text node, for the AI-copy check.
 const textsOf = (markup: string) =>
   markup
@@ -190,7 +196,35 @@ describe('T20 T21: the sign-in steps’ markup', () => {
     expect(spinner).toContain('aria-hidden="true"')
   })
 
-  it('WCAG 3.3.8 SHL-49 AQ-02: Choose a PIN has two password fields for a new password, numeric, with no maxlength and no paste handler, a hidden username, and Show PIN', () => {
+  it('X6 auth-research-web §3.8: while a code or PIN is being checked, Use a different number and Start again are aria-disabled with the busy text; a code request holds neither', () => {
+    const typed = { phone: PRIYA, code: '123456', pin: '482913', pin2: '482913' }
+    const held = (markup: string, label: string) => {
+      const button = buttonNamed(markup, label)
+      expect(button?.get('aria-disabled'), label).toBe('true')
+      const reasonId = (button?.get('aria-describedby') ?? '').split(' ').at(-1) ?? ''
+      expect(markup, label).toMatch(new RegExp(`id="${reasonId}"[^>]*>${SIGN_IN.busy.checking}<`))
+    }
+    held(at(CODE, { pending: { id: 2, kind: 'verify_code' }, nextId: 3, values: typed }), SIGN_IN.differentNumber)
+    held(
+      at({ kind: 'set_pin', e164: PRIYA }, { pending: { id: 3, kind: 'set_pin' }, nextId: 4, values: typed }),
+      SIGN_IN.startAgain,
+    )
+    held(
+      at(
+        { kind: 'enter_pin', e164: PRIYA, pin: OK_PIN },
+        { pending: { id: 3, kind: 'enter_pin' }, nextId: 4, values: typed },
+      ),
+      SIGN_IN.startAgain,
+    )
+    // At rest, and while a new code is being requested, they act.
+    expect(buttonNamed(STEPS.code, SIGN_IN.differentNumber)?.has('aria-disabled')).toBe(false)
+    expect(buttonNamed(STEPS.enter_pin, SIGN_IN.startAgain)?.has('aria-disabled')).toBe(false)
+    const resending = at(CODE, { pending: { id: 2, kind: 'request_code', e164: MARCUS }, nextId: 3 })
+    expect(buttonNamed(resending, SIGN_IN.resend)?.get('aria-disabled')).toBe('true')
+    expect(buttonNamed(resending, SIGN_IN.differentNumber)?.has('aria-disabled')).toBe(false)
+  })
+
+  it('WCAG 3.3.8 SHL-49 AQ-02: Choose a PIN has two password fields for a new password, numeric, with no maxlength, a hidden username, and Show PIN', () => {
     const markup = STEPS.set_pin
     const fields = visibleInputs(markup).filter(input => input.get('role') !== 'switch')
     expect(fields).toHaveLength(2)
@@ -201,7 +235,8 @@ describe('T20 T21: the sign-in steps’ markup', () => {
       expect(field.has('maxLength') || field.has('maxlength')).toBe(false)
     }
     expect(fields.map(field => field.get('name'))).toEqual(['new-pin', 'confirm-pin'])
-    expect(markup).not.toMatch(/onpaste/i)
+    // Paste and copy are left alone: markup never shows a handler, so WS-13 reads the source
+    // (scripts/guards/web-source.test.ts).
     const username = tags(markup, 'input').find(input => input.get('autoComplete') === 'username')
     expect(username?.get('value')).toBe(PRIYA)
     expect(username?.has('hidden')).toBe(true)

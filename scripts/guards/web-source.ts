@@ -521,4 +521,44 @@ export function webAuthnUses(path: string, source: string): string[] {
   return found
 }
 
+// WS-13: the code and PIN fields leave paste, copy and autofill alone (WCAG 3.3.8, SHL-49,
+// AUTH-DESIGN §10.4): a pasted code and a password manager are the help 3.3.8 says a memory test at
+// sign-in must allow. Markup rendered in Node never carries an event handler, so the rule reads
+// source: the fields themselves (CLIPBOARD_FIELD_FILES), everything under sign-in/, and every file
+// that renders either field (C0.16's re-authentication sheet, wherever it lands). From the syntax
+// tree, so comments say nothing, it refuses in those files:
+// - a clipboard or beforeinput handler's name, in any case, Capture or not (onPaste, onCopyCapture,
+//   onCut, onBeforeInput as a JSX attribute or a key, input.onpaste);
+// - the strings 'paste', 'copy', 'cut' and 'beforeinput', and those handler names as strings, which
+//   is how addEventListener('paste', …) or a spread `{ ['onPaste']: f }` would reach them.
+// A beforeinput handler is refused too, since it can cancel a paste (inputType insertFromPaste).
+// What is pasted is cleaned in onChange (normaliseCode), never stopped.
+export const CLIPBOARD_FIELD_FILES = new Set([
+  'ui/CodeField.tsx',
+  'ui/PinField.tsx',
+  'ui/Field.tsx',
+  'ui/code-field.ts',
+])
+export const CLIPBOARD_DIRS = ['sign-in/'] as const
+const AUTH_FIELDS = new Set(['ui/CodeField.tsx', 'ui/PinField.tsx'])
+const CLIPBOARD_HANDLER = /^on(?:paste|copy|cut|beforeinput)(?:capture)?$/i
+const CLIPBOARD_EVENT = /^(?:paste|copy|cut|beforeinput)$/i
+
+// Whether WS-13 reads this file (a path under apps/web/src/, and its source).
+export function takesAuthInput(path: string, source: string): boolean {
+  if (CLIPBOARD_FIELD_FILES.has(path) || CLIPBOARD_DIRS.some(dir => path.startsWith(dir))) return true
+  if (path.endsWith('.css')) return false
+  return loadsOf(path, source).some(load => {
+    const target = load.specifier === undefined ? undefined : srcTarget(path, load.specifier)
+    return target !== undefined && AUTH_FIELDS.has(target)
+  })
+}
+
+// Where a file names a clipboard handler or event, as the guard reports it.
+export function clipboardHandlers(path: string, source: string): string[] {
+  const names = identifiersOf(path, source).filter(name => CLIPBOARD_HANDLER.test(name))
+  const strings = stringsOf(path, source).filter(text => CLIPBOARD_HANDLER.test(text) || CLIPBOARD_EVENT.test(text))
+  return [...names, ...strings.map(text => `'${text}'`)]
+}
+
 export const matchesOf = (pattern: RegExp, text: string) => [...text.matchAll(pattern)].map(match => match[0])

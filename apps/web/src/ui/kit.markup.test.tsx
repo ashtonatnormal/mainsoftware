@@ -434,7 +434,7 @@ describe('T21: the kit’s markup', () => {
     expect(disabled.has('disabled')).toBe(true)
   })
 
-  it('KM-16 WCAG 3.3.8 SHL-49 AUTH-DESIGN §10.4: PinField is a numeric password field with the autocomplete it is given, no maxlength, no paste handler; ShowPin is a Switch; PinUsername is hidden', () => {
+  it('KM-16 WCAG 3.3.8 SHL-49 AUTH-DESIGN §10.4: PinField is a numeric password field with the autocomplete it is given and no maxlength; ShowPin is a Switch; PinUsername is hidden', () => {
     const field = (shown: boolean) =>
       html(
         <PinField
@@ -452,7 +452,9 @@ describe('T21: the kit’s markup', () => {
     expect(input.get('autoComplete')).toBe('current-password')
     expect(input.get('inputMode')).toBe('numeric')
     expect(input.get('aria-invalid')).toBe('true')
-    for (const absent of ['maxLength', 'maxlength', 'onPaste', 'onpaste']) expect(input.has(absent), absent).toBe(false)
+    for (const absent of ['maxLength', 'maxlength']) expect(input.has(absent), absent).toBe(false)
+    // No handler blocks paste or copy: markup never shows one, so WS-13 reads the source
+    // (scripts/guards/web-source.test.ts).
     expect(one(field(true), 'input').get('type')).toBe('text')
     const toggle = one(html(<ShowPin shown onChange={() => {}} />), 'input')
     expect(toggle.get('role')).toBe('switch')

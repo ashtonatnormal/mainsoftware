@@ -11,6 +11,8 @@
 //   succeed. A timed lock says when it ends (in this browser's zone: before sign-in there is no
 //   profile), and that a new code is needed then, since the attempt (10 minutes) ends before the lock
 //   (15). A lock only an Owner can end says so. Either way the one way on is "Start again".
+// "Start again" is held while the PIN is being checked, with the busy text as its reason
+// (startAgainHeld): the answer may sign the person in.
 // Both forms carry the number the code went to as a hidden username, so a password manager files
 // the PIN under it (ui/PinField.tsx), and their fields allow paste and autofill (WCAG 3.3.8).
 import { formattersFor } from '@/lib/time.ts'
@@ -19,16 +21,18 @@ import { Button } from '@/ui/Button.tsx'
 import { PinField, PinUsername, ShowPin } from '@/ui/PinField.tsx'
 import type { StepProps } from './PhoneStep.tsx'
 import { errorOn, Notice, StepForm, StepFrame, SubmitButton } from './StepFrame.tsx'
-import { type Lock, pinTriesText, type Step, showsTriesFirst, submitHeld } from './sign-in-model.ts'
+import { type Lock, pinTriesText, type Step, showsTriesFirst, startAgainHeld, submitHeld } from './sign-in-model.ts'
 
 type StepOf<K extends Step['kind']> = Extract<Step, { kind: K }>
 
-function StartAgain({ onPress, primary = false }: { onPress(): void; primary?: boolean }) {
+// held: why it can't act now (startAgainHeld), or undefined when it can.
+function StartAgain({ onPress, held, primary = false }: { onPress(): void; held?: string; primary?: boolean }) {
   return (
     <Button
       variant={primary ? 'primary' : 'ghost'}
       size={primary ? 'lg' : 'md'}
       className="w-full"
+      disabledReason={held}
       onClick={() => onPress()}
     >
       {SIGN_IN.startAgain}
@@ -69,7 +73,7 @@ export function SetPinStep({ state, step, controller, refs }: StepProps & { step
         <p className="text-small text-muted">{SIGN_IN.ifForgotten}</p>
         <SubmitButton label={SIGN_IN.setPin} held={submitHeld(state)} busy={state.pending !== undefined} />
       </StepForm>
-      <StartAgain onPress={controller.startAgain} />
+      <StartAgain onPress={controller.startAgain} held={startAgainHeld(state)} />
     </StepFrame>
   )
 }
@@ -100,7 +104,7 @@ export function EnterPinStep({ state, step, controller, refs }: StepProps & { st
         <summary className="flex min-h-11 cursor-pointer items-center font-semibold">{SIGN_IN.forgotPin}</summary>
         <p className="text-muted">{SIGN_IN.forgotPinBody}</p>
       </details>
-      <StartAgain onPress={controller.startAgain} />
+      <StartAgain onPress={controller.startAgain} held={startAgainHeld(state)} />
     </StepFrame>
   )
 }

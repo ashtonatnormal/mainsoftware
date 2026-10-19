@@ -2,9 +2,10 @@
 // The label is always visible, never a placeholder alone. The caller renders the control from the
 // props it is handed: the id the label points at, aria-describedby naming the hint and then the
 // error, and aria-invalid while there is an error. The error is text with an icon, in the danger
-// ink, so it never rests on colour alone. Every control takes CONTROL_CLASS: 16 px text at every
-// width (iOS zooms into anything smaller), a 44 px minimum height and the line-strong border that
-// marks a control at 3:1 (X7, SHL-37).
+// ink, so it never rests on colour alone. Every control takes CONTROL_CLASS, or, for the code and
+// PIN fields, DIGITS_CONTROL_CLASS (their 24 px figures). Both share one box: text of at least
+// 16 px at every width (iOS zooms into anything smaller), a 44 px minimum height and the
+// line-strong border that marks a control at 3:1 (X7, SHL-37).
 //
 // Every form the app renders carries noValidate: the checks are the client's own and the server's
 // codes, shown here, so the browser's bubble (in its own locale, outside this error model) never
