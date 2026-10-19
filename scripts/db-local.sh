@@ -10,6 +10,10 @@
 #   scripts/db-local.sh migrate   apply any new migrations to `hearth`, keeping its data.
 #                                 npm run db:migrate.
 #
+# HEARTH_DB names another database to build the same way: only `hearth` (the default) or
+# `hearth_e2e`, the web e2e suite's own, which its first web server rebuilds on every run
+# (apps/web/playwright.config.ts; T21, D-06), so the suite never touches the developer's `hearth`.
+#
 # Both give hearth_app and hearth_worker a login with the local password .env.example's database
 # URLs use, which migrations never do (roles are created without one; in AWS, infra/ sets IAM
 # sign-in). Roles belong to the whole server, so this refuses anything but a local server, as the
@@ -20,7 +24,7 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 export PGHOST=${PGHOST:-127.0.0.1} PGPORT=${PGPORT:-5432} PGUSER=${PGUSER:-postgres} PGPASSWORD=${PGPASSWORD:-postgres}
-db=hearth
+db=${HEARTH_DB:-hearth}
 owner=hearth_owner
 # The local-only password .env.example's database URLs use. Not a secret: the server is bound to
 # 127.0.0.1 and holds only the seed's made-up data.
@@ -32,6 +36,9 @@ case "$command" in
   reset | migrate) ;;
   *) echo "Usage: scripts/db-local.sh reset|migrate" >&2; exit 2 ;;
 esac
+
+# The only two databases this builds; the name goes into SQL and a role name below unquoted.
+[[ "$db" =~ ^hearth(_e2e)?$ ]] || { echo "Refusing HEARTH_DB=$db: only hearth or hearth_e2e." >&2; exit 2; }
 
 case "$PGHOST" in
   127.0.0.1 | localhost | ::1) ;;
@@ -65,8 +72,9 @@ fi
 # The migrate login, like CI's (scripts/check-migrations.sh): a NOINHERIT login whose only right
 # is to take hearth_owner, so a migration that switches role gains nothing here either. It's
 # dropped afterwards. The migrator connects with the PG* variables checked above, so nothing goes
-# into a URL; an inherited MIGRATION_DATABASE_URL would win over them, so it's dropped.
-migrator=hearth_local_m
+# into a URL; an inherited MIGRATION_DATABASE_URL would win over them, so it's dropped. It's named
+# after the database, so a db:reset and an e2e run's rebuild never drop each other's login.
+migrator=${db}_local_m
 migrator_pw=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 trap 'sql -d postgres -c "drop role if exists $migrator" >/dev/null 2>&1 || true' EXIT
 sql -d postgres -c "set client_min_messages = warning" \

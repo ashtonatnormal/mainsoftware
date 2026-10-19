@@ -1,0 +1,77 @@
+// Visual regression (T21; BUILD-PLAN C0.8, R-68, D-07, K-26, K-27; DESIGN-SHELL §9.4.5). Every
+// screenshot is named in support/visual-matrix.ts, and its baseline is made only on CI's runner and
+// adopted from the check job's artifact (support/adopt-baselines.ts). A local run walks the same
+// screens and takes no screenshot (ignoreSnapshots), so it can't write or compare a PNG. Each shot
+// waits for the self-hosted fonts and runs with reduced motion, and the caret is hidden.
+import type { Page } from '@playwright/test'
+import { SIGN_IN } from '../src/strings/sign-in.ts'
+import { fontsReady } from './support/checks.ts'
+import { expect, test } from './support/fixtures.ts'
+import { PERSONAS, typed } from './support/personas.ts'
+import { SCHEMES } from './support/viewports.ts'
+import { MORE_WIDTHS, shotName, VISUAL_WIDTHS } from './support/visual-matrix.ts'
+
+const h1 = (page: Page) => page.getByRole('heading', { level: 1 })
+
+// The height each width is shot at: a phone's, or the desktop's.
+const sizeOf = (width: number) => ({ width, height: width === 1440 ? 900 : width === 390 ? 844 : 568 })
+
+// One screen at every width and scheme in `widths`, each after `prepare`.
+async function shoot(page: Page, screen: string, widths: readonly number[], prepare?: () => Promise<void>) {
+  for (const width of widths) {
+    await page.setViewportSize(sizeOf(width))
+    await prepare?.()
+    for (const scheme of SCHEMES) {
+      await page.emulateMedia({ colorScheme: scheme })
+      await fontsReady(page)
+      await expect(page).toHaveScreenshot(shotName(screen, width, scheme), { fullPage: true })
+    }
+  }
+}
+
+test('VS-01 BP C0.8 R-68: the sign-in phone step, and the code step with an error, at 320, 390 and 1440 px, light and dark', {
+  tag: '@visual',
+}, async ({ open, guard }) => {
+  guard.expectResponses([{ path: '/api/auth/otp/verify', status: 401 }])
+  const page = await open({ ...sizeOf(320) })
+  await page.goto('/sign-in')
+  await expect(h1(page)).toHaveText(SIGN_IN.steps.phone)
+  await shoot(page, 'sign-in-phone', VISUAL_WIDTHS)
+
+  await page.setViewportSize(sizeOf(320))
+  await page.getByLabel('Mobile number').fill(typed(PERSONAS.visual))
+  await page.getByRole('button', { name: SIGN_IN.sendCode }).click()
+  await expect(h1(page)).toHaveText(SIGN_IN.steps.code)
+  await page.getByLabel('6-digit code').fill('000000')
+  await page.getByRole('button', { name: SIGN_IN.signIn, exact: true }).click()
+  await expect(page.getByLabel('6-digit code')).toHaveAttribute('aria-invalid', 'true')
+  // The same picture whichever element has focus.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await shoot(page, 'sign-in-code-error', VISUAL_WIDTHS)
+})
+
+test('VS-01 BP C0.8 R-68: Chats, the avatar menu open and Page not found at 320, 390 and 1440 px, and More at 320 and 390, light and dark', {
+  tag: '@visual',
+}, async ({ open }) => {
+  const page = await open({ ...sizeOf(320), signedIn: true })
+  await page.goto('/chats')
+  await expect(h1(page)).toHaveText('Chats')
+  await shoot(page, 'chats', VISUAL_WIDTHS)
+
+  const menu = page.getByRole('menu', { name: 'Account' })
+  await shoot(page, 'avatar-menu', VISUAL_WIDTHS, async () => {
+    if (await menu.isVisible()) await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: 'Account, Marcus' }).click()
+    await expect(menu).toBeVisible()
+    await page.mouse.move(0, 0)
+  })
+  await page.keyboard.press('Escape')
+
+  await page.goto('/xyz')
+  await expect(h1(page)).toHaveText('Page not found')
+  await shoot(page, 'not-found', VISUAL_WIDTHS)
+
+  await page.goto('/more')
+  await expect(h1(page)).toHaveText('More')
+  await shoot(page, 'more', MORE_WIDTHS)
+})

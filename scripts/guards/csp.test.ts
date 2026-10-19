@@ -8,8 +8,9 @@
 // blocks it.
 //
 // CSP-07 and CSP-08 read apps/web/index.html, the page the policy governs: a policy without
-// 'unsafe-inline' holds only while the page itself carries nothing inline. CSP-09 lands with the
-// e2e preview it reads (C0.8 S12).
+// 'unsafe-inline' holds only while the page itself carries nothing inline. CSP-09 reads the two
+// servers that serve the page before CloudFront does, Vite's dev server and the e2e preview, so
+// neither can serve a policy of its own (K-03).
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -21,6 +22,7 @@ import {
 } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import { isModelHost, MODEL_HOST } from './ai-free'
+import { codeOf } from './imports'
 import { readRepoFile, root } from './repo-files'
 
 // The origins the builder serves: production, the e2e preview over HTTPS on this machine, and the
@@ -255,9 +257,34 @@ describe('T21 item 7: the CSP guard', () => {
     expect(keys.has('user-scalable'), content).toBe(false)
     expect(keys.has('minimum-scale'), content).toBe(false)
   })
+
+  it('CSP-09 K-03 D-04: vite.config.ts and e2e/support/preview.ts exist; the first serves documentHeaders(…, { dev: true }) and the second documentHeaders(E2E_ORIGIN), and neither names a header of its own', () => {
+    for (const path of [VITE_CONFIG, E2E_PREVIEW]) expect(existsSync(join(root, path)), path).toBe(true)
+    const vite = codeOf(VITE_CONFIG, readRepoFile(VITE_CONFIG))
+    const preview = codeOf(E2E_PREVIEW, readRepoFile(E2E_PREVIEW))
+    // Dev: the builder, relaxed for dev, as the server's headers, and nothing else there.
+    // (TypeScript's printer, which strips the comments, writes strings in double quotes.)
+    expect(vite).toMatch(/headers: documentHeaders\(["']http:\/\/localhost:5173["'], \{ dev: true \}\)/)
+    expect([...vite.matchAll(/documentHeaders\(/g)]).toHaveLength(1)
+    // The preview: production's headers for the e2e origin, plus only the document's cache rule.
+    expect(preview).toMatch(
+      /headers: \{ \.\.\.documentHeaders\(E2E_ORIGIN\), ["']Cache-Control["']: DOCUMENT_CACHE_CONTROL \}/,
+    )
+    expect([...preview.matchAll(/documentHeaders\(/g)]).toHaveLength(1)
+    expect(preview).not.toMatch(/dev: true/)
+    // No other policy anywhere in either: no CSP string, no report-only header.
+    for (const [path, text] of [
+      [VITE_CONFIG, vite],
+      [E2E_PREVIEW, preview],
+    ] as const) {
+      expect(text, path).not.toMatch(/Content-Security-Policy|default-src|script-src/i)
+    }
+  })
 })
 
 const INDEX_HTML = 'apps/web/index.html'
+const VITE_CONFIG = 'apps/web/vite.config.ts'
+const E2E_PREVIEW = 'apps/web/e2e/support/preview.ts'
 
 // The attributes that name a URL the browser fetches or navigates to.
 const URL_ATTRIBUTES = new Set(['src', 'href', 'action', 'formaction', 'srcset', 'poster', 'data', 'manifest', 'ping'])

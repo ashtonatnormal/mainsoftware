@@ -23,7 +23,8 @@
     "fix": "biome check --write",
     "test": "vitest run && npm run test --workspaces --if-present",
     "test:integration": "vitest run --mode integration --reporter=verbose",
-    "build": "npm run build --workspaces --if-present"
+    "build": "npm run build --workspaces --if-present",
+    "e2e": "npm run e2e -w @hearth/web --"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
