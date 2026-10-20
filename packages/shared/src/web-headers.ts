@@ -12,6 +12,13 @@
 
 export const CSP_REPORT_PATH = '/api/csp-report'
 
+// Every word the app's own route paths are made of (apps/web/src/router/router.tsx): the path of a
+// CSP report's page keeps these and replaces any other segment with ':id' (T21 item 9), so a slug
+// or a name typed or pasted into a URL never reaches the log. apps/web's router test RO-06 holds
+// this list equal to the words of the paths the router registers, so a new route adds its words
+// here in the same PR.
+export const ROUTE_WORDS = ['today', 'chats', 'rooms', 'tasks', 'calendar', 'drive', 'more', 'sign-in'] as const
+
 // CloudFront's limit on the Content-Security-Policy value of a response-headers policy (OD-11).
 export const CLOUDFRONT_CSP_MAX = 1783
 

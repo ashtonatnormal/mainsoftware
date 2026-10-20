@@ -1,6 +1,7 @@
 // The route tree, loaded in Node with a memory history (T21 item 1). Node runs the router's server
 // load, which doesn't follow a redirect, so a guard's redirect is read from the guard itself and its
 // effect (the return path) from storage; what each path matches is read from the loaded router.
+import { ROUTE_WORDS } from '@hearth/shared'
 import { createMemoryHistory, isRedirect } from '@tanstack/react-router'
 import { describe, expect, it } from 'vitest'
 import type { TabStorage } from '@/session/document.ts'
@@ -145,5 +146,16 @@ describe('T21 item 1: the route tree (router/router.tsx)', () => {
     await router.load()
     expect(router.state.matches.map(match => match.routeId)).toEqual(['__root__', '/sign-in'])
     expect(router.state.matches.at(-1)?.staticData.title).toBe('Sign in')
+  })
+
+  it("RO-06 T21 item 9: ROUTE_WORDS, the only segments a CSP report's path keeps, equals the words of every path the router registers", () => {
+    const router = routerAt('/', signedIn())
+    const words = new Set(
+      Object.values(router.routesById)
+        .flatMap(route => (route.fullPath as string).split('/'))
+        .filter(segment => segment !== '' && segment !== '$'),
+    )
+    expect([...words].sort()).toEqual([...ROUTE_WORDS].sort())
+    expect(new Set(ROUTE_WORDS).size).toBe(ROUTE_WORDS.length)
   })
 })

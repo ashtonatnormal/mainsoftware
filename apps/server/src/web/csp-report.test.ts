@@ -1,6 +1,7 @@
 // What a CSP report's log line keeps (reduceReport) and the per-process cap on those lines
 // (createLogCap), both pure (OD-12). The route itself, its parser, the Origin hook and the cap at
 // work are tested at the api in routes.test.ts.
+import { ROUTE_WORDS } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import { CSP_LOG_PER_MINUTE, type CspReport, createLogCap, reduceReport } from '#src/web/csp-report.ts'
 
@@ -53,18 +54,23 @@ describe('C0.8 OD-12 reduceReport', () => {
     for (const [input, expected] of cases) expect([input, blocked(input)]).toEqual([input, expected])
   })
 
-  it('RR-02 OD-12: id-like path segments become :id; queries go; overlong paths are cut; another origin’s page is other-origin', () => {
+  it('RR-02 OD-12 T21 item 9: every segment but the app’s route words (ROUTE_WORDS) becomes :id, names and slugs too; queries go; overlong paths are cut; another origin’s page is other-origin', () => {
     const cases: [string | undefined, string][] = [
       [`${APP_ORIGIN}/chats/${PERSON}?invite=${MARKER}#${MARKER}`, '/chats/:id'],
       [`${APP_ORIGIN}/`, '/'],
       [APP_ORIGIN, '/'],
       [`${APP_ORIGIN}/sign-in`, '/sign-in'],
       [`${APP_ORIGIN}/today/`, '/today/'],
-      // Digits, upper case, other punctuation, percent-encoded names and long words are ids.
-      [`${APP_ORIGIN}/drive/folder/12345/Report%20Q3`, '/drive/folder/:id/:id'],
+      ...ROUTE_WORDS.map((word): [string, string] => [`${APP_ORIGIN}/${word}/${word}`, `/${word}/${word}`]),
+      // Any other segment, however plain: a name, a slug or a word no route has.
+      [`${APP_ORIGIN}/people/marcus-tan`, '/:id/:id'],
+      [`${APP_ORIGIN}/chats/hr-grievance-wei-ling`, '/chats/:id'],
+      [`${APP_ORIGIN}/drive/folder/12345/Report%20Q3`, '/drive/:id/:id/:id'],
+      [`${APP_ORIGIN}/admin/roles`, '/:id/:id'],
+      // Upper case, other punctuation and percent-encoded names, route words included.
       [`${APP_ORIGIN}/People/Ahmad`, '/:id/:id'],
+      [`${APP_ORIGIN}/Chats/CHATS/chats-/sign_in`, '/:id/:id/:id/:id'],
       [`${APP_ORIGIN}/a_b/c.d/-e/f-/g--h`, '/:id/:id/:id/:id/:id'],
-      [`${APP_ORIGIN}/${'a'.repeat(33)}/${'b'.repeat(32)}`, `/:id/${'b'.repeat(32)}`],
       [`${APP_ORIGIN}/caf%C3%A9`, '/:id'],
       // Another origin, a different scheme or port of the same host, or no page at all.
       [`https://other.example.com/chats?${MARKER}`, 'other-origin'],
@@ -76,9 +82,9 @@ describe('C0.8 OD-12 reduceReport', () => {
       [undefined, 'other-origin'],
     ]
     for (const [input, expected] of cases) expect([input, path(input)]).toEqual([input, expected])
-    const long = path(`${APP_ORIGIN}/${'abc/'.repeat(100)}`)
+    const long = path(`${APP_ORIGIN}/${'chats/'.repeat(40)}`)
     expect(long).toHaveLength(200)
-    expect(long.startsWith('/abc/abc/')).toBe(true)
+    expect(long.startsWith('/chats/chats/')).toBe(true)
   })
 
   it('RR-03 OD-12: script-sample, original-policy and referrer never appear in the result', () => {

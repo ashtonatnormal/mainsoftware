@@ -5,9 +5,10 @@
 // Valkey. The lines reach CloudWatch, which C0.9 lists in PDPA-10.
 //
 // What a line keeps (reduceReport): the directive; what was blocked, as a keyword, an http(s)
-// origin or a scheme alone; the page's path on the app origin, with id-like segments replaced; and
-// the disposition. Everything else a report carries is dropped: the script sample, the original
-// policy, the referrer, the source file, line and column, the status code and every query string.
+// origin or a scheme alone; the page's path on the app origin, with every segment that isn't one of
+// the app's route words (ROUTE_WORDS, packages/shared) replaced; and the disposition. Everything
+// else a report carries is dropped: the script sample, the original policy, the referrer, the
+// source file, line and column, the status code and every query string.
 // A browser extension's URL keeps its scheme only: its host is the extension's id, and Firefox's
 // moz-extension id is made per install, so it would single out a person's browser.
 //
@@ -23,6 +24,7 @@
 // after the minute ends logs one csp_reports_dropped line with the count. The route's request
 // lines (incoming, completed) are logged only at warn, as the probes' are, so a flood of reports
 // writes no more than the cap allows; the root hook's refusals are logged as for any route.
+import { ROUTE_WORDS } from '@hearth/shared'
 import type { FastifyInstance } from 'fastify'
 import type { LevelWithSilent } from 'pino'
 import { z } from 'zod'
@@ -59,7 +61,7 @@ export interface CspReportLog {
   // URL's origin (scheme, host and any port); any other scheme alone (data:…, blob:…,
   // chrome-extension://<id>/… → 'data', 'blob', 'chrome-extension'); else 'other'.
   blocked: string
-  // The page's pathname when it is on the app origin, each segment that isn't a plain route word
+  // The page's pathname when it is on the app origin, each segment that isn't one of ROUTE_WORDS
   // replaced by ':id', cut to 200 characters; any other page, or none, is 'other-origin'.
   path: string
   disposition: 'enforce' | 'report' | 'unknown'
@@ -69,11 +71,10 @@ const DIRECTIVE = /^[a-z-]{1,40}$/
 const KEYWORDS = new Set(['inline', 'eval', 'wasm-eval', 'data', 'blob', 'self'])
 // A URL scheme (RFC 3986 §3.1), of at most 32 characters.
 const SCHEME = /^([a-z][a-z0-9+.-]{0,31}):/
-// A path segment kept as it is: lower-case words joined by single hyphens, as the app's routes
-// are (/chats, /sign-in). Anything else (a uuid, a number, a token, upper case, a percent-encoded
-// name) reads ':id'. A uuid always holds a digit, its version, so none is a route word.
-const ROUTE_WORD = /^[a-z]{1,32}(?:-[a-z]{1,32})*$/
-const ROUTE_WORD_MAX = 32
+// The only path segments kept as they are: the words of the app's own routes (/chats, /sign-in).
+// Any other segment reads ':id', however plain it looks, since a slug or a name (/people/marcus-tan)
+// is shaped like a route word.
+const ROUTE_WORD: ReadonlySet<string> = new Set(ROUTE_WORDS)
 
 function directiveOf(report: CspReport['csp-report']): string {
   const candidates = [report['effective-directive'], report['violated-directive']?.trim().split(/\s+/, 1)[0]]
@@ -96,7 +97,7 @@ function blockedOf(blockedUri: string | undefined): string {
 }
 
 function segmentOf(segment: string): string {
-  return segment === '' || (segment.length <= ROUTE_WORD_MAX && ROUTE_WORD.test(segment)) ? segment : ':id'
+  return segment === '' || ROUTE_WORD.has(segment) ? segment : ':id'
 }
 
 function pathOf(documentUri: string | undefined, appOrigin: string): string {
