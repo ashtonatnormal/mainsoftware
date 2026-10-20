@@ -6,17 +6,16 @@
 import { useLocation } from '@tanstack/react-router'
 import { SHELL } from '@/strings/shell.ts'
 import { NavLink } from './NavLink.tsx'
-import { activeTab, TABS } from './nav.ts'
+import { currentOf, TABS } from './nav.ts'
 
 export function TabBar() {
   const pathname = useLocation({ select: location => location.pathname })
-  const current = activeTab(pathname, 'phone')
   return (
     <nav aria-label={SHELL.mainNav} className="border-t border-line bg-surface pb-safe px-safe rail:hidden">
       <ul className="grid grid-cols-5">
         {TABS.map(entry => (
           <li key={entry.id} className="flex min-w-0">
-            <NavLink entry={entry} current={current === entry.id} layout="phone" />
+            <NavLink entry={entry} current={currentOf(entry, pathname, 'phone')} layout="phone" />
           </li>
         ))}
       </ul>

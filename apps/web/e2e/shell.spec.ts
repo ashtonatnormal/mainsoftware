@@ -101,7 +101,8 @@ test('SH-04 OD-02: More lists Calendar and Drive on phones, and opening Calendar
   expect((await list.allInnerTexts()).map(name => name.trim())).toEqual(['Calendar', 'Drive'])
   await page.locator('#screen').getByRole('link', { name: 'Calendar' }).click()
   await expect(h1(page)).toHaveText('Calendar')
-  await expect(mainNav(page).getByRole('link', { name: 'More' })).toHaveAttribute('aria-current', 'page')
+  // More holds the page, but isn't it: "true", never "page" (WCAG 4.1.2).
+  await expect(mainNav(page).getByRole('link', { name: 'More' })).toHaveAttribute('aria-current', 'true')
   await expect(mainNav(page).locator('[aria-current]')).toHaveCount(1)
 })
 

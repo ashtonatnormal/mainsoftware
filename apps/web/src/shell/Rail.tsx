@@ -11,11 +11,10 @@ import { Flame } from 'lucide-react'
 import { SHELL } from '@/strings/shell.ts'
 import { AvatarMenu } from './AvatarMenu.tsx'
 import { NavLink } from './NavLink.tsx'
-import { activeTab, RAIL } from './nav.ts'
+import { currentOf, RAIL } from './nav.ts'
 
 export function Rail() {
   const pathname = useLocation({ select: location => location.pathname })
-  const current = activeTab(pathname, 'rail')
   return (
     <header className="hidden min-h-0 w-[calc(5rem+env(safe-area-inset-left,0px))] shrink-0 flex-col items-center border-r border-line bg-surface pt-safe pb-safe pl-safe rail:flex">
       <span
@@ -28,7 +27,7 @@ export function Rail() {
         <ul className="flex flex-col items-center gap-1 py-1">
           {RAIL.map(entry => (
             <li key={entry.id}>
-              <NavLink entry={entry} current={current === entry.id} layout="rail" />
+              <NavLink entry={entry} current={currentOf(entry, pathname, 'rail')} layout="rail" />
             </li>
           ))}
         </ul>

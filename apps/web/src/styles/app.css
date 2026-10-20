@@ -185,12 +185,12 @@ html.scroll-locked #screen {
 }
 
 /* Forced colours (Windows High Contrast) paint every background Canvas, so the current tab keeps
-   an outline in the system's text colour, and the Switch draws its own state in system colours:
-   forced-color-adjust: none keeps them as written, or the knob would be Canvas on a Canvas track
-   whether on or off. Off is a CanvasText knob on a Canvas track with a CanvasText border; on is a
+   an outline in the system's text colour (aria-current "page", or "true" on More while it holds the
+   page), and the Switch draws its own state in system colours: forced-color-adjust: none keeps them
+   as written, or the knob would be Canvas on a Canvas track whether on or off. Off is a CanvasText knob on a Canvas track with a CanvasText border; on is a
    HighlightText knob on a Highlight track (Switch.tsx adds .switch-on and .switch-knob). */
 @media (forced-colors: active) {
-  [aria-current="page"] {
+  [aria-current]:not([aria-current="false"]) {
     outline: 2px solid CanvasText;
     outline-offset: -4px;
   }

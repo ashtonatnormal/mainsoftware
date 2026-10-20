@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { APP_PATHS } from '@/router/paths.ts'
 import { aiCopyIn } from '@/strings/ai-copy.ts'
 import { AVATAR_MENU, signOutItem } from './avatar-menu.ts'
-import { activeTab, MORE_ENTRIES, NAV, RAIL, TABS } from './nav.ts'
+import { activeTab, currentOf, MORE_ENTRIES, NAV, RAIL, TABS } from './nav.ts'
 
 // The toast the sign-out item raises when the sign-out fails, without the app's store.
 const toasts = vi.hoisted(() => [] as unknown[])
@@ -53,6 +53,26 @@ describe('T21 OD-02: the navigation (shell/nav.ts)', () => {
     }
     // A trailing slash is the same place.
     expect(activeTab('/chats/', 'phone')).toBe('chats')
+  })
+
+  it('NV-05 WCAG 4.1.2: aria-current is "page" only on the link to the page shown; More holding Calendar or Drive on a phone is "true"', () => {
+    for (const path of ['/calendar', '/drive', '/drive/']) {
+      expect(currentOf(NAV.more, path, 'phone'), path).toBe('true')
+      expect(
+        TABS.filter(entry => entry.id !== 'more').map(entry => currentOf(entry, path, 'phone')),
+        path,
+      ).toEqual([undefined, undefined, undefined, undefined])
+    }
+    expect(currentOf(NAV.more, '/more', 'phone')).toBe('page')
+    for (const entry of TABS) expect(currentOf(entry, entry.to, 'phone'), entry.id).toBe('page')
+    for (const entry of RAIL) {
+      expect(currentOf(entry, entry.to, 'rail'), entry.id).toBe('page')
+      expect(currentOf(entry, `${entry.to}/`, 'rail'), entry.id).toBe('page')
+    }
+    for (const path of ['/xyz', '/chats/abc', '/more']) {
+      expect(RAIL.map(entry => currentOf(entry, path, 'rail')).filter(Boolean), path).toEqual([])
+    }
+    expect(TABS.map(entry => currentOf(entry, '/xyz', 'phone')).filter(Boolean)).toEqual([])
   })
 
   it('NV-04 OD-05: AVATAR_MENU’s only C0.8 entry is Sign out, which asks the runtime to sign out and says so only when that failed', async () => {

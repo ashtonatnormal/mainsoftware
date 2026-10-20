@@ -44,11 +44,25 @@ export type NavLayout = 'phone' | 'rail'
 // More, so they mark More; the rail has its own entries for them and none for More. A path the app
 // doesn't register (a not-found page) marks nothing, so no tab claims a page that isn't its own.
 export function activeTab(pathname: string, layout: NavLayout): NavId | undefined {
-  // A trailing slash is the same place, as the router reads it.
-  const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
+  const path = samePlace(pathname)
   const entries = layout === 'phone' ? TABS : RAIL
   const own = entries.find(entry => entry.to === path)
   if (own) return own.id
   if (layout === 'phone' && MORE_ENTRIES.some(entry => entry.to === path)) return 'more'
   return undefined
+}
+
+// How an entry is current for a path, as its aria-current: "page" when the path is the entry's own,
+// "true" when the entry is current as the section that holds the page (More on a phone, for Calendar
+// and Drive), so no link claims to be a page it doesn't go to; else it isn't current.
+export type NavCurrent = 'page' | 'true'
+
+export function currentOf(entry: NavEntry, pathname: string, layout: NavLayout): NavCurrent | undefined {
+  if (activeTab(pathname, layout) !== entry.id) return undefined
+  return entry.to === samePlace(pathname) ? 'page' : 'true'
+}
+
+// A trailing slash is the same place, as the router reads it.
+function samePlace(pathname: string): string {
+  return pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
 }

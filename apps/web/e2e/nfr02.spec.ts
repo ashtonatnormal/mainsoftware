@@ -207,4 +207,11 @@ test('NF-11 WCAG 1.4.11 forced colours: the current tab has an outline and the f
   const focused = await outline('Today')
   expect(focused.style).not.toBe('none')
   expect(focused.width).toBeGreaterThan(0)
+  // More holding Calendar (aria-current "true", not "page") keeps the outline too.
+  await page.goto('/calendar')
+  await expect(h1(page)).toHaveText('Calendar')
+  await expect(mainNav(page).getByRole('link', { name: 'More' })).toHaveAttribute('aria-current', 'true')
+  const holding = await outline('More')
+  expect(holding.style).not.toBe('none')
+  expect(holding.width).toBeGreaterThan(0)
 })

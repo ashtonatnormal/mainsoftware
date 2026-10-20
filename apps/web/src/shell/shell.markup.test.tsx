@@ -71,13 +71,13 @@ function readable(markup: string): string[] {
 
 const navsNamedMain = (markup: string) => tags(markup, 'nav').filter(nav => nav.get('aria-label') === 'Main')
 
-// The links inside the nav with this class, by label, with whether each is current.
-function navLinks(markup: string, navClass: string): [string, boolean][] {
+// The links inside the nav with this class, by label, with each one's aria-current, if any.
+function navLinks(markup: string, navClass: string): [string, string | undefined][] {
   const start = markup.search(new RegExp(`<nav[^>]*class="[^"]*${navClass}`))
   const nav = markup.slice(start, markup.indexOf('</nav>', start))
   return [...nav.matchAll(/<a\b([^>]*)>(.*?)<\/a>/gs)].map(match => [
     (match[2] ?? '').replace(/<[^>]+>/g, ''),
-    /aria-current="page"/.test(match[1] ?? ''),
+    (match[1] ?? '').match(/aria-current="([^"]*)"/)?.[1],
   ])
 }
 
@@ -113,19 +113,19 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
   it('SHM-02 R-32 OD-02 OD-30 WCAG 1.4.1: the tab bar holds Today, Chats, Rooms, Tasks, More and the rail six entries, each current one marked by aria-current, the pill and the heavier label', async () => {
     const chats = await appAt('/chats')
     expect(navLinks(chats, 'rail:hidden')).toEqual([
-      ['Today', false],
-      ['Chats', true],
-      ['Rooms', false],
-      ['Tasks', false],
-      ['More', false],
+      ['Today', undefined],
+      ['Chats', 'page'],
+      ['Rooms', undefined],
+      ['Tasks', undefined],
+      ['More', undefined],
     ])
     expect(navLinks(chats, 'overflow-y-auto')).toEqual([
-      ['Today', false],
-      ['Chats', true],
-      ['Rooms', false],
-      ['Tasks', false],
-      ['Calendar', false],
-      ['Drive', false],
+      ['Today', undefined],
+      ['Chats', 'page'],
+      ['Rooms', undefined],
+      ['Tasks', undefined],
+      ['Calendar', undefined],
+      ['Drive', undefined],
     ])
     const current = tags(chats, 'a').filter(link => link.get('aria-current') === 'page')
     expect(current).toHaveLength(2)
@@ -135,10 +135,16 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     }
     expect(chats).toMatch(/<span aria-hidden="true" class="[^"]*bg-accent-soft/)
 
-    // Calendar on a phone marks More; on the rail, Calendar itself.
+    // Calendar on a phone marks More as the section that holds it ("true", never "page": More's
+    // link goes to /more), with the same pill and label; on the rail, Calendar itself is the page.
     const calendar = await appAt('/calendar')
-    expect(navLinks(calendar, 'rail:hidden').filter(([, on]) => on)).toEqual([['More', true]])
-    expect(navLinks(calendar, 'overflow-y-auto').filter(([, on]) => on)).toEqual([['Calendar', true]])
+    expect(navLinks(calendar, 'rail:hidden').filter(([, on]) => on)).toEqual([['More', 'true']])
+    expect(navLinks(calendar, 'overflow-y-auto').filter(([, on]) => on)).toEqual([['Calendar', 'page']])
+    const more = tags(calendar, 'a').filter(link => link.get('aria-current') === 'true')
+    expect(more.map(link => link.get('href'))).toEqual(['/more'])
+    expect(classesOf(more[0])).toEqual(expect.arrayContaining(['font-semibold', 'text-accent-ink']))
+    // /more itself is More's own page.
+    expect(navLinks(await appAt('/more'), 'rail:hidden').filter(([, on]) => on)).toEqual([['More', 'page']])
   })
 
   it('SHM-03 OD-05 X10 SHL-41: the avatar button is named "Account, {name}" and opens a menu labelled Account holding Sign out, with the name above it hidden from assistive technology; one per layout', async () => {
@@ -212,7 +218,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
       expect(toChats[0], path).toMatch(/min-h-11/)
       // No tab claims a page that isn't its own.
       expect(
-        tags(markup, 'a').filter(link => link.get('aria-current') === 'page'),
+        tags(markup, 'a').filter(link => link.has('aria-current')),
         path,
       ).toEqual([])
     }

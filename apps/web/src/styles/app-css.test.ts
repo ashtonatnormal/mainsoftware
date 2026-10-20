@@ -64,13 +64,13 @@ describe('T21: app.css', () => {
     const forced = blocksOf(onlyBlock(blocks, '@media (forced-colors: active)').body)
     const rule = (selector: string) => declarationsOf(onlyBlock(forced, selector).body)
     expect(forced.map(block => block.prelude)).toEqual([
-      '[aria-current="page"]',
+      '[aria-current]:not([aria-current="false"])',
       '.switch-track',
       '.switch-knob',
       '.switch-track.switch-on',
       '.switch-on .switch-knob',
     ])
-    expect(rule('[aria-current="page"]').get('outline')).toBe('2px solid CanvasText')
+    expect(rule('[aria-current]:not([aria-current="false"])').get('outline')).toBe('2px solid CanvasText')
     // Without forced-color-adjust: none the browser repaints both backgrounds Canvas.
     const track = rule('.switch-track')
     const knob = rule('.switch-knob')
