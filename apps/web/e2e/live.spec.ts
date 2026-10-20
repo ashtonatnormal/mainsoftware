@@ -240,8 +240,16 @@ test("LV-07 T21 item 4 T19 item 11: with the 4426 reload held back on Rooms (no 
   await page.route('**/api/session', route => route.fulfill(signedOut))
 
   // Paused, the client probes at a random point in the first 30 s; Rooms shows no FlagSlot, so no
-  // flags poll runs, and 31 s is under the session answer's minute.
-  await page.clock.runFor(31_000)
+  // flags poll runs, and 31 s is under the session answer's minute. The clock moves a second at a
+  // time and stops once the probe's answer arrives: run in one go, it could pass the probe's 20 s
+  // deadline before the routed answer is read, and the probe would be let go (T21 item 4).
+  const probed = page.waitForResponse('**/api/flags')
+  let answered = false
+  void probed.then(() => {
+    answered = true
+  })
+  for (let second = 0; second < 31 && !answered; second++) await page.clock.runFor(1_000)
+  await probed
   await expect(page).toHaveURL(/\/sign-in$/)
   await expect(h1(page)).toHaveText('Sign in to Hearth')
   expect(await isOldDocument(page)).toBe(false)
