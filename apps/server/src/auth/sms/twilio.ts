@@ -27,7 +27,8 @@ export const TWILIO_TIMEOUTS = { startMs: 4000, checkMs: 4000, cancelMs: 3000 }
 // Twilio's replies are small; anything larger is refused before it's parsed.
 const MAX_REPLY_BYTES = 64 * 1024
 
-const VERIFICATION_SID = /^VE[0-9a-f]{32}$/
+// Twilio's API spec pattern for a Verification's SID: hex digits in either case.
+const VERIFICATION_SID = /^VE[0-9a-fA-F]{32}$/
 
 // Twilio's status has seven values; only 'approved' counts, so any other string is accepted.
 // send_code_attempts is nullable in Twilio's spec: absent or null lists no sends (T20 item 10).

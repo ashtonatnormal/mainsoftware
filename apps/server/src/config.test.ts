@@ -267,6 +267,29 @@ describe('C0.5 T14 sign-in settings', () => {
     expect(problems(() => loadConfig({ ...env, TWILIO_API_KEY_SECRET: secret }))).not.toContain(secret)
   })
 
+  it("T20: takes Twilio SIDs with upper-case hex digits, as Twilio's API spec allows, and still needs each one's prefix (Qodo)", () => {
+    const real = { ...env, ...twilioEnv, APP_ORIGIN: 'https://hearth.example', DEPLOY_ENV: 'prod' }
+    // Twilio's spec patterns are SK and VA, then [0-9a-fA-F]{32}.
+    const upper = { TWILIO_API_KEY_SID: `SK${'AB'.repeat(16)}`, TWILIO_VERIFY_SERVICE_SID: `VA${'0F'.repeat(16)}` }
+    expect(loadConfig({ ...real, ...upper }).auth).toMatchObject({
+      twilio: { apiKeySid: upper.TWILIO_API_KEY_SID, serviceSid: upper.TWILIO_VERIFY_SERVICE_SID },
+    })
+    const refused = [
+      ['TWILIO_API_KEY_SID', `sk${'ab'.repeat(16)}`, /TWILIO_API_KEY_SID: must be an API key SID/],
+      ['TWILIO_API_KEY_SID', `VA${'ab'.repeat(16)}`, /TWILIO_API_KEY_SID: must be an API key SID/],
+      ['TWILIO_API_KEY_SID', `SK${'G'.repeat(32)}`, /TWILIO_API_KEY_SID: must be an API key SID/],
+      ['TWILIO_VERIFY_SERVICE_SID', `va${'0f'.repeat(16)}`, /TWILIO_VERIFY_SERVICE_SID: must be a Verify Service SID/],
+      ['TWILIO_VERIFY_SERVICE_SID', `SK${'0f'.repeat(16)}`, /TWILIO_VERIFY_SERVICE_SID: must be a Verify Service SID/],
+      ['TWILIO_VERIFY_SERVICE_SID', `VA${'G'.repeat(32)}`, /TWILIO_VERIFY_SERVICE_SID: must be a Verify Service SID/],
+    ] as const
+    for (const [name, value, message] of refused) {
+      expect(
+        problems(() => loadConfig({ ...real, [name]: value })),
+        value,
+      ).toMatch(message)
+    }
+  })
+
   it('reads TRUST_PROXY as a list of addresses and CIDR ranges, never a hop count', () => {
     expect(loadConfig({ ...env, TRUST_PROXY: '10.0.0.0/16, 2600:9000::/28' }).trustProxy).toEqual([
       '10.0.0.0/16',

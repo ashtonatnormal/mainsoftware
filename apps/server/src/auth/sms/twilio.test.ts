@@ -90,6 +90,18 @@ describe('T7 T20 Twilio Verify adapter, against a loopback fake', () => {
     expect(await sms.start(A)).toEqual({ ref: sid, foreign: false })
   })
 
+  it("reads a start reply whose sid has upper-case hex digits, as Twilio's API spec allows, and still refuses another prefix (Qodo)", async () => {
+    const sms = verify()
+    // Twilio's spec pattern is VE[0-9a-fA-F]{32}; built at run time, as every SID here is.
+    const sid = `VE${'AF'.repeat(16)}`
+    twilio.script('start', { status: 201, body: { sid, status: 'pending', send_code_attempts: [{}] } })
+    expect(await sms.start(A)).toEqual({ ref: sid, foreign: false })
+    for (const other of [`VA${'af'.repeat(16)}`, `ve${'af'.repeat(16)}`, `VE${'G'.repeat(32)}`]) {
+      twilio.script('start', { status: 201, body: { sid: other, status: 'pending', send_code_attempts: [{}] } })
+      expect((await refusal(sms.start(A))).kind, other).toBe('bug')
+    }
+  })
+
   it('counts no send for a first try answered 20429, so a verification it never started still reads as foreign (T20 item 10)', async () => {
     const sms = verify()
     const seeded = twilio.seed(B)

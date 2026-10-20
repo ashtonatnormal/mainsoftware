@@ -113,10 +113,11 @@ const schema = z.object({
   // never on this machine: auth/sms/twilio.ts; TECH-SPEC T7, T20) or unset (none can be sent).
   SMS_PROVIDER: z.enum(['fake', 'twilio']).optional(),
   // Twilio Verify's credentials, only with SMS_PROVIDER=twilio: a Restricted API Key scoped to
-  // Verify (its SID and secret) and the Verify Service's SID, from Secrets Manager (C0.12).
+  // Verify (its SID and secret) and the Verify Service's SID, from Secrets Manager (C0.12). The SIDs
+  // take hex digits in either case, as Twilio's API spec's patterns do.
   TWILIO_API_KEY_SID: z
     .string()
-    .regex(/^SK[0-9a-f]{32}$/, 'must be an API key SID: SK and 32 hex digits')
+    .regex(/^SK[0-9a-fA-F]{32}$/, 'must be an API key SID: SK and 32 hex digits')
     .optional(),
   TWILIO_API_KEY_SECRET: z
     .string()
@@ -124,7 +125,7 @@ const schema = z.object({
     .optional(),
   TWILIO_VERIFY_SERVICE_SID: z
     .string()
-    .regex(/^VA[0-9a-f]{32}$/, 'must be a Verify Service SID: VA and 32 hex digits')
+    .regex(/^VA[0-9a-fA-F]{32}$/, 'must be a Verify Service SID: VA and 32 hex digits')
     .optional(),
   // IPs or CIDR ranges of the proxies in front of the server, comma-separated; unset or empty: none.
   TRUST_PROXY: z.string().optional(),
