@@ -24,6 +24,9 @@ export function valkeyKeys(prefix: string) {
     // A session's approved SMS re-authentication code whose stamp hasn't committed yet, by session
     // id: the id of the number it was sent to (account.ts, T20 item 6).
     reauthApproved: (sessionId: string) => `${prefix}reauth-ok:${sessionId}`,
+    // A session's SMS re-authentication code request in progress, by session id: a random uuid,
+    // its holder's, so only it frees the lock (account.ts, T20 item 6).
+    reauthSending: (sessionId: string) => `${prefix}reauth-send:${sessionId}`,
     // A sliding window (limiter.ts).
     limit: (name: string, subject: string) => `${prefix}rl:{auth}:${name}:${subject}`,
     // The pub/sub channel on which the api tells the realtime role which sessions ended (v1, C0.5;
