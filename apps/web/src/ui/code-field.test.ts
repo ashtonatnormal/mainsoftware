@@ -1,9 +1,9 @@
-// What a code or PIN field keeps of what was typed (T20, T21; AUTH-DESIGN §10.5, SHL-07, QA-04).
+// What a code or PIN field keeps of what was typed (T20; T21 item 13, SHL-07, QA-04).
 import { describe, expect, it } from 'vitest'
 import { normaliseCode, PIN_LENGTH } from './code-field.ts'
 
 describe('T21: normaliseCode (ui/code-field.ts)', () => {
-  it('SM-08 SI-07 AUTH-DESIGN §10.5: NFKC and stripping turn "１２３ ４５６", "123-456" and "123 456" into 123456, and the result is cut at the length', () => {
+  it('SM-08 SI-07 T21 item 13: NFKC and stripping turn "１２３ ４５６", "123-456" and "123 456" into 123456, and the result is cut at the length', () => {
     expect(normaliseCode('１２３ ４５６', 6)).toBe('123456')
     expect(normaliseCode('123-456', 6)).toBe('123456')
     expect(normaliseCode('123 456', 6)).toBe('123456')

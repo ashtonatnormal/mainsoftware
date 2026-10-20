@@ -1,9 +1,9 @@
-// The web e2e suite's set-up guard (T21; DESIGN-SHELL §9.3, INTEGRATION.md item 5; K-21–K-28,
-// K-38, K-39, K-46, K-69, PRD-53). The suite runs only where its config says (its own ports,
-// database, Valkey DB and provider), never inside `npm test`, never writes a PNG outside CI, and
-// spends sign-in codes only within PRD-53's windows. This guard reads the Playwright config by
-// importing it, the persona table and the screenshot matrix, and the files around them as text,
-// and CI's workflows for the check job's runner and its e2e step (ES-05, ES-10).
+// The web e2e suite's set-up guard (T21 item 11; CLAUDE.md Testing and CI, PRD-53). The suite runs
+// only where its config says (its own ports, database, Valkey DB and provider), never inside
+// `npm test`, never writes a PNG outside CI, and spends sign-in codes only within PRD-53's windows.
+// This guard reads the Playwright config by importing it, the persona table and the screenshot
+// matrix, and the files around them as text, and CI's workflows for the check job's runner and its
+// e2e step (ES-05, ES-10).
 import { execFileSync } from 'node:child_process'
 import { relative } from 'node:path'
 import { maskNumber } from '@hearth/shared'
@@ -36,7 +36,8 @@ const webPackage = JSON.parse(readRepoFile(`${WEB}package.json`)) as { scripts: 
 const servers = [config.webServer].flat().filter(server => server !== undefined)
 const serverNamed = (name: string) => servers.find(server => server.name === name)
 
-// CI's workflows, and the check job, the required check that runs the suite (K-51).
+// CI's workflows, and the check job: the required check that runs the suite
+// (CLAUDE.md Testing and CI).
 const workflowFiles = files.filter(path => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path))
 const ciJobs = workflowJobs(readRepoFile('.github/workflows/ci.yml'))
 const checkJob = (): WorkflowJob => {
@@ -88,7 +89,7 @@ function seedFacts() {
 const PIN_ROLE_NAMES = ['owner', 'admin', 'ai_admin', 'leadership', 'dpo', 'compliance_officer']
 
 describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)', () => {
-  it('ES-01 K-38: apps/web has no test script, so npm test stays browser-free; its e2e script runs playwright test', () => {
+  it('ES-01 T21 item 11: apps/web has no test script, so npm test stays browser-free; its e2e script runs playwright test', () => {
     expect(Object.keys(webPackage.scripts)).not.toContain('test')
     expect(webPackage.scripts.e2e).toBe('playwright test')
     const rootPackage = JSON.parse(readRepoFile('package.json')) as { scripts: Record<string, string> }
@@ -99,7 +100,7 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(rootPackage.scripts.check).not.toMatch(/e2e|playwright/)
   })
 
-  it('ES-02 K-39 T10: every *.spec.ts sits in apps/web/e2e and matches testDir and testMatch; no *.test.* file sits under e2e/', () => {
+  it('ES-02 T21 item 11 T10: every *.spec.ts sits in apps/web/e2e and matches testDir and testMatch; no *.test.* file sits under e2e/', () => {
     expect(config.testDir).toBe('./e2e')
     expect(config.testMatch).toBe('**/*.spec.ts')
     const specs = files.filter(path => /\.spec\.[cm]?[jt]sx?$/.test(path))
@@ -121,7 +122,7 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     )
   })
 
-  it('ES-03 K-23 K-69 D-06: the web servers use E2E_PORTS, never an existing server, and the preview a strict port; the api comes first and its command rebuilds hearth_e2e and flushes Valkey DB 9 before it starts; both roles use the e2e database, DEPLOY_ENV test, the e2e Valkey and the fake provider', () => {
+  it('ES-03 T21 item 11 D-06: the web servers use E2E_PORTS, never an existing server, and the preview a strict port; the api comes first and its command rebuilds hearth_e2e and flushes Valkey DB 9 before it starts; both roles use the e2e database, DEPLOY_ENV test, the e2e Valkey and the fake provider', () => {
     expect(E2E_PORTS).toEqual({ api: 3210, realtime: 3211, preview: 5180 })
     expect(E2E_ORIGIN).toBe('https://localhost:5180')
     expect(E2E_DATABASE).toBe('hearth_e2e')
@@ -168,7 +169,7 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(serverNamed('preview')?.command).toBe('node e2e/support/preview.ts')
   })
 
-  it("ES-04 K-26 K-27 D-07: updateSnapshots none except on GitHub's runner (missing, so a failing run writes every actual), ignoreSnapshots off only in CI, every screenshot a soft expect, a snapshot path without {platform}, no retries, forbidOnly", () => {
+  it("ES-04 D-07 T21 item 11: updateSnapshots none except on GitHub's runner (missing, so a failing run writes every actual), ignoreSnapshots off only in CI, every screenshot a soft expect, a snapshot path without {platform}, no retries, forbidOnly", () => {
     const onRunner = !!process.env.CI && process.env.GITHUB_ACTIONS === 'true'
     expect(config.updateSnapshots).toBe(onRunner ? 'missing' : 'none')
     expect(config.ignoreSnapshots).toBe(!process.env.CI)
@@ -197,14 +198,14 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(config.forbidOnly).toBe(true)
   })
 
-  it('ES-05 K-26 D-07: the check job pins runs-on ubuntu-24.04, the image the visual baselines are made on', () => {
+  it('ES-05 D-07: the check job pins runs-on ubuntu-24.04, the image the visual baselines are made on', () => {
     // The reader found the workflow's jobs (a reformatted file must fail here, not pass unread).
     expect(ciJobs.map(job => job.id)).toEqual(expect.arrayContaining(['check', 'migrations']))
     expect(checkJob().steps.length).toBeGreaterThan(10)
     expect(checkJob().runsOn).toBe('ubuntu-24.04')
   })
 
-  it('ES-06 K-27: every PNG under e2e/__screenshots__ is a VISUAL_SHOTS name in visual.spec.ts, and every VISUAL_SHOTS name is unique', () => {
+  it('ES-06 T21 item 11: every PNG under e2e/__screenshots__ is a VISUAL_SHOTS name in visual.spec.ts, and every VISUAL_SHOTS name is unique', () => {
     expect(VISUAL_SHOTS).toHaveLength(34)
     expect(new Set(VISUAL_SHOTS).size).toBe(VISUAL_SHOTS.length)
     for (const name of VISUAL_SHOTS) expect(name).toMatch(/^[a-z0-9-]+-(?:320|390|1440)-(?:light|dark)\.png$/)
@@ -220,7 +221,7 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(files.filter(path => path.startsWith(WEB) && path.endsWith('.png') && !baselines.includes(path))).toEqual([])
   })
 
-  it('ES-07 K-21 PRD-53: no number is asked for more than twice a run (otp-n10m allows 3), a run asks for at most 25 codes (otp-ip allows 30), no number is used by two projects that run at once, and every roster persona matches the seed: an account and the notice acknowledged, no PIN role, unless marked', () => {
+  it('ES-07 T21 item 11 PRD-53: no number is asked for more than twice a run (otp-n10m allows 3), a run asks for at most 25 codes (otp-ip allows 30), no number is used by two projects that run at once, and every roster persona matches the seed: an account and the notice acknowledged, no PIN role, unless marked', () => {
     const seed = seedFacts()
     // The seed was read: twelve people on the roster, eleven with accounts (Nadia has none).
     expect(seed.onRoster.size).toBe(12)
@@ -265,7 +266,7 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     }
   })
 
-  it('ES-08 K-46: storage state, logs and certificates live under apps/web/playwright/, which git ignores', () => {
+  it('ES-08 CL Testing and CI: storage state, logs and certificates live under apps/web/playwright/, which git ignores', () => {
     for (const dir of [AUTH_DIR, LOG_DIR, TLS_DIR]) expect(relative(STATE_DIR, dir)).not.toMatch(/^\.\./)
     expect(relative(root, STATE_DIR)).toBe('apps/web/playwright')
     for (const path of ['apps/web/playwright/.auth/chromium.json', 'apps/web/playwright/logs/api.log']) {
@@ -275,7 +276,7 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(files.filter(path => path.startsWith('apps/web/playwright/'))).toEqual([])
   })
 
-  it("ES-09 K-28: no workflow sets PW_CHROMIUM_EXECUTABLE; the config reads it only from the environment, for Chromium's projects", () => {
+  it("ES-09 OD-16: no workflow sets PW_CHROMIUM_EXECUTABLE; the config reads it only from the environment, for Chromium's projects", () => {
     const workflows = files.filter(path => path.startsWith('.github/'))
     expect(workflows.length).toBeGreaterThan(0)
     expect(workflows.filter(path => readRepoFile(path).includes('PW_CHROMIUM_EXECUTABLE'))).toEqual([])
@@ -294,7 +295,7 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     }
   })
 
-  it('ES-10 K-51 CL Testing and CI: npm run e2e is a step of the check job, the last but the report upload, after the browser install; the upload runs on failure and never takes playwright/.auth; no other job runs the suite', () => {
+  it('ES-10 CL Testing and CI: npm run e2e is a step of the check job, the last but the report upload, after the browser install; the upload runs on failure and never takes playwright/.auth; no other job runs the suite', () => {
     const steps = checkJob().steps
     const e2e = steps.findIndex(step => /^run: npm run e2e$/m.test(step))
     expect(e2e, 'the e2e step').toBeGreaterThan(-1)
@@ -321,8 +322,8 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(plantedUpload('someone/upload-artifact@v7')).not.toMatch(uploadAction)
     expect(upload).toMatch(uploadAction)
     expect(upload).toMatch(/^name: e2e-report$/m)
-    // The report, the traces and actual screenshots, and the servers' logs; never the storage
-    // state under playwright/.auth, which holds the run's session cookies (K-46).
+    // The report, the traces and actual screenshots, and the servers' logs; never the storage state
+    // under playwright/.auth, which holds the run's session cookies (CLAUDE.md Testing and CI).
     expect(upload.split('\n').filter(line => /^apps\//.test(line))).toEqual([
       'apps/web/playwright-report/',
       'apps/web/test-results/',
@@ -339,7 +340,7 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     }
   })
 
-  it('ES-11 K-21 PRD-53: no +65 number appears in apps/web/e2e outside support/personas.ts, so every number a spec uses is in the budgeted table', () => {
+  it('ES-11 T21 item 11 PRD-53: no +65 number appears in apps/web/e2e outside support/personas.ts, so every number a spec uses is in the budgeted table', () => {
     const number = /\+\s*65[\s-]*\d|\b658000\d{4}\b|\b8000[\s-]?\d{4}\b/
     // The pattern itself, on planted text.
     expect(number.test("phone: '+6580000003'")).toBe(true)
@@ -354,7 +355,7 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     ).toEqual([])
   })
 
-  it('ES-12 K-43 INTEGRATION item 5: the code reader reads the line the fake provider writes (apps/server/src/auth/sms/fake.ts), for its number only', () => {
+  it('ES-12 T20 item 1 T21 item 11: the code reader reads the line the fake provider writes (apps/server/src/auth/sms/fake.ts), for its number only', () => {
     // The template createFakeVerify() writes, filled in as it fills it.
     const fake = readRepoFile('apps/server/src/auth/sms/fake.ts')
     const template = /write\(`(\[local only[^`]*)`\)/.exec(fake)?.[1] ?? ''
@@ -370,7 +371,7 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(codesIn(log, PERSONAS.rachel.e164)).toEqual([])
   })
 
-  it("ES-13 K-51 T21: in CI the suite stops itself (globalTimeout, web servers and global setup included) within half the check job's timeout-minutes, so a stuck run fails and its report uploads instead of the job being cancelled; local runs have no limit", () => {
+  it("ES-13 T21 item 11: in CI the suite stops itself (globalTimeout, web servers and global setup included) within half the check job's timeout-minutes, so a stuck run fails and its report uploads instead of the job being cancelled; local runs have no limit", () => {
     const text = codeOf('playwright.config.ts', readRepoFile(`${WEB}playwright.config.ts`))
     const minutes = Number(/^\s*globalTimeout: CI \? (\d+) \* 60_?000 : undefined,$/m.exec(text)?.[1])
     expect(minutes, 'globalTimeout in CI').toBeGreaterThan(0)
@@ -381,7 +382,7 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(minutes * 2).toBeLessThanOrEqual(jobMinutes)
   })
 
-  it("ES-14 K-21 T14: every run, local or CI, uses a fixed number of workers whose signed-in pages stay below the realtime role's sockets per session, which every page on a project's persona shares", () => {
+  it("ES-14 T21 item 11 T14: every run, local or CI, uses a fixed number of workers whose signed-in pages stay below the realtime role's sockets per session, which every page on a project's persona shares", () => {
     const text = codeOf('playwright.config.ts', readRepoFile(`${WEB}playwright.config.ts`))
     // A plain number, so a local run never takes Playwright's default of half the cores.
     const workers = Number(/^\s*workers: (\d+),$/m.exec(text)?.[1])

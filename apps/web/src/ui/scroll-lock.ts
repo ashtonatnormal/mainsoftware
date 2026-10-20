@@ -1,4 +1,4 @@
-// Stops the screen scrolling under an open Dialog (T21; C-22, SHL-45). It toggles one class on
+// Stops the screen scrolling under an open Dialog (T21 item 7, SHL-45). It toggles one class on
 // <html>, `scroll-locked`, which app.css turns into `#screen { overflow: hidden }`; it never writes
 // a <style> element or an inline style, which the CSP refuses. Locks are counted, so a dialog
 // opened over another keeps the lock until the last one closes. Each release works once.

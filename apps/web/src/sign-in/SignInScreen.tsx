@@ -1,7 +1,7 @@
-// The sign-in screen (T21, T20; DESIGN-SHELL §5.8, AUTH-DESIGN §10, INTEGRATION.md items 2–3; D46,
-// AQ-02, OD-01): the router's /sign-in route, the only screen a signed-out document shows. It sits
-// outside the shell, in its own <main>; each step has its own h1 (StepFrame). On a phone the step's
-// form sits low, in the thumb's reach (PRD-66); from the rail breakpoint it is a centred card.
+// The sign-in screen (T21 item 13, T20; D46, AQ-02, OD-01): the router's /sign-in route, the only
+// screen a signed-out document shows. It sits outside the shell, in its own <main>; each step has
+// its own h1 (StepFrame). On a phone the step's form sits low, in the thumb's reach (PRD-66); from
+// the rail breakpoint it is a centred card.
 //
 // The steps: the number, the code, and for a holder of a PIN role setting or entering the PIN (or
 // the locked view). Which follows the code is the server's answer alone. The logic is pure
@@ -51,7 +51,7 @@ function selecting(element: HTMLElement): FocusableElement {
   }
 }
 
-// Turns a cue into focus or speech (AUTH-DESIGN §10.2): one or the other, never both.
+// Turns a cue into focus or speech (T21 item 13): one or the other, never both.
 function applyCue(cue: Cue, refs: SignInRefs): void {
   if ('say' in cue) {
     announce(cue.say, cue.politeness)

@@ -14,7 +14,7 @@ const json = (status: number, body: unknown) =>
 const AHMAD = { personId: 'b0000000-0000-4000-8000-000000000006', name: 'Ahmad', timeZone: 'Asia/Kuala_Lumpur' }
 
 describe('T21 D-01: who the document belongs to (boot/load-session.ts)', () => {
-  it('BT-01 OD-22: 200 → signed_in; 401 → signed_out; network or 5xx → unavailable', async () => {
+  it('BT-01 T21 item 10: 200 → signed_in; 401 → signed_out; network or 5xx → unavailable', async () => {
     expect(await loadSession(answer(json(200, AHMAD)))).toEqual({ kind: 'signed_in', session: AHMAD })
     expect(await loadSession(answer(json(401, { error: 'signed_out', message: 'Signed out.' })))).toEqual({
       kind: 'signed_out',

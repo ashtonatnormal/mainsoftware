@@ -1,4 +1,4 @@
-// The Search bar (T21; OD-04, R-34, BUILD-PLAN C1.7): built here, shown nowhere until C1.7 mounts it
+// The Search bar (T21; OD-04, BUILD-PLAN C1.7): built here, shown nowhere until C1.7 mounts it
 // with search behind it. Its label is "Search", never "Search & Ask" (decision 8): asking arrives
 // with its A-stage, in the AI slot beside the field, which renders nothing until then (D41).
 //

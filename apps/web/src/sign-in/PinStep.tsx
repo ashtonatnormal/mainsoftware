@@ -1,5 +1,5 @@
 // The PIN steps, for holders of the roles only an Owner grants (T20, T21; D46, AQ-02, ACC-02,
-// ACC-06, T14 items 8, 9 and 12; AUTH-DESIGN §10.1, auth-research-web §3.5–3.6). Everyone else
+// ACC-06, T14 items 8, 9 and 12; T21 item 13). Everyone else
 // signs in on the code alone and never sees them. There is no passkey here, whatever the answer
 // says (OD-01: dormant).
 // - SetPinStep, "Choose a PIN": the new PIN twice. The browser checks it with the server's own rule

@@ -1,7 +1,6 @@
-// The sign-in steps' markup, rendered with react-dom/server in Node (T20, T21; D-03, AUTH-DESIGN
-// §10.5, auth-research-web §8.1): each step's h1, form, fields and buttons, with their names and
-// attributes. How the steps lay out and behave in a browser is the e2e suite's (sign-in.spec.ts,
-// a11y.spec.ts, nfr02.spec.ts).
+// The sign-in steps' markup, rendered with react-dom/server in Node (T20, T21 item 13; D-03): each
+// step's h1, form, fields and buttons, with their names and attributes. How the steps lay out and
+// behave in a browser is the e2e suite's (sign-in.spec.ts, a11y.spec.ts, nfr02.spec.ts).
 import { MESSAGES } from '@hearth/shared'
 import type { ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -170,7 +169,7 @@ describe('T20 T21: the sign-in steps’ markup', () => {
     expect(markup).toContain(`>${SIGN_IN.differentNumber}</button>`)
   })
 
-  it('SM-02 AUTH-DESIGN §10.2: a dead code disables the field and Sign in, and Send a new code, ready, is described by the message', () => {
+  it('SM-02 T21 item 13: a dead code disables the field and Sign in, and Send a new code, ready, is described by the message', () => {
     const markup = at({ ...CODE, resend: { ...CODE.resend, ready: true }, dead: MESSAGES.code_expired })
     expect(one(markup, 'input').has('disabled')).toBe(true)
     const submit = tags(markup, 'button').find(button => button.get('type') === 'submit')
@@ -182,7 +181,7 @@ describe('T20 T21: the sign-in steps’ markup', () => {
     expect(described.map(id => textOfId(markup, id))).toContain(MESSAGES.code_expired)
   })
 
-  it('auth-research-web §3.1: while a call is out the submit is aria-disabled with the busy text and shows a hidden spinner', () => {
+  it('while a call is out the submit is aria-disabled with the busy text and shows a hidden spinner', () => {
     const markup = at(CODE, {
       pending: { id: 2, kind: 'verify_code' },
       nextId: 3,
@@ -196,7 +195,7 @@ describe('T20 T21: the sign-in steps’ markup', () => {
     expect(spinner).toContain('aria-hidden="true"')
   })
 
-  it('X6 auth-research-web §3.8: while a code or PIN is being checked, Use a different number and Start again are aria-disabled with the busy text; a code request holds neither', () => {
+  it('X6: while a code or PIN is being checked, Use a different number and Start again are aria-disabled with the busy text; a code request holds neither', () => {
     const typed = { phone: PRIYA, code: '123456', pin: '482913', pin2: '482913' }
     const held = (markup: string, label: string) => {
       const button = buttonNamed(markup, label)
@@ -297,7 +296,7 @@ describe('T20 T21: the sign-in steps’ markup', () => {
     expect(lockText({ kind: 'timed' }, 'Asia/Singapore').after).toBe(SIGN_IN.lockEndsUnknown)
   })
 
-  it('R-35 decision 8 OD-01 D46: no step shows AI copy or a passkey', () => {
+  it('decision 8 OD-01 D46: no step shows AI copy or a passkey', () => {
     for (const [kind, markup] of Object.entries(STEPS)) {
       const found = textsOf(markup).filter(text => aiCopyIn(text) !== undefined)
       expect(found, kind).toEqual([])

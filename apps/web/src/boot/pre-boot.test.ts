@@ -43,7 +43,7 @@ function fakeWindow(storage: () => ScrollCacheStorage) {
 const preloadError = () => new Event('vite:preloadError', { cancelable: true })
 
 describe('T21 D-02: before any library loads (boot/pre-boot.ts)', () => {
-  it('PB-01 K-08 D-02: every boot removes every tsr-scroll-restoration* key, with or without a leave marker; hearth:* and tanstack_router_reload:* stay', () => {
+  it('PB-01 D-02: every boot removes every tsr-scroll-restoration* key, with or without a leave marker; hearth:* and tanstack_router_reload:* stay', () => {
     const markers: Record<string, string>[] = [{}, { 'hearth:left': 'session_ended' }]
     for (const marker of markers) {
       const storage = memoryStorage({
@@ -91,7 +91,7 @@ describe('T21 D-02: before any library loads (boot/pre-boot.ts)', () => {
     expect(() => wipeScrollCache(undefined)).not.toThrow()
   })
 
-  it("PB-02 K-09: a persisted pageshow (the back-forward cache's copy) reloads; a fresh one doesn't", () => {
+  it("PB-02 T21 item 2: a persisted pageshow (the back-forward cache's copy) reloads; a fresh one doesn't", () => {
     const { win, reload, dispatch } = fakeWindow(() => memoryStorage({}))
     preBoot(win, () => 'blocked')
     dispatch('pageshow', Object.assign(new Event('pageshow'), { persisted: false }))
@@ -100,7 +100,7 @@ describe('T21 D-02: before any library loads (boot/pre-boot.ts)', () => {
     expect(reload).toHaveBeenCalledTimes(1)
   })
 
-  it("PB-03 K-65: vite:preloadError calls onPreloadError once; 'reloaded' prevents the default, 'blocked' lets the error through", () => {
+  it("PB-03 T21 item 2: vite:preloadError calls onPreloadError once; 'reloaded' prevents the default, 'blocked' lets the error through", () => {
     const blocked = fakeWindow(() => memoryStorage({}))
     const ask = vi.fn((): 'reloaded' | 'blocked' => 'blocked')
     preBoot(blocked.win, ask)

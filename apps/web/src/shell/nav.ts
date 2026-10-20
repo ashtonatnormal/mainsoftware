@@ -1,11 +1,12 @@
-// The app's places and where each is reached from (T21; PRD §6.1, OD-02, OD-30, R-32, R-36). On a
+// The app's places and where each is reached from (PRD §6.1, OD-02, T21 item 5). On a
 // phone the tab bar holds Today, Chats, Rooms, Tasks and More, and More lists Calendar and Drive; from
 // the rail breakpoint (48rem wide and 30rem tall, app.css) the rail holds Today, Chats, Rooms, Tasks,
 // Calendar and Drive, and More isn't needed. Every entry is a real route (router/router.tsx), so a
 // tab is a link with a URL, and Back and Forward move between them (X12).
 //
-// There is no AI, Ask, assistant or agent entry, ever (R-36, Principle 3): agents are teammates who
-// appear where people do, and the AI stages fill slots on existing screens (flags/ai-slots.tsx).
+// There is no AI, Ask, assistant or agent entry, ever (T21 item 5, Principle 3): agents are
+// teammates who appear where people do, and the AI stages fill slots on existing screens
+// (flags/ai-slots.tsx).
 import { Calendar, CheckSquare, HardDrive, Home, LayoutGrid, type LucideIcon, MessageCircle, Mic } from 'lucide-react'
 import type { AppPath } from '@/router/paths.ts'
 import { SHELL } from '@/strings/shell.ts'

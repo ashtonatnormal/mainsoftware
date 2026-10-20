@@ -1,4 +1,4 @@
-// The sizes the suite looks at (T21; PRD-66, NFR-02, OD-30, DESIGN-SHELL §9.4). Phones in portrait
+// The sizes the suite looks at (PRD-66, NFR-02, T21 items 5 and 11). Phones in portrait
 // from the smallest the pilot supports (320 × 568) to a common large one (390 × 844); a short wide
 // window (640 × 512) and a phone on its side (667 × 375), which keep the tab bar; a tablet in
 // portrait (768 × 1024), the first width with the rail; and a desktop (1440 × 900).

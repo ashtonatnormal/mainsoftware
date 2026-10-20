@@ -1,8 +1,7 @@
-// The sign-in screen's logic, pure (T20, T21; AUTH-DESIGN §10.1–10.2, DESIGN-SHELL §5.8,
-// INTEGRATION.md item 3; D46, AQ-02, OD-01, PRD-53). transition(state, event) answers the next
-// state, the call to make, and what the person should hear or where focus goes, as data, so Node
-// tests cover every branch without a DOM. sign-in/controller.ts runs the calls and timers and hands
-// the cues to the screen.
+// The sign-in screen's logic, pure (T20, T21 item 13; D46, AQ-02, OD-01, PRD-53). transition(state,
+// event) answers the next state, the call to make, and what the person should hear or where focus
+// goes, as data, so Node tests cover every branch without a DOM. sign-in/controller.ts runs the
+// calls and timers and hands the cues to the screen.
 //
 //   phone ──code_sent──▶ code ──signed_in──────────────────────────────▶ signed_in  (Member, Team Admin)
 //                         │ ──code_verified{set_pin}──▶ set_pin ──signed_in──▶ signed_in
@@ -13,13 +12,13 @@
 //   any step ──"Use a different number" / "Start again"──▶ phone (the number kept; held while a
 //                                                           code or PIN is being checked)
 //
-// The step lives here and in component state only: never in the URL, storage or history (R-44),
-// so a reload starts again at the phone step. The attempt cookie carries the server's side. Which
-// step follows the code is the server's answer alone; nothing reads a flag (WS-11), and a passkey
-// in the step-up answer is ignored (OD-01, D46: dormant).
+// The step lives here and in component state only: never in the URL, storage or history
+// (T21 item 5), so a reload starts again at the phone step. The attempt cookie carries the server's
+// side. Which step follows the code is the server's answer alone; nothing reads a flag (WS-11), and
+// a passkey in the step-up answer is ignored (OD-01, D46: dormant).
 //
 // Decisions are by the refusal's code, never its status, so a status the server moves changes
-// nothing here. How each is shown (AUTH-DESIGN §10.2, auth-research-web §7):
+// nothing here. How each is shown (T21 item 13):
 // - a step change focuses the new step's h1; one with a reason (back to the phone step) focuses
 //   the notice, which holds the reason;
 // - an error on a field focuses that field, whose description carries it (aria-describedby), or,
@@ -43,7 +42,7 @@ import {
 import { SIGN_IN } from '@/strings/sign-in.ts'
 import { normaliseCode, PIN_LENGTH } from '@/ui/code-field.ts'
 
-// "Send a new code" waits this long after each request (SHL-07, AUTH-DESIGN §10.1).
+// "Send a new code" waits this long after each request (SHL-07, T21 item 13).
 export const RESEND_WAIT_MS = 30_000
 // What the code step assumes when the answer names a length or a lifetime it can't use.
 export const DEFAULT_CODE_LENGTH = 6
@@ -514,7 +513,7 @@ export function resendHeld(state: SignInState): string | undefined {
 // (the server's sign-in.ts), which the browser keeps whatever the script makes of the reply. Leaving
 // the step then would show the phone step over a live session the tab doesn't know about, and a
 // second sign-in would leave the first session and its device orphaned until they expire, a second
-// signin.started included (auth-research-web §3.8). So they wait for the answer, at most 20 s
+// signin.started included. So they wait for the answer, at most 20 s
 // (sign-in/api.ts AUTH_TIMEOUT_MS). A code request signs nobody in, so it never holds them: its late
 // answer is stale and changes nothing.
 export function startAgainHeld(state: SignInState): string | undefined {

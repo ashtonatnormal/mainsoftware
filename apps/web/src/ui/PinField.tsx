@@ -1,4 +1,4 @@
-// The PIN's fields (T21, T20; AUTH-DESIGN §10.1, §10.4; SHL-49, WCAG 3.3.8): sign-in's PIN steps
+// The PIN's fields (T20; T21 item 13; SHL-49, WCAG 3.3.8): sign-in's PIN steps
 // now, C0.16's re-authentication sheet later.
 // - PinField: one native password input, inputmode="numeric" for the number pad, and
 //   autocomplete new-password (choosing one) or current-password (entering it), so a password

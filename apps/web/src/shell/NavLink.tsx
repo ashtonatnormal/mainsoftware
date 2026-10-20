@@ -1,4 +1,4 @@
-// One entry of the tab bar or the rail (T21; R-32, X7, QA-05, WCAG 1.4.1). A router link, so each
+// One entry of the tab bar or the rail (T21; OD-02, X7, QA-05, WCAG 1.4.1). A router link, so each
 // place has a real URL (X12). The icon is decoration and the visible label is the link's name. The
 // current entry is marked three ways, never by colour alone: aria-current, a pill behind the icon
 // (accent-soft) and a heavier label in accent-ink, plus an outline under forced colours (app.css).

@@ -148,7 +148,7 @@ function goLive(socket: FakeSocket) {
 const tick = () => new Promise(resolve => setTimeout(resolve, 5))
 
 describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
-  it('R-42 CHT-60 OD-10: it seeds the session answer and the formatters for the person', () => {
+  it('CHT-60 OD-10: it seeds the session answer and the formatters for the person', () => {
     const { env } = fakeEnv()
     const runtime = runtimeModule.startSessionRuntime({ ...MARCUS, timeZone: 'Europe/London' }, env)
     expect(runtime.queryClient.getQueryData(['session'])).toEqual({ ...MARCUS, timeZone: 'Europe/London' })
@@ -156,7 +156,7 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(runtime.formatters.time(Date.UTC(2026, 9, 11, 13, 30))).toBe('2:30 pm')
   })
 
-  it('RT-01 R-42 CHT-60: end() halts requests, stops the gateway, clears the QueryClient, then leaves the document, in that order', async () => {
+  it('RT-01 CHT-60: end() halts requests, stops the gateway, clears the QueryClient, then leaves the document, in that order', async () => {
     const calls = stubFetch({ '/api/session': () => json(200, MARCUS) })
     const steps: string[] = []
     const refused: string[] = []
@@ -277,7 +277,7 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(storage.map.get('hearth:left')).toBe('person_changed')
   })
 
-  it('RT-04 R-54: a 401 signed_out from the session answer ends the session (session_ended)', async () => {
+  it('RT-04 T21 item 3: a 401 signed_out from the session answer ends the session (session_ended)', async () => {
     stubFetch({ '/api/session': signedOut })
     const { env, left, storage } = fakeEnv()
     const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
@@ -287,7 +287,7 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(storage.map.get('hearth:left')).toBe('session_ended')
   })
 
-  it('RT-08 R-42: a 401 signed_out that arrives while signOut() waits ends with signed_out_here; a failed sign-out leaves the gateway running, and a later 401 is session_ended again', async () => {
+  it('RT-08 CHT-60: a 401 signed_out that arrives while signOut() waits ends with signed_out_here; a failed sign-out leaves the gateway running, and a later 401 is session_ended again', async () => {
     let answerSignOut: (response: Response) => void = () => {}
     stubFetch({
       '/api/auth/sign-out': () =>
@@ -332,7 +332,7 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(second.storage.map.get('hearth:left')).toBe('session_ended')
   })
 
-  it('RT-08 R-42 R-49: a 4401 that arrives while signOut() waits ends with signed_out_here', async () => {
+  it('RT-08 CHT-60 T21 item 4: a 4401 that arrives while signOut() waits ends with signed_out_here', async () => {
     stubFetch({ '/api/auth/sign-out': () => new Promise<Response>(() => {}) })
     const { env, left, storage, net } = fakeEnv()
     const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
@@ -344,7 +344,7 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(storage.map.get('hearth:left')).toBe('signed_out_here')
   })
 
-  it('RT-05 R-43 R-49: 4401 ends the session; 4403 does not, wipes nothing and keeps the session running', async () => {
+  it('RT-05 T19 item 10 T21 item 4: 4401 ends the session; 4403 does not, wipes nothing and keeps the session running', async () => {
     const signedOutHere = fakeEnv()
     const first = runtimeModule.startSessionRuntime(MARCUS, signedOutHere.env)
     goLive(signedOutHere.net.last())
@@ -371,7 +371,7 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(notice.net.sockets).toHaveLength(2)
   })
 
-  it('RT-06 R-47 T17 item 11: a flags nudge invalidates the flags query within the spread, and nothing else', () => {
+  it('RT-06 T17 item 11: a flags nudge invalidates the flags query within the spread, and nothing else', () => {
     const { env, clock, net } = fakeEnv(() => {}, { random: () => 0.5 })
     const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
     goLive(net.last())
@@ -387,7 +387,7 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(runtime.queryClient.getQueryState(['session'])?.isInvalidated).toBe(false)
   })
 
-  it('RT-07 R-48 T19 item 11: after 30 s of refused reconnects the probe reads GET /api/flags, and its 401 ends the session', async () => {
+  it('RT-07 T19 item 11: after 30 s of refused reconnects the probe reads GET /api/flags, and its 401 ends the session', async () => {
     const calls = stubFetch({ '/api/flags': signedOut })
     const { env, left, storage, clock, net } = fakeEnv(() => {}, { random: () => 0.5, refuse: true })
     const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
@@ -407,7 +407,7 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(net.sockets).toHaveLength(tried)
   })
 
-  it('RT-07 R-48 T19 item 11: the probe sends a request of its own while a flags fetch waits offline, so its 401 still ends the session', async () => {
+  it('RT-07 T19 item 11: the probe sends a request of its own while a flags fetch waits offline, so its 401 still ends the session', async () => {
     const calls = stubFetch({ '/api/flags': signedOut })
     const { env, left, storage, clock } = fakeEnv(() => {}, { random: () => 0.5, refuse: true })
     const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
@@ -428,7 +428,7 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(await polled).toBe('cancelled')
   })
 
-  it('RT-07 R-48: a probe that finds the session alive, or can’t tell, keeps it and the connection trying', async () => {
+  it('RT-07 T19 item 11: a probe that finds the session alive, or can’t tell, keeps it and the connection trying', async () => {
     let answer = () => json(200, { flags: {} })
     const calls = stubFetch({ '/api/flags': () => answer() })
     const { env, left, clock, net } = fakeEnv(() => {}, { random: () => 0.5, refuse: true })
@@ -479,7 +479,7 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(runtime.queryClient.getQueryData(['session'])).toEqual(MARCUS)
   })
 
-  it('RT-10 K-42 R-49: 4426 reloads for the update; a second within a minute is held back and the live store says so', () => {
+  it('RT-10 T21 item 4: 4426 reloads for the update; a second within a minute is held back and the live store says so', () => {
     const { env, left, net, storage } = fakeEnv()
     const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
     goLive(net.last())
@@ -496,7 +496,7 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(runtime.live.snapshot()).toEqual({ status: 'paused', updateBlocked: true })
   })
 
-  it("K-10: another tab's identity message ends the session with other_tab, which reloads", async () => {
+  it("T21 item 2: another tab's identity message ends the session with other_tab, which reloads", async () => {
     const { env, left, storage, FakeChannel } = fakeEnv()
     runtimeModule.startSessionRuntime(MARCUS, env)
     new FakeChannel('hearth:identity').postMessage({ t: 'identity' })

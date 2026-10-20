@@ -1,5 +1,5 @@
-// The live connection in a real browser (T21; T19 item 10, T17 item 11, R-47, R-48, X11, OD-42,
-// K-42; DESIGN-SHELL §9.4.5). Signed in as Kelvin, live.spec's own persona (INTEGRATION.md item 5),
+// The live connection in a real browser (T21 items 4 and 11; T19 items 10 and 11, T17 item 11,
+// X11). Signed in as Kelvin, live.spec's own persona (T21 item 11),
 // so closing, refusing and routing his sockets touches no other spec's session. The flags and socket
 // paths run against the real servers; the failure cases put Playwright's routeWebSocket between the
 // page and realtime, and the clock is Playwright's, so 30 s of reconnects take no 30 s. Nothing here
@@ -67,7 +67,9 @@ test('LV-02 T19 item 10: /ws on the app origin says hello first, gets welcome, s
   expect(closed).toBe(false)
 })
 
-test('LV-03 R-47: a nudge frame reaches the page and leads to GET /api/flags within the spread', async ({ page }) => {
+test('LV-03 T17 item 11: a nudge frame reaches the page and leads to GET /api/flags within the spread', async ({
+  page,
+}) => {
   await page.clock.install()
   let route: WebSocketRoute | undefined
   await page.routeWebSocket('/ws', ws => {
@@ -126,7 +128,7 @@ async function routeSockets(page: Page) {
 // of it, which sits outside.
 const banner = (page: Page, text: string) => page.locator('#main').getByText(text, { exact: true })
 
-test('LV-04 X11 OD-42: with every socket closed, Reconnecting… appears and is announced only after 30 s, and Connected again once on recovery', async ({
+test('LV-04 X11 T21 item 4: with every socket closed, Reconnecting… appears and is announced only after 30 s, and Connected again once on recovery', async ({
   page,
 }) => {
   const said = await recordAnnouncements(page)
@@ -158,7 +160,7 @@ test('LV-04 X11 OD-42: with every socket closed, Reconnecting… appears and is 
   expect(spoken.filter(text => text === 'Connected again.')).toHaveLength(1)
 })
 
-test("LV-05 R-48: after 30 s of refused reconnects, the probe's 401 from GET /api/flags ends the session: a new document shows the sign-in step with You've been signed out.", async ({
+test("LV-05 T19 item 11: after 30 s of refused reconnects, the probe's 401 from GET /api/flags ends the session: a new document shows the sign-in step with You've been signed out.", async ({
   page,
   guard,
 }) => {
@@ -193,7 +195,7 @@ test("LV-05 R-48: after 30 s of refused reconnects, the probe's 401 from GET /ap
   expect(await isOldDocument(page)).toBe(false)
 })
 
-test('LV-06 K-42: a 4426 close reloads once, and a second within 60 s shows the update banner instead', async ({
+test('LV-06 T21 item 4: a 4426 close reloads once, and a second within 60 s shows the update banner instead', async ({
   page,
 }) => {
   const said = await recordAnnouncements(page)

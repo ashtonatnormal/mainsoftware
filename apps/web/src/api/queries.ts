@@ -1,6 +1,6 @@
-// The api's answers as Query options (T21; OD-22, R-50, R-53). Every screen reads server data
-// through Query, under one QueryClient per signed-in document (session/query-client.ts), so the
-// cache can't outlive the person (D-01).
+// The api's answers as Query options (T21 items 3 and 10, T17 item 11). Every screen reads server
+// data through Query, under one QueryClient per signed-in document (session/query-client.ts), so
+// the cache can't outlive the person (D-01).
 import { type FlagKey, readFlagsAnswer, SessionResponseForClient } from '@hearth/shared'
 import { queryOptions, useQuery } from '@tanstack/react-query'
 import { z } from 'zod'
@@ -27,7 +27,7 @@ export function useSession(): SessionInfo {
   return useQuery(sessionQuery).data ?? runtime.info
 }
 
-// The person's client flags (T17 item 11, R-50, R-53): each flag the registry marks client: true,
+// The person's client flags (T17 item 11, T21 item 3): each flag the registry marks client: true,
 // evaluated for them, as a plain boolean. Read leniently (readFlagsAnswer): only true reads on, a
 // key that isn't a flag key is dropped, and an answer of the wrong shape reads as no flags.
 export type ClientFlags = Readonly<Record<string, boolean>>
@@ -49,10 +49,10 @@ function sameFlags(a: unknown, b: unknown): boolean {
 
 // GET /api/flags while anything shows a FlagSlot: on mount, every 60 s while the page is visible
 // (Query pauses the poll in a hidden tab, and refetches on focus when it returns), and when the
-// gateway's nudge invalidates it (the session runtime, R-47). The poll doesn't renew the session
-// (OD-14: the server reads it without the touch). A failure keeps the last answer, which Query
-// holds through errors; with none yet, every flag reads off (R-53). A 401 ends the session like
-// any other (session/query-client.ts).
+// gateway's nudge invalidates it (the session runtime, T17 item 11). The poll doesn't renew the
+// session (OD-14: the server reads it without the touch). A failure keeps the last answer, which
+// Query holds through errors; with none yet, every flag reads off (T17 item 11). A 401 ends the
+// session like any other (session/query-client.ts).
 export const flagsQuery = queryOptions({
   queryKey: ['flags'] as const,
   queryFn: ({ signal }): Promise<ClientFlags> => apiGet('/api/flags', FlagsAnswer, { signal }),
@@ -64,7 +64,7 @@ export const flagsQuery = queryOptions({
 })
 
 // Whether a flag reads on: only a true the answer holds itself. Missing, unknown, false or not yet
-// loaded reads off (R-53).
+// loaded reads off (T17 item 11).
 export function flagOn(flags: ClientFlags | undefined, key: FlagKey): boolean {
   return flags !== undefined && Object.hasOwn(flags, key) && flags[key] === true
 }

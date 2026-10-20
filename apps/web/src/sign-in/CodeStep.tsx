@@ -1,7 +1,7 @@
-// The second step: the texted code (T20, T21; AUTH-DESIGN §10.1–10.2, DESIGN-SHELL §5.8; PRD-53,
-// SHL-07, X11). Its words are the same for any number: they never say a text was sent, only that
-// one will come if the number is registered, and for how long the code works. The number is shown
-// as the server read it, so a bare 8-digit number shows its +65.
+// The second step: the texted code (T20, T21 item 13; PRD-53, SHL-07, X11). Its words are the same
+// for any number: they never say a text was sent, only that one will come if the number is
+// registered, and for how long the code works. The number is shown as the server read it, so a bare
+// 8-digit number shows its +65.
 //
 // One code field (ui/CodeField.tsx) and "Sign in". Below them:
 // - "Send a new code", held for 30 s after each request with the reason as its description, and

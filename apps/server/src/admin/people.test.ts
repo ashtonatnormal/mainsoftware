@@ -227,7 +227,7 @@ describe('C0.5 ACC-05 C0.6 T16 deactivating someone', () => {
 
 describe('C0.5 ACC-06 resetting a PIN', () => {
   // The Admin resets a Member who holds no Owner-only role, so the PIN is a former holder's
-  // leftover one, which an Admin may still clear (D46, AUTH-DESIGN §4.5).
+  // leftover one, which an Admin may still clear (D46, T14 item 12).
   it('locks the person, then the account, clears the PIN and lock, ends their sessions and publishes them', async () => {
     const pool = org({
       rows: ({ text }) => {

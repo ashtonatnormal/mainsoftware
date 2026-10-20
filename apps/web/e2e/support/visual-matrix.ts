@@ -1,4 +1,4 @@
-// Every screenshot visual.spec.ts takes, by name (T21; BUILD-PLAN C0.8, R-68, D-07, K-26, K-27).
+// Every screenshot visual.spec.ts takes, by name (BUILD-PLAN C0.8, T21 item 11, D-07).
 // Each name is the PNG's file name under e2e/__screenshots__/visual.spec.ts/, so a baseline belongs
 // to exactly one shot: scripts/guards/e2e-setup.test.ts (ES-06) refuses a PNG there that isn't
 // named here, and a name used twice. Baselines are made only on CI's runner and adopted from its

@@ -70,7 +70,7 @@ function setUp() {
 }
 
 describe('T21: the dialog model (dialog-model.ts)', () => {
-  it('DG-01 K-45 SHL-45: the effect run again while open (StrictMode, Fast Refresh) keeps it open, and the close its cleanup queued is not passed on', () => {
+  it('DG-01 D-03 SHL-45: the effect run again while open (StrictMode, Fast Refresh) keeps it open, and the close its cleanup queued is not passed on', () => {
     const { page, model, reported, element, opener } = setUp()
     const dialog = element()
     opener.focus()
@@ -88,7 +88,7 @@ describe('T21: the dialog model (dialog-model.ts)', () => {
     expect(reported).toEqual([])
   })
 
-  it('DG-02 K-45: an <Activity> hidden shuts it without telling the caller; shown again, it opens with the first opener kept', () => {
+  it('DG-02 D-03: an <Activity> hidden shuts it without telling the caller; shown again, it opens with the first opener kept', () => {
     const { page, model, reported, element, opener } = setUp()
     const dialog = element()
     opener.focus()
@@ -110,7 +110,7 @@ describe('T21: the dialog model (dialog-model.ts)', () => {
     expect(reported).toEqual([])
   })
 
-  it('DG-03 K-45 SHL-45: a close the browser makes itself (a cancel it won’t let be refused, Android’s back) is passed on once; an earlier opening’s element never is', () => {
+  it('DG-03 D-03 SHL-45: a close the browser makes itself (a cancel it won’t let be refused, Android’s back) is passed on once; an earlier opening’s element never is', () => {
     const { page, model, reported, element, opener } = setUp()
     const earlier = element()
     opener.focus()

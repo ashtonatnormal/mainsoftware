@@ -30,7 +30,7 @@ const MAX_REPLY_BYTES = 64 * 1024
 const VERIFICATION_SID = /^VE[0-9a-f]{32}$/
 
 // Twilio's status has seven values; only 'approved' counts, so any other string is accepted.
-// send_code_attempts is nullable in Twilio's spec: absent or null lists no sends (AUTH-DESIGN §3.1).
+// send_code_attempts is nullable in Twilio's spec: absent or null lists no sends (T20 item 10).
 const verificationReply = z.object({
   sid: z.string().regex(VERIFICATION_SID),
   status: z.string(),

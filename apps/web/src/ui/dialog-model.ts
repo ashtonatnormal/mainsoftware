@@ -1,8 +1,9 @@
 // Keeps Dialog's native <dialog> in step with its `open` prop however often React runs the effect
-// (T21; SHL-45, DRV-48, K-45). React runs it again while `open` stays true: StrictMode's development
-// double-run, Fast Refresh, an <Activity> hidden and shown again. Each cleanup closes the element (a
-// hidden modal would leave the page behind it inert), and each close queues a native `close` event,
-// which arrives after the next run has shown the element again, or while it stays hidden.
+// (T21; SHL-45, DRV-48, D-03). React runs it again while `open` stays true: StrictMode's
+// development double-run, Fast Refresh, an <Activity> hidden and shown again. Each cleanup closes
+// the element (a hidden modal would leave the page behind it inert), and each close queues a native
+// `close` event, which arrives after the next run has shown the element again, or while it stays
+// hidden.
 // - A `close` is the browser's own (a cancel it wouldn't let the page refuse, Android's back
 //   gesture) only while the run that showed the element still holds it and the element is shut. A
 //   close a cleanup caused is never passed on, so `open` stays the one truth.

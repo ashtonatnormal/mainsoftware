@@ -15,7 +15,7 @@ function* ids(count: number): Generator<string> {
 }
 
 describe('T21: avatar colours', () => {
-  it('AV-01 QA-01 OD-45: a person always gets the same colour', () => {
+  it('AV-01 QA-01 T21 item 6: a person always gets the same colour', () => {
     const id = '7f3c2b1a-0d4e-4f5a-9b6c-1d2e3f4a5b6c'
     expect(avatarHue(id)).toBe(avatarHue(id))
     expect(avatarHue(id)).toBe(avatarHue(String(id)))

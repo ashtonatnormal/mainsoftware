@@ -21,8 +21,8 @@ function render(element: ReactNode, answer?: unknown): string {
 const SLOT_NAMES = Object.keys(AI_SLOTS) as AiSlotName[]
 const AI_KEYS = (Object.keys(FLAGS) as FlagKey[]).filter(isAiFlag)
 
-describe('T21 OD-23: flag slots (flags/)', () => {
-  it('FS-01 R-35 OD-23 R-53: FlagSlot renders children only for a true value; missing, false, unreadable or loading renders nothing', () => {
+describe('T21 item 14: flag slots (flags/)', () => {
+  it('FS-01 decision 8 T21 item 14 T17 item 11: FlagSlot renders children only for a true value; missing, false, unreadable or loading renders nothing', () => {
     const slot = (
       <FlagSlot flag="ai.ask">
         <span>shown</span>
@@ -37,7 +37,7 @@ describe('T21 OD-23: flag slots (flags/)', () => {
     expect(render(slot)).toBe('')
   })
 
-  it('FS-02 R-35 D41 decision 8: every AiSlot renders nothing, even with every ai.* flag on', () => {
+  it('FS-02 decision 8 D41: every AiSlot renders nothing, even with every ai.* flag on', () => {
     const allOn = { flags: Object.fromEntries(AI_KEYS.map(key => [key, true])) }
     expect(SLOT_NAMES.length).toBeGreaterThan(0)
     for (const name of SLOT_NAMES) {
@@ -46,7 +46,7 @@ describe('T21 OD-23: flag slots (flags/)', () => {
     }
   })
 
-  it('FS-03 R-35 T17: every AI_SLOTS flag is an ai.* key that FLAGS marks client: false, locked off, with a stage', () => {
+  it('FS-03 decision 8 T17: every AI_SLOTS flag is an ai.* key that FLAGS marks client: false, locked off, with a stage', () => {
     for (const name of SLOT_NAMES) {
       const { flag, stage } = AI_SLOTS[name]
       expect(isAiFlag(flag), name).toBe(true)

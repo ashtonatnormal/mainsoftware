@@ -1,7 +1,6 @@
-// A session is a document (T21, D-01; R-42, R-43, CHT-60, PRD-74, K-07–K-10, ACC-04, ACC-05,
-// T19 item 10 (7); DESIGN-SHELL §9.4.5). These end the storage states' sessions, so they run in the
-// chromium-session-end project, after every other project has finished with them (K-21), one at a
-// time.
+// A session is a document (T21 items 2 and 11, D-01; CHT-60, PRD-74, ACC-04, ACC-05, T19 item 10
+// (7)). These end the storage states' sessions, so they run in the chromium-session-end project,
+// after every other project has finished with them (T21 item 11), one at a time.
 import type { Page } from '@playwright/test'
 import { SIGN_IN } from '../src/strings/sign-in.ts'
 import { logOffset, readCode } from './support/codes.ts'
@@ -33,7 +32,7 @@ async function signInAsRachel(page: Page): Promise<void> {
   await page.getByRole('button', { name: SIGN_IN.signIn, exact: true }).click()
 }
 
-test('SE-01 SE-02 R-42 CHT-60 PRD-74 K-07 K-08 K-09: with Marcus on /today → /chats, Sign out loads a new document, the cookie and scroll cache are gone, Back ends on sign-in with no trace of him; signing in as someone else in the same tab shows only them', async ({
+test('SE-01 SE-02 CHT-60 PRD-74 D-01 D-02 T21 item 2: with Marcus on /today → /chats, Sign out loads a new document, the cookie and scroll cache are gone, Back ends on sign-in with no trace of him; signing in as someone else in the same tab shows only them', async ({
   open,
   guard,
 }) => {
@@ -59,7 +58,7 @@ test('SE-01 SE-02 R-42 CHT-60 PRD-74 K-07 K-08 K-09: with Marcus on /today → /
   expect(await page.evaluate(() => document.body.innerText)).not.toContain('Marcus')
 
   // SE-02: the next person, in the same tab. Back asked for /today, which the signed-out document
-  // kept as the path to open after sign-in (a path only, R-44).
+  // kept as the path to open after sign-in (a path only, T21 item 5).
   await signInAsRachel(page)
   await expect(page).toHaveURL(/\/today$/)
   await expect(h1(page)).toHaveText('Today')
@@ -68,7 +67,7 @@ test('SE-01 SE-02 R-42 CHT-60 PRD-74 K-07 K-08 K-09: with Marcus on /today → /
   expect(JSON.stringify(await page.evaluate(() => ({ ...sessionStorage })))).not.toContain('Marcus')
 })
 
-test('SE-03 K-10 CHT-60: with Farah in two tabs of one browser, signing out in one sends the other to sign-in within 5 s', async ({
+test('SE-03 T21 item 2 CHT-60: with Farah in two tabs of one browser, signing out in one sends the other to sign-in within 5 s', async ({
   open,
   guard,
 }) => {
@@ -88,7 +87,7 @@ test('SE-03 K-10 CHT-60: with Farah in two tabs of one browser, signing out in o
   await expect(h1(second)).toHaveText(SIGN_IN.steps.phone)
 })
 
-test("SE-04 R-43 ACC-04 ACC-05 T19 item 10 (7): with Daniel's one session in two browsers, signing out through the api in one closes the other's socket (4401), and it lands on sign-in within 10 s with You've been signed out.", async ({
+test("SE-04 ACC-04 ACC-05 T19 item 10 (7): with Daniel's one session in two browsers, signing out through the api in one closes the other's socket (4401), and it lands on sign-in within 10 s with You've been signed out.", async ({
   open,
   guard,
 }) => {

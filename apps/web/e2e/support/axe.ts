@@ -1,8 +1,8 @@
-// axe-core in the browser (T21; BUILD-PLAN C0.8 Done, R-67, QA-10). A page passes when axe finds
+// axe-core in the browser (BUILD-PLAN C0.8 Done, T21 item 11, QA-10). A page passes when axe finds
 // nothing serious or critical against WCAG 2.0, 2.1 and 2.2 A and AA, and nothing at all for the
 // region rule (every piece of content in a landmark). Lesser findings and axe's "incomplete" list go
 // to the test's report as an attachment, not a failure. axe checks 24 px targets; the house rule is
-// 44 px, which checks.ts's targets44 holds instead (K-58).
+// 44 px, which checks.ts's targets44 holds instead (T21 item 11).
 import { AxeBuilder } from '@axe-core/playwright'
 import type { Page, TestInfo } from '@playwright/test'
 import { expect } from './fixtures.ts'

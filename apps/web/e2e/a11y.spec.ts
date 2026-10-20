@@ -1,5 +1,5 @@
 // axe on every screen (T21; BUILD-PLAN C0.8 Done: "axe finds 0 serious at 320, 390 and 1440 px,
-// light and dark"; R-67, QA-10; DESIGN-SHELL §9.4.5, AUTH-DESIGN §10.5). One page per screen,
+// light and dark"; T21 items 11 and 13, QA-10). One page per screen,
 // looping the viewport and the colour scheme, so each screen is loaded once. The PIN steps and the
 // locked view are checked where sign-in.spec.ts reaches them (SI-09, SI-11).
 import type { Page, TestInfo } from '@playwright/test'
@@ -24,7 +24,7 @@ async function axeEverywhere(page: Page, label: string, testInfo: TestInfo, prep
 }
 
 for (const screen of SCREENS) {
-  test(`A11Y-01 BP C0.8 Done R-67: axe finds nothing serious or critical on ${screen.path} at 320, 390 and 1440 px, light and dark`, async ({
+  test(`A11Y-01 BP C0.8 Done T21 item 11: axe finds nothing serious or critical on ${screen.path} at 320, 390 and 1440 px, light and dark`, async ({
     open,
   }, testInfo) => {
     const page = await open({ ...SIZES.w320, signedIn: true })
@@ -34,7 +34,7 @@ for (const screen of SCREENS) {
   })
 }
 
-test('A11Y-02 R-67: the same with the avatar menu open, and with the sign-out error toast showing', async ({
+test('A11Y-02 T21 item 11: the same with the avatar menu open, and with the sign-out error toast showing', async ({
   open,
   guard,
 }, testInfo) => {
@@ -62,7 +62,7 @@ test('A11Y-02 R-67: the same with the avatar menu open, and with the sign-out er
   await expect(h1(page)).toHaveText('Chats')
 })
 
-test('A11Y-03 R-35 AUTH-DESIGN §10.5: the sign-in phone step, and the code step with an error, pass axe at 320, 390 and 1440 px in both schemes, and noAiCopy', async ({
+test('A11Y-03 decision 8 T21 item 13: the sign-in phone step, and the code step with an error, pass axe at 320, 390 and 1440 px in both schemes, and noAiCopy', async ({
   open,
   guard,
 }, testInfo) => {

@@ -1,4 +1,4 @@
-// The live connection's banner and what it announces (T21; OD-42, X11, K-42). The markup is rendered
+// The live connection's banner and what it announces (T21 item 4, X11). The markup is rendered
 // with react-dom/server; what it announces is a pure function of the state before and after.
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
@@ -17,15 +17,15 @@ function banner(status: LiveStatus, updateBlocked = false): string {
 
 const state = (status: LiveStatus, updateBlocked = false): LiveState => ({ status, updateBlocked })
 
-describe('T21 OD-42: the connection banner (live/ConnectionBanner.tsx)', () => {
-  it('CB-01 OD-42 X11: it shows nothing until the connection has failed for 30 s, then Reconnecting… in a line that is not a live region', () => {
+describe('T21 item 4: the connection banner (live/ConnectionBanner.tsx)', () => {
+  it('CB-01 T21 item 4 X11: it shows nothing until the connection has failed for 30 s, then Reconnecting… in a line that is not a live region', () => {
     for (const status of STATUSES.filter(status => status !== 'stalled')) expect(banner(status), status).toBe('')
     const stalled = banner('stalled')
     expect(stalled).toContain(LIVE.reconnecting)
     expect(stalled).not.toMatch(/aria-live|role="(?:status|alert)"/)
   })
 
-  it('CB-02 K-42: a held-back reload shows the update line with a 44 px Reload button, whatever the status', () => {
+  it('CB-02 T21 item 4: a held-back reload shows the update line with a 44 px Reload button, whatever the status', () => {
     for (const status of STATUSES) {
       const markup = banner(status, true)
       expect(markup, status).toContain(LIVE.updated)
@@ -47,7 +47,7 @@ describe('T21 OD-42: the connection banner (live/ConnectionBanner.tsx)', () => {
     expect(liveAnnouncement(state('paused', true), state('paused', true))).toBeUndefined()
   })
 
-  it('CB-05 X11 K-42: the banner compares with where every document starts (LIVE_START), so a held-back reload or a stall reached before it mounted is still said once', () => {
+  it('CB-05 X11 T21 item 4: the banner compares with where every document starts (LIVE_START), so a held-back reload or a stall reached before it mounted is still said once', () => {
     expect(createLiveStore('connecting').snapshot()).toEqual(LIVE_START)
     expect(liveAnnouncement(LIVE_START, state('paused', true))).toBe(LIVE.updated)
     expect(liveAnnouncement(LIVE_START, state('stalled'))).toBe(LIVE.reconnecting)

@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { presetZodJitless, type ZodConfigHolder } from './pre-boot.ts'
 
 // zod must know it is jitless before it builds its first object schema, since that is when it tries
-// `new Function('')` (K-01, K-05), and in the build that happens as soon as the chunk holding zod and
-// @hearth/shared's schemas loads. preBoot() sets it in zod's own settings object before zod loads
-// (boot/pre-boot.ts item 4). The graph below is fresh: this file loads nothing at the top that
-// reaches zod, and Vitest runs each test file in its own worker. Function is wrapped, not replaced,
-// so zod still gets a working constructor when the control turns the compiler back on.
+// `new Function('')` (T21 item 2), and in the build that happens as soon as the chunk holding zod
+// and @hearth/shared's schemas loads. preBoot() sets it in zod's own settings object before zod
+// loads (boot/pre-boot.ts item 4). The graph below is fresh: this file loads nothing at the top
+// that reaches zod, and Vitest runs each test file in its own worker. Function is wrapped, not
+// replaced, so zod still gets a working constructor when the control turns the compiler back on.
 function spyOnFunction() {
   const calls: unknown[][] = []
   const original = globalThis.Function
@@ -36,7 +36,7 @@ describe('T21: zod without code made from strings (boot/pre-boot.ts presetZodJit
     expect(other.__zod_globalConfig).toEqual({ jitless: true, locale: 'en' })
   })
 
-  it("ZJ-01 K-01 K-05 WS-02: with the preset made before zod loads, zod adopts it, and the app's start (boot.tsx, then @hearth/shared) never calls Function, building or parsing; with the flag off it probes Function at the next object schema (the control)", async () => {
+  it("ZJ-01 T21 item 2 WS-02: with the preset made before zod loads, zod adopts it, and the app's start (boot.tsx, then @hearth/shared) never calls Function, building or parsing; with the flag off it probes Function at the next object schema (the control)", async () => {
     // What preBoot() does in main.ts, before the one dynamic import loads the app.
     presetZodJitless(globalThis as ZodConfigHolder)
     const spy = spyOnFunction()

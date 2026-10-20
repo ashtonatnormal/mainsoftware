@@ -110,7 +110,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     expect(markup.indexOf('aria-label="Notifications"')).toBeGreaterThan(markup.indexOf('id="screen"'))
   })
 
-  it('SHM-02 R-32 OD-02 OD-30 WCAG 1.4.1: the tab bar holds Today, Chats, Rooms, Tasks, More and the rail six entries, each current one marked by aria-current, the pill and the heavier label', async () => {
+  it('SHM-02 OD-02 T21 item 5 WCAG 1.4.1: the tab bar holds Today, Chats, Rooms, Tasks, More and the rail six entries, each current one marked by aria-current, the pill and the heavier label', async () => {
     const chats = await appAt('/chats')
     expect(navLinks(chats, 'rail:hidden')).toEqual([
       ['Today', undefined],
@@ -162,7 +162,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     expect(markup).toMatch(/bottom-full left-0/)
   })
 
-  it('SHM-04 R-34 OD-04 R-35 decision 8: no searchbox anywhere in the shell, and no AI copy on any screen', async () => {
+  it('SHM-04 OD-04 decision 8: no searchbox anywhere in the shell, and no AI copy on any screen', async () => {
     for (const path of ['/today', '/chats', '/rooms', '/tasks', '/calendar', '/drive', '/more', '/xyz']) {
       const markup = await appAt(path)
       expect(markup, path).not.toMatch(/type="search"|role="search"/)
@@ -205,7 +205,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     for (const link of links.slice(0, 2)) expect(link.classes).toContain('min-h-14')
   })
 
-  it('SHM-07 OD-42 R-37: an unknown path is Page not found inside the shell, with one h1, the navigations and a 44 px way to Chats', async () => {
+  it('SHM-07 T21 item 5: an unknown path is Page not found inside the shell, with one h1, the navigations and a 44 px way to Chats', async () => {
     for (const path of ['/xyz', '/chats/abc']) {
       const markup = await appAt(path)
       expect(textsOf(markup, 'h1'), path).toEqual([SHELL.notFound.title])
@@ -224,7 +224,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     }
   })
 
-  it('SHM-08 OD-42: the boot error screen stands alone: its own main and h1, the reason, and a 44 px Try again', () => {
+  it('SHM-08 T21 item 5: the boot error screen stands alone: its own main and h1, the reason, and a 44 px Try again', () => {
     const markup = renderToStaticMarkup(<BootErrorScreen reload={() => {}} />)
     expect(tags(markup, 'main')).toHaveLength(1)
     expect(textsOf(markup, 'h1')).toEqual(['Can&#x27;t reach Hearth'])
@@ -238,7 +238,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     expect(textsOf(crashed, 'button')).toEqual(['Reload'])
   })
 
-  it('SHM-10 OD-42 X16: a screen that failed keeps the shell’s h1 and says so in an h2 with Try again and Go to Chats; above the shell it brings its own main and h1', () => {
+  it('SHM-10 T21 item 5 X16: a screen that failed keeps the shell’s h1 and says so in an h2 with Try again and Go to Chats; above the shell it brings its own main and h1', () => {
     const router = createRouter({
       routeTree: createRootRoute(),
       history: createMemoryHistory({ initialEntries: ['/chats'] }),

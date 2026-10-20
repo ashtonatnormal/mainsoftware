@@ -1,4 +1,4 @@
-// The Content Security Policy guard (BUILD-PLAN C0.8, T21 item 7, R-59, R-61, R-65, R-75). The
+// The Content Security Policy guard (BUILD-PLAN C0.8, T21 item 7, PRD-70). The
 // web app's document headers come from one builder, documentHeaders() in
 // packages/shared/src/web-headers.ts. Vite's dev server serves documentHeaders(…, { dev: true })
 // and the e2e preview documentHeaders(E2E_ORIGIN); from C0.12, CloudFront's response-headers
@@ -11,7 +11,7 @@
 // CSP-07 and CSP-08 read apps/web/index.html, the page the policy governs: a policy without
 // 'unsafe-inline' holds only while the page itself carries nothing inline. CSP-09 reads the two
 // servers that serve the page before CloudFront does, Vite's dev server and the e2e preview, so
-// neither can serve a policy of its own (K-03).
+// neither can serve a policy of its own (D-04).
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -110,7 +110,7 @@ describe('T21 item 7: the CSP guard', () => {
   })
 
   it.each(CASES)(
-    "CSP-01 BP C0.8 R-59: connect-src holds only 'self' and the derived ws(s) origin ($name, $origin)",
+    "CSP-01 BP C0.8 T21 item 7: connect-src holds only 'self' and the derived ws(s) origin ($name, $origin)",
     ({ origin, dev }) => {
       const connect = served(origin, dev).get('connect-src')
       expect(connect).toEqual(["'self'", socketOf(origin)])
@@ -119,7 +119,7 @@ describe('T21 item 7: the CSP guard', () => {
   )
 
   it.each(CASES)(
-    "CSP-02 R-61: every directive and source is on the allow-list; no MODEL_HOSTS entry, no *, no bare scheme, no data:, blob:, 'unsafe-eval', 'unsafe-hashes' or 'wasm-unsafe-eval'; no 'unsafe-inline' in production ($name, $origin)",
+    "CSP-02 T21 item 7: every directive and source is on the allow-list; no MODEL_HOSTS entry, no *, no bare scheme, no data:, blob:, 'unsafe-eval', 'unsafe-hashes' or 'wasm-unsafe-eval'; no 'unsafe-inline' in production ($name, $origin)",
     ({ origin, dev }) => {
       const policy = served(origin, dev)
       expect(Object.fromEntries(policy)).toEqual(allowList(origin, dev))
@@ -162,7 +162,7 @@ describe('T21 item 7: the CSP guard', () => {
   )
 
   it.each(CASES)(
-    'CSP-04 C-21 R-59: report-uri /api/csp-report is present; report-to and Reporting-Endpoints are not ($name, $origin)',
+    'CSP-04 T21 item 7: report-uri /api/csp-report is present; report-to and Reporting-Endpoints are not ($name, $origin)',
     ({ origin, dev }) => {
       expect(CSP_REPORT_PATH).toBe('/api/csp-report')
       const policy = served(origin, dev)
@@ -203,7 +203,7 @@ describe('T21 item 7: the CSP guard', () => {
     )
   })
 
-  it('CSP-07 K-01 R-06 D-02: apps/web/index.html exists and has no inline script, style element, style or event-handler attribute, meta CSP or absolute URL, and exactly one script, the module /src/main.ts', () => {
+  it('CSP-07 T21 item 7 D-02: apps/web/index.html exists and has no inline script, style element, style or event-handler attribute, meta CSP or absolute URL, and exactly one script, the module /src/main.ts', () => {
     expect(existsSync(join(root, INDEX_HTML)), INDEX_HTML).toBe(true)
     const page = readRepoFile(INDEX_HTML)
     const tags = tagsOf(page)
@@ -259,7 +259,7 @@ describe('T21 item 7: the CSP guard', () => {
     expect(keys.has('minimum-scale'), content).toBe(false)
   })
 
-  it('CSP-09 K-03 D-04: vite.config.ts and e2e/support/preview.ts exist; the first serves documentHeaders(…, { dev: true }) and the second documentHeaders(E2E_ORIGIN), and neither names a header of its own', () => {
+  it('CSP-09 D-04: vite.config.ts and e2e/support/preview.ts exist; the first serves documentHeaders(…, { dev: true }) and the second documentHeaders(E2E_ORIGIN), and neither names a header of its own', () => {
     for (const path of [VITE_CONFIG, E2E_PREVIEW]) expect(existsSync(join(root, path)), path).toBe(true)
     const vite = codeOf(VITE_CONFIG, readRepoFile(VITE_CONFIG))
     const preview = codeOf(E2E_PREVIEW, readRepoFile(E2E_PREVIEW))

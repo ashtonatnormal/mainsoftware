@@ -1,4 +1,4 @@
-// The router's backstop for a page that isn't there (T21; OD-42, R-37). Every unknown path reaches
+// The router's backstop for a page that isn't there (T21 item 5). Every unknown path reaches
 // the splat route inside the shell first (router/router.tsx), so this shows only for a notFound()
 // thrown outside it, which nothing in C0.8 throws. It needs no session runtime and no shell: its
 // own <main>, one h1, and a link to Chats (which sends a signed-out visitor to sign-in).

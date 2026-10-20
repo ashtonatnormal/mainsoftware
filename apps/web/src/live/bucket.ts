@@ -1,5 +1,5 @@
 // The live connection's own frame budget (T19 item 10, item 2 of packages/shared/src/gateway.ts's
-// client side; K-40). The server gives each socket a token bucket, full when it opens
+// client side; T21 item 4). The server gives each socket a token bucket, full when it opens
 // (GATEWAY_LIMITS.frameBurst, 20) and refilled at framesPerSecond (5) a second, and every frame the
 // client sends takes a token; an empty bucket closes the socket with 1008 too_many_frames. The
 // client keeps a smaller bucket of its own (CLIENT_POLICY: 18 and 4 a second), one per socket and

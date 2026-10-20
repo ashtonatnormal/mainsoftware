@@ -1,4 +1,4 @@
-// How the suite reads a sign-in code (T21, T20; AUTH-DESIGN §6.2, §10.5, INTEGRATION.md item 5).
+// How the suite reads a sign-in code (T20 item 1, T21 item 11).
 // The api role runs the fake SMS provider, which sends nothing and prints one line to stderr for each
 // code it would text, never to the JSON log, with the number masked to its last two digits:
 //   [local only, not a log line] Hearth code for +65 xxxxxx03: 123456
@@ -8,13 +8,13 @@
 // reads the first line after that offset for its number: an older code is never read, and a new
 // request after a replaced code gets the new one. A number off the roster gets no text and no line.
 //
-// The pattern and the masking live here only (K-43): a change to the fake's line breaks its unit
-// test first, then this file.
+// The pattern and the masking live here only (T20 item 1): a change to the fake's line breaks its
+// unit test first, then this file.
 import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs'
 import { maskNumber } from '@hearth/shared'
 import { API_LOG } from './env.ts'
 
-// INTEGRATION.md item 5's pattern: the masked number, then the 6 digits at the line's end.
+// The fake's line (T20 item 1): the masked number, then the 6 digits at the line's end.
 export const CODE_LINE = /code for (\+\d+ x*\d{2}): (\d{6})$/gm
 
 // The log's size now: read codes after this.

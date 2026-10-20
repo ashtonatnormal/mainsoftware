@@ -1,4 +1,4 @@
-// A screen that failed (T21; OD-42, X11): the router's error component for every route. Inside the
+// A screen that failed (T21 item 5, X11): the router's error component for every route. Inside the
 // shell the screen keeps its h1 (the route's title, so the person still knows where they are) and
 // its navigation, says what happened in an h2, and announces it (the h1 that focus lands on names
 // only the place). Two ways on: Try again, and Go to Chats. Try again reloads the page when the

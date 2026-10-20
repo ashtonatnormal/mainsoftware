@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   The app's one page (T21). Nothing here is inline, because the CSP allows only same-origin
-  scripts and styles (K-01): one module script, /src/main.ts, loads everything, and Vite links its
+  scripts and styles (T21 item 7): one module script, /src/main.ts, loads everything, and Vite links its
   CSS in the head at build. The two theme-color values copy --bg from src/styles/tokens.css
   (SHL-11; contrast.test.ts TK-09 compares them). Zoom stays allowed (WCAG 1.4.4).
   scripts/guards/csp.test.ts holds this file to these rules (CSP-07, CSP-08).

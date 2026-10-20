@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { SHELL } from '@/strings/shell.ts'
 import { failureAnnouncement, isLoadFailure, retryFor } from './error-screen-model.ts'
 
-describe("T21 OD-42: the router's error screen (screens/error-screen-model.ts)", () => {
-  it("ER-01 OD-42 K-65: Try again reloads the page when a screen's code failed to load in any engine, and loads the route again for anything else", () => {
+describe("T21 item 5: the router's error screen (screens/error-screen-model.ts)", () => {
+  it("ER-01 T21 items 2 and 5: Try again reloads the page when a screen's code failed to load in any engine, and loads the route again for anything else", () => {
     const failedLoads = [
       // Chromium, which keeps the failed import in the document's module map.
       new TypeError('Failed to fetch dynamically imported module: https://localhost:5180/assets/MoreScreen-a1b2.js'),

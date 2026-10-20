@@ -1,4 +1,4 @@
-// What the shell and its screens say (T21; R-78, OD-02, OD-05, decision 8): British English,
+// What the shell and its screens say (T21; D29, OD-02, OD-05, decision 8): British English,
 // short and active (CLAUDE.md, Conventions). An empty screen says only what is true now: no
 // promise of a feature to come, no "coming soon" and no AI copy (strings/strings.test.ts, ST-02).
 // The owner may reword any of it in the PR's screenshots.

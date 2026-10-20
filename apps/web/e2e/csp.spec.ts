@@ -1,5 +1,5 @@
-// The document's headers and CSP in a real browser (T21 item 7; BUILD-PLAN C0.8, R-59, R-17, OD-12,
-// DESIGN-SHELL §9.4.5). The preview serves documentHeaders(E2E_ORIGIN), the builder C0.12's
+// The document's headers and CSP in a real browser (T21 items 7 and 11; BUILD-PLAN C0.8, SHL-69,
+// OD-12). The preview serves documentHeaders(E2E_ORIGIN), the builder C0.12's
 // CloudFront policy will use, so these cases hold production's policy to what the app does. Every
 // spec's guard already fails on any violation and on any request to another origin; these prove the
 // headers themselves, the fonts, and the report path.
@@ -12,7 +12,7 @@ import { SCREENS } from './support/viewports.ts'
 
 const h1 = (page: Page) => page.getByRole('heading', { level: 1 })
 
-test('CS-01 R-59: the document carries documentHeaders(E2E_ORIGIN) exactly, and Cache-Control no-cache', {
+test('CS-01 T21 item 7: the document carries documentHeaders(E2E_ORIGIN) exactly, and Cache-Control no-cache', {
   tag: '@smoke',
 }, async ({ page }) => {
   const response = await page.goto('/chats')
@@ -24,12 +24,12 @@ test('CS-01 R-59: the document carries documentHeaders(E2E_ORIGIN) exactly, and 
   // One policy, enforced: no report-only copy, and no meta policy in the page.
   expect(headers['content-security-policy-report-only']).toBeUndefined()
   expect(await page.locator('meta[http-equiv="Content-Security-Policy" i]').count()).toBe(0)
-  // No HSTS for localhost (K-30), which the builder decides.
+  // No HSTS for localhost (T21 item 7), which the builder decides.
   expect(headers['strict-transport-security']).toBeUndefined()
   await expect(h1(page)).toHaveText('Chats')
 })
 
-test('CS-02 R-17 SHL-69: a tour of every route makes only same-origin requests, both fonts load from the app itself, and no violation fires', {
+test('CS-02 SHL-69: a tour of every route makes only same-origin requests, both fonts load from the app itself, and no violation fires', {
   tag: '@smoke',
 }, async ({ page, guard }) => {
   const fonts: string[] = []
@@ -56,7 +56,7 @@ test('CS-03 BP C0.8 Done OD-12: a blocked image raises a violation that reaches 
   guard,
   browserName,
 }) => {
-  test.skip(browserName !== 'chromium', 'the report path was verified on Chromium (DESIGN-SHELL §9.4.5)')
+  test.skip(browserName !== 'chromium', 'the report path was verified on Chromium (T21 item 11)')
   guard.allowViolation('img-src')
   await page.goto('/chats')
   await expect(h1(page)).toHaveText('Chats')

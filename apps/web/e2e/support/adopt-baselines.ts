@@ -1,5 +1,5 @@
-// Adopts the visual baselines from a failing CI run (T21; D-07, K-26, K-27, DESIGN-SHELL §12 item
-// 14). Baselines come only from CI's runner, so a person:
+// Adopts the visual baselines from a failing CI run (T21 item 11, D-07). Baselines come only from
+// CI's runner, so a person:
 // 1. downloads the check job's e2e-report artifact and unpacks it into a folder of its own;
 // 2. runs `node apps/web/e2e/support/adopt-baselines.ts <that folder>`;
 // 3. looks at every PNG it copied, in both themes, and commits them.

@@ -176,7 +176,7 @@ function requestFacts(): { info: ReqInfo; queued: (() => Promise<void>)[] } {
 }
 
 describe('C0.8 T21 item 10 GET /api/session and GET /api/flags: refusals', () => {
-  it('WR-01 T19 item 11 R-54 T21: without a session, or with a stale cookie, both answer 401 signed_out with no Set-Cookie (a GET never clears the cookie)', async () => {
+  it('WR-01 T19 item 11 T21 item 3: without a session, or with a stale cookie, both answer 401 signed_out with no Set-Cookie (a GET never clears the cookie)', async () => {
     const signedOut = { error: 'signed_out', message: MESSAGES.signed_out }
     // No cookie, a malformed one, or two of them: refused before the database.
     const { db, touched } = unreachableDb()
@@ -248,7 +248,7 @@ describe('C0.8 T17 item 11 GET /api/flags', () => {
     vi.useRealTimers()
   })
 
-  it('WR-02 T17 item 11 R-51: on is true, off and not_in_cohort are false, and only client: true keys are sent', async () => {
+  it('WR-02 T17 item 11: on is true, off and not_in_cohort are false, and only client: true keys are sent', async () => {
     const flags = staticFlags(REGISTRY)
     const verdicts: Record<string, FlagVerdict> = {
       'it.alpha': 'on',
@@ -300,7 +300,7 @@ describe('C0.8 T17 item 11 GET /api/flags', () => {
     expect(wait).not.toHaveBeenCalled()
   })
 
-  it('WR-04 R-52 R-53: with a client key, the wait for the first read is bounded at 2.5 s and comes after the transaction; unconfirmed answers 503 unavailable', async () => {
+  it('WR-04 T17 item 11: with a client key, the wait for the first read is bounded at 2.5 s and comes after the transaction; unconfirmed answers 503 unavailable', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const flags = staticFlags(REGISTRY)
     flags.track.mockImplementation(() => new Promise<void>(() => {}))
@@ -329,7 +329,7 @@ describe('C0.8 T17 item 11 GET /api/flags', () => {
     expect(pool.texts().at(-1)).toBe('commit')
   })
 
-  it('R-53: an org whose flags went unconfirmed answers 503 unavailable at once, and the route says so', async () => {
+  it('T17 item 11: an org whose flags went unconfirmed answers 503 unavailable at once, and the route says so', async () => {
     const flags = staticFlags(REGISTRY)
     flags.verdict.mockImplementation((_org: string, key: string) => (key === 'it.beta' ? 'unconfirmed' : 'on'))
     const { get } = setup({ db: signedIn().db, flags })
@@ -340,7 +340,7 @@ describe('C0.8 T17 item 11 GET /api/flags', () => {
   })
 })
 
-describe('C0.8 OD-14 C-23 which GET counts as use of the session', () => {
+describe('C0.8 OD-14 which GET counts as use of the session', () => {
   // The transaction each statement ran in, by the start statement before it.
   const transactionOf = (texts: string[], match: (text: string) => boolean): string | undefined => {
     const at = texts.findIndex(match)
@@ -351,7 +351,7 @@ describe('C0.8 OD-14 C-23 which GET counts as use of the session', () => {
   }
   const READ_ONLY = 'start transaction isolation level read committed read only'
 
-  it('WR-05 OD-14 C-23 T21: GET /api/flags runs read only and queues no touch; GET /api/session runs read only and queues one', async () => {
+  it('WR-05 OD-14 T21: GET /api/flags runs read only and queues no touch; GET /api/session runs read only and queues one', async () => {
     const flagsPool = signedIn({ roles: [] })
     const flagsApp = setup({ db: flagsPool.db, flags: staticFlags(REGISTRY) })
     expect((await flagsApp.get('/api/flags', COOKIE)).statusCode).toBe(200)
@@ -394,8 +394,8 @@ describe('C0.8 OD-14 C-23 which GET counts as use of the session', () => {
   })
 })
 
-describe('C0.8 OD-22 GET /api/session', () => {
-  it('WR-07 OD-22 OD-10: the answer is the profile’s name and zone, else the full name and the org’s zone, read for the session’s own person', async () => {
+describe('C0.8 T21 item 10 GET /api/session', () => {
+  it('WR-07 T21 item 10 OD-10: the answer is the profile’s name and zone, else the full name and the org’s zone, read for the session’s own person', async () => {
     const pool = signedIn({ found: { name: 'Ahmad', time_zone: 'Asia/Kuala_Lumpur' } })
     const { get } = setup({ db: pool.db })
     const response = await get('/api/session', COOKIE)
@@ -450,7 +450,7 @@ describe('C0.8 OD-12 POST /api/csp-report', () => {
     vi.restoreAllMocks()
   })
 
-  it('CR-01 OD-12 R-59: application/csp-report from the app origin answers 204 and logs only directive, blocked, path and disposition', async () => {
+  it('CR-01 OD-12 T21 item 7: application/csp-report from the app origin answers 204 and logs only directive, blocked, path and disposition', async () => {
     // A session cookie is sent and ignored: the route reads no session, and the database and
     // Valkey (an empty object here) are never reached.
     const { db, touched } = unreachableDb()
@@ -575,7 +575,7 @@ describe('C0.8 OD-12 POST /api/csp-report', () => {
     expect(touched()).toBe(0)
   })
 
-  it('CR-06 C-21: application/reports+json is refused, and so is JSON: the route takes application/csp-report alone', async () => {
+  it('CR-06 T21 item 7: application/reports+json is refused, and so is JSON: the route takes application/csp-report alone', async () => {
     const { post, logs } = setup()
     // The Reporting API's shape (report-to), which the policy doesn't use.
     const reporting = [{ type: 'csp-violation', age: 0, url: `${APP_ORIGIN}/chats`, body: REPORT['csp-report'] }]

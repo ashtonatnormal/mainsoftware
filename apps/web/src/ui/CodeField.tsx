@@ -1,4 +1,4 @@
-// The field for a texted code (T21, T20; AUTH-DESIGN §10.1, §10.4; SHL-07, SHL-27, QA-04): sign-in's
+// The field for a texted code (T20; T21 item 13; SHL-07, SHL-27, QA-04): sign-in's
 // code step now, C0.16's re-authentication sheet later. One native input, never six boxes or an
 // on-screen keypad, so the phone's number pad, a physical keyboard, paste and autofill all work and
 // no tap can be dropped.

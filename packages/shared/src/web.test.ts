@@ -13,7 +13,7 @@ import {
 const personId = '0b9e6f2e-3c1a-4d5b-8e7f-1a2b3c4d5e6f'
 
 describe('T21 item 10: GET /api/session', () => {
-  test('OD-22: the answer is the person, a name and a zone, and nothing more', () => {
+  test('T21 item 10: the answer is the person, a name and a zone, and nothing more', () => {
     const answer = { personId, name: 'Ahmad', timeZone: 'Asia/Kuala_Lumpur' }
     expect(SessionResponse.parse(answer)).toEqual(answer)
     for (const extra of [{ phone: '+65 8000 0003' }, { roles: ['admin'] }, { orgId: personId }]) {

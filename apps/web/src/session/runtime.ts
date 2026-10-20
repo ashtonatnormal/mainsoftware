@@ -1,18 +1,19 @@
-// The signed-in document's session runtime (T21, D-01; R-42, R-47–R-49, R-54, CHT-60). The boot
-// starts one when GET /api/session names a person, and it holds everything that belongs to that
-// person: their session answer, the QueryClient, the formatters for their zone, and the live
-// connection (live/gateway-client.ts), which holds the person's own topic, person:<id> (C0.14's
-// inbox reads it; C0.8 holds it so the sub and ack path runs end to end).
+// The signed-in document's session runtime (T21 items 3 and 4, D-01; CHT-60, T17 item 11,
+// T19 item 11). The boot starts one when GET /api/session names a person, and it holds everything
+// that belongs to that person: their session answer, the QueryClient, the formatters for their
+// zone, and the live connection (live/gateway-client.ts), which holds the person's own topic,
+// person:<id> (C0.14's inbox reads it; C0.8 holds it so the sub and ack path runs end to end).
 //
 // What the live connection hears becomes Query work here, and nothing else (T19 item 10):
 // - a topic acked ok, or its ev or reset: invalidate ['topic', <topic>], the key C1's topic-backed
 //   queries use (none exists in C0.8);
 // - a topic refused or dropped: remove ['topic', <topic>], wiping what was cached (Rule 6);
-// - the flags nudge: invalidate the flags query, so it is fetched again (R-47, T17 item 11);
-// - 4401, or a stalled connection's probe answering 401: end the session (R-49, R-48);
+// - the flags nudge: invalidate the flags query, so it is fetched again (T17 item 11);
+// - 4401, or a stalled connection's probe answering 401: end the session (T21 item 4, T19 item 11);
 // - 4426: reload for the new deploy, at most once a minute; when that is held back the live store
-//   says so and ConnectionBanner offers a Reload button (K-42);
-// - 4403: nothing until C0.9 shows the notice and resumes the connection. Nothing is wiped (R-43).
+//   says so and ConnectionBanner offers a Reload button (T21 item 4);
+// - 4403: nothing until C0.9 shows the notice and resumes the connection. Nothing is wiped
+//   (T19 item 10).
 // The probe fetches the flags query only to learn whether the session still holds: it reads no
 // flag (WS-11), and a 401 from it ends the session through the QueryClient like any other.
 //

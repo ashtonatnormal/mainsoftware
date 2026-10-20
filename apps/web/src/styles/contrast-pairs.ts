@@ -1,5 +1,5 @@
 // Every ink and ground the kit pairs, with the WCAG minimum each must keep in both themes (T21,
-// X8, R-11, R-12). styles/contrast.test.ts reads the token values from tokens.css and fails on any
+// X8, QA-01). styles/contrast.test.ts reads the token values from tokens.css and fails on any
 // pair below its minimum, so a token change that breaks contrast fails `npm test`. A kit piece
 // that draws a new pair adds it here in the same change.
 //

@@ -13,7 +13,7 @@ import {
 } from './web-headers.ts'
 
 describe('T21 item 7: the Content Security Policy', () => {
-  test("WH-01 R-59 OD-40: the production policy is exactly T21 item 7's list, in order", () => {
+  test("WH-01 T21 item 7: the production policy is exactly T21 item 7's list, in order", () => {
     expect(contentSecurityPolicy('https://hearth.example.com')).toBe(
       [
         "default-src 'none'",
@@ -44,7 +44,7 @@ describe('T21 item 7: the Content Security Policy', () => {
     expect(contentSecurityPolicy(origin, { dev: false })).toBe(contentSecurityPolicy(origin))
   })
 
-  test('WH-02 R-60: connect-src names wss://host for https and ws://host:port for loopback http', () => {
+  test('WH-02 T21 item 7: connect-src names wss://host for https and ws://host:port for loopback http', () => {
     const connect = (origin: string) => new Map(cspDirectives(origin)).get('connect-src')
     expect(connect('https://hearth.example.com')).toEqual(["'self'", 'wss://hearth.example.com'])
     expect(connect('https://hearth.example.com:8443')).toEqual(["'self'", 'wss://hearth.example.com:8443'])
@@ -62,7 +62,7 @@ describe('T21 item 7: the Content Security Policy', () => {
 })
 
 describe('T21 item 7: the document headers', () => {
-  test('WH-03 K-30: no HSTS for localhost, 127.0.0.1 or [::1]; HSTS for https hosts', () => {
+  test('WH-03 T21 item 7: no HSTS for localhost, 127.0.0.1 or [::1]; HSTS for https hosts', () => {
     for (const origin of [
       'https://localhost:5180',
       'https://127.0.0.1:5180',

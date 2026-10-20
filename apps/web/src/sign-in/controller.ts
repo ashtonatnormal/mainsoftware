@@ -1,4 +1,4 @@
-// The sign-in screen's store (T20, T21; AUTH-DESIGN §10.1–10.2): it holds the state
+// The sign-in screen's store (T20; T21 item 13): it holds the state
 // sign-in-model.ts computes, makes the calls the model asks for (sign-in/api.ts), and runs the two
 // kinds of timer the screen needs, all through injected dependencies, so Node tests drive it with a
 // fake clock and a fake api:

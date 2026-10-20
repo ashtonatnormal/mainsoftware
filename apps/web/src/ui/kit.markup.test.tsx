@@ -360,7 +360,7 @@ describe('T21: the kit’s markup', () => {
     expect(markup).toMatch(/<svg[^>]*aria-hidden="true"/)
   })
 
-  it("KM-13 R-34 OD-04 decision 8: SearchBar is a search form whose field is type search, 16 px and named 'Search' by its label, with a Search button and no Ask", () => {
+  it("KM-13 OD-04 decision 8: SearchBar is a search form whose field is type search, 16 px and named 'Search' by its label, with a Search button and no Ask", () => {
     const markup = withQuery(<SearchBar onSearch={() => {}} />)
     const form = one(markup, 'form')
     expect(form.get('role')).toBe('search')
@@ -417,7 +417,7 @@ describe('T21: the kit’s markup', () => {
     }
   })
 
-  it('KM-15 AUTH-DESIGN §10.1 §10.4 PRD-53 X7: CodeField is one labelled text input for a one-time code on the number pad, 24 px figures and 44 px tall, with no maxlength or pattern', () => {
+  it('KM-15 T21 item 13 PRD-53 X7: CodeField is one labelled text input for a one-time code on the number pad, 24 px figures and 44 px tall, with no maxlength or pattern', () => {
     const markup = html(<CodeField label="6-digit code" length={6} value="123" onChange={() => {}} />)
     const input = one(markup, 'input')
     expect(input.get('type')).toBe('text')
@@ -434,7 +434,7 @@ describe('T21: the kit’s markup', () => {
     expect(disabled.has('disabled')).toBe(true)
   })
 
-  it('KM-16 WCAG 3.3.8 SHL-49 AUTH-DESIGN §10.4: PinField is a numeric password field with the autocomplete it is given and no maxlength; ShowPin is a Switch; PinUsername is hidden', () => {
+  it('KM-16 WCAG 3.3.8 SHL-49 T21 item 13: PinField is a numeric password field with the autocomplete it is given and no maxlength; ShowPin is a Switch; PinUsername is hidden', () => {
     const field = (shown: boolean) =>
       html(
         <PinField

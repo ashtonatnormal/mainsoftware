@@ -1,4 +1,4 @@
-// GET /api/session (T21 item 10, OD-22): who is signed in, as the web shell needs it to start: the
+// GET /api/session (T21 item 10): who is signed in, as the web shell needs it to start: the
 // person's id, the name to show and the time zone to show times in (OD-10). Nothing more: no phone
 // number and no roles; C0.16 adds capability booleans decided by can() when a screen needs one.
 //

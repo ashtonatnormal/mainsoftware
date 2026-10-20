@@ -72,12 +72,12 @@ describe('C0.8 T17 item 11 the client flags, decided per person (web/flags.ts)',
   })
 })
 
-describe('C0.8 R-52 waiting for the org’s first flag read', () => {
+describe('C0.8 T17 item 11 waiting for the org’s first flag read', () => {
   afterEach(() => {
     vi.useRealTimers()
   })
 
-  it('R-52: waitAtMost resolves at the bound when the promise never settles, and at once when it does, clearing its timer', async () => {
+  it('T17 item 11: waitAtMost resolves at the bound when the promise never settles, and at once when it does, clearing its timer', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     let ended = false
     void waitAtMost(new Promise<void>(() => {}), 2500).then(() => {

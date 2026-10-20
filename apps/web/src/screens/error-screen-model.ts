@@ -1,5 +1,5 @@
-// What the router's error screen does (T21; OD-42, X11, K-65, WCAG 4.1.3), kept apart from React so
-// Node tests it (screens/error-screen-model.test.ts).
+// What the router's error screen does (T21 items 2 and 5, X11, WCAG 4.1.3), kept apart from React
+// so Node tests it (screens/error-screen-model.test.ts).
 //
 // Try again depends on what failed:
 // - A screen's code that failed to load (a lazy chunk, or the stylesheet Vite preloads for it) can't

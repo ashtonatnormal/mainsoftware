@@ -1,4 +1,4 @@
-// A session is a document (T21, D-01, D-02; R-42, R-44, CHT-60, K-08, K-10, K-42). Every change of
+// A session is a document (D-01, D-02; CHT-60, T21 items 2, 4 and 5). Every change of
 // person ends in a full page load: sign-in, sign-out, a 401 signed_out, the gateway's 4401, a
 // session answer naming someone else, or another tab's sign-in or sign-out. So the QueryClient,
 // the gateway client, the router and every module's state live exactly as long as one person's
@@ -43,7 +43,7 @@ export const STORAGE_KEYS = {
   focusHeading: 'hearth:focus-heading',
 } as const
 
-// reloadForUpdate reloads at most once in this many milliseconds (K-42).
+// reloadForUpdate reloads at most once in this many milliseconds (T21 item 4).
 export const RELOAD_MIN_MS = 60_000
 
 export const IDENTITY_CHANNEL = 'hearth:identity'
@@ -207,9 +207,9 @@ export function enterDocument(env: DocumentEnv): void {
   env.location.replace(takeReturnTo(env.storage) ?? '/chats')
 }
 
-// Keeps the path a signed-out visit asked for (R-44): only a registered app path, which holds no
-// query and no other origin. Any other path forgets an older one, so sign-in opens what was asked
-// for last or nothing.
+// Keeps the path a signed-out visit asked for (T21 item 5): only a registered app path, which holds
+// no query and no other origin. Any other path forgets an older one, so sign-in opens what was
+// asked for last or nothing.
 export function rememberReturnTo(pathname: string, storage: TabStorage | undefined = tabStorage()): void {
   if (isAppPath(pathname)) write(storage, STORAGE_KEYS.returnTo, pathname)
   else remove(storage, STORAGE_KEYS.returnTo)
@@ -236,10 +236,10 @@ export function takeFocusHeading(storage: TabStorage | undefined = tabStorage())
   return flag === '1'
 }
 
-// Reloads for a new deploy (the gateway's 4426, or vite:preloadError) at most once a minute (K-42),
-// so a stale index.html can't reload the tab in a loop. Blocked when the last reload was under a
-// minute ago, or when the time of this one can't be stored; the caller then shows its own way out
-// (a Reload button, or the screen's error).
+// Reloads for a new deploy (the gateway's 4426, or vite:preloadError) at most once a minute
+// (T21 item 4), so a stale index.html can't reload the tab in a loop. Blocked when the last reload
+// was under a minute ago, or when the time of this one can't be stored; the caller then shows its
+// own way out (a Reload button, or the screen's error).
 export function reloadForUpdate(
   env: { readonly location: Pick<Location, 'reload'>; readonly storage: TabStorage | undefined },
   now: number = Date.now(),

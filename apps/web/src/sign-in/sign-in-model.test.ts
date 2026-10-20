@@ -1,6 +1,5 @@
-// The sign-in screen's pure logic (T20, T21; DESIGN-SHELL §9.2 SM-01–SM-08, AUTH-DESIGN §10.5,
-// auth-research-web §8.1). Each transition is checked for its next step, the call it asks for, and
-// what the person hears (a focus move or a message), with no DOM.
+// The sign-in screen's pure logic (T20, T21 item 13). Each transition is checked for its next step,
+// the call it asks for, and what the person hears (a focus move or a message), with no DOM.
 import { type CodeSent, type ErrorExtras, MESSAGES, type OtpVerifyReply, type PinStateJSON } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import { SIGN_IN } from '@/strings/sign-in.ts'
@@ -119,7 +118,7 @@ describe('T20 T21: the sign-in model (sign-in/sign-in-model.ts)', () => {
     expect(server.state.step.kind).toBe('phone')
   })
 
-  it('X6 AUTH-DESIGN §10.2: a code request answered moves to the code step, focuses its h1, and drops the left-reason line', () => {
+  it('X6 T21 item 13: a code request answered moves to the code step, focuses its h1, and drops the left-reason line', () => {
     const start = initialState(SIGN_IN.signedOut)
     expect(start.left).toBe(SIGN_IN.signedOut)
     const sent = last(run(start, { kind: 'input', field: 'phone', value: MARCUS }, { kind: 'submit', now: T0 }))
@@ -223,7 +222,7 @@ describe('T20 T21: the sign-in model (sign-in/sign-in-model.ts)', () => {
     expect(easy.state.error).toEqual({ field: 'pin', text: MESSAGES.pin_too_easy })
   })
 
-  it('SM-02 PRD-53 AUTH-DESIGN §10.2: code_dead and code_expired clear and disable the code, enable Send a new code at once and focus it, with the message as its description', () => {
+  it('SM-02 PRD-53 T21 item 13: code_dead and code_expired clear and disable the code, enable Send a new code at once and focus it, with the message as its description', () => {
     for (const code of ['code_dead', 'code_expired'] as const) {
       const dead = fail(verifying(), failure(code))
       const step = dead.state.step
@@ -346,7 +345,7 @@ describe('T20 T21: the sign-in model (sign-in/sign-in-model.ts)', () => {
     expect(sent.state.values.code).toBe('')
   })
 
-  it('AUTH-DESIGN §10.1 auth-research-web §3.4: a 503, a network failure or a second try_again at the code keeps the code for another press, in the notice, said assertively', () => {
+  it('T21 item 13: a 503, a network failure or a second try_again at the code keeps the code for another press, in the notice, said assertively', () => {
     for (const code of ['unavailable', 'network', 'try_again', 'invalid_response', 'internal']) {
       const refused = fail(verifying(), failure(code, {}, `${code} copy`))
       expect(refused.state.step.kind).toBe('code')
@@ -457,7 +456,7 @@ describe('T20 T21: the sign-in model (sign-in/sign-in-model.ts)', () => {
     }
   })
 
-  it('X6 auth-research-web §3.8: while a code or PIN is being checked, Use a different number and Start again are held with the busy text, so an answer that signs in still opens the app', () => {
+  it('X6: while a code or PIN is being checked, Use a different number and Start again are held with the busy text, so an answer that signs in still opens the app', () => {
     // The answer may set the session cookie, so leaving the step would orphan a live session.
     const inFlight = [verifying(), pinSent(atSetPin(), '482913', '482913'), pinSent(atEnterPin(), '482913')]
     for (const state of inFlight) {
@@ -500,7 +499,7 @@ describe('T20 T21: the sign-in model (sign-in/sign-in-model.ts)', () => {
     ).toBe(back.state)
   })
 
-  it('auth-research-web §3.1: one call at a time: a second submit or a resend while one is in flight does nothing, and the busy text names it', () => {
+  it('one call at a time: a second submit or a resend while one is in flight does nothing, and the busy text names it', () => {
     const inFlight = verifying()
     expect(busyText(inFlight)).toBe(SIGN_IN.busy.checking)
     expect(submitHeld(inFlight)).toBe(SIGN_IN.busy.checking)
@@ -510,7 +509,7 @@ describe('T20 T21: the sign-in model (sign-in/sign-in-model.ts)', () => {
     expect(busyText(atCode())).toBeUndefined()
   })
 
-  it('AUTH-DESIGN §10.5: every ErrorCode the server sends has a behaviour on every step that calls, never a throw and never silence', () => {
+  it('T21 item 13: every ErrorCode the server sends has a behaviour on every step that calls, never a throw and never silence', () => {
     const inFlight = [
       requested().state,
       verifying(),
@@ -526,7 +525,7 @@ describe('T20 T21: the sign-in model (sign-in/sign-in-model.ts)', () => {
     }
   })
 
-  it('auth-research-web §7.1 rule 3: every outcome carries at most one cue, a focus move or a message, so nothing is spoken twice', () => {
+  it('every outcome carries at most one cue, a focus move or a message, so nothing is spoken twice', () => {
     // The cue type is one or the other; check no outcome in a long run builds both.
     const outcomes = [
       requested(),
@@ -545,7 +544,7 @@ describe('T20 T21: the sign-in model (sign-in/sign-in-model.ts)', () => {
     }
   })
 
-  it('R-44: the state holds the step and what was typed only; Show PIN switches both PIN fields', () => {
+  it('T21 item 5: the state holds the step and what was typed only; Show PIN switches both PIN fields', () => {
     const state = atSetPin()
     const shown = transition(state, { kind: 'show_pin', shown: true })
     expect(shown.state.showPin).toBe(true)

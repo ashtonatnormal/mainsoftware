@@ -1,4 +1,4 @@
-// The token contrast gate (T21, R-10 to R-13, X8, QA-01): every ink and ground the kit pairs
+// The token contrast gate (T21, X8, QA-01, SHL-23): every ink and ground the kit pairs
 // (contrast-pairs.ts) keeps its WCAG minimum in both themes, read from tokens.css as written, and
 // TK-11 reads Button.tsx's own variant classes for what a button paints under the pointer and
 // pressed, which no token pair can see. The stylesheet and index.html come in with ?raw, which
@@ -84,7 +84,7 @@ describe('T21: the tokens and their contrast', () => {
     expect(() => parseHex('#12')).toThrow(/#rrggbb/)
   })
 
-  it('TK-00 sanity: the light block holds exactly the 37 custom properties of DESIGN-SHELL §3.1 (36 colours and --shadow) and the dark block 24 (the 13 avatar tokens don’t change), so an empty ?raw fails instead of passing', () => {
+  it('TK-00 sanity: the light block holds exactly its 37 custom properties (36 colours and --shadow) and the dark block 24 (the 13 avatar tokens don’t change), so an empty ?raw fails instead of passing', () => {
     expect(tokensCss.length).toBeGreaterThan(0)
     expect(customProperties(sheet.light)).toHaveLength(37)
     expect(customProperties(sheet.dark)).toHaveLength(24)
@@ -103,7 +103,7 @@ describe('T21: the tokens and their contrast', () => {
     }
   })
 
-  it('TK-01 X8 SHL-35 SHL-36 RMS-36 R-11: every text pair reaches 4.5:1 in light and dark', () => {
+  it('TK-01 X8 SHL-35 SHL-36 RMS-36: every text pair reaches 4.5:1 in light and dark', () => {
     expect(TEXT_PAIRS.length).toBeGreaterThan(30)
     expect(TEXT_PAIRS.every(([, , min]) => min === 4.5)).toBe(true)
     expect(belowMinimum(TEXT_PAIRS)).toEqual([])
@@ -115,7 +115,7 @@ describe('T21: the tokens and their contrast', () => {
     expect(belowMinimum(UI_PAIRS)).toEqual([])
   })
 
-  it('TK-03 QA-01 R-12: avatar-fg reaches 4.5:1 on every avatar token, in both themes', () => {
+  it('TK-03 QA-01: avatar-fg reaches 4.5:1 on every avatar token, in both themes', () => {
     const avatars = colourTokens.filter(name => /^--avatar-\d+$/.test(name))
     expect(avatars).toEqual(Array.from({ length: 12 }, (_, n) => `--avatar-${n}`))
     const failures = avatars.flatMap(name =>
@@ -132,7 +132,7 @@ describe('T21: the tokens and their contrast', () => {
     expect(new Set(avatars.map(name => sheet.light.get(name))).size).toBe(12)
   })
 
-  it('TK-04 R-13 SHL-23 OD-08: dark values are declared once, in one prefers-color-scheme block, every token that changes has both, and no data-theme selector exists', () => {
+  it('TK-04 SHL-23 OD-08: dark values are declared once, in one prefers-color-scheme block, every token that changes has both, and no data-theme selector exists', () => {
     const text = withoutComments(tokensCss)
     const blocks = blocksOf(tokensCss)
     expect(blocks.map(block => block.prelude)).toEqual([':root', DARK_QUERY])

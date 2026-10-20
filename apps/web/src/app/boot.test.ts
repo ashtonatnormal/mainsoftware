@@ -153,14 +153,14 @@ describe('T21 D-01: the boot (app/boot.tsx)', () => {
     expect(fetch.calls).toBe(1)
   })
 
-  it("BT-03 D-01 R-44 AUTH-DESIGN §10.1: signed out, it renders the app with no runtime, keeping the deep link as the return path and the leave reason for the sign-in screen; another tab's sign-out or ended session doesn't reload, its sign-in does, once", async () => {
+  it("BT-03 D-01 T21 items 5 and 13: signed out, it renders the app with no runtime, keeping the deep link as the return path and the leave reason for the sign-in screen; another tab's sign-out or ended session doesn't reload, its sign-in does, once", async () => {
     const fetch = stubSession(signedOut)
     const { env, root, render, history, rendered, storage, left, otherTab } = fakeDocument()
     await app.boot({ env, root, render, history })
     expect(storage.map.get('hearth:left')).toBe('session_ended')
     expect(fetch.calls).toBe(1)
     // The app rendered with no runtime; the shell's guard sent the deep link to sign-in and kept
-    // Drive as the path to open afterwards (R-44).
+    // Drive as the path to open afterwards (T21 item 5).
     expect(rendered.map(element => element.type)).toEqual([App])
     const props = rendered[0]?.props as AppProps
     expect(props.runtime).toBeNull()
@@ -215,7 +215,7 @@ describe('T21 D-01: the boot (app/boot.tsx)', () => {
     expect(left).toEqual(['reload'])
   })
 
-  it("BT-04 OD-22 OD-42: an api that can't answer renders the boot error screen alone and starts nothing; a boot that throws leaves the plain text in #root", async () => {
+  it("BT-04 T21 items 5 and 10: an api that can't answer renders the boot error screen alone and starts nothing; a boot that throws leaves the plain text in #root", async () => {
     stubSession(() => json(503, { error: 'unavailable', message: 'Later.' }))
     const down = fakeDocument()
     await app.boot({ env: down.env, root: down.root, render: down.render, history: down.history })

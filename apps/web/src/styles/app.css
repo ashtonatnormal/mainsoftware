@@ -1,8 +1,8 @@
 /* The app's one stylesheet (T21): Tailwind v4, the tokens, and the base rules every screen gets.
-   main.ts imports it with the two self-hosted font faces (R-17), so Vite links all three in
+   main.ts imports it with the two self-hosted font faces (SHL-69), so Vite links all three in
    index.html's head before any script runs.
 
-   Colours compile only from the tokens (R-18, OD-28): the @theme reset below removes Tailwind's
+   Colours compile only from the tokens (X9, T21 item 6): the @theme reset below removes Tailwind's
    default palette, so bg-red-500 or text-white compile to nothing, and @theme inline maps each
    token in tokens.css to its utility name (bg-surface, text-muted, border-line-strong …). inline
    makes each utility read the token itself, so the dark block in tokens.css re-themes it.
@@ -12,14 +12,14 @@
 @import "./tokens.css";
 
 /* The desktop rail replaces the tab bar from 48rem wide and 30rem tall, so a phone on its side
-   keeps the tab bar (D-08, OD-30). */
+   keeps the tab bar (D-08, T21 item 5). */
 @custom-variant rail (@media (min-width: 48rem) and (min-height: 30rem));
 
 @theme {
   --color-*: initial;
   --font-*: initial;
-  /* Body text is 15 px and the small size 13 px (OD-45), in rem so they follow the person's text
-     size. Inputs are 16 px (the base layer below). */
+  /* Body text is 15 px and the small size 13 px (T21 item 6), in rem so they follow the person's
+     text size. Inputs are 16 px (the base layer below). */
   --text-small: 0.8125rem;
   --text-small--line-height: 1.35;
   --text-body: 0.9375rem;
@@ -73,7 +73,7 @@
 }
 
 /* The safe areas (a notch, the home indicator) pad only the bars that sit against them, never the
-   root, so nothing adds them twice (R-16). */
+   root, so nothing adds them twice (SHL-34). */
 @utility pt-safe {
   padding-top: env(safe-area-inset-top, 0px);
 }
@@ -140,7 +140,7 @@
 }
 
 /* A Dialog locks the screen's scroll with this class, never with an injected <style>, which the
-   CSP refuses (C-22). */
+   CSP refuses (T21 item 7). */
 html.scroll-locked #screen {
   overflow: hidden;
 }
@@ -168,7 +168,7 @@ html.scroll-locked #screen {
   animation: hearth-in 0.25s ease-out both;
 }
 
-/* Reduced motion ends every animation and transition at once, whatever adds it later (R-15,
+/* Reduced motion ends every animation and transition at once, whatever adds it later (SHL-46,
    SHL-46). */
 @media (prefers-reduced-motion: reduce) {
   *,

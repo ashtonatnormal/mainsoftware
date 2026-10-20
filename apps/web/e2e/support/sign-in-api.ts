@@ -1,11 +1,11 @@
-// Signing a persona in through the api, for the storage states (T21, T20; DESIGN-SHELL §9.4.2,
-// INTEGRATION.md item 2). The same calls the sign-in screen makes, from the app's own origin
-// through the preview, so the session cookie is the one a browser would get: request a code, read
-// it from the api's log (codes.ts), check it, and keep the cookies. Only people who sign in on the
-// code alone may be signed in this way: a holder of a PIN role (D46, AQ-02) gets code_verified, and
-// the suite meets the PIN steps in sign-in.spec.ts instead.
+// Signing a persona in through the api, for the storage states (T21 items 11 and 13, T20). The same
+// calls the sign-in screen makes, from the app's own origin through the preview, so the session
+// cookie is the one a browser would get: request a code, read it from the api's log (codes.ts),
+// check it, and keep the cookies. Only people who sign in on the code alone may be signed in this
+// way: a holder of a PIN role (D46, AQ-02) gets code_verified, and the suite meets the PIN steps in
+// sign-in.spec.ts instead.
 //
-// The request shapes live here and in apps/web/src/sign-in/api.ts only (K-43).
+// The request shapes live here and in apps/web/src/sign-in/api.ts only (T21 item 13).
 import { request as playwrightRequest } from '@playwright/test'
 import { logOffset, readCode } from './codes.ts'
 import { E2E_ORIGIN } from './env.ts'

@@ -1,4 +1,4 @@
-// The rail (T21; OD-02, OD-30, D-08): from 48rem wide and 30rem tall it replaces the tab bar, down
+// The rail (OD-02, T21 item 5, D-08): from 48rem wide and 30rem tall it replaces the tab bar, down
 // the left edge, with the Hearth mark, the "Main" navigation (Today, Chats, Rooms, Tasks, Calendar,
 // Drive) and the avatar menu in its foot. Below that size it is display: none.
 //

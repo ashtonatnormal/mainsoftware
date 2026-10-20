@@ -1,4 +1,4 @@
-// The sign-in calls (T20, T21; AUTH-DESIGN §10.1, INTEGRATION.md item 2): each path and body, the
+// The sign-in calls (T20; T21 item 13): each path and body, the
 // shared schemas, one repeat of a try_again (and of nothing else), and the 20 s limit.
 import { describe, expect, it } from 'vitest'
 import { ApiFailure } from '@/api/http.ts'
@@ -59,7 +59,7 @@ const TRY_AGAIN = { error: 'try_again', message: 'Something else happened at the
 const SIGNED_IN = { status: 'signed_in', device: { id: 'd1', label: 'Safari on iPhone' } }
 
 describe('T20 T21: the sign-in calls (sign-in/api.ts)', () => {
-  it('AUTH-DESIGN §3.3 INTEGRATION item 2: each call posts its body to its path and reads its answer with the shared schema', async () => {
+  it('T21 item 13: each call posts its body to its path and reads its answer with the shared schema', async () => {
     const e = env([
       json(200, { status: 'code_sent', expiresInSeconds: 300, codeLength: 6 }),
       json(200, {
@@ -89,7 +89,7 @@ describe('T20 T21: the sign-in calls (sign-in/api.ts)', () => {
     expect(await refusal(verifyCode('123456', odd))).toMatchObject({ code: 'invalid_response' })
   })
 
-  it('AUTH-DESIGN §10.1 auth-research-web §3.1: every call is limited to 20 s, and a call cut off reads as network', async () => {
+  it('T21 item 13: every call is limited to 20 s, and a call cut off reads as network', async () => {
     const e = env([json(200, SIGNED_IN)])
     await enterPin('482913', e)
     expect(e.recorded.limits).toEqual([AUTH_TIMEOUT_MS])
@@ -112,7 +112,7 @@ describe('T20 T21: the sign-in calls (sign-in/api.ts)', () => {
     expect(await refusal(pending)).toMatchObject({ status: 0, code: 'network' })
   })
 
-  it('INTEGRATION item 2 AUTH-DESIGN §10.1: a 409 try_again is sent once more after 0.5 to 1.5 s with the same body, and a second one is shown', async () => {
+  it('T21 item 13: a 409 try_again is sent once more after 0.5 to 1.5 s with the same body, and a second one is shown', async () => {
     const once = env([json(409, TRY_AGAIN), json(200, SIGNED_IN)], 0.25)
     await expect(verifyCode('123456', once)).resolves.toEqual(SIGNED_IN)
     expect(once.recorded.calls.map(call => call.body)).toEqual([{ code: '123456' }, { code: '123456' }])
@@ -132,7 +132,7 @@ describe('T20 T21: the sign-in calls (sign-in/api.ts)', () => {
     expect(twice.recorded.calls).toHaveLength(2)
   })
 
-  it('INTEGRATION item 2: nothing else is repeated: a 503, a 401, a 429, another 409 or a network failure is shown at once', async () => {
+  it('T21 item 13: nothing else is repeated: a 503, a 401, a 429, another 409 or a network failure is shown at once', async () => {
     const refusals: (Response | Error)[] = [
       json(503, { error: 'unavailable', message: "That isn't available right now. Try again in a few minutes." }),
       json(401, { error: 'code_wrong', message: "That code isn't right.", triesLeft: 4 }),

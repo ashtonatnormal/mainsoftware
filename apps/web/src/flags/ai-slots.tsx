@@ -1,4 +1,4 @@
-// The seams where AI features will appear (T21; OD-23, R-35, D41, decision 8). Each slot names the
+// The seams where AI features will appear (T21 item 14, decision 8, D41). Each slot names the
 // ai.* flag that will gate it and the stage that builds it, so an A-stage fills a slot and turns its
 // flag on instead of changing the screens. Until then every slot renders nothing, twice over:
 // - no slot has content (AI_SLOT_CONTENT is empty; C0–C6 make no model calls and show no AI);

@@ -1,20 +1,22 @@
 // GET /api/flags (TECH-SPEC T17 item 11, T21 item 10): the signed-in person's own value of each
 // flag the registry marks client: true, as a plain boolean, so the web shell can show or hide what
-// a flag gates (FlagSlot). It answers no cohort, no revision and no ETag (OD-21): whether a flag is
-// on for someone else is never the browser's business. The shell asks at boot, every 60 s while a
-// tab is visible, and whenever the gateway nudges it about a client flag (T17 item 11, T19 item 10).
+// a flag gates (FlagSlot). It answers no cohort, no revision and no ETag (T21 item 10): whether a
+// flag is on for someone else is never the browser's business. The shell asks at boot, every 60 s
+// while a tab is visible, and whenever the gateway nudges it about a client flag (T17 item 11,
+// T19 item 10).
 //
 // - Who is asking: the acting session re-read and can() asked about session.read_own, in a
 //   read-only transaction that leaves the session's last use alone (OD-14): the shell polls this
-//   by itself, so a touch would keep an idle session alive while a tab stayed open (C-23). The
+//   by itself, so a touch would keep an idle session alive while a tab stayed open (OD-14). The
 //   flags' subject is built from the World can() decided on, as the job runner builds one: whether
 //   the person is still at the org, and the org-wide roles flags may name in a cohort.
 // - With no client flag in the registry (production today, OD-13) the answer is { flags: {} } at
 //   once: no wait, no flag read.
 // - Otherwise the process's own copy decides (flags/cache.ts verdict()). The answer waits, after
 //   the transaction so no transaction waits on the cache, for the org's first read for at most
-//   FLAG_READ_WAIT_MS (track() never rejects, R-52). While the org's flags are unconfirmed the answer
-//   is 503 unavailable, never a guess, and the client keeps the values it last had (R-53, P6).
+//   FLAG_READ_WAIT_MS (track() never rejects, T17 item 11). While the org's flags are unconfirmed
+//   the answer is 503 unavailable, never a guess, and the client keeps the values it last had
+//   (T17 item 11, P6).
 import type { World } from '@hearth/access'
 import { COHORT_ROLES, type FlagSpec, type FlagsJSON } from '@hearth/shared'
 import type { Api } from '#src/api.ts'

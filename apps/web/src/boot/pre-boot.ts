@@ -1,4 +1,4 @@
-// What runs before any library code exists (T21, D-02; K-08, K-09, K-65). main.ts calls preBoot()
+// What runs before any library code exists (D-02, T21 item 2). main.ts calls preBoot()
 // first, and only then loads the app by one dynamic import, so nothing in the app's graph (React,
 // the router, Query, zod) has evaluated yet when this runs. It imports nothing (WS-10), and every
 // storage access is guarded: storage that throws (blocked by the browser's settings) reads as absent.
@@ -15,7 +15,7 @@
 // 3. vite:preloadError (a stylesheet or chunk of a deploy that's gone) asks onPreloadError, which
 //    reloads at most once a minute (session/document.ts, reloadForUpdate). When it reloaded, the
 //    error is stopped; when it's blocked, the error goes on to the screen that loaded the chunk.
-// 4. zod is told, before it loads, to build no code from strings (K-01, K-05). zod 4 compiles an
+// 4. zod is told, before it loads, to build no code from strings (T21 item 2). zod 4 compiles an
 //    object schema's parser with `new Function` when it can, and finds out whether it can by trying
 //    `new Function('')` when the first object schema is built. The app's CSP has no 'unsafe-eval',
 //    so the browser blocks that probe: zod catches the error, but the browser still reports a

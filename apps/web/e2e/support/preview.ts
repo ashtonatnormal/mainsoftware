@@ -1,4 +1,4 @@
-// The e2e suite's web server (T21, D-04, D-06; DESIGN-SHELL §8.2, §9.4.1): the built app over HTTPS
+// The e2e suite's web server (D-04, D-06; T21 items 7 and 11): the built app over HTTPS
 // on https://localhost:5180, with the production document headers and CSP from the one builder,
 // documentHeaders(E2E_ORIGIN), the same headers C0.12's CloudFront policy will serve. /api goes to
 // the suite's api role and /ws to its realtime role, on the same origin as the page, as CloudFront
@@ -9,7 +9,8 @@
 // (type stripping), so its relative imports name the .ts file, and it imports @hearth/shared, whose
 // real path is outside node_modules, as the server does. In order:
 // 1. it refuses to start when dist/ is missing or older than any source it was built from, so a
-//    local run never passes on an old build (K-68): build first with npm run build -w @hearth/web;
+//    local run never passes on an old build (T21 item 11): build first with
+//    npm run build -w @hearth/web;
 // 2. it makes a throwaway self-signed certificate for localhost with openssl, kept a week under
 //    playwright/tls/ (git-ignored), when there is none or it is older than six days;
 // 3. it starts Vite's preview server, and closes it on SIGTERM or SIGINT.

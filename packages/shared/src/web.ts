@@ -19,7 +19,7 @@ export const DEFAULT_TIME_ZONE = 'Asia/Singapore'
 const NAME_MAX = 200
 const codePoints = (text: string) => [...text].length
 
-// GET /api/session (T21 item 10, OD-22): what the shell needs and nothing more. No phone number,
+// GET /api/session (T21 item 10): what the shell needs and nothing more. No phone number,
 // no roles: C0.16 adds capability booleans decided by can() when a screen needs one.
 export const SessionResponse = z.strictObject({
   personId: LowerUuid,
@@ -41,7 +41,7 @@ export const SessionResponseForClient = z.object({
 })
 export type SessionForClient = z.infer<typeof SessionResponseForClient>
 
-// GET /api/flags (T17 item 11, OD-21): the person's own value of each flag the registry marks
+// GET /api/flags (T17 item 11, T21 item 10): the person's own value of each flag the registry marks
 // client: true, as a plain boolean. No cohort, no revision and nothing else: whether a flag is on
 // for someone else is never the browser's business.
 export const FlagsResponse = z.strictObject({

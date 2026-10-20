@@ -1,6 +1,6 @@
-// Media queries as React state (T21; SHL-16, R-15). Layout follows CSS (the rail variant, sm:), so
-// these are for behaviour only: whether to animate, or which presentation a component picks. They
-// read matchMedia through useSyncExternalStore, so a change re-renders at once, and the server
+// Media queries as React state (T21; SHL-16, SHL-46). Layout follows CSS (the rail variant, sm:),
+// so these are for behaviour only: whether to animate, or which presentation a component picks.
+// They read matchMedia through useSyncExternalStore, so a change re-renders at once, and the server
 // snapshot is false, so react-dom/server markup tests render with no window.
 import { useCallback, useSyncExternalStore } from 'react'
 

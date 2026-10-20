@@ -176,7 +176,7 @@ export const CDN_URL =
 
 // The hosts of model and speech-to-text APIs. Nothing calls one before A0, and from A0 only the
 // server does (packages/model, transcribe()): the browser never reaches a model host, so none may
-// appear in the web app's Content Security Policy (scripts/guards/csp.test.ts, R-61) or, once
+// appear in the web app's Content Security Policy (scripts/guards/csp.test.ts, T21 item 7) or, once
 // scripts/check-web-dist.ts scans it, in its built bundle. A denylist can't name every provider:
 // the policy's allow-list, which derives every source from the app's own origin, is the real check.
 // `*` stands for one or more DNS labels, so a regional endpoint matches too.

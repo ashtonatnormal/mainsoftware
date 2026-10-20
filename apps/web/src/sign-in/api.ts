@@ -1,4 +1,4 @@
-// The sign-in screens' calls (T20, T21; AUTH-DESIGN §3.3, §10.1; INTEGRATION.md item 2): the one
+// The sign-in screens' calls (T20; T21 item 13): the one
 // file in apps/web that knows the sign-in contract. Each call posts through api/http.ts (relative
 // /api paths, same-origin credentials, no-store) and reads its answer with the shared schema
 // (packages/shared auth.ts), so a reply the server changes fails here, not on a screen:

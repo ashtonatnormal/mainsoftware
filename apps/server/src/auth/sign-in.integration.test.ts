@@ -285,7 +285,7 @@ async function seedWindow(key: string, count: number, at: number): Promise<void>
   await s.valkey.pexpire(key, 86_400_000)
 }
 
-// The reauth_wrong_method warn lines logged for this person (D46, I2, AUTH-DESIGN §8.2), as
+// The reauth_wrong_method warn lines logged for this person (D46, I2, T20 item 6), as
 // [level, route], after checking each holds the person's id and the route and no other personal
 // data: no method, number or code.
 function wrongMethodLines(personId: string): [unknown, unknown][] {
@@ -1478,7 +1478,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       { method: 'pin' },
     ])
     // Each 409 reauth_method left a warn line naming the person and the route, and nothing else of
-    // theirs; none reached the audit log (AUTH-DESIGN §8.2, Q5).
+    // theirs; none reached the audit log (T20 item 6, Q5).
     expect(wrongMethodLines(a.id)).toEqual([
       [40, '/api/auth/reauth/code/request'],
       [40, '/api/auth/reauth/code/verify'],

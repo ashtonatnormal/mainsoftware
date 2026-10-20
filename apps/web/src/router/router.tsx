@@ -1,4 +1,4 @@
-// The app's routes (T21; OD-24, OD-02, OD-03, OD-42, R-37, R-40, R-44, X12, D-02). Code-based, so
+// The app's routes (T21 items 1 and 5, OD-02, OD-03, X12, D-02). Code-based, so
 // the tree is plain TypeScript that tests load in Node, with no generated file.
 //
 // __root__            RouteFocus, then the matched route; PlainNotFound and ErrorScreen as defaults
@@ -18,10 +18,10 @@
 //
 // Rules the router tests hold (router/router.test.ts):
 // - APP_PATHS (router/paths.ts, import-free) lists exactly the paths registered under _app;
-// - no route declares a search param, so no URL carries state (R-44), and the scroll cache is keyed
-//   by pathname alone (C-13, D-02);
-// - reserved for later steps and deliberately not routes yet (OD-46): /admin/* (C0.16), /settings/*
-//   (the settings registry, C0.9 onwards) and /notice (C0.9).
+// - no route declares a search param, so no URL carries state (T21 item 5), and the scroll cache is
+//   keyed by pathname alone (D-02);
+// - reserved for later steps and deliberately not routes yet (T21 item 5): /admin/* (C0.16),
+//   /settings/* (the settings registry, C0.9 onwards) and /notice (C0.9).
 //
 // No route has a loader in C0.8. From C1 a loader fills Query's cache through the runtime in its
 // context (context.runtime.queryClient.ensureQueryData(...)) and returns nothing: Query is the cache.
@@ -151,7 +151,7 @@ export const routeTree = rootRoute.addChildren([
 export const ROUTER_OPTIONS = {
   // Scroll positions are restored within a document, by the router, in #screen (the one scroller).
   scrollRestoration: true,
-  // Keyed by the pathname alone: never a query string, a hash or a whole href (C-13, D-02).
+  // Keyed by the pathname alone: never a query string, a hash or a whole href (D-02).
   getScrollRestorationKey: (location: ParsedLocation) => location.pathname,
   scrollToTopSelectors: ['#screen'],
   // A link's route loads on hover or focus; Query, not the router, caches data.

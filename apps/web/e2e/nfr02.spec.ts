@@ -1,4 +1,4 @@
-// The phone suite (T21; NFR-02, PRD-66, WCAG 2.2 AA; DESIGN-SHELL §9.4.5): every screen and both
+// The phone suite (NFR-02, PRD-66, WCAG 2.2 AA; T21 item 11): every screen and both
 // sign-in steps on the four phone sizes, by touch, at 44 px targets and 16 px inputs, with the
 // navigation in the thumb's reach, nothing sideways, nothing hidden under a toast, and the reflow,
 // text-spacing, text-size, reduced-motion and forced-colours checks. Each NFR-02 core flow (read,
@@ -82,7 +82,7 @@ test('NF-01 NF-03 NF-06 NFR-02 PRD-66: both sign-in steps at each phone size: no
   }
 })
 
-test('NF-02 NFR-02 X7 K-58: every visible interactive element is at least 44 × 44 on every screen, menu open included', async ({
+test('NF-02 NFR-02 X7 T21 item 11: every visible interactive element is at least 44 × 44 on every screen, menu open included', async ({
   open,
 }) => {
   const page = await open({ ...SIZES.w320, signedIn: true, phone: true })
@@ -117,7 +117,7 @@ test('NF-04 NFR-02 PRD-66: the tab bar sits in the bottom quarter and every tab 
   }
 })
 
-test('NF-05 NFR-02 R-33: the avatar menu opens and offers Sign out by taps alone', async ({ open }) => {
+test('NF-05 NFR-02 OD-05: the avatar menu opens and offers Sign out by taps alone', async ({ open }) => {
   const page = await open({ ...SIZES.w320, signedIn: true, phone: true })
   for (const size of PHONES) {
     await page.setViewportSize(size)
@@ -176,9 +176,7 @@ test('NF-09 WCAG 1.4.4: 200% text loses nothing at 320 and 390; tab labels wrap 
   }
 })
 
-test('NF-10 SHL-46 R-15: with reduced motion, no animation runs and no transition is over 0.01 ms', async ({
-  open,
-}) => {
+test('NF-10 SHL-46: with reduced motion, no animation runs and no transition is over 0.01 ms', async ({ open }) => {
   const page = await open({ ...SIZES.w320, signedIn: true, reducedMotion: 'reduce' })
   await eachScreen(page, SIZES.w320, async label => expect(await reducedMotionHolds(page), label).toEqual([]))
   await page.getByRole('button', { name: 'Account, Marcus' }).click()

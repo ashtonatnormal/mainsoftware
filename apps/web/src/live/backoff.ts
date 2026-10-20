@@ -1,5 +1,5 @@
 // The live connection's waits (T19 item 10, items 2 and 7 of packages/shared/src/gateway.ts's
-// client side; R-46, R-49, K-41). Each is a whole number of milliseconds drawn with the random
+// client side; T21 item 4). Each is a whole number of milliseconds drawn with the random
 // source the caller passes, so a test seeds it and the browser passes Math.random. Every wait is
 // random over its range, so the tabs a server restart cut off don't come back together.
 //

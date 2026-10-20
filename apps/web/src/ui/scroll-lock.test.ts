@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createScrollLock, SCROLL_LOCKED } from './scroll-lock.ts'
 
 describe('T21: the scroll lock', () => {
-  it('SL-01 C-22 SHL-45: nested locks count; the class goes only when the last releases; no <style> is created', () => {
+  it('SL-01 T21 item 7 SHL-45: nested locks count; the class goes only when the last releases; no <style> is created', () => {
     const classes = new Set<string>()
     const calls: string[] = []
     const root = {

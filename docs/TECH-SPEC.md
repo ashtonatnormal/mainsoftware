@@ -783,7 +783,7 @@ The numbers live in `apps/server/src/auth/policy.ts` (`OTP`, `PIN_RULE_SESSION`,
 
 ## T21: the web shell, defaults for the owner to confirm or change
 
-The OD ids in this section are C0.8's owner decisions and the defaults C0.8 took, listed in the C0.8 PR (AQ-02 is sign-in's, T20); the D-01 to D-09 ids are the shell design's own choices, recorded here. They are not T19's OD ids, which are C0.7's, nor the PRD's decisions (D1 to D46).
+The OD ids in this section are C0.8's owner decisions and the defaults C0.8 took, listed in the C0.8 PR (OD-01 and the AQ ids are sign-in's, T20); the D-01 to D-09 ids are the shell design's own choices, recorded here. They are not T19's OD ids, which are C0.7's, nor the PRD's decisions (D1 to D46). The shell design's working ids (its OD-19 onwards and its R-, K- and C- lists) aren't recorded, and nothing cites them: code that needs one cites the item here that holds the choice.
 
 The owner decided the five tabs (OD-02), the hidden Search bar (OD-04) and the hosting (OD-11) on 19 Oct 2026; `CLAUDE.md` decides the stack. The rest are C0.8's choices, each a Default the owner confirms or changes in the C0.8 PR. They are pinned by:
 - the unit tests beside the code in `apps/web/src`: kit and screen markup rendered with `react-dom/server` in Node, and the logic as pure functions (there is no DOM environment);
@@ -815,12 +815,14 @@ The owner decided the five tabs (OD-02), the hidden Search bar (OD-04) and the h
    - `/` lands on Chats (OD-03). `/sign-in` sits outside the shell and sends a signed-in document to Chats. A signed-out visit to an app path keeps it to return to after sign-in, and only a path in `APP_PATHS`. Every other path shows "Page not found" inside the shell.
    - No route takes a search parameter, so no URL carries state.
    - Reserved, and not routes yet: `/admin/*` (C0.16), `/settings/*` and `/notice` (C0.9).
-   - No AI, Ask, assistant or agent entry, ever.
+   - No AI, Ask, assistant or agent entry, ever, and no AI copy on any screen until an A-stage turns one on (OD-06, BUILD-PLAN decision 8; `strings/ai-copy.ts`).
    - The avatar menu is a registry holding Sign out alone (OD-05); each later step adds its own entry.
    - The Search bar, labelled "Search", is built and mounted nowhere until C1.7 (OD-04).
+   - The app-wide states (`screens/`): an unknown path is "Page not found" inside the shell, with a way to Chats; a screen that fails keeps the shell and its h1, says so, and offers Try again (a new document when the screen's code failed to load) and Go to Chats; and a boot that can't learn who is signed in shows "Can't reach Hearth" alone, with Try again. The live connection's line is item 4's.
 6. **Design system.**
    - Tokens on `:root` with one `prefers-color-scheme` block: the system theme only, no toggle (OD-08). Ported from the demo with the dark-mode fixes: ink tokens for text on red, teal and inverse grounds, `--line-strong` for a border that identifies a control (3:1), and twelve avatar fills, each 4.5:1 under its ink (X8, QA-01). `styles/contrast.test.ts` holds every pair the kit uses to its WCAG minimum in both themes.
    - Colours only through the tokens (WS-04), no opacity on text (WS-05), 44 px targets at every width, 16 px inputs, body text 15 px and small text 13 px.
+   - Dates and times are day first on a 12-hour clock ('Sun 11 Oct 2026', '2:30 pm'), in the viewer's zone: their profile's, else the org's (OD-10; `lib/time.ts`).
    - The layout has no fixed bars (D-08): a `100dvh` grid with one scroll container, and the screen's one h1 in flow at the top of `<main>`, never scrolled away, so a bar never hides focus (WCAG 2.4.11).
    - The kit is native-first (D-03): Dialog is `<dialog>` with `showModal()`, Segmented a fieldset of radios, Switch a checkbox with `role="switch"`, Select a native select, and forms are `noValidate` and handled by `onSubmit`. Only Menu and the toast store are hand-rolled.
    - The demo's Card, UnreadBadge, Pill, AvatarStack, SectionTitle and RecordingIndicator wait for their first user (D18), which ports them with their review fixes: Card is a `<button type="button">` when clickable (SHL-47, C1); UnreadBadge reads to screen readers as "{n} unread", its visible number hidden from them and shown as `99+` above 99 (CHT-40, C1.2); RecordingIndicator sits inside a landmark (Principle 6, QA-10, C2.3); Pill, AvatarStack and SectionTitle come with C1.
@@ -844,7 +846,7 @@ The owner decided the five tabs (OD-02), the hidden Search bar (OD-04) and the h
 9. **CSP reports** (`POST /api/csp-report`, `apps/server/src/web/csp-report.ts`; OD-12). A browser's report, `application/csp-report` JSON of at most 8 KiB, becomes at most one warn line of four reduced fields: the directive; what was blocked, as a keyword, an origin or a scheme; the page's path, with id-like segments replaced; and the disposition. Everything else is dropped, and nothing is stored. At most 60 lines a minute per process. It takes no session, asks no `can()`, reaches neither Postgres nor Valkey, and has no exemption from the Origin hook. The lines reach CloudWatch, which C0.9 lists in PDPA-10.
 10. **`GET /api/session` and `GET /api/flags`** (`apps/server/src/web/`; D-05: no new write and no migration).
     - `GET /api/session` answers `{ personId, name, timeZone }`: the profile's display name and zone, else the roster's name and the org's zone. No number and no roles; C0.16 adds capability booleans when a screen needs one.
-    - `GET /api/flags` answers `{ flags }` (T17 item 11).
+    - `GET /api/flags` answers `{ flags }` (T17 item 11). No production flag is `client: true` yet (OD-13), so in production that is `{ flags: {} }`.
     - One access action decides both, `session.read_own`, for any active person and without re-authentication, in a read-only transaction. The flags' subject comes from the `World` that `can()` decided on. Its one refusal, someone who has left (a deactivation that commits after the acting session was re-read), answers 401 `signed_out` like an ended session, never 404.
     - The session GET counts as use of the session (the existing after-response touch, exempt from the outbox). The flags GET doesn't touch it (OD-14), so a polling tab can't keep an idle session alive. Neither answers a revision.
     - **A GET never clears the session cookie:** their 401 carries no `Set-Cookie`, so a boot's 401 can't delete a session another tab has just made. Clearing stays with sign-out and the sign-in steps. The older GETs (your devices, the admin device list) still clear; C0.16 aligns them.

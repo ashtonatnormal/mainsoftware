@@ -1,5 +1,5 @@
 // A modal dialog: a sheet from the bottom on phones, centred from sm: up (T21, D-03; fixes SHL-45,
-// SHL-25, DRV-48, R-29). Renamed from the demo's Sheet, and rebuilt on the native <dialog> with
+// SHL-25, DRV-48). Renamed from the demo's Sheet, and rebuilt on the native <dialog> with
 // showModal(), so the browser gives the top layer, an inert page behind and the Tab trap, and the
 // demo's hand-rolled focus trap is gone.
 // - Escape fires `cancel` on the top dialog only. Unless something inside already handled it (a

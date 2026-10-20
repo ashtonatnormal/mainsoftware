@@ -1,4 +1,4 @@
-// The web app's source guard (T21; BUILD-PLAN C0.8, DESIGN-SHELL §9.3, AUTH-DESIGN §10.5). It reads
+// The web app's source guard (BUILD-PLAN C0.8, T21 items 11 and 13). It reads
 // every file under apps/web/src (runtime code; tests only for tsconfig coverage) with comments
 // stripped, and both of the workspace's tsconfigs. Each case first proves its pattern on planted
 // source, so a rule that matches nothing can't pass by accident, then holds the tree to it.
@@ -92,7 +92,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     expect(COLOURS).toEqual(expect.arrayContaining(['bg', 'fg', 'surface-2', 'avatar-11', 'transparent', 'current']))
   })
 
-  it('WS-01 K-11 PRD-74 CHT-60: no localStorage, indexedDB or caches; sessionStorage only in boot/pre-boot.ts and session/document.ts', () => {
+  it('WS-01 T21 item 2 PRD-74 CHT-60: no localStorage, indexedDB or caches; sessionStorage only in boot/pre-boot.ts and session/document.ts', () => {
     expect(
       matchesOf(STORAGE, planted('window.localStorage.setItem("k", v); indexedDB.open("x"); caches.open("y")')),
     ).toEqual(['localStorage', 'indexedDB', 'caches'])
@@ -106,7 +106,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     ).toEqual([])
   })
 
-  it("WS-02 D-01 SHL-26 K-01: new QueryClient( only in session/query-client.ts; no eval or new Function; no window.__ read, and no __ member written through any alias but pre-boot's __zod_globalConfig", () => {
+  it("WS-02 D-01 SHL-26 T21 item 7: new QueryClient( only in session/query-client.ts; no eval or new Function; no window.__ read, and no __ member written through any alias but pre-boot's __zod_globalConfig", () => {
     expect(matchesOf(NEW_QUERY_CLIENT, planted('const q = new QueryClient({})'))).toHaveLength(1)
     expect(
       matchesOf(
@@ -161,7 +161,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     expect([...new Set(writes)]).toEqual(allowed)
   })
 
-  it('WS-03 K-13: fetch only in api/http.ts and WebSocket only in live/gateway-client.ts and session/runtime.ts, never with an absolute URL', () => {
+  it('WS-03 T21 item 3: fetch only in api/http.ts and WebSocket only in live/gateway-client.ts and session/runtime.ts, never with an absolute URL', () => {
     const net = new Set(['fetch', 'WebSocket'])
     expect(
       globalReads(
@@ -204,7 +204,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     expect(absolute).toEqual([])
   })
 
-  it('WS-04 R-18 CL Conventions: no colour literal (hex, rgb, hsl, oklch) outside styles/tokens.css; no text-white, bg-black or default-palette class; no arbitrary colour value', () => {
+  it('WS-04 X9 CL Conventions: no colour literal (hex, rgb, hsl, oklch) outside styles/tokens.css; no text-white, bg-black or default-palette class; no arbitrary colour value', () => {
     expect(
       matchesOf(
         COLOUR_LITERAL,
@@ -288,7 +288,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     ).toEqual([])
   })
 
-  it('WS-07 K-18 PRD-70: no dangerouslySetInnerHTML, innerHTML, outerHTML, insertAdjacentHTML or document.write', () => {
+  it('WS-07 PRD-70: no dangerouslySetInnerHTML, innerHTML, outerHTML, insertAdjacentHTML or document.write', () => {
     expect(
       matchesOf(
         HTML_FROM_STRINGS,
@@ -326,7 +326,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     expect(web.filter(path => browser.has(path) && node.has(path))).toEqual([])
   })
 
-  it("WS-10 D-02 K-08 K-61: src/main.ts's static import graph, followed through relative imports, holds only .css files and modules with no package import (import type aside), nothing in it uses import.meta.glob, and main.ts loads ./app/boot.tsx by one dynamic import after preBoot()", () => {
+  it("WS-10 D-02 T21 item 2: src/main.ts's static import graph, followed through relative imports, holds only .css files and modules with no package import (import type aside), nothing in it uses import.meta.glob, and main.ts loads ./app/boot.tsx by one dynamic import after preBoot()", () => {
     const graph = (planted: Record<string, string>) => entryGraph(path => planted[path])
     const entry = (before = '', after = '') =>
       `import '@fontsource-variable/figtree/index.css'\nimport './styles/app.css'\nimport { preBoot } from './boot/pre-boot.ts'\nimport { reloadForUpdate } from './session/document.ts'\n${before}preBoot(window, () => reloadForUpdate())\n${after}import('${ENTRY_APP}').then(app => app.boot())\n`
@@ -415,7 +415,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     ])
   })
 
-  it('WS-11 AUTH-DESIGN §10.5 D46 CL Database INTEGRATION item 1: no file under sign-in/ or session/, or named for either, reads the flags client (flags never gate an access control), and no folder elsewhere is named for either', () => {
+  it('WS-11 T21 item 13 D46 CL Database: no file under sign-in/ or session/, or named for either, reads the flags client (flags never gate an access control), and no folder elsewhere is named for either', () => {
     const problems = (path: string, source: string): string[] => {
       const modules = specifiersOf(path, source)
         .filter(specifier => srcTarget(path, specifier)?.startsWith('flags/'))
@@ -481,10 +481,10 @@ describe('T21: the web source guard (apps/web/src)', () => {
     ).toBe(false)
     expect(src.filter(misplacedSignInOrSessionFolder)).toEqual([])
 
-    // The files the rule reads, pinned so it can't read nothing unnoticed (R2-27): the session code
-    // from the boot step (C0.8 S8), the sign-in screen's frame and copy from the router step (S10),
-    // and its steps, model, store and calls from S11. A file that lands fails this line until it is
-    // named, and a renamed folder fails it instead of leaving the rule reading nothing.
+    // The files the rule reads, pinned so it can't read nothing unnoticed: the session code, the
+    // sign-in screen's frame and copy, and its steps, model, store and calls. A file that lands fails
+    // this line until it is named, and a renamed folder fails it instead of leaving the rule reading
+    // nothing.
     const guarded = runtime.filter(path => isSignInOrSessionCode(path) && !path.endsWith('.css'))
     const READS: readonly string[] = [
       'boot/load-session.ts',
@@ -507,7 +507,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     ).toEqual([])
   })
 
-  it('WS-12 AUTH-DESIGN §7.3 item 7 OD-01 D46: apps/web/src has no WebAuthn ceremony: no create read from navigator.credentials (directly, through a name bound to it, or destructured), no publicKey name, key or string, no PublicKeyCredential', () => {
+  it('WS-12 T20 item 8 OD-01 D46: apps/web/src has no WebAuthn ceremony: no create read from navigator.credentials (directly, through a name bound to it, or destructured), no publicKey name, key or string, no PublicKeyCredential', () => {
     const uses = (source: string) => webAuthnUses('fixture.tsx', source)
     expect(
       uses(
@@ -549,7 +549,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     )
   })
 
-  it('WS-13 WCAG 3.3.8 SHL-49 AUTH-DESIGN §10.4: the code and PIN fields, the sign-in steps and whatever renders the fields block no paste or copy: no onPaste, onCopy, onCut or onBeforeInput, and no paste, copy, cut or beforeinput listener', () => {
+  it('WS-13 WCAG 3.3.8 SHL-49 T21 item 13: the code and PIN fields, the sign-in steps and whatever renders the fields block no paste or copy: no onPaste, onCopy, onCut or onBeforeInput, and no paste, copy, cut or beforeinput listener', () => {
     const handlers = (source: string) => clipboardHandlers('fixture.tsx', source)
     // Planted: every way a handler could reach an input.
     expect(

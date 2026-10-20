@@ -5,7 +5,7 @@ import { TokenBucket } from './bucket.ts'
 const ends = [0, 0.25, 0.5, 0.999_999]
 
 describe('T19 item 10: the live connection’s waits (live/backoff.ts)', () => {
-  it('BO-01 R-49 K-41: withinSpread stays within [0, spread]; full jitter within 1–30 s; abuse from 30 s', () => {
+  it('BO-01 T21 item 4: withinSpread stays within [0, spread]; full jitter within 1–30 s; abuse from 30 s', () => {
     for (const r of ends) {
       const random = () => r
       const spread = withinSpread(5_000, random)
@@ -36,7 +36,7 @@ describe('T19 item 10: the live connection’s waits (live/backoff.ts)', () => {
     expect([0, 1, 2, 3].map(n => retryAckDelay(n, () => 0.999_999))).toEqual([4_999, 9_999, 19_999, 30_000])
   })
 
-  it('BO-03 K-40: the bucket starts full, refills at its rate, never above its burst, and says how long until a token', () => {
+  it('BO-03 T21 item 4: the bucket starts full, refills at its rate, never above its burst, and says how long until a token', () => {
     const bucket = new TokenBucket(18, 4, 0)
     let taken = 0
     while (bucket.take(0)) taken++

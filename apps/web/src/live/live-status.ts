@@ -1,6 +1,6 @@
-// The live connection's state as the screens see it (T21; OD-42, X11): the gateway client's status
-// (live/gateway-client.ts) and whether a reload for a new deploy was held back (K-42). The session
-// runtime owns the one store a document has and feeds it; ConnectionBanner reads it through
+// The live connection's state as the screens see it (T21 item 4, X11): the gateway client's status
+// (live/gateway-client.ts) and whether a reload for a new deploy was held back (T21 item 4). The
+// session runtime owns the one store a document has and feeds it; ConnectionBanner reads it through
 // useLiveStatus. It holds no one's data, only a status.
 import { useSyncExternalStore } from 'react'
 import { LIVE } from '@/strings/live.ts'

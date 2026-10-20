@@ -1,4 +1,4 @@
-// The live connection to the realtime gateway (T21; T19 item 10, R-46–R-49, K-40, K-41). It keeps
+// The live connection to the realtime gateway (T19 item 10, T21 item 4). It keeps
 // the client's side of the protocol in packages/shared/src/gateway.ts, items 1–7 of its header,
 // and knows nothing of React, Query or the browser: the socket class, the clock and the random
 // source are passed in, so the tests drive every timer, and the session runtime
@@ -110,7 +110,7 @@ export interface GatewayDeps {
 }
 
 export const CLIENT_POLICY = {
-  // Under GATEWAY_LIMITS' 20 and 5, so the server's bucket never empties (K-40).
+  // Under GATEWAY_LIMITS' 20 and 5, so the server's bucket never empties (T21 item 4).
   bucketBurst: 18,
   bucketPerSecond: 4,
   debounceMs: 250,
@@ -593,7 +593,8 @@ export class GatewayClient {
     this.#deps.onOutdated()
   }
 
-  // 4403 and 4426: no reconnect until resume(); the holds and every cached topic stay (R-43).
+  // 4403 and 4426: no reconnect until resume(); the holds and every cached topic stay
+  // (T19 item 10).
   #pause(): void {
     if (this.#socket !== undefined) this.#detach(this.#socket)
     this.#paused = true

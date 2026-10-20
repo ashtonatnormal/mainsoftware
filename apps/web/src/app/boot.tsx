@@ -55,7 +55,7 @@ function cantReach(root: BootDeps['root']): void {
 // A signed-out document's answer to another tab's identity message (D-01). A sign-in there changes
 // whom the cookie names, so this document asks GET /api/session again and reloads when it names a
 // person. A sign-out there, or its session ending, changes nothing here, so a sign-in step in
-// progress keeps its place (AUTH-DESIGN §10.1) and its code isn't spent. A message that arrives
+// progress keeps its place (T21 item 13) and its code isn't spent. A message that arrives
 // while a check is in flight makes one more check after it, so a sign-in that lands meanwhile
 // isn't missed.
 function followSignIn(env: RuntimeEnv): void {

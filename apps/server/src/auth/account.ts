@@ -84,7 +84,7 @@ async function acting(trx: InOrg, session: SessionIds) {
 
 // The acting session, and 409 reauth_method {method} unless it re-authenticates by `own` (D46, I2).
 // Thrown before anything is checked, counted or sent, so nothing is written; the error handler logs
-// it as reauth_wrong_method at warn (api.ts, AUTH-DESIGN §8.2).
+// it as reauth_wrong_method at warn (api.ts, T20 item 6).
 async function actingBy(trx: InOrg, session: SessionIds, own: ReauthMethod): Promise<void> {
   const method = await reauthMethodNow(trx, session, await acting(trx, session))
   if (method !== own) throw reauthRefusal('reauth_method', method, session.userId)

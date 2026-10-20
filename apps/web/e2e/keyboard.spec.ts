@@ -1,5 +1,5 @@
 // The shell by keyboard alone (T21; SHL-42, X6, X10, X12, QA-05, WCAG 2.1.1, 2.4.1, 2.4.3, 2.4.7;
-// DESIGN-SHELL §9.4.5). Signed in as the project's persona (Marcus). No case here presses Sign out:
+// T21 item 11). Signed in as the project's persona (Marcus). No case here presses Sign out:
 // the session is shared with the other specs.
 import type { Page } from '@playwright/test'
 import { expect, test } from './support/fixtures.ts'

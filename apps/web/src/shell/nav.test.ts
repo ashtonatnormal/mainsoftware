@@ -9,7 +9,7 @@ const toasts = vi.hoisted(() => [] as unknown[])
 vi.mock('@/ui/toast.ts', () => ({ toast: (input: unknown) => toasts.push(input) }))
 
 describe('T21 OD-02: the navigation (shell/nav.ts)', () => {
-  it('NV-01 R-32 OD-02 PRD §6.1: tabs Today, Chats, Rooms, Tasks, More in order; the rail Today, Chats, Rooms, Tasks, Calendar, Drive; More lists Calendar and Drive', () => {
+  it('NV-01 OD-02 PRD §6.1: tabs Today, Chats, Rooms, Tasks, More in order; the rail Today, Chats, Rooms, Tasks, Calendar, Drive; More lists Calendar and Drive', () => {
     expect(TABS.map(entry => entry.label)).toEqual(['Today', 'Chats', 'Rooms', 'Tasks', 'More'])
     expect(RAIL.map(entry => entry.label)).toEqual(['Today', 'Chats', 'Rooms', 'Tasks', 'Calendar', 'Drive'])
     expect(MORE_ENTRIES.map(entry => entry.label)).toEqual(['Calendar', 'Drive'])
@@ -26,7 +26,7 @@ describe('T21 OD-02: the navigation (shell/nav.ts)', () => {
     }
   })
 
-  it('NV-02 R-36 PRD:128 Principle 3: no AI, Ask, assistant or agent entry or path', () => {
+  it('NV-02 T21 item 5 PRD:128 Principle 3: no AI, Ask, assistant or agent entry or path', () => {
     for (const entry of Object.values(NAV)) {
       expect(aiCopyIn(entry.label), entry.id).toBeUndefined()
       expect(aiCopyIn(entry.to.replaceAll('/', ' ')), entry.id).toBeUndefined()
@@ -38,7 +38,7 @@ describe('T21 OD-02: the navigation (shell/nav.ts)', () => {
     expect(['/ask', '/agents', '/ai/x'].every(named)).toBe(true)
   })
 
-  it('NV-03 OD-30: on phones Calendar and Drive mark More active; on the rail they mark themselves and More marks nothing; an unknown path marks nothing', () => {
+  it('NV-03 T21 item 5: on phones Calendar and Drive mark More active; on the rail they mark themselves and More marks nothing; an unknown path marks nothing', () => {
     expect(activeTab('/calendar', 'phone')).toBe('more')
     expect(activeTab('/drive', 'phone')).toBe('more')
     expect(activeTab('/more', 'phone')).toBe('more')

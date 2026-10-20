@@ -1,9 +1,9 @@
-/* The design tokens (T21, R-10 to R-13, OD-08). Every colour the app draws is one of these, through
-   the Tailwind names app.css maps them to (bg-surface, text-muted …); no other file in src/ holds a
-   colour literal. Outside src/, index.html's two theme-color metas copy --bg (TK-09 holds them to
-   it), and public/favicon.svg draws the light accent. Ported from the demo (demo/src/index.css),
-   with --chat-wall renamed --wall and the dark-mode contrast fixes (X8, SHL-35 to SHL-37, RMS-36,
-   QA-01):
+/* The design tokens (T21 item 6, X8, QA-01, SHL-23, OD-08). Every colour the app draws is one of
+   these, through the Tailwind names app.css maps them to (bg-surface, text-muted …); no other file
+   in src/ holds a colour literal. Outside src/, index.html's two theme-color metas copy --bg (TK-09
+   holds them to it), and public/favicon.svg draws the light accent. Ported from the demo
+   (demo/src/index.css), with --chat-wall renamed --wall and the dark-mode contrast fixes (X8,
+   SHL-35 to SHL-37, RMS-36, QA-01):
    - --rec-fg, --agent-fg: ink on a red or teal fill. White fails on dark mode's lighter fills.
    - --accent-inverse: accent text and the focus ring on an inverse (bg-fg) ground, such as a toast.
    - --line-strong: the border that identifies a control (an input, the Switch's off track), at 3:1

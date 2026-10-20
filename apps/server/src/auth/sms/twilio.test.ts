@@ -66,7 +66,7 @@ describe('T7 T20 Twilio Verify adapter, against a loopback fake', () => {
       authorised: true,
     })
     // Exactly these fields: never a CustomCode, and nothing but the number and the Service SID
-    // (in the path) reaches Twilio (AUTH-DESIGN §12 items 6 and 13).
+    // (in the path) reaches Twilio (T20 item 10).
     expect(start?.form).toEqual({ To: A, Channel: 'sms' })
     expect(check).toMatchObject({ op: 'check', authorised: true })
     expect(check?.form).toEqual({ VerificationSid: started.ref, Code: wrong })
@@ -81,7 +81,7 @@ describe('T7 T20 Twilio Verify adapter, against a loopback fake', () => {
     expect(await sms.start(B)).toEqual({ ref: seeded, foreign: true })
   })
 
-  it('reads a start reply without send_code_attempts, or with null, as not foreign (AUTH-DESIGN §3.1)', async () => {
+  it('reads a start reply without send_code_attempts, or with null, as not foreign (T20 item 10)', async () => {
     const sms = verify()
     const sid = `VE${'a'.repeat(32)}`
     twilio.script('start', { status: 201, body: { sid, status: 'pending' } })
@@ -90,7 +90,7 @@ describe('T7 T20 Twilio Verify adapter, against a loopback fake', () => {
     expect(await sms.start(A)).toEqual({ ref: sid, foreign: false })
   })
 
-  it('counts no send for a first try answered 20429, so a verification it never started still reads as foreign (AUTH-DESIGN §3.1)', async () => {
+  it('counts no send for a first try answered 20429, so a verification it never started still reads as foreign (T20 item 10)', async () => {
     const sms = verify()
     const seeded = twilio.seed(B)
     twilio.script('start', { status: 429, body: { code: 20429, status: 429 } })
@@ -224,7 +224,7 @@ describe('T7 T20 Twilio Verify adapter, against a loopback fake', () => {
     expect((await refusal(sms.start(A))).kind).toBe('bug')
   })
 
-  it('times out a start or check try at 4 s and a cancel at 3 s unless a test passes its own (AUTH-DESIGN §6.3)', () => {
+  it('times out a start or check try at 4 s and a cancel at 3 s unless a test passes its own (T20 item 10)', () => {
     expect(TWILIO_TIMEOUTS).toEqual({ startMs: 4000, checkMs: 4000, cancelMs: 3000 })
   })
 

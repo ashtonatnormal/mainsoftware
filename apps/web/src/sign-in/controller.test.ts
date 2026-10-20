@@ -1,4 +1,4 @@
-// The sign-in screen's store (T20, T21; AUTH-DESIGN §10.1–10.2, SHL-07, X11, WCAG 4.1.3), on a fake
+// The sign-in screen's store (T20; T21 item 13, SHL-07, X11, WCAG 4.1.3), on a fake
 // clock and a fake api: the calls it makes, the timers it runs, and the cues it hands the screen.
 import { MESSAGES } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
@@ -110,7 +110,7 @@ describe('T20 T21: the sign-in store (sign-in/controller.ts)', () => {
     expect(calls.map(call => call.kind)).toEqual(['requestCode', 'requestCode'])
   })
 
-  it('WCAG 4.1.3 auth-research-web §3.1: a call still out after a second is said busy once, politely; one answered sooner says nothing', async () => {
+  it('WCAG 4.1.3: a call still out after a second is said busy once, politely; one answered sooner says nothing', async () => {
     const { time, calls, cues, controller } = setup()
     controller.input('phone', '+6580000003')
     controller.submit()

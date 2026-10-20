@@ -49,7 +49,7 @@ export interface InSessionOptions {
   // response (touch; true unless set false). GET /api/flags sets it false (OD-14, T21 item 10): the
   // shell polls it every 60 s while a tab is visible and on every gateway nudge, whether or not
   // anyone is using it, so a poll that touched would keep an idle session alive past SESSION.idle
-  // for as long as a tab stayed open (C-23).
+  // for as long as a tab stayed open (OD-14).
   touch?: boolean
   // `start transaction … read only` (withOrg's TransactionOptions): the web shell's GETs, which
   // write nothing in their own transaction. A read-only transaction can't take row locks, so its

@@ -39,7 +39,7 @@ export const MESSAGES = {
   purpose_refused: "That feature isn't cleared for use yet.",
   invalid_cohort:
     "That cohort can't be used. Name 1 to 1,000 people still at this organisation and roles, or none for everyone.",
-  // Read at sign-in too, where nothing the person sees has changed (AUTH-DESIGN §10.3).
+  // Read at sign-in too, where nothing the person sees has changed (T21 item 13).
   try_again: 'Something else happened at the same moment. Try again.',
   internal: 'Something went wrong on our side. Try again.',
 } as const satisfies Record<string, string>

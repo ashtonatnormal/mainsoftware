@@ -1,9 +1,9 @@
-// The one builder of the web app's document headers and Content Security Policy (T21 item 7, D-04,
-// OD-40). Vite's dev server serves documentHeaders(…, { dev: true }) (apps/web/vite.config.ts) and
+// The one builder of the web app's document headers and Content Security Policy (T21 item 7, D-04).
+// Vite's dev server serves documentHeaders(…, { dev: true }) (apps/web/vite.config.ts) and
 // the e2e preview documentHeaders(E2E_ORIGIN) (apps/web/e2e/support/preview.ts); from C0.12,
 // CloudFront's response-headers policy will serve documentHeaders(appOrigin), so what the tests see
 // is what people get. Every source is derived from the app's own origin: the browser talks to
-// nothing else, so no CDN or model host can enter the policy (R-59–R-61).
+// nothing else, so no CDN or model host can enter the policy (T21 item 7).
 // scripts/guards/csp.test.ts parses the result against its own allow-list, and a new source
 // (C0.13's RUM endpoint, C2's LiveKit host) changes both in one PR.
 //
@@ -137,7 +137,7 @@ export function contentSecurityPolicy(appOrigin: string, options: { dev?: boolea
 // (DOCUMENT_CACHE_CONTROL). Referrer-Policy is same-origin, not no-referrer, because no-referrer
 // makes a CSP report's Origin null, and the server refuses a POST with a null Origin. HSTS is sent
 // only for an https host that isn't this machine, so the HTTPS e2e run can't pin a developer's
-// localhost to https (K-30). C1.6 and C2 relax the microphone in Permissions-Policy.
+// localhost to https (T21 item 7). C1.6 and C2 relax the microphone in Permissions-Policy.
 export function documentHeaders(appOrigin: string, options: { dev?: boolean } = {}): Readonly<Record<string, string>> {
   const origin = parseAppOrigin(appOrigin)
   return Object.freeze({

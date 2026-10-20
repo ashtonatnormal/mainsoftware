@@ -1,9 +1,9 @@
-// The first step: the mobile number (T20, T21; AUTH-DESIGN §10.1, DESIGN-SHELL §5.8; OD-01,
-// BUILD-PLAN C0.8). Any country's number (ACC-01): the hint says how, and the shared normaliser
-// (normalisePhone, packages/shared) reads it here exactly as the server will, so a number it can't
-// read is refused on the field before anything is sent. The field asks for the browser's own
-// number autofill (autocomplete tel, WCAG 1.3.5) and the phone keypad; its text is 16 px, so iOS
-// doesn't zoom in. Under the h1, once, the reason the last document left, if it did.
+// The first step: the mobile number (T20, T21 item 13; OD-01, BUILD-PLAN C0.8). Any country's
+// number (ACC-01): the hint says how, and the shared normaliser (normalisePhone, packages/shared)
+// reads it here exactly as the server will, so a number it can't read is refused on the field
+// before anything is sent. The field asks for the browser's own number autofill (autocomplete tel,
+// WCAG 1.3.5) and the phone keypad; its text is 16 px, so iOS doesn't zoom in. Under the h1, once,
+// the reason the last document left, if it did.
 import { SIGN_IN } from '@/strings/sign-in.ts'
 import { CONTROL_CLASS, Field } from '@/ui/Field.tsx'
 import type { SignInController } from './controller.ts'

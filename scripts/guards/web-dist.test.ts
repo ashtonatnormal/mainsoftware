@@ -1,8 +1,8 @@
-// scripts/check-web-dist.ts's pure parts on planted fixtures (T21 item 12; DESIGN-SHELL §9.3,
-// §10.6; OD-15, R-61, K-01, QA-01): the initial set it measures, the scan of dist/, the budget
-// comparison and the avatar rules, and that CI's check job runs it straight after the build. It
-// sits in scripts/guards/ because its fixtures plant CDN and model URLs on purpose, which ai-free's
-// text check refuses in every script outside this folder (R2-05).
+// scripts/check-web-dist.ts's pure parts on planted fixtures (T21 items 7, 11 and 12; OD-15,
+// QA-01): the initial set it measures, the scan of dist/, the budget comparison and the avatar
+// rules, and that CI's check job runs it straight after the build. It sits in scripts/guards/
+// because its fixtures plant CDN and model URLs on purpose, which ai-free's text check refuses in
+// every script outside this folder.
 
 import { describe, expect, it } from 'vitest'
 import { AVATAR_BG } from '../../apps/web/src/ui/avatar-hue'
@@ -149,7 +149,7 @@ describe('T21: the web bundle check (scripts/check-web-dist.ts)', () => {
     ])
   })
 
-  it('DT-02 R-61 K-01 SHL-26: the scan finds an inline script, an inline style, a data: URL, a public npm CDN, a model host, Google Fonts and the test hook in planted fixtures, and passes a clean dist', () => {
+  it('DT-02 T21 item 7 SHL-26: the scan finds an inline script, an inline style, a data: URL, a public npm CDN, a model host, Google Fonts and the test hook in planted fixtures, and passes a clean dist', () => {
     expect(scanDist(CLEAN_DIST)).toEqual([])
     const cases: [DistFile[], string][] = [
       [
@@ -229,7 +229,7 @@ describe('T21: the web bundle check (scripts/check-web-dist.ts)', () => {
     expect(Object.keys(parseBudget(JSON.parse(readRepoFile('apps/web/bundle-budget.json'))))).toHaveLength(4)
   })
 
-  it('DT-04 QA-01 R2-09: missingAvatarRules finds a built CSS without a .bg-avatar-N rule for each N in 0–11', () => {
+  it('DT-04 QA-01 T21 item 12: missingAvatarRules finds a built CSS without a .bg-avatar-N rule for each N in 0–11', () => {
     expect(AVATAR_BG).toHaveLength(12)
     expect(missingAvatarRules(avatarCss())).toEqual([])
     expect(missingAvatarRules(`@layer utilities{${avatarCss()}}`)).toEqual([])
@@ -240,7 +240,7 @@ describe('T21: the web bundle check (scripts/check-web-dist.ts)', () => {
     expect(missingAvatarRules(avatarCss().replace('var(--avatar-3)', 'var(--avatar-4)'))).toEqual(['bg-avatar-3'])
   })
 
-  it('DT-05 T21 K-51: the check job runs node scripts/check-web-dist.ts straight after npm run build', () => {
+  it('DT-05 T21 item 12 CL Testing and CI: the check job runs node scripts/check-web-dist.ts straight after npm run build', () => {
     const check = workflowJobs(readRepoFile('.github/workflows/ci.yml')).find(job => job.id === 'check')
     const steps = check?.steps ?? []
     const build = steps.findIndex(step => /^run: npm run build$/m.test(step))

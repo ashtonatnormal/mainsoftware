@@ -1,5 +1,5 @@
 // What the suite checks on a screen as it stands (T21; NFR-02, PRD-66, WCAG 2.2 AA, decision 8;
-// DESIGN-SHELL §9.4.4). Each reads the page in the browser and answers a list of what is wrong,
+// T21 item 11). Each reads the page in the browser and answers a list of what is wrong,
 // empty when nothing is, so a failure names every offender at once: expect(await check(page)).toEqual([]).
 import type { Page } from '@playwright/test'
 import { AI_COPY } from '../../src/strings/ai-copy.ts'
@@ -41,9 +41,9 @@ export function noSidewaysScroll(page: Page): Promise<string[]> {
   })
 }
 
-// NF-02 X7 K-58: every shown interactive element is at least 44 × 44 CSS px. A native input hidden
-// visually (a Switch's checkbox) is measured by its label's box; a link inline in a paragraph is
-// exempt (WCAG 2.5.8's inline exception).
+// NF-02 X7 T21 item 11: every shown interactive element is at least 44 × 44 CSS px. A native input
+// hidden visually (a Switch's checkbox) is measured by its label's box; a link inline in a
+// paragraph is exempt (WCAG 2.5.8's inline exception).
 export function targets44(page: Page): Promise<string[]> {
   return page.evaluate(selector => {
     const problems: string[] = []
@@ -178,7 +178,7 @@ export function noClippedText(page: Page): Promise<string[]> {
   })
 }
 
-// NF-10 SHL-46 R-15: with reduced motion, no animation is running and no transition lasts over
+// NF-10 SHL-46: with reduced motion, no animation is running and no transition lasts over
 // 0.01 ms.
 export function reducedMotionHolds(page: Page): Promise<string[]> {
   return page.evaluate(() => {
@@ -202,7 +202,7 @@ export function reducedMotionHolds(page: Page): Promise<string[]> {
   })
 }
 
-// R-35 decision 8 OD-06: no text a person can see or hear reads as AI: the visible text (visually
+// decision 8 OD-06: no text a person can see or hear reads as AI: the visible text (visually
 // hidden text and both announcer regions included) and every aria-label, title and alt, against
 // AI_COPY, the list strings/strings.test.ts (ST-02) holds the string tables to. "Search" is the
 // Search bar's label, never "Search & Ask".

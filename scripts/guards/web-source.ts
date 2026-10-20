@@ -200,7 +200,7 @@ export function loadsOf(path: string, source: string): WebLoad[] {
   return found
 }
 
-// WS-10 (D-02, K-08, K-61): main.ts, the one entry, removes the router's scroll cache (preBoot)
+// WS-10 (D-02, T21 item 2): main.ts, the one entry, removes the router's scroll cache (preBoot)
 // before any library code evaluates, and only then loads the app by one dynamic import. That holds
 // however the bundler splits chunks, as long as main.ts's static import graph reaches no package:
 // - every module main.ts loads statically, followed through relative and `@/` imports, is a .css
@@ -311,7 +311,8 @@ export const DUNDER_WRITES_ALLOWED: ReadonlyMap<string, ReadonlySet<string>> = n
   // zod's own settings object, which zod adopts when it loads (zod/v4/core/core.js:
   // `globalThis.__zod_globalConfig ??= {}`). preBoot() sets jitless there before zod loads, so zod
   // builds no code from strings and the CSP's missing 'unsafe-eval' raises no violation report on
-  // every load (pre-boot.ts item 4; K-01, K-05; boot/zod-preset.test.ts checks zod still adopts it).
+  // every load (pre-boot.ts item 4, T21 item 2; boot/zod-preset.test.ts checks zod still adopts
+  // it).
   ['boot/pre-boot.ts', new Set(['__zod_globalConfig'])],
 ])
 
@@ -458,11 +459,11 @@ export const POPOVER = /\b(?:show|hide|toggle)Popover\b|\bpopover(?:Target(?:Act
 export const PROCESS_ENV = /\bprocess\s*\.\s*env\b/g
 
 // WS-11: sign-in and session code read no flag (CLAUDE.md: flags gate features, never an access
-// check or a privacy or safety control; AUTH-DESIGN §10.5, D46). Nothing under these folders, and
-// no file whose path names sign-in or session, imports a module in flags/ or one of these names,
-// wherever it comes from. The session runtime alone may
-// hold flagsQuery: a flags nudge invalidates it (R-47), and the stalled gateway's probe fetches it
-// to learn only whether the session still holds (T19 item 11, R-48); neither reads a flag.
+// check or a privacy or safety control; T21 item 13, D46). Nothing under these folders, and no file
+// whose path names sign-in or session, imports a module in flags/ or one of these names, wherever
+// it comes from. The session runtime alone may hold flagsQuery: a flags nudge invalidates it
+// (T17 item 11), and the stalled gateway's probe fetches it to learn only whether the session still
+// holds (T19 item 11); neither reads a flag.
 export const NO_FLAGS_DIRS = ['sign-in/', 'session/'] as const
 export const FLAG_READERS = new Set([
   'useFlag',
@@ -490,7 +491,7 @@ export const isSignInOrSessionCode = (path: string) =>
   path.split('/').some(segment => NAMES_SIGN_IN_OR_SESSION.test(segment))
 
 // A folder under apps/web/src/ that names sign-in or session other than the top-level sign-in/ and
-// session/ (INTEGRATION.md item 1: the sign-in screens live in sign-in/).
+// session/ (T21 item 13: the sign-in screens live in sign-in/).
 export function misplacedSignInOrSessionFolder(path: string): boolean {
   if (NO_FLAGS_DIRS.some(dir => path.startsWith(dir))) return false
   return path
@@ -631,7 +632,7 @@ export function webAuthnUses(path: string, source: string): string[] {
 }
 
 // WS-13: the code and PIN fields leave paste, copy and autofill alone (WCAG 3.3.8, SHL-49,
-// AUTH-DESIGN §10.4): a pasted code and a password manager are the help 3.3.8 says a memory test at
+// T21 item 13): a pasted code and a password manager are the help 3.3.8 says a memory test at
 // sign-in must allow. Markup rendered in Node never carries an event handler, so the rule reads
 // source: the fields themselves (CLIPBOARD_FIELD_FILES), everything under sign-in/, and every file
 // that renders either field (C0.16's re-authentication sheet, wherever it lands). From the syntax

@@ -1,4 +1,4 @@
-// A page that isn't there, inside the shell (T21; OD-42, R-37). The splat route under the shell
+// A page that isn't there, inside the shell (T21 item 5). The splat route under the shell
 // catches every path no other route matches (/xyz, /chats/abc), so a signed-in person keeps the tab
 // bar or rail and the screen's one h1, "Page not found", which the shell takes from the route's
 // title. The content says so and offers a way to Chats. Outside the shell (a notFound() thrown above

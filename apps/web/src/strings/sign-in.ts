@@ -1,4 +1,4 @@
-// What the sign-in screen says (T21, T20; AUTH-DESIGN §10.1–10.3, OD-01, D46, R-78): British
+// What the sign-in screen says (T20; T21 item 13, OD-01, D46, D29): British
 // English, short and active. It never confirms that a number is registered (PRD-53, T14 item 3):
 // the code step says the same for any number, and nothing claims a text was sent, because a number
 // off the roster gets the same answer and no text, and the global cap or the transfer gate can skip

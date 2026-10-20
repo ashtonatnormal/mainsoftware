@@ -181,7 +181,7 @@ function answerError(error: unknown, request: FastifyRequest, reply: FastifyRepl
     // The re-authentication refusals carry the acting person for these lines only (D46). Each holds
     // the person's id and, for the wrong method, the route: never the method, a number or a code.
     if (known.code === 'reauth_method') {
-      // A re-authentication route this session's method isn't (I2, AUTH-DESIGN §8.2). The web app
+      // A re-authentication route this session's method isn't (I2, T20 item 6). The web app
       // only calls the route the method names, so this is warn: it points to a non-app client. A
       // log line only, no audit row.
       request.log.warn(

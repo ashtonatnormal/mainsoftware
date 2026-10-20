@@ -1,4 +1,4 @@
-// The words no text the app shows may hold before its AI stages (T21; R-35, decision 8, D41,
+// The words no text the app shows may hold before its AI stages (T21; decision 8, D41,
 // OD-06). Stages C0 to C6 build no AI, so no screen may suggest any: no "Ask", no "AI", no
 // assistant or agent, no "coming soon", and no sparkle mark. strings/strings.test.ts holds every
 // string table to it (ST-02), and the e2e suite's noAiCopy check holds every visible text and

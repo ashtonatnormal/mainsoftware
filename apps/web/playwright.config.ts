@@ -1,4 +1,4 @@
-// The web app's end-to-end suite (T21; BUILD-PLAN C0.8, DESIGN-SHELL §9.4, INTEGRATION.md item 5).
+// The web app's end-to-end suite (BUILD-PLAN C0.8, T21 item 11).
 // `npm run e2e` (this workspace) builds nothing: build first (npm run build -w @hearth/web); the
 // preview refuses a build older than its sources.
 //
@@ -17,10 +17,10 @@
 //
 // Projects: Chromium runs every spec but session-end; WebKit and Firefox run the @smoke tests
 // (NFR-01, OD-07, OD-16: CI is their gate); chromium-session-end, which ends the sessions the
-// others share, runs after them all (K-21). Snapshots: local runs never write or compare PNGs, and
-// CI compares against baselines made only on its own runner (D-07). One failing CI run writes the
-// actual screenshot of every shot that is missing or changed, all 34 on a first run, so one
-// artifact holds every baseline to adopt (e2e/support/adopt-baselines.ts).
+// others share, runs after them all (T21 item 11). Snapshots: local runs never write or compare
+// PNGs, and CI compares against baselines made only on its own runner (D-07). One failing CI run
+// writes the actual screenshot of every shot that is missing or changed, all 34 on a first run, so
+// one artifact holds every baseline to adopt (e2e/support/adopt-baselines.ts).
 //
 // Cloud sessions can't download Playwright's browsers. There, PW_CHROMIUM_EXECUTABLE points at a
 // Chromium already on the machine, an unsupported pairing for functional local runs only:
@@ -44,14 +44,14 @@ import {
 
 const CI = !!process.env.CI
 // GitHub's runner itself, not a local run with CI set (where a written baseline would reach the
-// auto-push hook, K-27).
+// auto-push hook, T21 item 11).
 const ON_RUNNER = CI && process.env.GITHUB_ACTIONS === 'true'
 
 // A Chromium of the machine's own, when PW_CHROMIUM_EXECUTABLE names one (cloud sessions only).
 const localChromium = () =>
   process.env.PW_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PW_CHROMIUM_EXECUTABLE } : {}
 
-// Shared by both server roles: their own database, Valkey keys and provider (D-06, K-43).
+// Shared by both server roles: their own database, Valkey keys and provider (D-06, T21 item 13).
 const serverEnv = {
   APP_ORIGIN: E2E_ORIGIN,
   DEPLOY_ENV: E2E_DEPLOY_ENV,
@@ -78,11 +78,12 @@ export default defineConfig({
   forbidOnly: true,
   retries: 0,
   fullyParallel: true,
-  // 2 workers in every run, never Playwright's default of half the cores (K-21). Every signed-in page
-  // a project opens shares its persona's one session and opens a /ws socket, and realtime refuses a
-  // 9th socket on one session (SOCKETS_PER_SESSION, apps/server/src/auth/policy.ts) with a 429 the
-  // page guard fails on. A test keeps at most 3 signed-in pages open (SH-08, SH-09), so 2 workers
-  // hold at most 6, leaving room for sockets still closing from tests just finished (ES-14).
+  // 2 workers in every run, never Playwright's default of half the cores (T21 item 11). Every
+  // signed-in page a project opens shares its persona's one session and opens a /ws socket, and
+  // realtime refuses a 9th socket on one session (SOCKETS_PER_SESSION,
+  // apps/server/src/auth/policy.ts) with a 429 the page guard fails on. A test keeps at most 3
+  // signed-in pages open (SH-08, SH-09), so 2 workers hold at most 6, leaving room for sockets
+  // still closing from tests just finished (ES-14).
   workers: 2,
   timeout: 60_000,
   // In CI the whole run (web servers and global setup included) stops and fails at 15 minutes, half
@@ -166,7 +167,7 @@ export default defineConfig({
       testIgnore: /session-end\.spec\.ts/,
       use: { browserName: 'firefox', storageState: stateFile('firefox') },
     },
-    // Ends sessions, so it runs only after every project that uses them (K-21).
+    // Ends sessions, so it runs only after every project that uses them (T21 item 11).
     {
       name: 'chromium-session-end',
       testMatch: /session-end\.spec\.ts/,

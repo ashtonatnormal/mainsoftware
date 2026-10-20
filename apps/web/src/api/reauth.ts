@@ -1,8 +1,8 @@
-// Which way a refused admin request asks the person to confirm it's them (T20, D46, AQ-01, AQ-02;
-// AUTH-DESIGN §10.4, INTEGRATION.md item 4). The server decides it in the transaction that refuses,
-// from the session and the roles it has just read, and names it on the refusal: 403
-// reauth_required {method} on the admin request, 409 reauth_method {method} on a re-authentication
-// route that isn't the session's own. So the client never guesses and never holds a stale copy:
+// Which way a refused admin request asks the person to confirm it's them (T20 item 6, D46, AQ-01,
+// AQ-02; T21 item 13). The server decides it in the transaction that refuses, from the session and
+// the roles it has just read, and names it on the refusal: 403 reauth_required {method} on the
+// admin request, 409 reauth_method {method} on a re-authentication route that isn't the session's
+// own. So the client never guesses and never holds a stale copy:
 // - 'pin': the PIN (a session issued under the PIN rule);
 // - 'code': a fresh code texted to the session's own number (everyone else);
 // - 'sign_in': only signing out and in again mends the session (its roles changed under it).

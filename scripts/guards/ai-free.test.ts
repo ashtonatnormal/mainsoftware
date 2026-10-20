@@ -232,7 +232,7 @@ describe('D41 AI-free guard: the matcher', () => {
     expect(cdnUrls(`<link href="https://fonts.googleapis.com/css2?family=Inter" rel="stylesheet">`)).toEqual([])
   })
 
-  it('R-61 T21: names model and speech API hosts, regional endpoints included, for the CSP guard and the dist scan', () => {
+  it('T21 item 7: names model and speech API hosts, regional endpoints included, for the CSP guard and the dist scan', () => {
     for (const host of [
       'api.openai.com',
       'API.OpenAI.com',
@@ -272,7 +272,7 @@ describe('D41 AI-free guard: the matcher', () => {
     for (const glob of MODEL_HOSTS) expect(glob, glob).toMatch(/^[a-z0-9*][a-z0-9*.-]*\.[a-z]+$/)
   })
 
-  it('R-61: finds a model host in a URL, a CSP source or plain text, and nothing else', () => {
+  it('T21 item 7: finds a model host in a URL, a CSP source or plain text, and nothing else', () => {
     expect(modelHosts(`fetch('https://api.openai.com/v1/x')`)).toEqual(['api.openai.com'])
     expect(modelHosts(`connect-src 'self' wss://api.anthropic.com https://x.openai.azure.com:443`)).toEqual([
       'api.anthropic.com',

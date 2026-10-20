@@ -1,5 +1,5 @@
-// Who the e2e suite signs in as, and how many codes each number costs a run (T21; DESIGN-SHELL
-// §9.4.3, INTEGRATION.md item 5, AUTH-DESIGN §10.5; PRD-53, K-21). Every number here is fictional:
+// Who the e2e suite signs in as, and how many codes each number costs a run (T21 items 11 and 13;
+// PRD-53). Every number here is fictional:
 // the Tembusu seed's +65 8000 00NN people (db/seed/tembusu.sql), and numbers in the same +65 8000
 // range that no one in the seed holds. This is the only file in e2e/ that may spell a number
 // (scripts/guards/e2e-setup.test.ts, ES-11), so every number a spec uses is counted below.
@@ -14,7 +14,7 @@
 //   replaces its code (T14 item 4) and the first test's code would stop working.
 // Every run starts from a new hearth_e2e and an empty Valkey DB 9, so every run spends the same.
 //
-// The personas (INTEGRATION.md item 5): Marcus is the Chromium projects' signed-in state (a Team
+// The personas (T21 item 11): Marcus is the Chromium projects' signed-in state (a Team
 // Admin, so he signs in on the code alone, D46); Kelvin is live.spec's own; Priya and Wei Ling hold
 // PIN roles (Leadership; Wei Ling is also the Compliance Officer), for the PIN steps (AQ-02); Nadia
 // is on the roster with no account yet (ACC-03: her first sign-in makes it); +65 8000 9999 and the

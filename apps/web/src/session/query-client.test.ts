@@ -5,7 +5,7 @@ import { createQueryClient, RETRY_CAP_MS, retryDelay, shouldRetry } from './quer
 const failure = (status: number, code: string) => new ApiFailure(status, code, 'copy')
 
 describe('T21: the QueryClient (session/query-client.ts)', () => {
-  it('QC-01 OD-25: no retry on a 4xx, one on 409 try_again, for queries and mutations alike', () => {
+  it('QC-01 T21 item 3: no retry on a 4xx, one on 409 try_again, for queries and mutations alike', () => {
     for (const kind of ['query', 'mutation'] as const) {
       expect(shouldRetry(kind, 0, failure(409, 'try_again'))).toBe(true)
       expect(shouldRetry(kind, 1, failure(409, 'try_again'))).toBe(false)
@@ -23,7 +23,7 @@ describe('T21: the QueryClient (session/query-client.ts)', () => {
     }
   })
 
-  it('QC-02 OD-25: queries retry up to 2 times on a 5xx or no answer; mutations never do; full jitter up to 30 s', () => {
+  it('QC-02 T21 item 3: queries retry up to 2 times on a 5xx or no answer; mutations never do; full jitter up to 30 s', () => {
     for (const error of [failure(503, 'unavailable'), failure(500, 'internal'), failure(0, 'network')]) {
       expect([0, 1, 2].map(count => shouldRetry('query', count, error))).toEqual([true, true, false])
       expect(shouldRetry('mutation', 0, error)).toBe(false)
@@ -42,7 +42,7 @@ describe('T21: the QueryClient (session/query-client.ts)', () => {
     for (let count = 0; count < 20; count++) expect(retryDelay(count)).toBeLessThan(RETRY_CAP_MS)
   })
 
-  it('QC-02 OD-25: the client applies the policy: a query that keeps failing on a 503 is tried 3 times in all, then errors', async () => {
+  it('QC-02 T21 item 3: the client applies the policy: a query that keeps failing on a 503 is tried 3 times in all, then errors', async () => {
     vi.useFakeTimers()
     try {
       const client = createQueryClient(() => {}, { random: () => 0.5 })
@@ -53,7 +53,7 @@ describe('T21: the QueryClient (session/query-client.ts)', () => {
       await vi.runAllTimersAsync()
       expect(await result).toMatchObject({ code: 'unavailable' })
       expect(queryFn).toHaveBeenCalledTimes(3)
-      // The query defaults the design names (OD-25, R-50).
+      // The query defaults the design names (T21 item 3).
       expect(client.getDefaultOptions().queries).toMatchObject({
         staleTime: 0,
         refetchOnWindowFocus: true,
@@ -65,7 +65,7 @@ describe('T21: the QueryClient (session/query-client.ts)', () => {
     }
   })
 
-  it('QC-03 R-54 T19 item 11: a 401 signed_out from any query or mutation calls onSignedOut once; other failures and halted never do', async () => {
+  it('QC-03 T21 item 3 T19 item 11: a 401 signed_out from any query or mutation calls onSignedOut once; other failures and halted never do', async () => {
     const onSignedOut = vi.fn()
     const client = createQueryClient(onSignedOut)
     const reject = (error: unknown) => async () => {

@@ -1,4 +1,4 @@
-// The theme stylesheet's rules (T21, R-15, R-17, R-18, OD-28, OD-30): only the tokens compile as
+// The theme stylesheet's rules (SHL-46, SHL-69, X9, T21 items 5 and 6): only the tokens compile as
 // colours, reduced motion stops everything, the rail needs room both ways, forced colours keep the
 // Switch's state visible, and no stylesheet fetches from another host. app.css and tokens.css come
 // in with ?raw, as in contrast.test.ts, so TK-10 fails on an empty or unparsed sheet instead of
@@ -28,7 +28,7 @@ describe('T21: app.css', () => {
     expect(mappedColours).toHaveLength(36)
   })
 
-  it('TK-05 R-18 OD-28: the palette is reset, every @theme inline colour names a declared token, and transparent and current are explicit', () => {
+  it('TK-05 X9 T21 item 6: the palette is reset, every @theme inline colour names a declared token, and transparent and current are explicit', () => {
     // Tailwind's default colours and families go, so bg-red-500 and text-white compile to nothing.
     expect(theme.get('--color-*')).toBe('initial')
     expect(theme.get('--font-*')).toBe('initial')
@@ -46,7 +46,7 @@ describe('T21: app.css', () => {
     expect(themes.map(block => block.prelude)).toEqual(['@theme', '@theme inline'])
   })
 
-  it('TK-06 R-15 SHL-46: a global reduced-motion rule ends animations and transitions', () => {
+  it('TK-06 SHL-46: a global reduced-motion rule ends animations and transitions', () => {
     const reduced = blocksOf(onlyBlock(blocks, '@media (prefers-reduced-motion: reduce)').body)
     const all = declarationsOf(onlyBlock(reduced, '*, *::before, *::after').body)
     expect(all.get('animation-duration')).toBe('0.01ms !important')
@@ -55,7 +55,7 @@ describe('T21: app.css', () => {
     expect(all.get('scroll-behavior')).toBe('auto !important')
   })
 
-  it('TK-07 OD-30 D-08: the rail variant needs 48rem wide and 30rem tall, so a phone on its side keeps the tab bar', () => {
+  it('TK-07 T21 item 5 D-08: the rail variant needs 48rem wide and 30rem tall, so a phone on its side keeps the tab bar', () => {
     const variants = statementsOf(appCss).filter(statement => statement.startsWith('@custom-variant'))
     expect(variants).toEqual(['@custom-variant rail (@media (min-width: 48rem) and (min-height: 30rem))'])
   })
@@ -88,7 +88,7 @@ describe('T21: app.css', () => {
     expect(rule('.switch-track.switch-on').get('border-color')).toBe('Highlight')
   })
 
-  it('TK-08 R-17 SHL-69: no url() or @import names another host', () => {
+  it('TK-08 SHL-69: no url() or @import names another host', () => {
     for (const [file, css] of [
       ['app.css', appCss],
       ['tokens.css', tokensCss],

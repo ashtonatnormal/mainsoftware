@@ -1,4 +1,4 @@
-// Visual regression (T21; BUILD-PLAN C0.8, R-68, D-07, K-26, K-27; DESIGN-SHELL §9.4.5). Every
+// Visual regression (BUILD-PLAN C0.8, T21 item 11, D-07). Every
 // screenshot is named in support/visual-matrix.ts, and its baseline is made only on CI's runner and
 // adopted from the check job's artifact (support/adopt-baselines.ts). A local run walks the same
 // screens and takes no screenshot (ignoreSnapshots), so it can't write or compare a PNG. Each shot
@@ -31,7 +31,7 @@ async function shoot(page: Page, screen: string, widths: readonly number[], prep
   }
 }
 
-test('VS-01 BP C0.8 R-68: the sign-in phone step, and the code step with an error, at 320, 390 and 1440 px, light and dark', {
+test('VS-01 BP C0.8 T21 item 11: the sign-in phone step, and the code step with an error, at 320, 390 and 1440 px, light and dark', {
   tag: '@visual',
 }, async ({ open, guard }) => {
   guard.expectResponses([{ path: '/api/auth/otp/verify', status: 401 }])
@@ -52,7 +52,7 @@ test('VS-01 BP C0.8 R-68: the sign-in phone step, and the code step with an erro
   await shoot(page, 'sign-in-code-error', VISUAL_WIDTHS)
 })
 
-test('VS-01 BP C0.8 R-68: Chats, the avatar menu open and Page not found at 320, 390 and 1440 px, and More at 320 and 390, light and dark', {
+test('VS-01 BP C0.8 T21 item 11: Chats, the avatar menu open and Page not found at 320, 390 and 1440 px, and More at 320 and 390, light and dark', {
   tag: '@visual',
 }, async ({ open }) => {
   const page = await open({ ...sizeOf(320), signedIn: true })

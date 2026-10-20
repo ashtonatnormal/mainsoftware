@@ -1,4 +1,4 @@
-// Every string table the app shows from (T21; CLAUDE.md Conventions, R-35, R-78, decision 8): the
+// Every string table the app shows from (T21; CLAUDE.md Conventions, decision 8, D29): the
 // kit's (ui/strings.ts) and each screen's in strings/. New tables in strings/ are read without a
 // change here. A table may hold functions that build a line from a value; each is called with
 // placeholder arguments and its result read too.
@@ -57,7 +57,7 @@ describe('T21: the string tables', () => {
     expect(all.some(entry => entry.text === 'Skip to content')).toBe(true)
   })
 
-  it('ST-01 CL Conventions R-78: no American spellings from a short list (color, center, organization, canceled, …) in strings/ and ui/strings.ts', () => {
+  it('ST-01 CL Conventions D29: no American spellings from a short list (color, center, organization, canceled, …) in strings/ and ui/strings.ts', () => {
     const found = all.filter(entry => AMERICAN.some(pattern => pattern.test(entry.text)))
     expect(found).toEqual([])
     // The list itself catches what it says it does.
@@ -73,7 +73,7 @@ describe('T21: the string tables', () => {
       ).toBe(false)
   })
 
-  it('ST-02 R-35 decision 8 D41: no string in those tables matches AI_COPY (ask, AI, assistant, agent, copilot, coming soon, ✦)', () => {
+  it('ST-02 decision 8 D41: no string in those tables matches AI_COPY (ask, AI, assistant, agent, copilot, coming soon, ✦)', () => {
     const found = all.filter(entry => aiCopyIn(entry.text)).map(entry => `${entry.where}: ${entry.text}`)
     expect(found).toEqual([])
     for (const text of ['Ask Hearth', 'AI summary', 'Your assistant', 'Agents', 'Copilot', 'Coming soon', '✦ New'])

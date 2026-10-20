@@ -1,9 +1,9 @@
-// The e2e suite's own environment (T21, D-06; INTEGRATION.md item 5). Everything here is fixed, so
+// The e2e suite's own environment (D-06; T21 item 11). Everything here is fixed, so
 // a run never meets the developer's stack: its own ports (dev keeps 3000, 3001 and 5173, and
 // scripts/check-server.sh its own), its own database, hearth_e2e, rebuilt by every run, Valkey DB 9,
 // flushed by every run, and DEPLOY_ENV test, which puts every Valkey key and channel under h:test:
 // (apps/server/src/auth/valkey-keys.ts). The app is served over HTTPS on localhost, because
-// __Host- cookies on http://localhost are unverified in WebKit and Firefox (K-29).
+// __Host- cookies on http://localhost are unverified in WebKit and Firefox (D-06).
 //
 // Every path is absolute, resolved from this file, so the working directory never matters:
 // `npx playwright test -c apps/web/playwright.config.ts` from the root behaves like `npm run e2e`.

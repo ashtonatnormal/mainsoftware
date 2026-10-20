@@ -21,7 +21,7 @@ const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
 describe('T21: the api answers as Query options (api/queries.ts)', () => {
-  it('OD-22 OD-14 T21: sessionQuery reads GET /api/session leniently and is fresh for 60 s, so a focus refetch renews the session at most once a minute', async () => {
+  it('T21 item 10 OD-14: sessionQuery reads GET /api/session leniently and is fresh for 60 s, so a focus refetch renews the session at most once a minute', async () => {
     expect(sessionQuery.queryKey).toEqual(['session'])
     expect(sessionQuery.staleTime).toBe(60_000)
 
@@ -38,7 +38,7 @@ describe('T21: the api answers as Query options (api/queries.ts)', () => {
     expect(seen[0]?.signal).toBeInstanceOf(AbortSignal)
   })
 
-  it('QY-01 R-50 T17 item 11: flags refetch every 60 s while visible, not while hidden, and at once on focus', async () => {
+  it('QY-01 T21 item 3 T17 item 11: flags refetch every 60 s while visible, not while hidden, and at once on focus', async () => {
     expect(flagsQuery.queryKey).toEqual(['flags'])
     expect(flagsQuery).toMatchObject({
       staleTime: 0,
@@ -88,7 +88,7 @@ describe('T21: the api answers as Query options (api/queries.ts)', () => {
     }
   })
 
-  it('QY-02 R-53 P6: a missing key reads off; unknown keys are ignored; only true reads on', async () => {
+  it('QY-02 T17 item 11 P6: a missing key reads off; unknown keys are ignored; only true reads on', async () => {
     vi.stubGlobal('fetch', async () =>
       json(200, {
         flags: { 'ai.ask': true, 'Not A Key': true, 'core.system': 'yes', 'later.flag': true },
@@ -115,7 +115,7 @@ describe('T21: the api answers as Query options (api/queries.ts)', () => {
     expect({ ...(await client.fetchQuery({ ...flagsQuery, staleTime: 0 })) }).toEqual({})
   })
 
-  it('QY-03 R-53 OD-21: a failed poll (503) keeps the last answer; with none yet, every flag reads off', async () => {
+  it('QY-03 T17 item 11 T21 item 10: a failed poll (503) keeps the last answer; with none yet, every flag reads off', async () => {
     let answer = () => json(200, { flags: { 'ai.ask': true } })
     vi.stubGlobal('fetch', async () => answer())
     const client = createQueryClient(() => {}, { random: () => 0 })

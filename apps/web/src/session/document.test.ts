@@ -103,7 +103,7 @@ function fakeEnv(...given: [TabStorage | undefined] | []) {
 }
 
 describe('T21 D-01: a session is a document (session/document.ts)', () => {
-  it('DC-01 K-08 C-13: leaveDocument marks the reason and the focus flag, tells other tabs, removes every tsr-scroll-restoration* key now and again on pagehide, then replaces with /sign-in', async () => {
+  it('DC-01 D-02: leaveDocument marks the reason and the focus flag, tells other tabs, removes every tsr-scroll-restoration* key now and again on pagehide, then replaces with /sign-in', async () => {
     const storage = memoryStorage({
       'tsr-scroll-restoration-v1_3': '{"/chats":{}}',
       'tanstack_router_reload:Failed to fetch dynamically imported module': '1',
@@ -135,7 +135,7 @@ describe('T21 D-01: a session is a document (session/document.ts)', () => {
     expect(heard).toEqual([{ t: 'identity' }])
   })
 
-  it('DC-01 K-10: every other reason but other_tab tells the other tabs; other_tab reloads instead of replacing, and posts nothing', async () => {
+  it('DC-01 T21 item 2: every other reason but other_tab tells the other tabs; other_tab reloads instead of replacing, and posts nothing', async () => {
     for (const reason of ['session_ended', 'person_changed'] as const) {
       const { env, steps, bus } = fakeEnv()
       doc.leaveDocument(reason, env)
@@ -150,7 +150,7 @@ describe('T21 D-01: a session is a document (session/document.ts)', () => {
     expect(storage.map.get('hearth:left')).toBe('other_tab')
   })
 
-  it("DC-02 K-10: an identity message from another tab calls the listener; this tab's own post doesn't, and other messages are ignored", async () => {
+  it("DC-02 T21 item 2: an identity message from another tab calls the listener; this tab's own post doesn't, and other messages are ignored", async () => {
     const { env, bus } = fakeEnv()
     const heard = vi.fn()
     const channel = doc.openIdentityChannel(env, heard)
@@ -196,7 +196,7 @@ describe('T21 D-01: a session is a document (session/document.ts)', () => {
     expect(heard).toHaveBeenCalledTimes(1)
   })
 
-  it('DC-03 R-44 K-12: rememberReturnTo keeps only a registered app path, never a query or another origin; takeReturnTo validates again and reads once', () => {
+  it('DC-03 T21 item 5: rememberReturnTo keeps only a registered app path, never a query or another origin; takeReturnTo validates again and reads once', () => {
     const storage = memoryStorage()
     doc.rememberReturnTo('/tasks', storage)
     expect(doc.takeReturnTo(storage)).toBe('/tasks')
@@ -224,7 +224,7 @@ describe('T21 D-01: a session is a document (session/document.ts)', () => {
     expect(storage.map.has('hearth:return-to')).toBe(false)
   })
 
-  it('DC-03 R-44: enterDocument opens the kept path, else /chats (OD-03)', () => {
+  it('DC-03 T21 item 5: enterDocument opens the kept path, else /chats (OD-03)', () => {
     const storage = memoryStorage()
     doc.rememberReturnTo('/rooms', storage)
     const first = fakeEnv(storage)
@@ -235,7 +235,7 @@ describe('T21 D-01: a session is a document (session/document.ts)', () => {
     expect(second.steps).toEqual(['replace /chats'])
   })
 
-  it('DC-04 K-42: reloadForUpdate reloads once per 60 s, then answers blocked', () => {
+  it('DC-04 T21 item 4: reloadForUpdate reloads once per 60 s, then answers blocked', () => {
     const storage = memoryStorage()
     const { env, steps } = fakeEnv(storage)
     const at = 1_760_000_000_000

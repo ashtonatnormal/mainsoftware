@@ -1,5 +1,5 @@
-// What a code or PIN field keeps of what was typed, pasted or autofilled (T21, T20; AUTH-DESIGN
-// §10.1, SHL-07, SHL-27, QA-04). Pure, so Node tests cover it.
+// What a code or PIN field keeps of what was typed, pasted or autofilled (T21 item 13, T20;
+// SHL-07, SHL-27, QA-04). Pure, so Node tests cover it.
 //
 // The text is first put in Unicode's compatibility form (NFKC), so the full-width digits an East
 // Asian keyboard types (１２３) become ASCII ones; then everything but the ASCII digits goes

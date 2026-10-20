@@ -1,4 +1,4 @@
-// The live connection's line under the screen's header (T21; OD-42, X11, K-42). It renders nothing
+// The live connection's line under the screen's header (T21 item 4, X11). It renders nothing
 // while the connection is up, connecting, or down for under 30 s. Stalled (30 s of failed
 // reconnects) it reads "Reconnecting…"; when a new deploy needs a reload the page couldn't make
 // itself (one a minute at most), it says so with a Reload button. The line is not a live region:

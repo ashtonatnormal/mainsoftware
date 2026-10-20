@@ -1,4 +1,4 @@
-// The suite's test function (T21; DESIGN-SHELL §9.4.4). Every spec imports `test` and `expect`
+// The suite's test function (T21 item 11). Every spec imports `test` and `expect`
 // from here, never from @playwright/test, so every page it opens is watched by the guard.
 //
 // - open(options): a new context and page at a viewport and colour scheme, with reduced motion,
@@ -12,8 +12,8 @@
 //     (expectResponses), a request it aborts itself (allowFailedRequest), a violation it expects
 //     (allowViolation), or a line it allows (allowConsole);
 //   - a failed request, other than one a navigation cancelled or one the test aborts itself;
-//   - a request or socket to any origin but the app's own (K-13), unless the CSP blocked it before
-//     it left the page (the violation is then the guard's to judge);
+//   - a request or socket to any origin but the app's own (T21 item 3), unless the CSP blocked it
+//     before it left the page (the violation is then the guard's to judge);
 //   - any 4xx or 5xx from the app's origin that the test didn't declare (a test that answers a
 //     request with a 503 itself declares it).
 //   A signed-out page's boot answers GET /api/session 401: open() declares it; a spec whose default

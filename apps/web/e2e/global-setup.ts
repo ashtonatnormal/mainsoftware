@@ -1,4 +1,4 @@
-// Before every project (T21; DESIGN-SHELL §9.4.2): signs in each storage state's persona through
+// Before every project (T21 item 11): signs in each storage state's persona through
 // the api (support/sign-in-api.ts), every run, since every run starts from a new hearth_e2e and no
 // saved session can still be valid. The web servers are up by now: Playwright starts them first.
 import { mkdirSync } from 'node:fs'

@@ -1,4 +1,4 @@
-// The signed-in shell (T21; BUILD-PLAN C0.8, DESIGN-SHELL §9.4.5): its navigation at every size,
+// The signed-in shell (BUILD-PLAN C0.8, T21 item 11): its navigation at every size,
 // real URLs, the not-found and error screens inside the frame, the avatar menu, one h1 per screen,
 // no AI copy and no Search bar, and the boot's scroll-cache wipe on the built bundle. Signed in as
 // the project's persona (Marcus in Chromium; Farah and Daniel for the @smoke cases in WebKit and
@@ -30,15 +30,15 @@ const MORE_CHUNK = /\/assets\/MoreScreen-[^/]+\.js$/
 
 // What a screen whose chunk fails to load logs, besides the failed request: the browser's own line,
 // and, on the first failure, the router's error for the module the preload helper hands back empty
-// while preBoot()'s reload for a gone deploy is under way (main.ts, K-65): the page is replaced a
-// moment later, and the reload is what the person sees.
+// while preBoot()'s reload for a gone deploy is under way (main.ts, T21 item 2): the page is
+// replaced a moment later, and the reload is what the person sees.
 function allowMissingChunk(guard: Guard): void {
   guard.allowFailedRequest(MORE_CHUNK)
   guard.allowConsole(/Failed to fetch dynamically imported module|error loading dynamically imported module/i)
   guard.allowConsole(/Cannot read properties of undefined \(reading 'MoreScreen'\)/)
 }
 
-test('SH-01 R-32 OD-02: under the rail breakpoint, five tabs in the bottom quarter with aria-current; at 1440 the rail six entries', {
+test('SH-01 OD-02: under the rail breakpoint, five tabs in the bottom quarter with aria-current; at 1440 the rail six entries', {
   tag: '@smoke',
 }, async ({ open }) => {
   const phone = await open({ ...SIZES.w390, signedIn: true, phone: true })
@@ -57,7 +57,7 @@ test('SH-01 R-32 OD-02: under the rail breakpoint, five tabs in the bottom quart
   await expect(mainNav(desktop).getByRole('link', { name: 'Chats' })).toHaveAttribute('aria-current', 'page')
 })
 
-test('SH-02 OD-30: 767 × 1024 tabs, 768 × 1024 rail, 1440 × 900 rail, 667 × 375 (a phone on its side) tabs', async ({
+test('SH-02 T21 item 5: 767 × 1024 tabs, 768 × 1024 rail, 1440 × 900 rail, 667 × 375 (a phone on its side) tabs', async ({
   page,
 }) => {
   await page.goto('/today')
@@ -70,7 +70,7 @@ test('SH-02 OD-30: 767 × 1024 tabs, 768 × 1024 rail, 1440 × 900 rail, 667 × 
   }
 })
 
-test('SH-03 X12 R-40: every tab is a real URL; a deep link to /drive opens Drive; Back and Forward move between screens', async ({
+test('SH-03 X12: every tab is a real URL; a deep link to /drive opens Drive; Back and Forward move between screens', async ({
   open,
 }) => {
   const page = await open({ ...SIZES.w390, signedIn: true, phone: true })
@@ -117,7 +117,7 @@ test('SH-05 OD-03: / lands on /chats', async ({ page }) => {
   await expect(h1(page)).toHaveText('Chats')
 })
 
-test('SH-06 OD-42 R-37: /xyz and /chats/abc show Page not found inside the shell (one h1, the tab bar or rail present) with a way to Chats', async ({
+test('SH-06 T21 item 5: /xyz and /chats/abc show Page not found inside the shell (one h1, the tab bar or rail present) with a way to Chats', async ({
   open,
 }) => {
   for (const size of [SIZES.w390, SIZES.desktop]) {
@@ -136,7 +136,7 @@ test('SH-06 OD-42 R-37: /xyz and /chats/abc show Page not found inside the shell
   }
 })
 
-test('SH-07 R-34 R-35 OD-04 decision 8: no searchbox in the shell and no AI copy on any screen', async ({ open }) => {
+test('SH-07 OD-04 decision 8: no searchbox in the shell and no AI copy on any screen', async ({ open }) => {
   for (const size of [SIZES.w390, SIZES.desktop]) {
     const page = await open({ ...size, signedIn: true })
     for (const screen of SCREENS) {
@@ -195,7 +195,7 @@ test('SH-09 D-08 X16: exactly one visible h1 on every screen at 320, 390 and 144
   }
 })
 
-test('SH-10 SHL-26 R-37: no window.__hearth, and nothing else the app hangs on window for tests', async ({ page }) => {
+test('SH-10 SHL-26: no window.__hearth, and nothing else the app hangs on window for tests', async ({ page }) => {
   await page.goto('/chats')
   await expect(h1(page)).toHaveText('Chats')
   // The booted page's globals against a blank document's of the same origin in the same browser
@@ -212,7 +212,7 @@ test('SH-10 SHL-26 R-37: no window.__hearth, and nothing else the app hangs on w
   expect(added.sort()).toEqual(LIBRARY_GLOBALS)
 })
 
-test("SH-11 OD-42: a failed session check shows Can't reach Hearth, and Try again recovers", async ({
+test("SH-11 T21 item 5: a failed session check shows Can't reach Hearth, and Try again recovers", async ({
   page,
   guard,
 }) => {
@@ -237,7 +237,7 @@ test("SH-11 OD-42: a failed session check shows Can't reach Hearth, and Try agai
   expect(await timeOrigin(page)).not.toBe(before)
 })
 
-test('SH-12 D-02 K-08 K-61: on the built bundle, a foreign scroll cache seeded before every load is gone after boot, and the router then writes its own with no trace of it', async ({
+test('SH-12 D-02 T21 item 2: on the built bundle, a foreign scroll cache seeded before every load is gone after boot, and the router then writes its own with no trace of it', async ({
   open,
 }) => {
   const page = await open({ ...SIZES.w390, signedIn: true })
@@ -269,7 +269,7 @@ test('SH-12 D-02 K-08 K-61: on the built bundle, a foreign scroll cache seeded b
   expect(JSON.stringify(written)).not.toContain('foreign-xyz')
 })
 
-test('SH-13 OD-42 K-65: a screen whose code failed to load is recovered by Try again in a new document', async ({
+test('SH-13 T21 items 2 and 5: a screen whose code failed to load is recovered by Try again in a new document', async ({
   open,
   guard,
 }) => {

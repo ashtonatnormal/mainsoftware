@@ -1,10 +1,10 @@
 // GET /api/session and GET /api/flags on the Compose stack (T21 item 10, T17 item 11): the client
 // flags a signed-in person gets as an Admin changes them through the production route, their
-// cohorts, which GET counts as use of the session (OD-14), the session answer's fallbacks (OD-22,
-// OD-10), and the refusals that never clear the cookie (R-54, ACC-05). The test flag it.client is
-// the harness's (testing/stack.ts TEST_FLAGS), the only client: true flag in its registry; no
-// production flag is one yet (OD-13).
-// `npm run test:integration` runs it with the stack up (`docker compose up -d --wait`).
+// cohorts, which GET counts as use of the session (OD-14), the session answer's fallbacks
+// (T21 item 10, OD-10), and the refusals that never clear the cookie (T21 item 3, ACC-05). The test
+// flag it.client is the harness's (testing/stack.ts TEST_FLAGS), the only client: true flag in its
+// registry; no production flag is one yet (OD-13). `npm run test:integration` runs it with the
+// stack up (`docker compose up -d --wait`).
 //
 // afterAll checks every reply was no-store and none a 500, and the outbox's contract for the run
 // (every committed write covered: the sign-ins', the flag changes', the sign-out's and the
@@ -92,7 +92,7 @@ describe('C0.8 T21 item 10 T17 item 11 GET /api/session and GET /api/flags on th
     }
   })
 
-  it('WI-01 T17 item 11 R-51: a signed-in member gets it.client true while it is on for the org, false once off; no ai.* or client: false key ever appears', async () => {
+  it('WI-01 T17 item 11: a signed-in member gets it.client true while it is on for the org, false once off; no ai.* or client: false key ever appears', async () => {
     const member = await s.person()
     const client = await s.signIn(member)
     try {
@@ -129,7 +129,7 @@ describe('C0.8 T21 item 10 T17 item 11 GET /api/session and GET /api/flags on th
     }
   })
 
-  it('WI-03 OD-14 C-23: GET /api/flags leaves the session’s last use as it was; GET /api/session then moves it', async () => {
+  it('WI-03 OD-14: GET /api/flags leaves the session’s last use as it was; GET /api/session then moves it', async () => {
     const member = await s.person()
     const client = await s.signIn(member)
     const { id } = await s.sessionOf(client)
@@ -148,7 +148,7 @@ describe('C0.8 T21 item 10 T17 item 11 GET /api/session and GET /api/flags on th
     expect(after.device.getTime()).toBeGreaterThan(before.device.getTime() + 60_000)
   })
 
-  it('WI-04 OD-22 OD-10: GET /api/session gives the person’s id, display name and profile zone; without a profile, the full name and the org’s zone', async () => {
+  it('WI-04 T21 item 10 OD-10: GET /api/session gives the person’s id, display name and profile zone; without a profile, the full name and the org’s zone', async () => {
     const org = await s.newOrg()
     await s.query("update orgs set time_zone = 'Asia/Jakarta' where id = $1", [org.id])
     const ahmad = await s.person({ org })
@@ -177,7 +177,7 @@ describe('C0.8 T21 item 10 T17 item 11 GET /api/session and GET /api/flags on th
     }
   })
 
-  it('WI-05 R-54 ACC-05: after sign-out, or once the person is deactivated, both answer 401 signed_out with no Set-Cookie', async () => {
+  it('WI-05 T21 item 3 ACC-05: after sign-out, or once the person is deactivated, both answer 401 signed_out with no Set-Cookie', async () => {
     const expectSignedOut = async (client: Client) => {
       for (const url of ['/api/session', '/api/flags']) {
         const reply = await client.get(url)

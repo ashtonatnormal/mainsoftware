@@ -1,5 +1,4 @@
-// What every sign-in step shares (T21, T20; DESIGN-SHELL §5.8, AUTH-DESIGN §10.1–10.2, PRD-66,
-// NFR-02):
+// What every sign-in step shares (T21 item 13, T20; PRD-66, NFR-02):
 // - StepFrame: the step's column inside the screen's <main>. On a phone the Hearth mark, the h1 and
 //   the step's words sit at the top and the form at the bottom, in the thumb's reach (PRD-66); from
 //   the rail breakpoint it is a centred card. One h1 per step, focusable and marked as the screen's

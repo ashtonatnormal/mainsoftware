@@ -1,4 +1,4 @@
-// What the page shows when it can't start (T21; OD-42, D-01): the boot couldn't learn who the page
+// What the page shows when it can't start (T21 item 5, D-01): the boot couldn't learn who the page
 // belongs to (GET /api/session failed or didn't answer), or the app failed above every screen. It
 // renders with no router, no shell and no session runtime, never guessing who is signed in, and its
 // one way on reloads the page, which asks again from the start.

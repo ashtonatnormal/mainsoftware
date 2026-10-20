@@ -1,7 +1,7 @@
-// Who this document belongs to (T21, D-01; OD-22): the boot's first request, GET /api/session.
-// Its answer decides everything after it. Signed in, the session runtime starts for that person;
-// signed out, the sign-in screen shows; and when the api can't answer, a boot error with a reload,
-// never a guess. A 401 here clears no cookie (the server's GETs never do, R2-25), so a boot can't
+// Who this document belongs to (D-01; T21 item 10): the boot's first request, GET /api/session. Its
+// answer decides everything after it. Signed in, the session runtime starts for that person; signed
+// out, the sign-in screen shows; and when the api can't answer, a boot error with a reload, never a
+// guess. A 401 here clears no cookie (the server's GETs never do, T21 item 10), so a boot can't
 // delete a session another tab has just made.
 import { type SessionForClient, SessionResponseForClient } from '@hearth/shared'
 import { ApiFailure, apiGet } from '@/api/http.ts'

@@ -1,5 +1,5 @@
-// The web bundle's budget and a scan of what it ships (T21 item 12; DESIGN-SHELL §10.6, OD-15,
-// R-61, K-01, QA-01). It runs after the build, in CI's check job and before a PR:
+// The web bundle's budget and a scan of what it ships (T21 items 7 and 12, OD-15, QA-01). It runs
+// after the build, in CI's check job and before a PR:
 //
 //   npm run build && node scripts/check-web-dist.ts
 //
@@ -17,13 +17,13 @@
 // Then it scans every text file in dist/ and fails on:
 // - an inline script (an element without src, or with a body), an inline event handler, a style
 //   element or a style attribute in index.html, which the CSP without 'unsafe-inline' would block
-//   (K-01);
+//   (T21 item 7);
 // - a data: URL in CSS, which the CSP doesn't allow either;
 // - a public npm CDN or a model host (the patterns ai-free.ts keeps), or Google Fonts: the app
-//   loads its code and fonts from its own origin only (R-61, R-17);
+//   loads its code and fonts from its own origin only (T21 item 7, SHL-69);
 // - __hearth, a test hook that must never ship (SHL-26);
 // - a built CSS without a .bg-avatar-N rule for each of the twelve avatar fills, which proves
-//   Tailwind compiled the class names AVATAR_BG spells whole (R2-09).
+//   Tailwind compiled the class names AVATAR_BG spells whole (T21 item 12).
 // It prints a table and exits 1 on any failure.
 //
 // It holds no CDN or model host itself, since ai-free's text check reads every script outside
@@ -165,7 +165,7 @@ const GOOGLE_FONTS = /\bfonts\.(?:googleapis|gstatic)\.com\b/i
 const TEST_HOOK = /__hearth/
 const DATA_URL_IN_CSS = /url\(\s*['"]?\s*data:/i
 
-// What index.html carries inline (K-01): comments aside, since a comment runs nothing.
+// What index.html carries inline (T21 item 7): comments aside, since a comment runs nothing.
 function inlineInPage(html: string): string[] {
   const page = html.replace(/<!--[\s\S]*?-->/g, '')
   const found: string[] = []

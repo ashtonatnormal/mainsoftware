@@ -1,4 +1,4 @@
-// The route tree, loaded in Node with a memory history (T21; OD-24). Node runs the router's server
+// The route tree, loaded in Node with a memory history (T21 item 1). Node runs the router's server
 // load, which doesn't follow a redirect, so a guard's redirect is read from the guard itself and its
 // effect (the return path) from storage; what each path matches is read from the loaded router.
 import { createMemoryHistory, isRedirect } from '@tanstack/react-router'
@@ -61,7 +61,7 @@ function shellPaths(): string[] {
     .filter(path => path !== '/' && path !== '/$')
 }
 
-describe('T21 OD-24: the route tree (router/router.tsx)', () => {
+describe('T21 item 1: the route tree (router/router.tsx)', () => {
   it('RO-01 X12 OD-02 OD-03: every NAV path is a route with its title; / goes to /chats; APP_PATHS (import-free, so main.ts may reach it) equals the paths registered in the shell, splat excluded', async () => {
     for (const entry of Object.values(NAV)) {
       const router = routerAt(entry.to, signedIn())
@@ -76,7 +76,7 @@ describe('T21 OD-24: the route tree (router/router.tsx)', () => {
     expect(shellPaths()).toHaveLength(Object.keys(NAV).length)
   })
 
-  it('RO-02 C-13 D-02: getScrollRestorationKey is the pathname only; #screen is the scroll container', () => {
+  it('RO-02 D-02: getScrollRestorationKey is the pathname only; #screen is the scroll container', () => {
     const router = routerAt('/chats', signedIn())
     const location = router.buildLocation({ to: '/chats', hash: 'x' })
     expect(ROUTER_OPTIONS.getScrollRestorationKey({ ...location, searchStr: '?q=1', href: '/chats?q=1#x' })).toBe(
@@ -87,7 +87,7 @@ describe('T21 OD-24: the route tree (router/router.tsx)', () => {
     expect(router.options.getScrollRestorationKey).toBe(ROUTER_OPTIONS.getScrollRestorationKey)
   })
 
-  it('RO-03 OD-46: /admin, /settings and /notice are not routes and not in APP_PATHS: signed in they are Page not found', async () => {
+  it('RO-03 T21 item 5: /admin, /settings and /notice are not routes and not in APP_PATHS: signed in they are Page not found', async () => {
     for (const path of ['/admin', '/admin/roles', '/settings', '/notice']) {
       expect(APP_PATHS as readonly string[], path).not.toContain(path)
       const router = routerAt(path, signedIn())
@@ -96,7 +96,7 @@ describe('T21 OD-24: the route tree (router/router.tsx)', () => {
     }
   })
 
-  it('R-44 RO-04: no route declares validateSearch or a search middleware, so no URL carries state', () => {
+  it('T21 item 5 RO-04: no route declares validateSearch or a search middleware, so no URL carries state', () => {
     const router = routerAt('/', signedIn())
     const routes = Object.values(router.routesById)
     expect(routes.length).toBeGreaterThan(10)
@@ -108,7 +108,7 @@ describe('T21 OD-24: the route tree (router/router.tsx)', () => {
     }
   })
 
-  it("RO-05 OD-42 R-37: /xyz, /chats/abc and /sign-in/foo match the splat under _app, so _app's guard runs: signed out they go to /sign-in and keep no return path; signed in the match is __root__ > _app > $ titled Page not found", async () => {
+  it("RO-05 T21 item 5: /xyz, /chats/abc and /sign-in/foo match the splat under _app, so _app's guard runs: signed out they go to /sign-in and keep no return path; signed in the match is __root__ > _app > $ titled Page not found", async () => {
     for (const path of ['/xyz', '/chats/abc', '/sign-in/foo']) {
       // Signed out: the guard sends the visit to sign-in, and an unknown path forgets an older
       // return path rather than keeping itself.
@@ -135,7 +135,7 @@ describe('T21 OD-24: the route tree (router/router.tsx)', () => {
     }
   })
 
-  it('R-44 OD-03: signed out, an app path is kept as the return path and the guard sends the visit to sign-in; signed in, /sign-in goes to /chats; signed out, /sign-in is the sign-in screen', async () => {
+  it('T21 item 5 OD-03: signed out, an app path is kept as the return path and the guard sends the visit to sign-in; signed in, /sign-in goes to /chats; signed out, /sign-in is the sign-in screen', async () => {
     const storage = memoryStorage()
     expect(guard('/_app', '/tasks', { runtime: null, storage })).toEqual({ to: '/sign-in', replace: true })
     expect(storage.map.get('hearth:return-to')).toBe('/tasks')

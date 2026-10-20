@@ -1,5 +1,5 @@
 // Signing in, in a real browser against the real api (T20, T21; D46, AQ-02, OD-01, PRD-53, ACC-03;
-// AUTH-DESIGN §10, DESIGN-SHELL §9.4.5, INTEGRATION.md items 2 and 5). Every page starts signed out.
+// T21 items 11 and 13). Every page starts signed out.
 // The api runs the fake provider, so a roster number's code is read from the api's log
 // (support/codes.ts); a number off the roster gets the same answer and no text, so any code is wrong
 // for it. Each test uses its own number (support/personas.ts), within PRD-53's windows.
@@ -75,7 +75,7 @@ function declareWrongCode(guard: Guard): void {
   guard.expectResponses([{ path: '/api/auth/otp/verify', status: 401 }])
 }
 
-test('SI-01 OD-01 SHL-27 R-35 OD-42: signed out, /tasks and /xyz go to /sign-in; the phone step is a real form (label, type tel, autocomplete tel, 16 px, novalidate), Enter submits, and both steps pass noAiCopy', async ({
+test('SI-01 OD-01 SHL-27 decision 8 T21 item 5: signed out, /tasks and /xyz go to /sign-in; the phone step is a real form (label, type tel, autocomplete tel, 16 px, novalidate), Enter submits, and both steps pass noAiCopy', async ({
   page,
 }) => {
   for (const path of ['/tasks', '/xyz']) {
@@ -99,7 +99,7 @@ test('SI-01 OD-01 SHL-27 R-35 OD-42: signed out, /tasks and /xyz go to /sign-in;
 })
 
 test(
-  'SI-02 OD-01 K-29 R-44: from a signed-out deep link to /drive, a roster number signs in on its code alone and lands on Drive in a fresh document with its h1 focused; the return path came from sessionStorage, no URL carried a query, and a reload stays signed in',
+  'SI-02 OD-01 D-06 T21 item 5: from a signed-out deep link to /drive, a roster number signs in on its code alone and lands on Drive in a fresh document with its h1 focused; the return path came from sessionStorage, no URL carried a query, and a reload stays signed in',
   {
     tag: '@smoke',
   },

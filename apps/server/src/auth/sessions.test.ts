@@ -169,7 +169,7 @@ describe('C0.8 T21 item 10 OD-14 inSession for the web shell’s GETs', () => {
     after: task => tasks.push(task),
   })
 
-  it('OD-14 C-23: runs the work read only when asked, and queues no touch with touch: false, keeping the org’s flags either way', async () => {
+  it('OD-14: runs the work read only when asked, and queues no touch with touch: false, keeping the org’s flags either way', async () => {
     const { db, texts } = scriptedPool()
     const flags = staticFlags()
     const api = { db, flags } as unknown as Api

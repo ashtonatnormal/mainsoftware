@@ -1,4 +1,4 @@
-// The gateway client against a fake socket and a fake clock (T21; T19 item 10, R-46–R-49). Each case
+// The gateway client against a fake socket and a fake clock (T19 item 10, T21 item 4). Each case
 // names the item of packages/shared/src/gateway.ts's client side it checks. Every timer runs only
 // when a case moves the clock, and every random draw is given, so each wait is exact.
 import { ClientFrame, GATEWAY_LIMITS, Hello } from '@hearth/shared'
@@ -82,7 +82,7 @@ function holdLive(harness: { client: GatewayClient; clock: FakeClock }, socket: 
 }
 
 describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
-  it("GW-01 T19 item 10 (1) R-46: hello names every version at open; later frames use welcome's v; pong updates the spread", () => {
+  it("GW-01 T19 item 10 (1) T21 item 4: hello names every version at open; later frames use welcome's v; pong updates the spread", () => {
     const { client, clock, net } = setup({ random: () => 0.99 })
     client.start()
     const socket = net.last()
@@ -202,7 +202,7 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
     expect(seen.stale).toEqual([A, A])
   })
 
-  it('GW-06 (2) K-40: a burst of 30 frames sends ≤18 at once and ≤4 a second after; nothing is dropped', () => {
+  it('GW-06 (2) T21 item 4: a burst of 30 frames sends ≤18 at once and ≤4 a second after; nothing is dropped', () => {
     const { client, clock, socket } = connected({}, { maxTopicsPerFrame: 1 })
     const topics = Array.from({ length: 30 }, (_, i) => topic(i + 1))
     for (const held of topics) client.hold(held)
@@ -281,7 +281,7 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
     expect(client.status()).toBe('live')
   })
 
-  it('GW-09 (5) R-43: dropped forgets and wipes, whatever the reason', () => {
+  it('GW-09 (5) T19 item 10: dropped forgets and wipes, whatever the reason', () => {
     const harness = connected()
     const { client, clock, net, seen, socket } = harness
     holdLive(harness, socket, A, B, C)
@@ -330,7 +330,7 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
     expect(seen.stale).toEqual([A, A, A])
   })
 
-  it('GW-11 (5) R-47: nudge flags calls onNudge once within the spread; an unknown nudge is ignored', () => {
+  it('GW-11 (5) T17 item 11: nudge flags calls onNudge once within the spread; an unknown nudge is ignored', () => {
     const { clock, seen, socket } = connected({ random: () => 0.5 })
     socket.receive({ v: 1, t: 'nudge', what: 'flags' })
     clock.advance(1_000)
@@ -378,7 +378,7 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
     expect(net.sockets).toHaveLength(2)
   })
 
-  it('GW-13 (7) R-49: 4401 signs out and never reconnects; 4403 pauses, wipes nothing and waits for resume(); 4426 calls onOutdated', () => {
+  it('GW-13 (7) T21 item 4: 4401 signs out and never reconnects; 4403 pauses, wipes nothing and waits for resume(); 4426 calls onOutdated', () => {
     const out = connected()
     out.socket.serverClose(4401, 'signed_out')
     expect(out.seen.signedOut).toBe(1)
@@ -412,7 +412,7 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
     expect(old.net.sockets).toHaveLength(1)
   })
 
-  it('GW-14 (7) K-41: abuse 1008 waits ≥30 s; 1006/1001/1013/4408/1011/hello_timeout wait within the spread, then full jitter 1–30 s', () => {
+  it('GW-14 (7) T21 item 4: abuse 1008 waits ≥30 s; 1006/1001/1013/4408/1011/hello_timeout wait within the spread, then full jitter 1–30 s', () => {
     for (const reason of ['bad_frame', 'too_many_frames', 'too_many_topics']) {
       const soon = connected({ random: () => 0 })
       soon.socket.serverClose(1008, reason)
@@ -456,7 +456,7 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
     }
   })
 
-  it('GW-15 (7) R-48 T19 item 11: stalled at 30 s; probes within 5 s, then every 30 s; signed_out signs out', async () => {
+  it('GW-15 (7) T19 item 11: stalled at 30 s; probes within 5 s, then every 30 s; signed_out signs out', async () => {
     let refusing = false
     const { client, clock, net, seen, setProbe } = setup({ random: () => 0.5, refuse: () => refusing })
     client.start()

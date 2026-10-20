@@ -1,5 +1,5 @@
 // Reads tokens.css and app.css as text, and computes WCAG contrast, for the token tests
-// (contrast.test.ts, app-css.test.ts; T21, R-11). Only those tests import it; nothing in the app
+// (contrast.test.ts, app-css.test.ts; T21, X8). Only those tests import it; nothing in the app
 // does, so it never reaches the bundle. The stylesheets it reads hold no braces or semicolons in
 // strings, so a brace matcher is enough.
 

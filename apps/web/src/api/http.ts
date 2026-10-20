@@ -1,4 +1,4 @@
-// The web app's one way to the api (T21; R-63, K-13, D-01). Every request:
+// The web app's one way to the api (T21 item 3, D-01). Every request:
 // - names a relative /api path from ApiPath, so it can only reach this page's own origin, where
 //   the server's Origin check and the session cookie work (OD-11: CloudFront sends /api to the
 //   ALB on the same host);
@@ -59,7 +59,7 @@ export interface RequestOptions {
   // The fetch to use; the browser's own when absent.
   fetch?: typeof fetch
   // Ends the request early: Query's cancellation, or sign-in's 20 s limit (AbortSignal.timeout,
-  // AUTH-DESIGN §10.1). An ended request reads as network.
+  // T21 item 13). An ended request reads as network.
   signal?: AbortSignal
 }
 

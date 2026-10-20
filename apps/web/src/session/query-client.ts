@@ -1,4 +1,4 @@
-// The one QueryClient a signed-in document makes (T21, D-01; OD-25, R-54). It lives exactly as long
+// The one QueryClient a signed-in document makes (D-01; T21 item 3). It lives exactly as long
 // as the document and the person: the session runtime makes it at the start and clears it at the
 // end, and the next person's document makes its own. WS-02 keeps `new QueryClient(` in this file.
 //
@@ -10,7 +10,8 @@
 // together don't come back together.
 //
 // A refusal with signed_out (a 401) from any query or mutation ends the session: this is the one
-// place that notices it (R-54), and it calls onSignedOut once. halted is the session already ending.
+// place that notices it (T21 item 3), and it calls onSignedOut once. halted is the session already
+// ending.
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query'
 import { ApiFailure } from '@/api/http.ts'
 

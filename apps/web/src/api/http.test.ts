@@ -47,7 +47,7 @@ async function failureOf(promise: Promise<unknown>) {
 }
 
 describe('T21: the api client (api/http.ts)', () => {
-  it('HT-01 R-63 CL Security: same-origin credentials, no-store, no redirects, relative /api paths only', async () => {
+  it('HT-01 T21 item 3 CL Security: same-origin credentials, no-store, no redirects, relative /api paths only', async () => {
     const { fetch, calls } = fakeFetch(json(200, PERSON), json(200, { status: 'signed_out' }))
     await expect(http.apiGet('/api/session', SessionResponseForClient, { fetch })).resolves.toEqual(PERSON)
     await expect(http.apiPost('/api/auth/sign-out', {}, undefined, { fetch })).resolves.toBeUndefined()
@@ -79,7 +79,7 @@ describe('T21: the api client (api/http.ts)', () => {
     expect(calls).toHaveLength(2)
   })
 
-  it('HT-01 R-63: without a fetch passed in, the browser global is the one called, at call time', async () => {
+  it('HT-01 T21 item 3: without a fetch passed in, the browser global is the one called, at call time', async () => {
     const { fetch, calls } = fakeFetch(json(200, PERSON))
     vi.stubGlobal('fetch', fetch)
     try {
@@ -107,7 +107,7 @@ describe('T21: the api client (api/http.ts)', () => {
     expect(wrong.extra).toEqual({ triesLeft: 3 })
     expect(Object.isFrozen(wrong.extra)).toBe(true)
 
-    // A re-authentication method this build doesn't know reads as sign_in (D46, AUTH-DESIGN §10.4).
+    // A re-authentication method this build doesn't know reads as sign_in (D46, T21 item 13).
     expect((await failureOf(get())).extra).toEqual({ method: 'sign_in' })
 
     // Extras that don't read are dropped, never the error; the code's own copy fills a missing message.
@@ -140,7 +140,7 @@ describe('T21: the api client (api/http.ts)', () => {
     expect(await failureOf(get())).toMatchObject({ status: 200, code: 'invalid_response' })
   })
 
-  it('HT-03 AUTH-DESIGN §10.1: an aborted request (a time limit, a cancelled query) reads as network', async () => {
+  it('HT-03 T21 item 13: an aborted request (a time limit, a cancelled query) reads as network', async () => {
     const controller = new AbortController()
     const fetch = (async (_url: RequestInfo | URL, init?: RequestInit) =>
       new Promise<Response>((_resolve, reject) => {
@@ -154,7 +154,7 @@ describe('T21: the api client (api/http.ts)', () => {
     expect(await failureOf(pending)).toMatchObject({ status: 0, code: 'network' })
   })
 
-  it('HT-04 D-01 R-42: after haltRequests() no fetch is called, and apiGet and apiPost reject with halted', async () => {
+  it('HT-04 D-01 CHT-60: after haltRequests() no fetch is called, and apiGet and apiPost reject with halted', async () => {
     const { fetch, calls } = fakeFetch(json(200, PERSON))
     http.haltRequests()
     expect(await failureOf(http.apiGet('/api/session', SessionResponseForClient, { fetch }))).toMatchObject({
@@ -167,7 +167,7 @@ describe('T21: the api client (api/http.ts)', () => {
     expect(calls).toEqual([])
   })
 
-  it('HT-04 D-01 R-42: an answer that lands after the halt is dropped, success or failure', async () => {
+  it('HT-04 D-01 CHT-60: an answer that lands after the halt is dropped, success or failure', async () => {
     const answers: ((response: Response) => void)[] = []
     const fetch = (async () =>
       new Promise<Response>(resolve => {
