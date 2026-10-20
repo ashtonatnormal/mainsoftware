@@ -438,12 +438,13 @@ async function deliverCode(
 // it first asks whether the owner still holds the record, and only then acts on a verification the
 // provider handed back from someone else (foreign): it cancels it and starts once more, and a second
 // foreign reply is cancelled too and nothing is attached, so the attempt answers as after a lost
-// text. A request that has lost the record to a newer one by the time either start answers leaves
-// that verification alone, so it never cancels the newer owner's: a newer request that starts
-// between this one's cancel and its second start makes the verification this one then gets back
-// as foreign. Answers whether a code is now live for the owner (attached), or not (lost: a newer
-// request owns the record; foreign: twice handed someone else's); account.ts's re-authentication
-// answers 503 for either.
+// text; a first cancel that fails throws, with nothing started again or attached. A request that
+// has lost the record to a newer one by the time either start answers leaves that verification
+// alone, so it never cancels the newer owner's: a newer request that starts between this one's
+// cancel and its second start makes the verification this one then gets back as foreign. Answers
+// whether a code is now live for the owner (attached), or not (lost: a newer request owns the
+// record; foreign: twice handed someone else's); account.ts's re-authentication answers 503 for
+// either.
 export async function startCode(
   api: Api,
   info: ReqInfo,
@@ -455,6 +456,11 @@ export async function startCode(
   let started = await sms.start(sending.e164)
   if (!(await stillOwner())) return 'lost'
   if (started.foreign) {
+    // Not cancelQuietly: a cancel that failed most likely left the verification pending, so a second
+    // start would only hand it back as foreign again, texting its code once more, and attach nothing
+    // either way. The failure goes to the caller as a failed send does: nothing is attached, so the
+    // attempt answers as after a lost text (re-authentication answers 503), and the next request,
+    // which replaces the record, tries the cancel again.
     await sms.cancel(started.ref)
     started = await sms.start(sending.e164)
     if (!(await stillOwner())) return 'lost'

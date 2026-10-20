@@ -1120,6 +1120,81 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(s.logs.some(line => line.event === 'sms_provider_not_cleared' && line.personId === n.id)).toBe(true)
   })
 
+  it('T20 item 2: a foreign verification whose cancel fails gets no second start and nothing attached: sign-in answers as for any number, re-authentication 503, and a later request works (Qodo)', async () => {
+    // Budgets: F 2 code requests and an off-roster number 1; G 1 (the sign-in), and 2
+    // re-authentication requests, which count against their own windows.
+    const f = await s.person()
+    const g = await s.person()
+    const gc = await s.signIn(g)
+    // A pending verification for each number that Hearth didn't start, as a stray or planted one is:
+    // the provider hands it back as foreign, and texts its code again.
+    const strays = [(await s.sms.start(f.e164)).ref, (await s.sms.start(g.e164)).ref]
+    const cancel = s.sms.cancel.bind(s.sms)
+    const refused = new Set<string>()
+    // The provider fails the first cancel of each stray: the one the foreign check asks for.
+    const failing = vi.spyOn(s.sms, 'cancel').mockImplementation(async ref => {
+      if (strays.includes(ref) && !refused.has(ref)) {
+        refused.add(ref)
+        s.sms.failNext('cancel')
+      }
+      return cancel(ref)
+    })
+    const lastTo = (to: string) => s.sms.sent.filter(sent => sent.to === to).at(-1)
+    const failedSends = (person: Person) =>
+      s.logs
+        .filter(line => line.event === 'sms_send_failed' && line.personId === person.id)
+        .map(line => [line.level, line.kind])
+    try {
+      // Sign-in: the reply is the same as for any number, and the after-reply delivery starts once.
+      const fb = s.client()
+      const fSent = s.sms.countTo(f.e164)
+      const reply = await requestCode(fb, f.e164)
+      const offRoster = await requestCode(s.client(), s.number())
+      await s.settled()
+      expect([reply.status, reply.body]).toEqual([offRoster.status, offRoster.body])
+      expect(s.sms.countTo(f.e164)).toBe(fSent + 1)
+      expect(lastTo(f.e164)?.ref).toBe(strays[0])
+      expect(failedSends(f)).toEqual([[50, 'unavailable']])
+      // Nothing attached: a check of the stray's code asks the provider nothing and answers wrong.
+      expect(await s.valkey.hget(s.names.otp(tag(s.keys, f.e164)), 'ref')).toBeNull()
+      const checksBefore = s.sms.checks.length
+      const guess = await verifyCode(fb, lastTo(f.e164)?.code ?? '')
+      expect([guess.status, guess.error]).toEqual([401, 'code_wrong'])
+      expect(s.sms.checks.length).toBe(checksBefore)
+      // A later request cancels the stray, still pending, this time, and attaches a fresh code.
+      expect((await requestCode(fb, f.e164)).status).toBe(200)
+      await s.settled()
+      const fresh = lastTo(f.e164)
+      expect(fresh?.ref).not.toBe(strays[0])
+      const signedIn = await verifyCode(fb, fresh?.code ?? '')
+      expect([signedIn.status, signedIn.body]).toMatchObject([200, { status: 'signed_in' }])
+
+      // Re-authentication: one start, nothing attached, 503.
+      const gSent = s.sms.countTo(g.e164)
+      const asked = await gc.post('/api/auth/reauth/code/request', {})
+      expect([asked.status, asked.error]).toEqual([503, 'unavailable'])
+      expect(s.sms.countTo(g.e164)).toBe(gSent + 1)
+      expect(lastTo(g.e164)?.ref).toBe(strays[1])
+      expect(await s.valkey.hget(s.names.otp(tag(s.keys, g.e164)), 'ref')).toBeNull()
+      expect(failedSends(g)).toEqual([[50, 'unavailable']])
+      // A later request works.
+      expect((await gc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+      const code = lastTo(g.e164)
+      expect(code?.ref).not.toBe(strays[1])
+      const stamped = await gc.post('/api/auth/reauth/code/verify', { code: code?.code ?? '' })
+      expect([stamped.status, stamped.body]).toEqual([200, { status: 'reauthenticated', validForSeconds: 300 }])
+      // Each stray was asked to cancel twice: the failed cancel, then the later request's.
+      expect(s.sms.cancels.map(entry => entry.ref).filter(ref => strays.includes(ref))).toEqual([
+        strays[0],
+        strays[0],
+        strays[1],
+        strays[1],
+      ])
+    } finally {
+      failing.mockRestore()
+    }
+  })
+
   it('C0.5 Done: the PIN locks after 5 wrong tries for 15 minutes and after 10 until an admin resets it (PRD-53, ACC-02, ACC-06)', async () => {
     // Budgets: M 3 code requests, E 1, K 1, U 0, C 1, the Owner 1. M, E and K hold PIN roles, so
     // they have PINs (D46), and only an Owner resets a PIN-role holder's PIN.
