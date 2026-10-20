@@ -308,7 +308,18 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(install).toBeLessThan(e2e)
     const upload = steps.at(-1) ?? ''
     expect(upload).toMatch(/^if: failure\(\)$/m)
-    expect(upload).toMatch(/^uses: actions\/upload-artifact@v\d+$/m)
+    // By tag, or by commit with the tag in a comment, as Renovate's helpers:pinGitHubActionDigests
+    // writes it; the parser keeps a step line's comment, so the pattern allows one.
+    const uploadAction = /^uses: actions\/upload-artifact@(?:v\d+|[0-9a-f]{40})(?:\s+#.*)?$/m
+    const plantedUpload = (ref: string) =>
+      workflowJobs(`jobs:\n  check:\n    steps:\n      - if: failure()\n        uses: ${ref}\n`)[0]?.steps[0] ?? ''
+    expect(plantedUpload('actions/upload-artifact@v7')).toMatch(uploadAction)
+    expect(plantedUpload('actions/upload-artifact@0123456789abcdef0123456789abcdef01234567 # v7.0.0')).toMatch(
+      uploadAction,
+    )
+    expect(plantedUpload('actions/upload-artifact@main')).not.toMatch(uploadAction)
+    expect(plantedUpload('someone/upload-artifact@v7')).not.toMatch(uploadAction)
+    expect(upload).toMatch(uploadAction)
     expect(upload).toMatch(/^name: e2e-report$/m)
     // The report, the traces and actual screenshots, and the servers' logs; never the storage
     // state under playwright/.auth, which holds the run's session cookies (K-46).
