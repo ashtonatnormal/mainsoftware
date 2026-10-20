@@ -9,14 +9,16 @@ import { SIGN_IN } from '../src/strings/sign-in.ts'
 import { expectAxeClean } from './support/axe.ts'
 import { noAiCopy, recordAnnouncements } from './support/checks.ts'
 import { logOffset, readCode } from './support/codes.ts'
-import { expect, type Guard, SESSION_401, test } from './support/fixtures.ts'
+import { expect, type Guard, test } from './support/fixtures.ts'
 import { E2E_PIN, PERSONAS, type Persona, SIGN_IN_PERSONAS, shown, typed, WRONG_PIN } from './support/personas.ts'
 import { CHECK_SIZES, SCHEMES } from './support/viewports.ts'
 
 test.use({ storageState: { cookies: [], origins: [] } })
 
-// Every page here boots signed out (GET /api/session answers 401).
-test.beforeEach(({ guard }) => guard.expectResponses([SESSION_401]))
+// Every page here boots signed out (GET /api/session answers 401), which the guard expects only
+// until the context is signed in (support/signed-out.ts), so a session 401 after a sign-in fails the
+// test unless the test declares it; signOut() marks the context signed out again.
+test.beforeEach(({ guard, context }) => guard.expectSignedOut(context))
 
 const h1 = (page: Page) => page.getByRole('heading', { level: 1 })
 const phoneField = (page: Page) => page.getByLabel('Mobile number')
@@ -54,9 +56,11 @@ async function axeStep(page: Page, label: string, testInfo: TestInfo): Promise<v
 }
 
 // Signs out through the avatar menu, and waits for the sign-in screen's new document: its h1 has
-// focus, the reason shows under it, and the announcer says the reason once (T21 item 13, X11).
-async function signOut(page: Page): Promise<void> {
+// focus, the reason shows under it, and the announcer says the reason once (T21 item 13, X11). The
+// new document boots signed out, so the context is marked signed out before the press.
+async function signOut(page: Page, guard: Guard): Promise<void> {
   const said = await recordAnnouncements(page)
+  guard.expectSignedOut(page.context())
   await page.getByRole('button', { name: /^Account, / }).click()
   await page.getByRole('menuitem', { name: 'Sign out' }).click()
   await expect(page).toHaveURL(/\/sign-in$/)
@@ -218,7 +222,7 @@ test(
   {
     tag: '@pin',
   },
-  async ({ page }, testInfo) => {
+  async ({ page, guard }, testInfo) => {
     const priya = PERSONAS.priya
     await page.goto('/sign-in')
     let from = await sendCode(page, priya)
@@ -238,7 +242,7 @@ test(
     await expect(h1(page)).toHaveText('Chats')
     await expect(page.getByRole('button', { name: 'Account, Priya' })).toBeVisible()
 
-    await signOut(page)
+    await signOut(page, guard)
     from = await sendCode(page, priya)
     await enterCode(page, priya, from)
     await expect(h1(page)).toHaveText(SIGN_IN.steps.enter_pin)
@@ -288,7 +292,7 @@ test(
     await page.getByRole('button', { name: SIGN_IN.setPin }).click()
     await expect(h1(page)).toHaveText('Chats')
 
-    await signOut(page)
+    await signOut(page, guard)
     from = await sendCode(page, weiLing)
     await enterCode(page, weiLing, from)
     await expect(h1(page)).toHaveText(SIGN_IN.steps.enter_pin)

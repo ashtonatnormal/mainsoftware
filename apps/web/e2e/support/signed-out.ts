@@ -1,6 +1,7 @@
 // Which browser contexts the page guard (fixtures.ts) still treats as signed out (T21 item 11). A
 // signed-out page's boot answers GET /api/session 401, which the guard expects of a context open()
-// made signed out only until that context is signed in, as a 2xx from GET /api/session there shows.
+// made signed out (or a spec marked so: sign-in.spec.ts's default context, and again before each
+// sign-out there) only until that context is signed in, as a 2xx from GET /api/session there shows.
 // From then on a session 401 is the test's to declare, so an unexpected one after a sign-in fails
 // the test. It reads no DOM, so scripts/guards/e2e-setup.test.ts (ES-15) can test it in Node.
 

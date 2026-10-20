@@ -7,6 +7,7 @@
 import { execFileSync } from 'node:child_process'
 import { relative } from 'node:path'
 import { maskNumber } from '@hearth/shared'
+import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 import { codesIn } from '../../apps/web/e2e/support/codes'
 import {
@@ -57,6 +58,27 @@ function screenshotCalls(path: string, source: string): string[] {
       /(expect(?:\.soft)?)\s*\([^()]*\)\s*\.\s*toHaveScreenshot\s*\(|\btoHaveScreenshot\b/g,
     ),
   ].map(match => match[1] ?? 'toHaveScreenshot')
+}
+
+// The before hooks (beforeEach, beforeAll, on test or bare) in a spec that name the session check:
+// SESSION_401, or the path '/api/session' itself. A declaration there would hold for every test, a
+// signed-in stretch included, so it would mask a session 401 after a sign-in (ES-16).
+function sessionHooks(path: string, source: string): string[] {
+  const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  const names = (node: ts.Node): boolean =>
+    (ts.isIdentifier(node) && node.text === 'SESSION_401') ||
+    (ts.isStringLiteralLike(node) && node.text === '/api/session') ||
+    ts.forEachChild(node, child => names(child) || undefined) === true
+  const hooks: string[] = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression.getText(file)
+      if (/^(test\.)?before(Each|All)$/.test(callee) && node.arguments.some(names)) hooks.push(callee)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return hooks
 }
 
 // The persona table as a list.
@@ -427,5 +449,33 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(guard).toMatch(/this\.#signedOut\.saw\(page\.context\(\), url\.pathname, status\)/)
     expect(guard).toMatch(/return this\.#signedOut\.allows\(page\.context\(\), path, status\)/)
     expect([...guard.matchAll(/this\.#declared\([^)]*, page\)/g)]).toHaveLength(2)
+  })
+
+  it('ES-16 T21 item 11: no spec declares the session 401 in a before hook, which would mask one after a sign-in; sign-in.spec.ts marks its default context signed out instead, and again before each sign-out it expects', () => {
+    // The detector: a before hook naming the session check, by constant or path; nothing in a test.
+    expect(sessionHooks('a.spec.ts', 'test.beforeEach(({ guard }) => guard.expectResponses([SESSION_401]))')).toEqual([
+      'test.beforeEach',
+    ])
+    expect(
+      sessionHooks('a.spec.ts', "beforeAll(() => { g.expectResponses([{ path: '/api/session', status: 401 }]) })"),
+    ).toEqual(['beforeAll'])
+    expect(sessionHooks('a.spec.ts', "test('x', ({ guard }) => guard.expectResponses([SESSION_401]))")).toEqual([])
+    expect(
+      sessionHooks('a.spec.ts', 'test.beforeEach(({ guard, context }) => guard.expectSignedOut(context))'),
+    ).toEqual([])
+
+    const specs = files.filter(path => path.startsWith(E2E) && path.endsWith('.spec.ts'))
+    expect(specs).toContain(`${E2E}sign-in.spec.ts`)
+    expect(
+      specs.flatMap(path => sessionHooks(path, readRepoFile(path)).map(hook => `${relative(E2E, path)}: ${hook}`)),
+    ).toEqual([])
+
+    const signIn = codeOf('sign-in.spec.ts', readRepoFile(`${E2E}sign-in.spec.ts`))
+    expect(signIn).toMatch(/test\.beforeEach\(\(\{ guard, context \}\) => guard\.expectSignedOut\(context\)\)/)
+    // The sign-out helper marks the context before it presses Sign out; its signature makes every
+    // test that signs out pass the guard.
+    expect(signIn).toMatch(
+      /async function signOut\(page: Page, guard: Guard\)[\s\S]*?guard\.expectSignedOut\(page\.context\(\)\)[\s\S]*?name: ["']Sign out["']/,
+    )
   })
 })

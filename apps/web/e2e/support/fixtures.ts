@@ -18,8 +18,9 @@
 //     request with a 503 itself declares it).
 //   A signed-out page's boot answers GET /api/session 401. open() expects that of a context it
 //   opens signed out only until the context is signed in (a 2xx from GET /api/session there;
-//   signed-out.ts), so a 401 after the sign-in is the test's to declare; a spec whose default page
-//   is signed out declares it itself.
+//   signed-out.ts), so a 401 after the sign-in is the test's to declare. A spec whose default page
+//   is signed out marks that context itself (expectSignedOut, as sign-in.spec.ts does), and marks
+//   it again before a sign-out it expects to land on a signed-out boot.
 import {
   type BrowserContext,
   test as base,
@@ -60,8 +61,9 @@ export interface Guard {
   // A request the test aborts itself (route.abort()), and its console line.
   allowFailedRequest(path: string | RegExp): void
   // The context starts signed out: its boots' GET /api/session 401 is expected until it is signed
-  // in, which a 2xx from GET /api/session in it shows (open() calls this). A 401 from then on is
-  // undeclared unless the test declares it.
+  // in, which a 2xx from GET /api/session in it shows (open() calls this, and a spec whose default
+  // page starts signed out). A 401 from then on is undeclared unless the test declares it, or marks
+  // the context signed out again (a sign-out it expects).
   expectSignedOut(context: BrowserContext): void
   // Starts watching a context and its pages (open() and the default context do this).
   watch(context: BrowserContext): Promise<void>
