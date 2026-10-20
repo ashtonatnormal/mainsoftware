@@ -369,4 +369,19 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(jobMinutes, "the check job's timeout-minutes").toBeGreaterThan(0)
     expect(minutes * 2).toBeLessThanOrEqual(jobMinutes)
   })
+
+  it("ES-14 K-21 T14: every run, local or CI, uses a fixed number of workers whose signed-in pages stay below the realtime role's sockets per session, which every page on a project's persona shares", () => {
+    const text = codeOf('playwright.config.ts', readRepoFile(`${WEB}playwright.config.ts`))
+    // A plain number, so a local run never takes Playwright's default of half the cores.
+    const workers = Number(/^\s*workers: (\d+),$/m.exec(text)?.[1])
+    expect(workers, 'workers').toBeGreaterThan(0)
+    expect(config.workers).toBe(workers)
+    const policy = codeOf('policy.ts', readRepoFile('apps/server/src/auth/policy.ts'))
+    const perSession = Number(/^export const SOCKETS_PER_SESSION = (\d+);?$/m.exec(policy)?.[1])
+    expect(perSession, 'SOCKETS_PER_SESSION').toBeGreaterThan(0)
+    // The most signed-in pages one test keeps open at once (SH-08 and SH-09, one per size). Below
+    // the cap, not at it, so a socket still closing from a finished test can't tip it over.
+    const pagesPerTest = 3
+    expect(workers * pagesPerTest).toBeLessThan(perSession)
+  })
 })

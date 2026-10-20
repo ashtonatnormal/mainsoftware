@@ -78,7 +78,12 @@ export default defineConfig({
   forbidOnly: true,
   retries: 0,
   fullyParallel: true,
-  workers: CI ? 2 : undefined,
+  // 2 workers in every run, never Playwright's default of half the cores (K-21). Every signed-in page
+  // a project opens shares its persona's one session and opens a /ws socket, and realtime refuses a
+  // 9th socket on one session (SOCKETS_PER_SESSION, apps/server/src/auth/policy.ts) with a 429 the
+  // page guard fails on. A test keeps at most 3 signed-in pages open (SH-08, SH-09), so 2 workers
+  // hold at most 6, leaving room for sockets still closing from tests just finished (ES-14).
+  workers: 2,
   timeout: 60_000,
   // In CI the whole run (web servers and global setup included) stops and fails at 15 minutes, half
   // the check job's timeout-minutes. Actions have no timeout of their own, so a build that never
