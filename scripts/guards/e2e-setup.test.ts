@@ -2,8 +2,8 @@
 // K-38, K-39, K-46, K-69, PRD-53). The suite runs only where its config says (its own ports,
 // database, Valkey DB and provider), never inside `npm test`, never writes a PNG outside CI, and
 // spends sign-in codes only within PRD-53's windows. This guard reads the Playwright config by
-// importing it, the persona table and the screenshot matrix, and the files around them as text.
-// ES-05 and ES-10 (the check job's runner and its e2e step) land with the CI step (C0.8 S13).
+// importing it, the persona table and the screenshot matrix, and the files around them as text,
+// and CI's workflows for the check job's runner and its e2e step (ES-05, ES-10).
 import { execFileSync } from 'node:child_process'
 import { relative } from 'node:path'
 import { maskNumber } from '@hearth/shared'
@@ -27,6 +27,7 @@ import { VISUAL_SHOTS } from '../../apps/web/e2e/support/visual-matrix'
 import config from '../../apps/web/playwright.config'
 import { codeOf } from './imports'
 import { readRepoFile, repoFiles, root } from './repo-files'
+import { type WorkflowJob, workflowJobs } from './workflow'
 
 const WEB = 'apps/web/'
 const E2E = `${WEB}e2e/`
@@ -34,6 +35,17 @@ const files = repoFiles()
 const webPackage = JSON.parse(readRepoFile(`${WEB}package.json`)) as { scripts: Record<string, string> }
 const servers = [config.webServer].flat().filter(server => server !== undefined)
 const serverNamed = (name: string) => servers.find(server => server.name === name)
+
+// CI's workflows, and the check job, the required check that runs the suite (K-51).
+const workflowFiles = files.filter(path => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path))
+const ciJobs = workflowJobs(readRepoFile('.github/workflows/ci.yml'))
+const checkJob = (): WorkflowJob => {
+  const job = ciJobs.find(each => each.id === 'check')
+  if (job === undefined) throw new Error('ci.yml has no check job')
+  return job
+}
+// A step that runs the e2e suite, by npm or by Playwright itself.
+const runsE2e = (step: string) => /\bnpm run e2e\b|\bplaywright test\b/.test(step)
 
 // Every toHaveScreenshot in a file's code: `expect.soft` or `expect` when it is called on
 // `expect(<a plain argument>)`, and `toHaveScreenshot` for any other use (ES-04).
@@ -185,6 +197,13 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(config.forbidOnly).toBe(true)
   })
 
+  it('ES-05 K-26 D-07: the check job pins runs-on ubuntu-24.04, the image the visual baselines are made on', () => {
+    // The reader found the workflow's jobs (a reformatted file must fail here, not pass unread).
+    expect(ciJobs.map(job => job.id)).toEqual(expect.arrayContaining(['check', 'migrations']))
+    expect(checkJob().steps.length).toBeGreaterThan(10)
+    expect(checkJob().runsOn).toBe('ubuntu-24.04')
+  })
+
   it('ES-06 K-27: every PNG under e2e/__screenshots__ is a VISUAL_SHOTS name in visual.spec.ts, and every VISUAL_SHOTS name is unique', () => {
     expect(VISUAL_SHOTS).toHaveLength(34)
     expect(new Set(VISUAL_SHOTS).size).toBe(VISUAL_SHOTS.length)
@@ -271,6 +290,40 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
         expect(launch?.executablePath, project.name).toBe(process.env.PW_CHROMIUM_EXECUTABLE)
       } else {
         expect(launch, project.name).toBeUndefined()
+      }
+    }
+  })
+
+  it('ES-10 K-51 CL Testing and CI: npm run e2e is a step of the check job, the last but the report upload, after the browser install; the upload runs on failure and never takes playwright/.auth; no other job runs the suite', () => {
+    const steps = checkJob().steps
+    const e2e = steps.findIndex(step => /^run: npm run e2e$/m.test(step))
+    expect(e2e, 'the e2e step').toBeGreaterThan(-1)
+    expect(steps.filter(runsE2e)).toEqual([steps[e2e]])
+    expect(e2e).toBe(steps.length - 2)
+    // Chromium gates everything; WebKit and Firefox run the @smoke tests (OD-07, OD-16).
+    const install = steps.findIndex(step =>
+      /npx playwright install --with-deps --only-shell chromium webkit firefox\b/.test(step),
+    )
+    expect(install, 'the browser install').toBeGreaterThan(-1)
+    expect(install).toBeLessThan(e2e)
+    const upload = steps.at(-1) ?? ''
+    expect(upload).toMatch(/^if: failure\(\)$/m)
+    expect(upload).toMatch(/^uses: actions\/upload-artifact@v\d+$/m)
+    expect(upload).toMatch(/^name: e2e-report$/m)
+    // The report, the traces and actual screenshots, and the servers' logs; never the storage
+    // state under playwright/.auth, which holds the run's session cookies (K-46).
+    expect(upload.split('\n').filter(line => /^apps\//.test(line))).toEqual([
+      'apps/web/playwright-report/',
+      'apps/web/test-results/',
+      'apps/web/playwright/logs/',
+    ])
+    expect(upload).not.toMatch(/\.auth|include-hidden-files:\s*true/)
+    // No other job, in any workflow, runs the suite: it gates merging only as a step of check.
+    expect(workflowFiles).toContain('.github/workflows/ci.yml')
+    for (const path of workflowFiles) {
+      for (const job of workflowJobs(readRepoFile(path))) {
+        if (path === '.github/workflows/ci.yml' && job.id === 'check') continue
+        expect(job.steps.filter(runsE2e), `${path} ${job.id}`).toEqual([])
       }
     }
   })
