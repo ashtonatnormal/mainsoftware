@@ -447,6 +447,32 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(net.sockets.length).toBeGreaterThan(tried)
   })
 
+  it('RT-07 T19 item 11 T21 item 4: a probe whose request hangs is let go, so the next one 30 s later sends its own, and its 401 ends the session', async () => {
+    const calls: string[] = []
+    let answer: (() => Response) | undefined
+    vi.stubGlobal('fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(String(url))
+      const next = answer
+      // The first request never answers; it ends only when it is cancelled.
+      if (next === undefined)
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+        })
+      return next()
+    })
+    const { env, left, storage, clock } = fakeEnv(() => {}, { random: () => 0.5, refuse: true })
+    runtimeModule.startSessionRuntime(MARCUS, env)
+    clock.advance(32_500)
+    await tick()
+    expect(calls).toEqual(['/api/flags'])
+    answer = signedOut
+    clock.advance(30_000)
+    await tick()
+    expect(calls).toEqual(['/api/flags', '/api/flags'])
+    expect(left).toEqual(['replace /sign-in'])
+    expect(storage.map.get('hearth:left')).toBe('session_ended')
+  })
+
   it('RT-09 T19 item 10 Rule 6: the runtime holds person:<id>; an ok ack, an ev or a reset invalidates the topic, a refusal or a drop removes it, and a shown page pings', () => {
     const { env, clock, net, show } = fakeEnv(() => {}, { random: () => 0.5 })
     const runtime = runtimeModule.startSessionRuntime(MARCUS, env)

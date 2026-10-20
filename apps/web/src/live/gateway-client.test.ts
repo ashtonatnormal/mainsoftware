@@ -566,6 +566,65 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
     expect(seen.probes).toEqual([15_000])
   })
 
+  // Probes that answer only when the case says, each with its own answer.
+  function heldProbes(setProbe: (next: () => Promise<ProbeAnswer>) => void) {
+    const answers: ((said: ProbeAnswer) => void)[] = []
+    setProbe(
+      () =>
+        new Promise<ProbeAnswer>(resolve => {
+          answers.push(resolve)
+        }),
+    )
+    return answers
+  }
+
+  it('GW-24 (7) T21 item 4 T19 item 11: a stalled probe unanswered after 20 s is let go: the next runs on time, its late signed_out changes nothing, and a fresh one’s signs out', async () => {
+    let refusing = false
+    const { client, clock, net, seen, setProbe } = setup({ random: () => 0.5, refuse: () => refusing })
+    client.start()
+    net.last().connect()
+    refusing = true
+    const answers = heldProbes(setProbe)
+    net.last().serverClose(1006)
+    clock.advance(32_500)
+    expect(seen.probes).toEqual([32_500])
+    // The first never answers; 30 s later the next one still runs.
+    clock.advance(30_000)
+    expect(seen.probes).toEqual([32_500, 62_500])
+    answers[0]?.('signed_out')
+    await flush()
+    expect(seen.signedOut).toBe(0)
+    expect(client.status()).toBe('stalled')
+    answers[1]?.('signed_out')
+    await flush()
+    expect(seen.signedOut).toBe(1)
+    expect(client.status()).toBe('stopped')
+    expect(clock.pending()).toBe(0)
+  })
+
+  it('GW-24 (7) T21 item 4: a paused probe unanswered after 20 s is let go the same way (4426, 4403)', async () => {
+    for (const [code, reason] of [
+      [4426, 'client_outdated'],
+      [4403, 'notice_required'],
+    ] as const) {
+      const { client, clock, seen, setProbe, socket } = connected({ random: () => 0.5 })
+      const answers = heldProbes(setProbe)
+      socket.serverClose(code, reason)
+      clock.advance(15_000)
+      expect(seen.probes, reason).toEqual([15_000])
+      clock.advance(30_000)
+      expect(seen.probes, reason).toEqual([15_000, 45_000])
+      answers[0]?.('signed_out')
+      await flush()
+      expect(seen.signedOut, reason).toBe(0)
+      expect(client.status(), reason).toBe('paused')
+      answers[1]?.('signed_out')
+      await flush()
+      expect(seen.signedOut, reason).toBe(1)
+      expect(client.status(), reason).toBe('stopped')
+    }
+  })
+
   it('GW-16 P6: an unknown t or bad JSON is skipped and the socket stays open', () => {
     const { client, clock, socket, seen } = connected()
     client.hold(A)

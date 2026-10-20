@@ -40,7 +40,8 @@
 //    random point in the next 5 s and every 30 s after while it lasts; signed_out signs out. A
 //    welcome ends the episode. While paused there is no socket to hear a 4401, so probe() runs at a
 //    random point in the first 30 s and every 30 s after until resume(), and signed_out signs out
-//    there too (T21 item 4).
+//    there too (T21 item 4). A probe unanswered after 20 s is let go: the next runs on time, and the
+//    late answer counts for nothing.
 //
 // Known limit (T21 item 4): realtime refuses a session's 9th socket at the upgrade with 429, which
 // the browser shows as a 1006 close, so a 9th tab retries and reads as stalled while its probe
@@ -121,6 +122,9 @@ export const CLIENT_POLICY = {
   stalledAfterMs: 30_000,
   probeWindowMs: 5_000,
   probeEveryMs: 30_000,
+  // How long a probe may wait for its answer before it is let go, under probeEveryMs, so a request
+  // that hangs can't hold back the next probe (T21 item 4).
+  probeTimeoutMs: 20_000,
   // From open: the server's hello limit and 5 s more, for a proxy that upgrades while realtime
   // hangs.
   welcomeTimeoutMs: GATEWAY_LIMITS.helloTimeoutMs + 5_000,
@@ -301,7 +305,9 @@ export class GatewayClient {
   #stalled = false
   #stalledTimer: number | undefined
   #probeTimer: number | undefined
-  #probing = false
+  // The probe waiting for its answer, by number, until it answers or is let go.
+  #probing: number | undefined
+  #probes = 0
   // Whether the client has ever had a welcome since start() or resume(): until then it's connecting.
   #everLive = false
 
@@ -564,12 +570,18 @@ export class GatewayClient {
   }
 
   // Asks whether the session still holds, then again every 30 s while the episode or the pause
-  // lasts. One probe at a time: one still waiting skips the next. An answer counts only in the
-  // episode or pause that asked: a welcome or resume() since then has ended it.
+  // lasts. One probe at a time: one still waiting skips the next, until its 20 s are up and it is
+  // let go, its answer then counting for nothing. An answer counts only in the episode or pause
+  // that asked: a welcome or resume() since then has ended it.
   #probe(): void {
     this.#probeTimer = this.#timers.set(() => this.#probe(), CLIENT_POLICY.probeEveryMs)
-    if (this.#probing) return
-    this.#probing = true
+    if (this.#probing !== undefined) return
+    this.#probes += 1
+    const probe = this.#probes
+    this.#probing = probe
+    const deadline = this.#timers.set(() => {
+      if (this.#probing === probe) this.#probing = undefined
+    }, CLIENT_POLICY.probeTimeoutMs)
     const episode = this.#failingSince
     const paused = this.#paused
     let answer: Promise<ProbeAnswer>
@@ -581,7 +593,10 @@ export class GatewayClient {
     answer
       .catch((): ProbeAnswer => 'unknown')
       .then(said => {
-        this.#probing = false
+        // Let go at its deadline: a later probe has the say.
+        if (this.#probing !== probe) return
+        this.#probing = undefined
+        this.#timers.clear(deadline)
         if (said !== 'signed_out' || this.#stopped) return
         if (this.#failingSince === episode && this.#paused === paused) this.#signedOut()
       })
