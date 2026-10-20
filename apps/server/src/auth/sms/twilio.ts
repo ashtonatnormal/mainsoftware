@@ -117,7 +117,10 @@ export class TwilioVerify implements SmsProvider {
     const parsed = verificationReply.safeParse(reply.body)
     if (!parsed.success) throw new SmsProviderError('bug', undefined, reply.status)
     // Twilio hands back a pending verification for the same number, with every send listed; more
-    // sends than this call made means one Hearth didn't start here (sign-in.ts cancels it).
+    // sends than this call made means one Hearth didn't start here (sign-in.ts cancels it). After a
+    // try that may or may not have sent, `sends` is only an upper bound, so a verification Hearth
+    // didn't start, listing exactly one send, can pass as this call's (TECH-SPEC T20 item 2's
+    // residual).
     const listed = (parsed.data.send_code_attempts ?? []).length
     return { ref: parsed.data.sid, foreign: listed > sends }
   }

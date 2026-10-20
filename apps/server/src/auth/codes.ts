@@ -6,7 +6,7 @@
 // code or a number. The provider makes and checks the code (AQ-03); this record holds Hearth's own
 // rules, the same whatever provider sits behind sms/provider.ts: 5 minutes from the request
 // (PRD-53), 5 tries, the newest request for the number wins, and a code works only for the attempt
-// that asked for it.
+// that asked for it (one residual, after a provider glitch: TECH-SPEC T20 item 2).
 //
 // Four scripts, each atomic on Valkey's clock, compare and act: a script that finds another owner's
 // record, or none, changes nothing, so a stale attempt can never delete, cancel or spend a try of
