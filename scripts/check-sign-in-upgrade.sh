@@ -238,10 +238,10 @@ begin
 end
 \$\$"
 
-# The upgraded schema matches a fresh build (scripts/schema-digest.sql), apart from whether each rule
-# was validated, which the checks above cover.
-upgraded=$(sql -d "$db" -At -f scripts/schema-digest.sql)
-fresh=$(sql -d "$base" -At -f scripts/schema-digest.sql)
+# The upgraded schema matches a fresh build (scripts/schema-digest.sql), apart from whether the rule
+# this run leaves NOT VALID was validated, which the checks above cover.
+upgraded=$(sql -d "$db" -At -v not_valid="sessions.$kept" -f scripts/schema-digest.sql)
+fresh=$(sql -d "$base" -At -v not_valid="sessions.$kept" -f scripts/schema-digest.sql)
 if [ "$upgraded" != "$fresh" ]; then
   echo "The upgraded schema ($db) differs from a fresh build ($base):" >&2
   diff <(printf '%s\n' "$fresh") <(printf '%s\n' "$upgraded") | sed 's/^/  /' >&2 || true
