@@ -20,6 +20,11 @@ const navNames = (page: Page) => mainNav(page).getByRole('link').allInnerTexts()
 // The page's start time, which a new document changes.
 const timeOrigin = (page: Page) => page.evaluate(() => performance.timeOrigin)
 
+// What the libraries themselves put on window in the browser, never the app (SH-10): TanStack
+// Router's router (router-core's router.js, for its devtools) and zod's global config and registry
+// (zod/v4/core). Sorted.
+const LIBRARY_GLOBALS = ['__TSR_ROUTER__', '__zod_globalConfig', '__zod_globalRegistry']
+
 // The built More screen's chunk.
 const MORE_CHUNK = /\/assets\/MoreScreen-[^/]+\.js$/
 
@@ -193,8 +198,18 @@ test('SH-09 D-08 X16: exactly one visible h1 on every screen at 320, 390 and 144
 test('SH-10 SHL-26 R-37: no window.__hearth, and nothing else the app hangs on window for tests', async ({ page }) => {
   await page.goto('/chats')
   await expect(h1(page)).toHaveText('Chats')
-  const names = await page.evaluate(() => Object.keys(window).filter(name => /^__hearth|hearth/i.test(name)))
-  expect(names).toEqual([])
+  // The booted page's globals against a blank document's of the same origin in the same browser
+  // (an iframe with no src, which inherits the page's origin), so the browser's own are left out,
+  // whatever it exposes. Only the libraries' own may be added.
+  const added = await page.evaluate(() => {
+    const own = Object.keys(window)
+    const frame = document.createElement('iframe')
+    document.body.append(frame)
+    const blank = new Set(Object.keys(frame.contentWindow ?? {}))
+    frame.remove()
+    return own.filter(name => !blank.has(name))
+  })
+  expect(added.sort()).toEqual(LIBRARY_GLOBALS)
 })
 
 test("SH-11 OD-42: a failed session check shows Can't reach Hearth, and Try again recovers", async ({
