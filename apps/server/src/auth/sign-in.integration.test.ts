@@ -796,6 +796,55 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect([stamped.status, stamped.body]).toEqual([200, { status: 'reauthenticated', validForSeconds: 300 }])
   })
 
+  it('T14 item 5 T20 item 3: a provider failure during which a newer request replaced the code still answers 503 and spends none of the day’s checks', async () => {
+    // Budgets: P 2 code requests, M 2 (a sign-in, and the sign-in request that lands during M's
+    // re-authentication check). On an api of its own, so its two failures reach no other breaker.
+    const app = await s.startApi({})
+    const p = await s.person()
+    const pc = s.client({ app })
+    expect((await requestCode(pc, p.e164)).status).toBe(200)
+    const code = await s.sms.nextCode(p.e164)
+    const day = s.names.limit('otp-v24h', tag(s.keys, p.e164))
+    // The provider fails P's check, and a newer request for P's number lands before it settles.
+    const failing = vi.spyOn(s.sms, 'check').mockImplementationOnce(async () => {
+      expect((await requestCode(s.client(), p.e164)).status).toBe(200)
+      throw new Error('the provider is down')
+    })
+    let reply: Awaited<ReturnType<typeof verifyCode>>
+    try {
+      reply = await verifyCode(pc, code)
+    } finally {
+      failing.mockRestore()
+    }
+    expect([reply.status, reply.error]).toEqual([503, 'unavailable'])
+    expect(await s.valkey.zcard(day)).toBe(0)
+    // The newer owner's record is untouched: no try counted, its code live.
+    expect(await s.valkey.hget(s.names.otp(tag(s.keys, p.e164)), 'tries')).toBe('0')
+
+    // Re-authentication by SMS: a sign-in request for M's number replaces the code during the
+    // failing check, and the person's day of checks is given back the same way.
+    const m = await s.person()
+    const mc = await s.signIn(m)
+    const rc = s.client({ app })
+    rc.setCookie(SESSION_COOKIE, mc.cookie(SESSION_COOKIE) ?? '')
+    expect((await rc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+    const reauthCode = await s.sms.nextCode(m.e164)
+    const checks = s.names.limit('reauth-check-p24h', m.id)
+    const down = vi.spyOn(s.sms, 'check').mockImplementationOnce(async () => {
+      expect((await requestCode(s.client(), m.e164)).status).toBe(200)
+      throw new Error('the provider is down')
+    })
+    let reauthReply: Awaited<ReturnType<Client['post']>>
+    try {
+      reauthReply = await rc.post('/api/auth/reauth/code/verify', { code: reauthCode })
+    } finally {
+      down.mockRestore()
+    }
+    expect([reauthReply.status, reauthReply.error]).toEqual([503, 'unavailable'])
+    expect(await s.valkey.zcard(checks)).toBe(0)
+    await s.settled()
+  })
+
   it('C0.5 Done: a number not on the roster gets the identical reply and no SMS (ACC-03, PRD-53)', async () => {
     // Budgets: R 3 code requests, N (not on the roster) 3; a refused request doesn't count.
     const r = await s.person()
