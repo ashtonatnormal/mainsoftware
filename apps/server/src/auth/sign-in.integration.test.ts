@@ -1542,6 +1542,49 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     ])
   })
 
+  it('T20 item 6: a new re-authentication code request ends an approval whose stamp failed, so wrong digits stamp nothing and only the new code does (Qodo)', async () => {
+    // Budgets: Q 1 code request (the sign-in; re-authentication codes count against their own windows).
+    const q = await s.person()
+    const qc = await s.signIn(q)
+    const { id: sessionId } = await s.sessionOf(qc)
+    await s.age(sessionId, '6 minutes')
+    const fresh = async () =>
+      (
+        await s.query<{ fresh: boolean }>(
+          "select reauthenticated_at > now() - interval '5 minutes' as fresh from sessions where id = $1",
+          [sessionId],
+        )
+      )[0]?.fresh
+    expect((await qc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+    const first = await s.sms.nextCode(q.e164)
+    await s.query('begin')
+    let blocked: Awaited<ReturnType<Client['post']>>
+    try {
+      // As above: only the stamp's UPDATE waits out its 2 s, so the approval is kept.
+      await s.query('select id from sessions where id = $1 for share', [sessionId])
+      blocked = await qc.post('/api/auth/reauth/code/verify', { code: first })
+    } finally {
+      await s.query('commit')
+    }
+    expect([blocked.status, blocked.error]).toEqual([409, 'try_again'])
+    expect(await s.valkey.exists(s.names.reauthApproved(sessionId))).toBe(1)
+
+    // A new code request opens a new challenge and ends the approval with it.
+    expect((await qc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+    const second = await s.sms.nextCode(q.e164)
+    // Wrong digits are checked against the new code, and stamp nothing.
+    const checksBefore = s.sms.checks.length
+    const wrong = await qc.post('/api/auth/reauth/code/verify', { code: another(second) })
+    expect([wrong.status, wrong.body]).toMatchObject([401, { error: 'code_wrong', triesLeft: 4 }])
+    expect(s.sms.checks.length).toBe(checksBefore + 1)
+    expect(await fresh()).toBe(false)
+    expect(await s.valkey.exists(s.names.reauthApproved(sessionId))).toBe(0)
+    // The new code stamps it.
+    const right = await qc.post('/api/auth/reauth/code/verify', { code: second })
+    expect([right.status, right.body]).toEqual([200, { status: 'reauthenticated', validForSeconds: 300 }])
+    expect(await fresh()).toBe(true)
+  })
+
   it('D46 AQ-02 I2: a session issued under the PIN rule never re-authenticates by SMS, even after its role is removed and given again', async () => {
     // Budgets: A 1 code request, T 0.
     const a = await s.person({ roles: ['admin'], pin: s.newPin() })

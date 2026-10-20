@@ -44,11 +44,12 @@ export const PIN_RULE_SESSION = { lifetime: '168 hours', lifetimeSeconds: 604_80
 // Admin actions, and adding or removing a passkey, need a re-authentication from the last 5 minutes
 // (§9.4): the PIN for a session issued under the PIN rule, a fresh SMS code for anyone else
 // (D46, AQ-01; packages/access reauthMethodOf). approvedMs: how long an approved SMS code whose stamp
-// failed (409 try_again, Postgres lost) still stamps the session on a retry with no second check
-// (account.ts, T20 item 6); short, so a retry can't stretch the 5 minutes by much. sendLockMs: the
-// longest a session's SMS code request holds its send lock, so an overlapping one (a double tap)
-// answers 409 try_again instead of starting a second code (account.ts, T20 item 6); longer than a
-// usual send, and short, since a request that dies holding it blocks the next for that long.
+// failed (409 try_again, Postgres lost) still stamps the session on a retry with no second check,
+// until the session asks for a new code (account.ts, T20 item 6); short, so a retry can't stretch
+// the 5 minutes by much. sendLockMs: the longest a session's SMS code request holds its send lock,
+// so an overlapping one (a double tap) answers 409 try_again instead of starting a second code
+// (account.ts, T20 item 6); longer than a usual send, and short, since a request that dies holding
+// it blocks the next for that long.
 export const REAUTH = { window: '5 minutes', windowSeconds: 300, approvedMs: 120_000, sendLockMs: 15_000 } as const
 
 // PRD-53: 5 wrong PINs lock the PIN for 15 minutes, and every failure after that starts a new

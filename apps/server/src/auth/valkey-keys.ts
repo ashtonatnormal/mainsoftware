@@ -22,7 +22,8 @@ export function valkeyKeys(prefix: string) {
     // A passkey challenge: for a sign-in by attempt key, for re-auth or registration by session id.
     challenge: (kind: 'signin' | 'reauth' | 'register', id: string) => `${prefix}pk:${kind}:${id}`,
     // A session's approved SMS re-authentication code whose stamp hasn't committed yet, by session
-    // id: the id of the number it was sent to (account.ts, T20 item 6).
+    // id: the id of the number it was sent to. The session's next code request deletes it
+    // (account.ts, T20 item 6).
     reauthApproved: (sessionId: string) => `${prefix}reauth-ok:${sessionId}`,
     // A session's SMS re-authentication code request in progress, by session id: a random uuid,
     // its holder's, so only it frees the lock (account.ts, T20 item 6).

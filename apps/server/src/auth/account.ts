@@ -26,7 +26,8 @@
 //   answers 409 try_again before anything is opened or sent (sendLock). Its refusals carry no
 //   floor: the caller is signed in, and there's nothing to hide. An approved code is kept until its
 //   stamp commits (REAUTH.approvedMs), so a stamp that fails (409 try_again) is retried with no
-//   second code.
+//   second code; the session's next code request ends it before it opens the record, so from then
+//   on only the new code stamps.
 import { randomUUID } from 'node:crypto'
 import type { CodeSentSchema, ReauthenticatedSchema, ReauthMethod } from '@hearth/shared'
 import { sql } from 'kysely'
@@ -253,6 +254,9 @@ async function sendReauthCode(api: Api, session: SessionIds, info: ReqInfo, sms:
       return undefined
     }
     const numberTag = tag(api.keys, number.e164)
+    // A new code ends any approval this session still holds from a stamp that failed, before the
+    // record is opened, so from here only the new code stamps it (T20 item 6).
+    await fromValkey(info, api.valkey.del(api.names.reauthApproved(session.sessionId)))
     // This session owns the number's challenge from here; any earlier code is cancelled below.
     const replacedRef = await fromValkey(info, openCode(api.valkey, api.names, numberTag, owner))
     await requested('attempted')
