@@ -547,8 +547,9 @@ export async function verifyCode(
       }
     }
     const settled = await fromValkey(info, settleCode(api.valkey, api.names, attempt.numberTag, key, reserved, verdict))
-    // The provider couldn't answer: the try was given back, and so is the day's check (the per-IP
-    // window still counts the request), and the attempt stays at the code.
+    // The provider couldn't answer: the try was given back (on this attempt's own live record), and
+    // so is the day's check (the per-IP window still counts the request), even when a newer request
+    // replaced the record or another check used it meanwhile, and the attempt stays at the code.
     if (settled.result === 'failed') {
       await giveBack(api, info, [day], member)
       throw new ApiError(503, 'unavailable')

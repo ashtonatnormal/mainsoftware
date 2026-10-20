@@ -294,7 +294,8 @@ export async function reauthCodeVerify(
       )
     }
     const settled = await fromValkey(info, settleCode(api.valkey, api.names, numberTag, owner, reserved, verdict))
-    // The provider couldn't answer: the try was given back, and the day's check.
+    // The provider couldn't answer: the try was given back (on this session's own live record), and
+    // the day's check, even when a sign-in request replaced the record meanwhile.
     if (settled.result === 'failed') {
       await giveBack(api, info, [day], member)
       throw new ApiError(503, 'unavailable')
