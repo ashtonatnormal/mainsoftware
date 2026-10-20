@@ -171,8 +171,10 @@ function answerError(error: unknown, request: FastifyRequest, reply: FastifyRepl
   if (known === undefined) {
     request.log.error({ err: error }, 'request failed')
     known = new ApiError(500, 'internal')
-  } else if (known.code === 'try_again') {
-    // Another transaction got there first; the client tries again.
+  } else if (known.code === 'try_again' && !(error instanceof ApiError)) {
+    // Another transaction got there first; the client tries again. (A try_again the server
+    // answers itself, such as a re-authentication code request already in progress, logs its own
+    // line.)
     const code = (error as { code?: unknown }).code
     request.log.info({ event: 'db_conflict', code: typeof code === 'string' ? code : undefined }, 'database conflict')
   } else if (error instanceof PinSlotsFull) {

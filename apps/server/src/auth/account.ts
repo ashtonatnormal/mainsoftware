@@ -25,6 +25,7 @@
 //   Its refusals carry no floor: the caller is signed in, and there's nothing to hide. An approved
 //   code is kept until its stamp commits (REAUTH.approvedMs), so a stamp that fails (409 try_again)
 //   is retried with no second code.
+import { randomUUID } from 'node:crypto'
 import type { CodeSentSchema, ReauthenticatedSchema, ReauthMethod } from '@hearth/shared'
 import { sql } from 'kysely'
 import type { z } from 'zod'
@@ -35,7 +36,7 @@ import { openCode, reserveCode, settleCode } from '#src/auth/codes.ts'
 import { clearedCookie } from '#src/auth/cookies.ts'
 import { tag, withPinSlot } from '#src/auth/crypto.ts'
 import { ApiError, reauthRefusal } from '#src/auth/errors.ts'
-import { hit } from '#src/auth/limiter.ts'
+import { hit, runScript, script } from '#src/auth/limiter.ts'
 import {
   type AuthenticationResponse,
   authenticationOptions,
@@ -61,7 +62,7 @@ import {
   tooManyRequests,
   windowOf,
 } from '#src/auth/sign-in.ts'
-import type { Verdict } from '#src/auth/sms/provider.ts'
+import type { SmsProvider, Verdict } from '#src/auth/sms/provider.ts'
 import type { InOrg } from '#src/db/database.ts'
 import { endDevices } from '#src/devices/routes.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
@@ -167,10 +168,56 @@ async function currentNumber(trx: InOrg, session: SessionIds): Promise<{ id: str
 // The challenge record's owner for a session's re-authentication (codes.ts).
 const ownerOf = (session: SessionIds) => `r:${session.sessionId}`
 
+// KEYS[1]: reauth-send:<session id>. ARGV: the holder's token. Frees the lock only while this
+// request still holds it, so a request that outlived its lock never frees a newer request's.
+const UNLOCK = script(`
+if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end
+return 0
+`)
+
+type SendLock = { key: string; token: string }
+
+// The session's send lock, or 409 try_again: another code request from this session (a double tap,
+// two tabs) is still opening the record or sending. Every request from one session owns the record
+// as r:<session id>, so two at once would both pass startCode's owner check: the older could attach
+// its reference and the newer answer 503, after texting a code Hearth won't accept (T20 item 6).
+// Taken before anything is opened or sent; fails closed, as the route does (AQ-10).
+async function sendLock(api: Api, info: ReqInfo, session: SessionIds): Promise<SendLock> {
+  const key = api.names.reauthSending(session.sessionId)
+  const token = randomUUID()
+  if ((await fromValkey(info, api.valkey.set(key, token, 'PX', REAUTH.sendLockMs, 'NX'))) !== 'OK') {
+    info.log.info(
+      { event: 'reauth_code_busy', personId: session.userId },
+      'a re-authentication code request from this session is still in progress',
+    )
+    throw new ApiError(409, 'try_again')
+  }
+  return { key, token }
+}
+
+// Frees the send lock, best effort: a failure is logged, and the lock ends after REAUTH.sendLockMs.
+async function unlock(api: Api, info: ReqInfo, lock: SendLock): Promise<void> {
+  try {
+    await runScript(api.valkey, UNLOCK, [lock.key], [lock.token])
+  } catch (error) {
+    info.log.warn({ err: error, event: 'reauth_unlock_failed' }, 'a re-authentication send lock could not be freed')
+  }
+}
+
 export async function reauthCodeRequest(api: Api, session: SessionIds, info: ReqInfo): Promise<Answer> {
   const sms = api.sms
   if (sms === undefined) throw new ApiError(503, 'unavailable')
   await enforce(api, info, [windowOf(api, LIMITS.reauthPerSession, session.sessionId)])
+  const lock = await sendLock(api, info, session)
+  try {
+    return await sendReauthCode(api, session, info, sms)
+  } finally {
+    await unlock(api, info, lock)
+  }
+}
+
+// The request's work, under the session's send lock.
+async function sendReauthCode(api: Api, session: SessionIds, info: ReqInfo, sms: SmsProvider): Promise<Answer> {
   const owner = ownerOf(session)
   const opened = await inSession(api, info, session, async trx => {
     await actingBy(trx, session, 'code')
