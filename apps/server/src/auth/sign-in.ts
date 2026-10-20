@@ -1,10 +1,11 @@
 // The sign-in service (ACC-01, ACC-02, ACC-03, PRD-53, T14, T20, D46). A sign-in is an attempt in
 // Valkey (attempts.ts): a code is sent, the provider approves it (verified), and then someone with
-// no privileged role is signed in on the code alone, while a privileged holder (the roles only an
+// no PIN role is signed in on the code alone, while a PIN-role holder (PIN_ROLES: the roles only an
 // Owner grants) goes on to set a new PIN or pass the step-up (the account PIN, or a passkey while
 // those are switched on); a device and session are issued and the attempt is used up. Whether the
-// person is privileged is read in the transaction that acts on it (access/world.ts privilegedNow),
-// and sets the session's lifetime (PRIVILEGED_SESSION).
+// person holds a PIN role is read in the transaction that acts on it (access/world.ts
+// holdsPinRoleNow), and decides whether the session is issued under the PIN rule, with its shorter
+// lifetime (PIN_RULE_SESSION).
 // - A refused code check answers no sooner than OTP.verifyFloorMs after it arrived, and a provider
 //   that keeps failing trips the breaker, which refuses every check for a while (api.otp, T20).
 //
@@ -22,7 +23,7 @@
 // - A failure that writes (a wrong PIN's count, a failed passkey's audit row) is returned from the
 //   transaction, so it commits, and only then becomes an error.
 // - A finished sign-in appends signin.started to the outbox in its transaction (which also makes a
-//   code-only person's account row on their first sign-in), and a privileged holder's first one,
+//   code-only person's account row on their first sign-in), and a PIN-role holder's first one,
 //   which sets the PIN, account.pin_set too (C0.6, T16); a failure writes only counters and audit
 //   rows, which append nothing (outbox/coverage.ts).
 // - Valkey errors fail closed: sign-in answers 503 unavailable while Valkey is down.
@@ -38,7 +39,7 @@ import {
 } from '@hearth/shared'
 import { sql } from 'kysely'
 import type { z } from 'zod'
-import { privilegedNow } from '#src/access/world.ts'
+import { holdsPinRoleNow } from '#src/access/world.ts'
 import type { Api } from '#src/api.ts'
 import {
   type Attempt,
@@ -257,14 +258,14 @@ const sessionInput = (
   attempt: Named,
   info: ReqInfo,
   method: 'sms' | 'sms_new_pin' | 'sms_pin' | 'sms_passkey',
-  privileged: boolean,
+  pinRule: boolean,
 ) => ({
   orgId: attempt.orgId,
   personId: attempt.personId,
   phoneNumberId: attempt.phoneNumberId,
   label: deviceLabel(info.userAgent),
   method,
-  privileged,
+  pinRule,
   ip: info.ip,
   requestId: info.requestId,
 })
@@ -635,10 +636,10 @@ async function finishAgain(api: Api, info: ReqInfo, key: string, found: Attempt)
 
 // The sign-in after an approved code (D46). One transaction reads the person FOR SHARE, then their
 // roles, and acts on them, so a role granted meanwhile is either seen here or waits for it:
-// - someone with no privileged role signs in on the code alone: the account row is made if it's
+// - someone with no PIN role signs in on the code alone: the account row is made if it's
 //   their first, the device and session issued, and the attempt used up as the last statement
 //   before the commit, so a failure before it leaves the attempt verified for a retry (R1);
-// - a privileged holder goes on to set their PIN (none yet) or to enter it, with its state.
+// - a PIN-role holder goes on to set their PIN (none yet) or to enter it, with its state.
 // A leaver, or a number gone, answers stale and writes nothing.
 async function finish(api: Api, info: ReqInfo, key: string, attempt: Named): Promise<Finished> {
   const { orgId, personId, phoneNumberId } = attempt
@@ -653,7 +654,7 @@ async function finish(api: Api, info: ReqInfo, key: string, attempt: Named): Pro
   try {
     outcome = await withOrg(api.db, { orgId, system: true }, async trx => {
       if (!(await stillHere(trx, orgId, personId))) return { kind: 'stale', stale: 'left' } as const
-      if (!(await privilegedNow(trx, orgId, personId))) {
+      if (!(await holdsPinRoleNow(trx, orgId, personId))) {
         // The first sign-in makes the account (users comes before phone_numbers in the lock order).
         await sql`insert into users (id, org_id) values (${personId}, ${orgId}) on conflict (id) do nothing`.execute(
           trx,
@@ -756,7 +757,7 @@ export async function setPin(
       if (!(await stillHere(trx, orgId, personId))) throw new AttemptStale()
       // Read again here, where the session is issued: a role removed since the code was checked
       // still finishes with the PIN (stricter), with a normal lifetime (D46).
-      const privileged = await privilegedNow(trx, orgId, personId)
+      const pinRule = await holdsPinRoleNow(trx, orgId, personId)
       // The first sign-in makes the account; two at once both get here, and one then finds the
       // other's PIN below.
       await sql`insert into users (id, org_id) values (${personId}, ${orgId}) on conflict (id) do nothing`.execute(trx)
@@ -767,7 +768,7 @@ export async function setPin(
         where org_id = ${orgId} and id = ${personId}`.execute(trx)
       // Only one request turns an attempt into a session.
       if (!(await fromValkey(info, consumeAttempt(api.valkey, api.names, key)))) throw attemptExpired()
-      const issued = await issueSession(trx, sessionInput(attempt, info, 'sms_new_pin', privileged))
+      const issued = await issueSession(trx, sessionInput(attempt, info, 'sms_new_pin', pinRule))
       // As Hearth, before a session exists: the event names the person as its actor (T16 item 10).
       await appendOutbox(trx, {
         orgId,
@@ -815,7 +816,7 @@ export async function verifyPinStep(
         // Someone who has left, or whose number has gone, gets the same answer for a right and a
         // wrong PIN, and no count.
         if (!(await stillSigningIn(trx, attempt, { locked: false }))) return { kind: 'left' } as const
-        const privileged = await privilegedNow(trx, orgId, personId)
+        const pinRule = await holdsPinRoleNow(trx, orgId, personId)
         const check = await checkPin(
           trx,
           api.keys,
@@ -842,7 +843,7 @@ export async function verifyPinStep(
         if (!(await fromValkey(info, consumeAttempt(api.valkey, api.names, key)))) throw attemptExpired()
         return {
           kind: 'issued',
-          session: await issueSession(trx, sessionInput(attempt, info, 'sms_pin', privileged)),
+          session: await issueSession(trx, sessionInput(attempt, info, 'sms_pin', pinRule)),
         } as const
       }),
     ),
@@ -909,7 +910,7 @@ export async function passkeyVerify(
     key,
     withOrg(api.db, { orgId, system: true }, async trx => {
       if (!(await stillSigningIn(trx, attempt, { locked: false }))) return { kind: 'left' } as const
-      const privileged = await privilegedNow(trx, orgId, personId)
+      const pinRule = await holdsPinRoleNow(trx, orgId, personId)
       const failed = async (passkey?: string) => {
         // As for a refused PIN: a number removed since the unlocked read writes no failure.
         if (!(await numberStillTheirs(trx, orgId, personId, attempt.phoneNumberId))) throw new AttemptStale()
@@ -936,7 +937,7 @@ export async function passkeyVerify(
       if (!(await fromValkey(info, consumeAttempt(api.valkey, api.names, key)))) throw attemptExpired()
       return {
         kind: 'issued',
-        session: await issueSession(trx, sessionInput(attempt, info, 'sms_passkey', privileged)),
+        session: await issueSession(trx, sessionInput(attempt, info, 'sms_passkey', pinRule)),
       } as const
     }),
   )

@@ -54,7 +54,7 @@ describe('C0.5 api errors', () => {
   })
 
   it('ACC-06 D46 AQ-02: the PIN-reset copy asks an Owner, and no_pin says there is nothing to reset', () => {
-    // Only privileged holders have a PIN, and only an Owner resets one (AUTH-DESIGN §4.5).
+    // Only PIN-role holders have a PIN, and only an Owner resets one (AUTH-DESIGN §4.5).
     expect(MESSAGES.pin_reset_needed).toBe(
       "Your PIN needs resetting. Ask an Owner to reset it. They'll check it's you first.",
     )

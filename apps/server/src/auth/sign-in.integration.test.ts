@@ -377,15 +377,15 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     )
     expect(term).toEqual({ full_term: true, stamped: true })
     expect((await auditOf(m)).map(row => row.action)).toEqual(['auth.code_requested', 'auth.sign_in'])
-    expect((await auditOf(m))[1]).toMatchObject({ actor_id: m.id, details: { method: 'sms', privileged: false } })
+    expect((await auditOf(m))[1]).toMatchObject({ actor_id: m.id, details: { method: 'sms', pinRule: false } })
     expect(await eventsOf(m)).toEqual([
-      about(m, 'signin.started', m, { device: deviceId, session: sessionId, method: 'sms', privileged: false }),
+      about(m, 'signin.started', m, { device: deviceId, session: sessionId, method: 'sms', pin_rule: false }),
     ])
     // The spent attempt can't be used again, with the right code or any other.
     expect((await verifyCode(browser, '000000')).error).toBe('attempt_expired')
   })
 
-  it('C0.5 Done D46: a privileged holder signs in with an SMS code and a new PIN, on a 7-day session (ACC-01, ACC-02, ACC-03, T5, AQ-05)', async () => {
+  it('C0.5 Done D46: a PIN-role holder signs in with an SMS code and a new PIN, on a 7-day PIN-rule session (ACC-01, ACC-02, ACC-03, T5, AQ-05)', async () => {
     // Budgets: P 1 code request, Q 2.
     const p = await s.person({ roles: ['leadership'] })
     const q = await s.person({ roles: ['dpo'] })
@@ -489,13 +489,13 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       actor_id: p.id,
       device_id: deviceId,
       ip: browser.ip,
-      details: { method: 'sms_new_pin', privileged: true },
+      details: { method: 'sms_new_pin', pinRule: true },
     })
     expect(rows[2]).toMatchObject({ actor_id: p.id, device_id: deviceId })
     // C0.6 T16: the outbox events beside the writes. Before a session exists the transaction acts
     // as Hearth, so they name the person as their actor, as the audit rows do.
     expect(await eventsOf(p)).toEqual([
-      about(p, 'signin.started', p, { device: deviceId, session: sessionId, method: 'sms_new_pin', privileged: true }),
+      about(p, 'signin.started', p, { device: deviceId, session: sessionId, method: 'sms_new_pin', pin_rule: true }),
       about(p, 'account.pin_set', p),
     ])
 
@@ -527,11 +527,11 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect([badPin.status, badPin.error]).toEqual([400, 'invalid_pin'])
   })
 
-  it('D46 AQ-02 AQ-05: each of the six Owner-only roles sets or enters a PIN after the code and gets a 7-day privileged session; a Member and a Team Admin sign in on the code alone', async () => {
+  it('D46 AQ-02 AQ-05: each of the six Owner-only roles sets or enters a PIN after the code and gets a 7-day PIN-rule session; a Member and a Team Admin sign in on the code alone', async () => {
     // Budgets: one code request each.
-    // The session a PIN step issues: 7 days on its cookie and its row, and privileged on its
+    // The session a PIN step issues: 7 days on its cookie and its row, and pin_rule (pinRule) on its
     // signin.started event and its auth.sign_in row, with the method of that step.
-    const privilegedSession = async (
+    const pinRuleSession = async (
       person: Person,
       client: Client,
       finished: Awaited<ReturnType<Client['post']>>,
@@ -545,22 +545,22 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
         `${SESSION_COOKIE}=${client.cookie(SESSION_COOKIE)}; Path=/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax`,
         `${ATTEMPT_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`,
       ])
-      const [term] = await s.query<{ privileged: boolean }>(
-        "select expires_at - created_at = interval '168 hours' as privileged from sessions where id = $1",
+      const [term] = await s.query<{ pin_rule: boolean }>(
+        "select expires_at - created_at = interval '168 hours' as pin_rule from sessions where id = $1",
         [sessionId],
       )
-      expect(term?.privileged, role).toBe(true)
+      expect(term?.pin_rule, role).toBe(true)
       expect(
         (await eventsOf(person)).filter(event => event.type === 'signin.started'),
         role,
       ).toEqual([
-        about(person, 'signin.started', person, { device: deviceId, session: sessionId, method, privileged: true }),
+        about(person, 'signin.started', person, { device: deviceId, session: sessionId, method, pin_rule: true }),
       ])
       expect(
         (await auditOf(person)).filter(row => row.action === 'auth.sign_in'),
         role,
       ).toEqual([
-        expect.objectContaining({ actor_id: person.id, device_id: deviceId, details: { method, privileged: true } }),
+        expect.objectContaining({ actor_id: person.id, device_id: deviceId, details: { method, pinRule: true } }),
       ])
     }
     for (const role of ['owner', 'admin', 'ai_admin', 'leadership', 'dpo', 'compliance_officer'] as const) {
@@ -568,7 +568,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       const toSet = await atStepUp(first)
       expect(toSet.reply.body, role).toEqual({ status: 'code_verified', next: 'set_pin' })
       const pin = s.newPin()
-      await privilegedSession(
+      await pinRuleSession(
         first,
         toSet.client,
         await toSet.client.post('/api/auth/pin/set', { pin }),
@@ -583,7 +583,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
         next: 'step_up',
         pin: { state: 'ok' },
       })
-      await privilegedSession(again, toEnter.client, await verifyPin(toEnter.client, pinOf(again)), 'sms_pin', role)
+      await pinRuleSession(again, toEnter.client, await verifyPin(toEnter.client, pinOf(again)), 'sms_pin', role)
     }
     // A Member's leftover PIN is never asked for, and a Team Admin's role is not an Owner-only one.
     for (const codeOnly of [await s.person({ pin: s.newPin() }), await s.person({ roles: ['team_admin'] })]) {
@@ -600,26 +600,26 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
           device: deviceId,
           session: sessionId,
           method: 'sms',
-          privileged: false,
+          pin_rule: false,
         }),
       ])
     }
   })
 
-  it("D46 AQ-05/06: a privileged session ends after 168 hours, while a Member's of the same age carries on", async () => {
+  it("D46 AQ-05/06: a PIN-rule session ends after 168 hours, while a Member's of the same age carries on", async () => {
     // Budgets: P 1 code request, M 1.
     const p = await s.person({ roles: ['admin'] })
     const m = await s.person()
     const pc = await s.signIn(p)
     const mc = await s.signIn(m)
-    const [pTerm] = await s.query<{ privileged: boolean }>(
-      "select expires_at - created_at = interval '168 hours' as privileged from sessions where id = $1",
+    const [pTerm] = await s.query<{ pin_rule: boolean }>(
+      "select expires_at - created_at = interval '168 hours' as pin_rule from sessions where id = $1",
       [(await s.sessionOf(pc)).id],
     )
-    expect(pTerm?.privileged).toBe(true)
+    expect(pTerm?.pin_rule).toBe(true)
     expect((await eventsOf(p)).find(event => event.type === 'signin.started')?.ids).toMatchObject({
       method: 'sms_new_pin',
-      privileged: true,
+      pin_rule: true,
     })
     await s.age((await s.sessionOf(pc)).id, '168 hours 1 minute')
     await s.age((await s.sessionOf(mc)).id, '168 hours 1 minute')
@@ -826,7 +826,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('PRD-53: codes expire, die after 5 tries, and are replaced', async () => {
-    // Budgets: A 2 code requests, B 2, C 1, D 2. A is privileged, for the step-up's body (D46).
+    // Budgets: A 2 code requests, B 2, C 1, D 2. A holds a PIN role, for the step-up's body (D46).
     const a = await s.person({ roles: ['ai_admin'], pin: s.newPin() })
     const b = await s.person({ pin: s.newPin() })
     const c = await s.person({ pin: s.newPin() })
@@ -1015,8 +1015,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('C0.5 Done: the PIN locks after 5 wrong tries for 15 minutes and after 10 until an admin resets it (PRD-53, ACC-02, ACC-06)', async () => {
-    // Budgets: M 3 code requests, E 1, K 1, U 0, C 1, the Owner 1. M, E and K are privileged, so
-    // they have PINs (D46), and only an Owner resets a privileged holder's PIN.
+    // Budgets: M 3 code requests, E 1, K 1, U 0, C 1, the Owner 1. M, E and K hold PIN roles, so
+    // they have PINs (D46), and only an Owner resets a PIN-role holder's PIN.
     const m = await s.person({ roles: ['leadership'], pin: s.newPin() })
     const e = await s.person({ roles: ['compliance_officer'], pin: s.newPin() })
     const k = await s.person({ roles: ['ai_admin'], pin: s.newPin() })
@@ -1147,7 +1147,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('PRD-53 ACC-02: parallel PIN guesses and parallel finishes stay correct', async () => {
-    // Budgets: G 2 code requests. Privileged, so they step up with the PIN (D46).
+    // Budgets: G 2 code requests. G holds a PIN role, so steps up with the PIN (D46).
     const g = await s.person({ roles: ['dpo'], pin: s.newPin() })
     const { client: gc } = await atStepUp(g)
     const wrongPin = another(pinOf(g))
@@ -1360,14 +1360,14 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
 
     // The role removed: the session still re-authenticates only with the PIN, keeping its 7 days.
     const former = await s.revokeRole(a, 'admin')
-    expect(former.privileged).toBe(false)
+    expect(former.holdsPinRole).toBe(false)
     expect((await ac.post('/api/auth/reauth/code/request', {})).body).toMatchObject({ method: 'pin' })
     expect((await ac.post('/api/auth/reauth/pin', { pin: pinOf(a) })).status).toBe(200)
-    const [term] = await s.query<{ privileged: boolean }>(
-      "select expires_at - created_at = interval '168 hours' as privileged from sessions where id = $1",
+    const [term] = await s.query<{ pin_rule: boolean }>(
+      "select expires_at - created_at = interval '168 hours' as pin_rule from sessions where id = $1",
       [sessionId],
     )
-    expect(term?.privileged).toBe(true)
+    expect(term?.pin_rule).toBe(true)
     // Given again: no SMS stamp ever landed on the session, and the PIN's stamp counts.
     await s.grantRole(former, 'admin')
     expect((await signOutT()).status).toBe(200)
@@ -1401,7 +1401,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
         method: 'sign_in',
       },
     ])
-    const mismatch = s.logs.filter(line => line.event === 'privileged_session_mismatch')
+    const mismatch = s.logs.filter(line => line.event === 'pin_rule_session_mismatch')
     expect(mismatch.some(line => line.personId === m.id)).toBe(true)
     for (const line of mismatch) expect(Object.keys(line)).not.toContain('method')
     for (const [path, body] of [
@@ -1559,7 +1559,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
 
   it('C0.5 Done: deactivating a member signs them out everywhere and closes their socket within 2 s through the push (ACC-05, T5)', async () => {
     // Budgets: the Admin 1 code request, D 3, L 1.
-    // L is privileged, to reach the step-up (D46), so an Owner deactivates them.
+    // L holds a PIN role, to reach the step-up (D46), so an Owner deactivates them.
     const admin = await s.person({ roles: ['owner'], pin: s.newPin() })
     const d = await s.person({ pin: s.newPin() })
     const l = await s.person({ roles: ['leadership'], pin: s.newPin() })
@@ -1817,7 +1817,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
 
   it('T14: with Valkey down, sign-in fails closed and signed-in requests carry on', async () => {
     // Budgets: V 1 code request, W 1.
-    // V is privileged, so re-authenticates with the PIN (D46); W, a Member, by SMS code.
+    // V holds a PIN role, so re-authenticates with the PIN (D46); W, a Member, by SMS code.
     const v = await s.person({ roles: ['admin'], pin: s.newPin() })
     const w = await s.person()
     const signedIn = await s.signIn(v)
@@ -1877,7 +1877,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       ['auth.code_failed', { result: 'wrong', numberRemoved: true }],
     ])
 
-    // The same for a privileged holder with a PIN (D46), whose finish alone reads the account: the
+    // The same for a PIN-role holder with a PIN (D46), whose finish alone reads the account: the
     // reply shows neither their PIN's state nor whether they have a passkey, and the attempt stays
     // at the code.
     const o = await s.person({ roles: ['owner'], pin: s.newPin() })
@@ -1904,7 +1904,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
 
     // At the step-up, a PIN for a number removed since is refused right or wrong, uncounted, and
     // the attempt goes.
-    // W and Y are privileged, to reach the PIN steps (D46).
+    // W and Y hold PIN roles, to reach the PIN steps (D46).
     const w = await s.person({ roles: ['admin'], pin: s.newPin() })
     const { client: wc, reply: wStep } = await atStepUp(w)
     expect(wStep.body).toMatchObject({ next: 'step_up' })
@@ -2018,7 +2018,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     // code request, a code check, setting a PIN and a PIN check; the dormant passkey suite checks
     // its own routes, D46).
     const authIp = '192.0.2.78'
-    // P7 and P9 are privileged, to reach the PIN steps (D46).
+    // P7 and P9 hold PIN roles, to reach the PIN steps (D46).
     const p7 = await s.person({ roles: ['leadership'], pin: s.newPin() })
     const p8 = await s.person()
     const p9 = await s.person({ roles: ['leadership'] })
@@ -2058,7 +2058,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     await fill('otp-v24h', tag(s.keys, p5.e164), 10)
     expect((await verifyCode(c5, await s.sms.nextCode(p5.e164))).status).toBe(429)
 
-    // Re-authentications per session (P6 privileged, so by the PIN, D46).
+    // Re-authentications per session (P6 holds a PIN role, so by the PIN, D46).
     const p6 = await s.person({ roles: ['admin'], pin: s.newPin() })
     const c6 = await s.signIn(p6)
     await fill('reauth', (await s.sessionOf(c6)).id, 10)

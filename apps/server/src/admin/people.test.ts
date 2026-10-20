@@ -27,7 +27,7 @@ const session = { sessionId: SESSION, orgId: ORG, userId: ADMIN, deviceId: DEVIC
 function org(options: {
   fresh?: boolean
   // Whether the acting session was issued under the PIN rule (D46); the Admin holds a PIN.
-  issuedPrivileged?: boolean
+  issuedUnderPinRule?: boolean
   memberLeft?: boolean
   rows?: (statement: Statement) => unknown[] | undefined
 }) {
@@ -36,7 +36,9 @@ function org(options: {
     if (answered !== undefined) return answered
     const { text } = statement
     if (text.includes('from people p')) {
-      return [{ fresh: options.fresh ?? true, pin_set: true, issued_privileged: options.issuedPrivileged ?? true }]
+      return [
+        { fresh: options.fresh ?? true, pin_set: true, issued_under_pin_rule: options.issuedUnderPinRule ?? true },
+      ]
     }
     if (text.startsWith('select "id", "deactivated_at" from "people"')) {
       return [
@@ -211,7 +213,7 @@ describe('C0.5 ACC-05 C0.6 T16 deactivating someone', () => {
   })
 
   it('D46 AQ-02: an Admin on a session issued under the code-only rule must sign in again, even with a fresh stamp', async () => {
-    const c = context(org({ issuedPrivileged: false }))
+    const c = context(org({ issuedUnderPinRule: false }))
     const error = await refusal(deactivate(c.api, { person: MEMBER }, session, c.info))
     expect(error).toMatchObject({ status: 403, code: 'reauth_required', extra: { method: 'sign_in' }, person: ADMIN })
     const stale = context(org({ fresh: false }))

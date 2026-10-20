@@ -12,11 +12,11 @@
 // the PIN for a session issued under the PIN rule, a fresh SMS code to the person's own number for
 // any other, and a new sign-in for one that neither mends. Each route decides the method in the
 // transaction that stamps, after re-reading the acting session, and refuses any other with 409
-// reauth_method {method} before it checks or sends anything, so a privileged holder's session never
+// reauth_method {method} before it checks or sends anything, so a PIN-rule session never
 // gets an SMS stamp.
 // - The PIN counts against a per-session window that, unlike sign-in's, lets requests through when
 //   Valkey is down: re-authentication is signed-in traffic, which carries on without Valkey, and the
-//   PIN lock in Postgres still bounds guessing while the PIN slots bound the work. So privileged
+//   PIN lock in Postgres still bounds guessing while the PIN slots bound the work. So PIN-role
 //   holders keep their admin powers through a Valkey or SMS provider outage.
 // - An SMS code fails closed instead (AQ-10): the same per-session window, and per person 20 code
 //   requests and 20 code checks a rolling day. The code lives in the number's one challenge record

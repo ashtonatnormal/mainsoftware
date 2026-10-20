@@ -77,7 +77,7 @@ function signedIn(script: Script = {}) {
       return [{ session_id: sessionId, org_id: ORG, user_id: PERSON, device_id: DEVICE }]
     }
     if (text.includes('join devices d on')) {
-      return script.live === false ? [] : [{ fresh: false, pin_set: false, issued_privileged: false }]
+      return script.live === false ? [] : [{ fresh: false, pin_set: false, issued_under_pin_rule: false }]
     }
     if (text.includes('from "people"')) return [{ id: PERSON, deactivated_at: null }]
     // TEAM is live, so a team_admin row of it counts as held (World.rolesOf).

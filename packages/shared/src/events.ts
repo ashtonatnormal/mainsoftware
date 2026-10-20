@@ -76,11 +76,12 @@ export const EVENTS = {
     ids: z.strictObject({
       device: z.uuid(),
       session: z.uuid(),
-      // sms: the code alone (not privileged). sms_new_pin / sms_pin: a privileged holder's code, then
+      // sms: the code alone (no PIN role). sms_new_pin / sms_pin: a PIN-role holder's code, then
       // their new or existing PIN. sms_passkey: dormant (D46).
       method: z.enum(['sms', 'sms_new_pin', 'sms_pin', 'sms_passkey']),
-      // Privileged at issue (D46). C0.14's DPO alert reads this, never the roles at alert time.
-      privileged: z.boolean(),
+      // Issued under the PIN rule: the person held a PIN role at issue (D46). C0.14's DPO alert
+      // reads this, never the roles at alert time.
+      pin_rule: z.boolean(),
     }),
     description: 'A person signed in on a device (issueSession)',
   }),

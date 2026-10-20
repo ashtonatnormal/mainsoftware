@@ -2051,12 +2051,12 @@ describe('Rule 9 ACC-10 ADM-03 ACC-07: no run of admin actions opens content to 
 // Who signs in and re-authenticates with the PIN (D46, AQ-02), and the method each session must use
 // (AQ-01). The server reads ReauthFacts from the session in the deciding transaction; can() still
 // receives only the boolean reauthenticated() computes. The exports avoid the word privileged,
-// which R9-02 keeps for Rule 9.
+// which means Rule 9 access here (R9-02).
 describe('D46 AQ-02 AQ-01: the PIN roles and the re-authentication method', () => {
   const facts = (f: Partial<ReauthFacts> = {}): ReauthFacts => ({
     stampFresh: true,
     pinSet: true,
-    issuedPrivileged: false,
+    issuedUnderPinRule: false,
     ...f,
   })
   // The same matrix with every role row of one person revoked.
@@ -2106,24 +2106,24 @@ describe('D46 AQ-02 AQ-01: the PIN roles and the re-authentication method', () =
 
   // The whole table: the session decides first, then the holder's roles now. stampFresh never
   // changes the method, only whether the stamp counts.
-  const TABLE: { issuedPrivileged: boolean; pinSet: boolean; holderNow: boolean; method: string }[] = [
-    { issuedPrivileged: true, pinSet: true, holderNow: true, method: 'pin' },
-    { issuedPrivileged: true, pinSet: true, holderNow: false, method: 'pin' },
-    { issuedPrivileged: true, pinSet: false, holderNow: true, method: 'sign_in' },
-    { issuedPrivileged: true, pinSet: false, holderNow: false, method: 'sign_in' },
-    { issuedPrivileged: false, pinSet: true, holderNow: true, method: 'sign_in' },
-    { issuedPrivileged: false, pinSet: false, holderNow: true, method: 'sign_in' },
-    { issuedPrivileged: false, pinSet: true, holderNow: false, method: 'code' },
-    { issuedPrivileged: false, pinSet: false, holderNow: false, method: 'code' },
+  const TABLE: { issuedUnderPinRule: boolean; pinSet: boolean; holderNow: boolean; method: string }[] = [
+    { issuedUnderPinRule: true, pinSet: true, holderNow: true, method: 'pin' },
+    { issuedUnderPinRule: true, pinSet: true, holderNow: false, method: 'pin' },
+    { issuedUnderPinRule: true, pinSet: false, holderNow: true, method: 'sign_in' },
+    { issuedUnderPinRule: true, pinSet: false, holderNow: false, method: 'sign_in' },
+    { issuedUnderPinRule: false, pinSet: true, holderNow: true, method: 'sign_in' },
+    { issuedUnderPinRule: false, pinSet: false, holderNow: true, method: 'sign_in' },
+    { issuedUnderPinRule: false, pinSet: true, holderNow: false, method: 'code' },
+    { issuedUnderPinRule: false, pinSet: false, holderNow: false, method: 'code' },
   ]
   test.each(TABLE)(
-    'D46 AQ-01 AQ-02: issued under the PIN rule $issuedPrivileged, PIN set $pinSet, holder now $holderNow → $method',
-    ({ issuedPrivileged, pinSet, holderNow, method }) => {
+    'D46 AQ-01 AQ-02: issued under the PIN rule $issuedUnderPinRule, PIN set $pinSet, holder now $holderNow → $method',
+    ({ issuedUnderPinRule, pinSet, holderNow, method }) => {
       // A holder now: each of the six. Not one: a Member, a Team Admin, and a former holder.
       const people = holderNow ? SIX : [ONE.member, ONE.teamAdmin, P.formerAdmin]
       for (const person of people) {
         for (const stampFresh of [true, false]) {
-          const f = facts({ issuedPrivileged, pinSet, stampFresh })
+          const f = facts({ issuedUnderPinRule, pinSet, stampFresh })
           expect(reauthMethodOf(W, person, f), person).toBe(method)
           expect(reauthenticated(W, person, f), person).toBe(stampFresh && method !== 'sign_in')
         }
@@ -2133,12 +2133,12 @@ describe('D46 AQ-02 AQ-01: the PIN roles and the re-authentication method', () =
 
   test('D46: a session issued under the PIN rule keeps the PIN after its holder’s roles are removed', () => {
     for (const person of SIX) {
-      expect(reauthMethodOf(revoked(person), person, facts({ issuedPrivileged: true })), person).toBe('pin')
+      expect(reauthMethodOf(revoked(person), person, facts({ issuedUnderPinRule: true })), person).toBe('pin')
     }
   })
 
   test('D46 AQ-02: a remove, SMS re-auth, re-grant cycle can’t put an SMS stamp on a PIN-rule session', () => {
-    const session = facts({ issuedPrivileged: true })
+    const session = facts({ issuedUnderPinRule: true })
     // Removed: the session is still on the PIN rule, so the SMS code routes refuse it.
     const removed = revoked(ONE.admin)
     expect(holdsPinRole(removed, ONE.admin)).toBe(false)
@@ -2163,12 +2163,12 @@ describe('D46 AQ-02 AQ-01: the PIN roles and the re-authentication method', () =
     const team = { action: 'team.create' } as const
     // An Owner on a PIN-rule session with a fresh PIN stamp may act; on a code-only session, or a
     // stale stamp, or a PIN-rule session whose PIN was cleared, may not.
-    const ok = { reauthenticated: reauthenticated(W, ONE.owner, facts({ issuedPrivileged: true })) }
+    const ok = { reauthenticated: reauthenticated(W, ONE.owner, facts({ issuedUnderPinRule: true })) }
     expect(can(W, human(ONE.owner), team, ok)).toBe(true)
     for (const f of [
       facts(),
-      facts({ issuedPrivileged: true, stampFresh: false }),
-      facts({ issuedPrivileged: true, pinSet: false }),
+      facts({ issuedUnderPinRule: true, stampFresh: false }),
+      facts({ issuedUnderPinRule: true, pinSet: false }),
     ]) {
       expect(can(W, human(ONE.owner), team, { reauthenticated: reauthenticated(W, ONE.owner, f) })).toBe(false)
     }
@@ -2187,7 +2187,7 @@ describe('D46 AQ-02 AQ-01: the PIN roles and the re-authentication method', () =
     expect(reauthMethodOf(W, ONE.owner, facts())).toBe('sign_in')
     for (const [id, f] of [
       [ONE.owner, facts()],
-      [ONE.owner, facts({ issuedPrivileged: true, pinSet: false })],
+      [ONE.owner, facts({ issuedUnderPinRule: true, pinSet: false })],
       [ONE.member, facts({ stampFresh: false })],
     ] as const) {
       expect(reauthenticated(W, id, f), id).toBe(false)

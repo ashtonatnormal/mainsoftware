@@ -205,7 +205,7 @@ test('SI-08 SHL-07 X11 PRD-53: Send a new code is aria-disabled with its reason 
 })
 
 test(
-  'SI-09 AQ-02 D46 ACC-02: a privileged number’s code leads to Choose a PIN, which signs in; after Sign out, the next code leads to Enter your PIN, and the same PIN signs in; axe finds nothing serious on either PIN step',
+  'SI-09 AQ-02 D46 ACC-02: a PIN-role holder’s code leads to Choose a PIN, which signs in; after Sign out, the next code leads to Enter your PIN, and the same PIN signs in; axe finds nothing serious on either PIN step',
   {
     tag: '@pin',
   },
@@ -258,7 +258,7 @@ test('SI-10 ACC-03: a roster number with no account yet (Nadia) signs in on its 
 })
 
 test(
-  'SI-11 AQ-02 PRD-53 T14 item 9: after a privileged holder sets a PIN and signs out, each wrong PIN says how many tries are left, the 5th shows the locked view with its end time, which passes axe, and Start again goes back to the phone step',
+  'SI-11 AQ-02 PRD-53 T14 item 9: after a PIN-role holder sets a PIN and signs out, each wrong PIN says how many tries are left, the 5th shows the locked view with its end time, which passes axe, and Start again goes back to the phone step',
   {
     tag: '@pin',
   },

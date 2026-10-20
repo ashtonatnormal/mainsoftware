@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { otpChecks } from '#src/api.ts'
-import { OTP, PASSKEYS_ON, PRIVILEGED_SESSION, SESSION } from '#src/auth/policy.ts'
+import { OTP, PASSKEYS_ON, PIN_RULE_SESSION, SESSION } from '#src/auth/policy.ts'
 
 // '168 hours' → seconds.
 const seconds = (lifetime: string) => {
@@ -10,9 +10,9 @@ const seconds = (lifetime: string) => {
 }
 
 describe('D46 T20 the sign-in policy constants', () => {
-  it('AQ-05/06: a privileged session is shorter than a normal one, and each lifetime matches its seconds', () => {
-    expect(PRIVILEGED_SESSION.lifetimeSeconds).toBeLessThan(SESSION.lifetimeSeconds)
-    expect(seconds(PRIVILEGED_SESSION.lifetime)).toBe(PRIVILEGED_SESSION.lifetimeSeconds)
+  it('AQ-05/06: a PIN-rule session is shorter than a normal one, and each lifetime matches its seconds', () => {
+    expect(PIN_RULE_SESSION.lifetimeSeconds).toBeLessThan(SESSION.lifetimeSeconds)
+    expect(seconds(PIN_RULE_SESSION.lifetime)).toBe(PIN_RULE_SESSION.lifetimeSeconds)
     expect(seconds(SESSION.lifetime)).toBe(SESSION.lifetimeSeconds)
   })
 

@@ -110,7 +110,7 @@ function orgAnswer(
     pinHash?: string | null
     passkeys?: number
     roster?: boolean
-    // Roles they hold now (D46): any of the Owner-only roles makes them privileged.
+    // Roles they hold now (D46): any of the Owner-only roles is a PIN role.
     roles?: string[]
   } = {},
 ) {
@@ -322,9 +322,9 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
     expect(audit?.values).toContainEqual({ result: 'wrong', left: true })
   })
 
-  it('ACC-03 T14 D46: answers the right code sent to a privileged holder at a number removed or moved since as a wrong one, shows nothing of the account, and audits it', async () => {
+  it('ACC-03 T14 D46: answers the right code sent to a PIN-role holder at a number removed or moved since as a wrong one, shows nothing of the account, and audits it', async () => {
     const pin = `$argon2id$v=19$m=19456,t=2,p=1$${'A'.repeat(22)}$${'B'.repeat(43)}`
-    // A privileged holder with a PIN and a passkey: the one finish that reads the account and would
+    // A PIN-role holder with a PIN and a passkey: the one finish that reads the account and would
     // answer with its PIN state and passkey.
     const pool = orgPool({ numberRemoved: true, pinHash: pin, passkeys: 1, roles: ['admin'] })
     const stale = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1])
@@ -333,7 +333,7 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
       code: 'code_wrong',
       extra: { triesLeft: 4 },
     })
-    // The roles were read, so this took the privileged branch; the attempt stays where it was, and
+    // The roles were read, so this took the PIN-role branch; the attempt stays where it was, and
     // neither the PIN nor the passkeys were read.
     expect(pool.texts().some(text => text.startsWith('select person_id, role'))).toBe(true)
     expect(JSON.parse(stale.store.get(names.attempt(keyName(ATTEMPT_ID))) ?? '{}')).toMatchObject({ step: 'code_sent' })
@@ -369,7 +369,7 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
     expect(audit?.values).toContainEqual({ result: 'wrong', numberRemoved: true })
   })
 
-  it("D46 AQ-02: moves a privileged holder's first sign-in to set_pin, and one with a PIN to the step-up with their PIN state", async () => {
+  it("D46 AQ-02: moves a PIN-role holder's first sign-in to set_pin, and one with a PIN to the step-up with their PIN state", async () => {
     const first = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1])
     const firstContext = context(first.valkey, orgPool({ roles: ['admin'] }))
     expect(await verifyCode(firstContext.api, code, ATTEMPT_ID, firstContext.info)).toEqual({
@@ -402,7 +402,7 @@ describe('PRD-53 ACC-03 T14 checking a sign-in code', () => {
 describe('D46 T20 the code-only finish, the verified step, the floor and the breaker', () => {
   const attemptKey = names.attempt(keyName(ATTEMPT_ID))
 
-  it('D46 AQ-02: signs someone with no privileged role in on the code alone, making their account, and uses the attempt up last', async () => {
+  it('D46 AQ-02: signs someone with no PIN role in on the code alone, making their account, and uses the attempt up last', async () => {
     const valkey = valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1])
     const pool = orgPool({ roles: [] })
     const { api, info } = context(valkey.valkey, pool)
@@ -429,10 +429,10 @@ describe('D46 T20 the code-only finish, the verified step, the floor and the bre
     expect(session?.values.at(-1)).toBe('2160 hours')
   })
 
-  it("D46 AQ-05: the step-up reads the roles, then issues a privileged holder's session for 168 hours marked privileged; one whose role went since gets the normal term", async () => {
+  it("D46 AQ-05: the step-up reads the roles, then issues a PIN-role holder's session under the PIN rule, for 168 hours and marked so; one whose role went since gets the normal term", async () => {
     const keys = deriveKeys('unit-test-unit-test-unit-test-unit-test')
     const stored = await hashPin('381904', keys)
-    for (const [roles, lifetime, maxAge, privileged] of [
+    for (const [roles, lifetime, maxAge, pinRule] of [
       [['owner'], '168 hours', 604_800, true],
       [[], '2160 hours', 7_776_000, false],
     ] as const) {
@@ -459,7 +459,7 @@ describe('D46 T20 the code-only finish, the verified step, the floor and the bre
       expect(session?.values.at(-1), roles.join()).toBe(lifetime)
       const audit = pool.statements.find(st => st.text.startsWith('insert into "audit_events"'))
       expect(audit?.values).toContain('auth.sign_in')
-      expect(audit?.values, roles.join()).toContainEqual({ method: 'sms_pin', privileged })
+      expect(audit?.values, roles.join()).toContainEqual({ method: 'sms_pin', pinRule })
     }
   })
 

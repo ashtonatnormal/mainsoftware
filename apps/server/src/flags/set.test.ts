@@ -41,15 +41,17 @@ const REGISTRY = {
 
 // The org: an Admin and a Member. `revision` is what set_feature_flag() returns (1 is the row's
 // own: a change that changed nothing); `fails` makes it raise.
-// issuedPrivileged: whether the acting session was issued under the PIN rule (D46); the Admin holds
+// issuedUnderPinRule: whether the acting session was issued under the PIN rule (D46); the Admin holds
 // a PIN.
 function org(
-  options: { fresh?: boolean; issuedPrivileged?: boolean; row?: boolean; revision?: string; fails?: Error } = {},
+  options: { fresh?: boolean; issuedUnderPinRule?: boolean; row?: boolean; revision?: string; fails?: Error } = {},
 ) {
   return scriptedPool((statement: Statement) => {
     const { text } = statement
     if (text.includes('from people p')) {
-      return [{ fresh: options.fresh ?? true, pin_set: true, issued_privileged: options.issuedPrivileged ?? true }]
+      return [
+        { fresh: options.fresh ?? true, pin_set: true, issued_under_pin_rule: options.issuedUnderPinRule ?? true },
+      ]
     }
     if (text.startsWith('select "id", "deactivated_at" from "people"')) {
       return [
@@ -188,7 +190,7 @@ describe('C0.6 T17 item 9 POST /api/admin/flags/set', () => {
   })
 
   it('D46 AQ-02: refuses an Admin on a session issued under the code-only rule with reauth_required {method: sign_in}', async () => {
-    const pool = org({ issuedPrivileged: false })
+    const pool = org({ issuedUnderPinRule: false })
     const c = context(pool)
     expect(await refusal(setFlag(c.api, body({ key: 'it.optional', enabled: true }), session(), c.info))).toMatchObject(
       {

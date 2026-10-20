@@ -551,7 +551,7 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
   })
 
   it('R6-10 ACC-04 PRD-53: a PIN reset closes every socket of the person', async () => {
-    // A PIN belongs to a privileged holder (D46), and only an Owner resets one.
+    // A PIN belongs to a PIN-role holder (D46), and only an Owner resets one.
     const admin = await s.person({ roles: ['owner'], pin: s.newPin() })
     const r = await s.person({ roles: ['leadership'], pin: s.newPin() })
     const sockets = [await s.gatewaySocket(await s.signIn(r)), await s.gatewaySocket(await s.signIn(r))]
@@ -566,7 +566,7 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     }
   })
 
-  it('D46 AQ-05/06 T19 item 13: a privileged session that runs out (168 h) closes its socket by the re-check, its latency from expires_at under 60 s', async () => {
+  it('D46 AQ-05/06 T19 item 13: a PIN-rule session that runs out (168 h) closes its socket by the re-check, its latency from expires_at under 60 s', async () => {
     const lone = await s.startRealtime({ recheckMs: 500, subscribe: false })
     const p = await s.person({ roles: ['leadership'] })
     const browser = await s.signIn(p)

@@ -41,7 +41,7 @@ export interface ActingOptions {
 // live; otherwise its raw re-authentication facts (D46): whether it re-authenticated in the last 5
 // minutes, whether its person has a PIN, and whether it was issued under the PIN rule (its lifetime
 // is shorter than SESSION's: only issueSession writes expires_at, from the same now() as
-// created_at, policy.ts PRIVILEGED_SESSION). The rows are taken FOR SHARE, person, device, session
+// created_at, policy.ts PIN_RULE_SESSION). The rows are taken FOR SHARE, person, device, session
 // (the lock order); the users row is read with no lock (FOR SHARE OF names only p, d and s), so a
 // deactivation, sign-out or revocation in progress either waits for this action, or makes it wait
 // and then refuse (CLAUDE.md, Database).
@@ -56,10 +56,10 @@ export async function actingSession(
       : options.person === 'no_key_update'
         ? sql`for no key update of p for share of d, s`
         : sql`for share of p, d, s`
-  const { rows } = await sql<{ fresh: boolean; pin_set: boolean; issued_privileged: boolean }>`
+  const { rows } = await sql<{ fresh: boolean; pin_set: boolean; issued_under_pin_rule: boolean }>`
     select s.reauthenticated_at > now() - ${REAUTH.window}::interval as fresh,
       u.pin_hash is not null as pin_set,
-      s.expires_at - s.created_at < ${SESSION.lifetime}::interval as issued_privileged
+      s.expires_at - s.created_at < ${SESSION.lifetime}::interval as issued_under_pin_rule
     from people p
     join devices d on d.org_id = p.org_id and d.user_id = p.id
     join sessions s on s.org_id = d.org_id and s.device_id = d.id
@@ -72,7 +72,11 @@ export async function actingSession(
   const row = rows[0]
   return row === undefined
     ? undefined
-    : { stampFresh: row.fresh === true, pinSet: row.pin_set === true, issuedPrivileged: row.issued_privileged === true }
+    : {
+        stampFresh: row.fresh === true,
+        pinSet: row.pin_set === true,
+        issuedUnderPinRule: row.issued_under_pin_rule === true,
+      }
 }
 
 const ms = (time: Date | null): number | null => (time === null ? null : time.getTime())
@@ -125,7 +129,7 @@ export async function loadWorld(trx: InOrg, orgId: string, options: { credential
 // exact for each of them. Nothing else is loaded, and can() is asked only about those people, and
 // only topic requests (realtime/topics.ts). No row is locked: teams and memberships are never
 // locked, so the lock order (CLAUDE.md, Database) is unchanged, and a writing transaction may use it
-// too (privilegedNow and reauthMethodNow below).
+// too (holdsPinRoleNow and reauthMethodNow below).
 export async function loadTopicWorld(trx: InOrg, orgId: string, people: readonly string[]): Promise<World> {
   const ids = [...new Set(people)]
   const { rows: persons } = await sql<{ id: string; deactivated_at: Date | null }>`
@@ -151,10 +155,10 @@ export async function loadTopicWorld(trx: InOrg, orgId: string, people: readonly
   })
 }
 
-// Whether the person holds a privileged role now (D46, AQ-02): read in the transaction that acts on
+// Whether the person holds a PIN role now (D46, AQ-02): read in the transaction that acts on
 // it (a sign-in's finish, a PIN step), after the person's row was read FOR SHARE, as its own
 // statement with no lock on role_assignments. The person's row is where a sign-in and a grant meet.
-export async function privilegedNow(trx: InOrg, orgId: string, personId: string): Promise<boolean> {
+export async function holdsPinRoleNow(trx: InOrg, orgId: string, personId: string): Promise<boolean> {
   return holdsPinRole(await loadTopicWorld(trx, orgId, [personId]), personId)
 }
 

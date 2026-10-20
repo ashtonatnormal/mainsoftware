@@ -33,7 +33,7 @@ export class ApiError extends Error {
   readonly extra: Extras
   readonly clear: readonly ('session' | 'attempt')[]
   // The acting person, on a re-authentication refusal (reauthRefusal): the error handler logs
-  // reauth_wrong_method on a 409 reauth_method, and privileged_session_mismatch when the method is
+  // reauth_wrong_method on a 409 reauth_method, and pin_rule_session_mismatch when the method is
   // sign_in, with this id and no other personal data (D46). Never sent.
   readonly person: string | undefined
 

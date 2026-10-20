@@ -376,15 +376,15 @@ const issueThrough = (person: string, number: string, device: string, session: s
 // C0.8 (D46). A role grant as C0.16 will make one for someone with no live session: their person row
 // FOR NO KEY UPDATE first, then the role row (the owner plays it; no session is ended, since
 // role_changed arrives only with C0.16's migration).
-const grantPrivileged = (person: string, role: string): Step => ({
+const grantPinRole = (person: string, role: string): Step => ({
   as: 'owner',
   sql: `select 1 from public.people where org_id = '${ORG}' and id = '${id(person)}' for no key update;
         insert into public.role_assignments (org_id, person_id, role, created_by)
         values ('${ORG}', '${id(person)}', '${role}', '${ADMIN}')`,
 })
 // A code-only sign-in's finish as the server runs it (sign-in.ts finish()): the person FOR SHARE,
-// then their roles read as their own statement with no lock, and only for someone with no
-// privileged role the account, device and session.
+// then their roles read as their own statement with no lock, and only for someone with no PIN
+// role the account, device and session.
 const codeOnlyFinish = (person: string, device: string, session: string): Step => ({
   as: 'app',
   user: SYSTEM,
@@ -392,7 +392,7 @@ const codeOnlyFinish = (person: string, device: string, session: string): Step =
           perform 1 from public.people where org_id = '${ORG}' and id = '${id(person)}' and deactivated_at is null for share;
           if exists (select 1 from public.role_assignments where org_id = '${ORG}' and person_id = '${id(person)}'
                      and revoked_at is null and role in ('owner', 'admin', 'ai_admin', 'leadership', 'dpo', 'compliance_officer'))
-          then raise exception 'privileged: the PIN step, no session'; end if;
+          then raise exception 'pin role: the PIN step, no session'; end if;
           insert into public.users (id, org_id) values ('${id(person)}', '${ORG}') on conflict (id) do nothing;
           insert into public.devices (id, org_id, user_id, label) values ('${id(device)}', '${ORG}', '${id(person)}', 'New phone');
           insert into public.sessions (id, org_id, user_id, device_id, token_hash, expires_at)
@@ -864,11 +864,11 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
   [
     "D46 AQ-02: a code-only sign-in finish waits for a role grant holding the person's row, then reads the role and issues nothing",
     async watcher => {
-      const { waited, error } = await race(watcher, grantPrivileged('c9', 'admin'), codeOnlyFinish('c9', 'd9', 'f0'))
+      const { waited, error } = await race(watcher, grantPinRole('c9', 'admin'), codeOnlyFinish('c9', 'd9', 'f0'))
       expect(waited, 'the finish did not wait for the grant, so it could not see it')
-      expect(error?.includes('privileged') === true, `expected the PIN step, got ${error ?? 'a session'}`)
+      expect(error?.includes('pin role') === true, `expected the PIN step, got ${error ?? 'a session'}`)
       const made = await watcher.query('select 1 from public.sessions where user_id = $1', [id('c9')])
-      expect(made.rowCount === 0, 'a session was issued to a privileged holder on the code alone')
+      expect(made.rowCount === 0, 'a session was issued to a PIN-role holder on the code alone')
     },
   ],
   [

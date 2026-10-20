@@ -328,7 +328,7 @@ describe('C0.6 T16 the outbox on the Compose stack: delivered once, in order, re
   })
 
   it('C0 exit T16 item 4: a real route whose transaction fails after all its writes leaves no account, session or event; the next sign-in emits each once', async () => {
-    // Privileged, so the sign-in goes on to set a PIN (D46).
+    // Holds a PIN role, so the sign-in goes on to set a PIN (D46).
     const person = await s.person({ roles: ['leadership'] })
     // The set-PIN request writes the account, the PIN, the device, the session and their events,
     // then fails at its last audit row.

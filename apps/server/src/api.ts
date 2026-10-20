@@ -190,10 +190,10 @@ function answerError(error: unknown, request: FastifyRequest, reply: FastifyRepl
       )
     }
     if (known.extra.method === 'sign_in') {
-      // A session that only a new sign-in mends (D46): a privileged role reached a code-only
+      // A session that only a new sign-in mends (D46): a PIN role reached a code-only
       // session, or a PIN-rule session lost its PIN. The person's id only.
       request.log.warn(
-        { event: 'privileged_session_mismatch', personId: known.person },
+        { event: 'pin_rule_session_mismatch', personId: known.person },
         'this session must sign in again to re-authenticate',
       )
     }

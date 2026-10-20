@@ -24,11 +24,11 @@ export const OWNER_ONLY_ROLES: readonly OrgRole[] = [
   'dpo',
   'compliance_officer',
 ]
-// The privileged roles (D46): they sign in and re-authenticate with the account PIN after the SMS
-// code. Named PIN_ROLES, not by the word privileged, which R9-02 keeps for Rule 9 alone. The
-// owner's default is the roles only an Owner grants; roles.test.ts pins the two lists equal, so
-// splitting them is a reviewed change. A code constant: flags never gate an access or safety
-// control (CLAUDE.md, Database).
+// The PIN roles (D46): they sign in and re-authenticate with the account PIN after the SMS code.
+// Named for that, not by the word privileged, which means Rule 9 access here and R9-02 keeps out of
+// this package's exports. The owner's default is the roles only an Owner grants; roles.test.ts pins
+// the two lists equal, so splitting them is a reviewed change. A code constant: flags never gate an
+// access or safety control (CLAUDE.md, Database).
 export const PIN_ROLES: readonly OrgRole[] = OWNER_ONLY_ROLES
 // The roles whose grant needs a second approver, because they open Rule 9 access (PRD-85).
 export const TWO_PERSON_ROLES: readonly OrgRole[] = ['dpo', 'compliance_officer']

@@ -6,8 +6,8 @@
 //
 // As in sign-in.integration.test.ts, each test makes its own people and clients, and PRD-53's 3
 // code requests per number per 10 minutes aren't loosened: each test's first comment gives every
-// person's budget. A passkey stands in for a set PIN, and only privileged holders have PINs, so the
-// people who use one are privileged (D46).
+// person's budget. A passkey stands in for a set PIN, and only PIN-role holders have PINs, so the
+// people who use one hold a PIN role (D46).
 //
 // afterAll runs the sign-in suite's sweep (testing/leaks.ts): no log line or audit row holds a
 // number, code, PIN, session token or attempt id; every /api reply was no-store, held no token or
@@ -150,7 +150,7 @@ describe('D46 the dormant passkeys, switched on for this suite alone (ACC-02, T1
   })
 
   it('D46 ACC-02: a passkey is added, used at step-up while the PIN is locked, used to re-authenticate, and removed', async () => {
-    // Budgets: P 3 code requests, W 1. Both privileged: a passkey stands in for a set PIN (D46).
+    // Budgets: P 3 code requests, W 1. Both hold a PIN role: a passkey stands in for a set PIN (D46).
     const p = await s.person({ roles: ['leadership'] })
     const w = await s.person({ roles: ['leadership'], pin: s.newPin() })
     const authenticator = createAuthenticator(APP_ORIGIN)
@@ -275,7 +275,7 @@ describe('D46 the dormant passkeys, switched on for this suite alone (ACC-02, T1
     expect([none.status, none.error]).toEqual([409, 'no_passkey'])
   })
 
-  it('D46 AQ-05: a privileged passkey sign-in gets a 7-day session and its events, and GET /api/devices lists the passkey', async () => {
+  it('D46 AQ-05: a PIN-role holder’s passkey sign-in gets a 7-day PIN-rule session and its events, and GET /api/devices lists the passkey', async () => {
     // Budgets: P 2 code requests.
     const p = await s.person({ roles: ['owner'] })
     const authenticator = createAuthenticator(APP_ORIGIN)
@@ -294,13 +294,13 @@ describe('D46 the dormant passkeys, switched on for this suite alone (ACC-02, T1
       `${SESSION_COOKIE}=${second.cookie(SESSION_COOKIE)}; Path=/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax`,
       `${ATTEMPT_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`,
     ])
-    const [term] = await s.query<{ privileged: boolean }>(
-      "select expires_at - created_at = interval '168 hours' as privileged from sessions where id = $1",
+    const [term] = await s.query<{ pin_rule: boolean }>(
+      "select expires_at - created_at = interval '168 hours' as pin_rule from sessions where id = $1",
       [sessionId],
     )
-    expect(term?.privileged).toBe(true)
+    expect(term?.pin_rule).toBe(true)
     expect((await eventsOf(p)).filter(event => event.type === 'signin.started').at(-1)).toEqual(
-      about(p, 'signin.started', p, { device: deviceId, session: sessionId, method: 'sms_passkey', privileged: true }),
+      about(p, 'signin.started', p, { device: deviceId, session: sessionId, method: 'sms_passkey', pin_rule: true }),
     )
 
     const devices = await second.get('/api/devices')
@@ -334,7 +334,7 @@ describe('D46 the dormant passkeys, switched on for this suite alone (ACC-02, T1
   })
 
   it('PRD-53 T14: the passkey steps are refused from an address past its sign-in limit, and after the number is removed', async () => {
-    // Budgets: P 1 code request, W 1. Both privileged, to reach the step-up (D46).
+    // Budgets: P 1 code request, W 1. Both hold a PIN role, to reach the step-up (D46).
     const authIp = '192.0.2.79'
     const p = await s.person({ roles: ['leadership'], pin: s.newPin() })
     const atPin = s.client({ ip: authIp })

@@ -19,7 +19,7 @@ const input = {
   phoneNumberId: NUMBER,
   label: 'iPhone · Safari',
   method: 'sms_pin',
-  privileged: true,
+  pinRule: true,
   ip: '198.51.100.7',
   requestId: 'f0000000-0000-4000-8000-000000000001',
 } as const
@@ -66,30 +66,30 @@ describe('C0.5 T5 C0.6 T16 D46 issuing a session at the end of a sign-in', () =>
         type: 'signin.started',
         entity: PERSON,
         subjects: [PERSON],
-        ids: { device: DEVICE, session: SESSION, method: 'sms_pin', privileged: true },
+        ids: { device: DEVICE, session: SESSION, method: 'sms_pin', pin_rule: true },
         actor: PERSON,
       },
     ])
     expect(number?.values).toEqual([ORG, NUMBER, PERSON])
     expect(device?.values).toEqual([ORG, PERSON, 'iPhone · Safari'])
-    // Only the token's hash is stored, and a privileged holder's session lasts 7 days (D46).
+    // Only the token's hash is stored, and a session issued under the PIN rule lasts 7 days (D46).
     expect(session?.values).toEqual([ORG, PERSON, DEVICE, sha256(issued.token), '168 hours'])
     expect(JSON.stringify(statements)).not.toContain(issued.token)
     expect(audit?.values).toContain('auth.sign_in')
-    expect(audit?.values).toContainEqual({ method: 'sms_pin', privileged: true })
+    expect(audit?.values).toContainEqual({ method: 'sms_pin', pinRule: true })
   })
 
   it('D46 AQ-05: a code-only session lasts 90 days and says so on signin.started and auth.sign_in', async () => {
     const { db, statements } = issuing()
     const issued = await withOrg(db, { orgId: ORG, userId: PERSON }, trx =>
-      issueSession(trx, { ...input, method: 'sms', privileged: false }),
+      issueSession(trx, { ...input, method: 'sms', pinRule: false }),
     )
     expect(issued.maxAgeSeconds).toBe(7_776_000)
     const session = statements.find(s => s.text.startsWith('insert into sessions'))
     expect(session?.values.at(-1)).toBe('2160 hours')
-    expect(appended(statements)[0]?.ids).toEqual({ device: DEVICE, session: SESSION, method: 'sms', privileged: false })
+    expect(appended(statements)[0]?.ids).toEqual({ device: DEVICE, session: SESSION, method: 'sms', pin_rule: false })
     const audit = statements.find(s => s.text.startsWith('insert into "audit_events"'))
-    expect(audit?.values).toContainEqual({ method: 'sms', privileged: false })
+    expect(audit?.values).toContainEqual({ method: 'sms', pinRule: false })
   })
 
   it('refuses with AttemptStale when the number was removed or moved since the code was sent', async () => {

@@ -34,13 +34,14 @@ export const SESSION = {
   touchEveryMs: 60_000,
 } as const
 
-// A privileged holder's session (D46, AQ-05/06): 7 days, set at issue in expires_at like SESSION's,
-// so every lookup enforces it with no role read. Must stay below SESSION.lifetime: re-authentication
-// tells a session issued under the PIN rule by its shorter lifetime, and policy.test.ts pins that.
-export const PRIVILEGED_SESSION = { lifetime: '168 hours', lifetimeSeconds: 604_800 } as const
+// A session issued under the PIN rule, to a PIN-role holder (D46, AQ-05/06): 7 days, set at issue
+// in expires_at like SESSION's, so every lookup enforces it with no role read. Must stay below
+// SESSION.lifetime: re-authentication tells a session issued under the PIN rule by its shorter
+// lifetime, and policy.test.ts pins that.
+export const PIN_RULE_SESSION = { lifetime: '168 hours', lifetimeSeconds: 604_800 } as const
 
 // Admin actions, and adding or removing a passkey, need a re-authentication from the last 5 minutes
-// (§9.4): the PIN for a session issued to a privileged holder, a fresh SMS code for anyone else
+// (§9.4): the PIN for a session issued under the PIN rule, a fresh SMS code for anyone else
 // (D46, AQ-01; packages/access reauthMethodOf).
 export const REAUTH = { window: '5 minutes', windowSeconds: 300 } as const
 
@@ -96,7 +97,7 @@ export const SOCKETS_PER_SESSION = 8
 // protocol owns every close code (packages/shared GATEWAY_CLOSE, TECH-SPEC T19 item 10).
 export const SIGNED_OUT_CLOSE = GATEWAY_CLOSE.signedOut
 
-// D46: passkeys are kept, switched off. A passkey stands in for a set PIN, and only privileged
+// D46: passkeys are kept, switched off. A passkey stands in for a set PIN, and only PIN-role
 // holders have PINs. While off, the passkey routes aren't registered (an /api 404), the step-up
 // reply has no passkey key and GET /api/devices lists no passkeys. policy.test.ts pins this false,
 // so turning it on is a reviewed change; never a flag or an env var. The integration harness turns

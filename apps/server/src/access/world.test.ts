@@ -24,7 +24,7 @@ function org(fresh: boolean | 'ended' = true, issued = true) {
   return scriptedPool((statement: Statement) => {
     const { text } = statement
     if (text.includes('from people p')) {
-      return fresh === 'ended' ? [] : [{ fresh, pin_set: true, issued_privileged: issued }]
+      return fresh === 'ended' ? [] : [{ fresh, pin_set: true, issued_under_pin_rule: issued }]
     }
     if (text.startsWith('select "id", "deactivated_at" from "people"')) {
       return [
@@ -58,14 +58,14 @@ describe('C0.5 T14 the acting session, re-read in the action’s own transaction
   it('locks person, device and session FOR SHARE by default, and says whether the re-authentication is fresh', async () => {
     const { db, statements } = org(true)
     const acting = await withOrg(db, { orgId: ORG, userId: ADMIN }, trx => actingSession(trx, session(ADMIN)))
-    expect(acting).toEqual({ stampFresh: true, pinSet: true, issuedPrivileged: true })
+    expect(acting).toEqual({ stampFresh: true, pinSet: true, issuedUnderPinRule: true })
     const read = statements.find(s => s.text.includes('from people p'))
     expect(read?.text).toMatch(/for share of p, d, s$/)
     expect(read?.text).toContain('s.reauthenticated_at > now() - $1::interval as fresh')
     // D46: the users row joins unlocked, and a session issued under the PIN rule is the one whose
     // lifetime is shorter than SESSION's.
     expect(read?.text).toContain('u.pin_hash is not null as pin_set')
-    expect(read?.text).toContain('s.expires_at - s.created_at < $2::interval as issued_privileged')
+    expect(read?.text).toContain('s.expires_at - s.created_at < $2::interval as issued_under_pin_rule')
     expect(read?.text).toContain('join users u on u.org_id = p.org_id and u.id = p.id')
     expect(read?.values).toEqual(['5 minutes', '2160 hours', ORG, ADMIN, MY_DEVICE, SESSION, '30 days'])
   })
@@ -78,7 +78,7 @@ describe('C0.5 T14 the acting session, re-read in the action’s own transaction
       const { db, statements } = org(false)
       expect(
         await withOrg(db, { orgId: ORG, userId: ADMIN }, trx => actingSession(trx, session(ADMIN), options)),
-      ).toEqual({ stampFresh: false, pinSet: true, issuedPrivileged: true })
+      ).toEqual({ stampFresh: false, pinSet: true, issuedUnderPinRule: true })
       expect(statements.find(s => s.text.includes('from people p'))?.text).toMatch(ending)
     }
   })

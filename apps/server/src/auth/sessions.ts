@@ -11,7 +11,7 @@ import { writeAudit } from '#src/auth/audit.ts'
 import { readCookie, SESSION_COOKIE } from '#src/auth/cookies.ts'
 import { newSecret, sha256 } from '#src/auth/crypto.ts'
 import { ApiError } from '#src/auth/errors.ts'
-import { PRIVILEGED_SESSION, SESSION } from '#src/auth/policy.ts'
+import { PIN_RULE_SESSION, SESSION } from '#src/auth/policy.ts'
 import { type Database, type InOrg, withOrg } from '#src/db/database.ts'
 import { type SessionIds, sessionByToken } from '#src/db/pre-org.ts'
 import type { ReqInfo } from '#src/http.ts'
@@ -154,12 +154,12 @@ export interface IssuedSession {
 // already read the person FOR SHARE (sign-in.ts), appends signin.started to the outbox (C0.6, T16)
 // and audits auth.sign_in. The number the code went to is read again FOR SHARE, so a number removed
 // since the code was sent can't finish a sign-in (ACC-03, T14). The session starts re-authenticated:
-// the sign-in just proved the code, and for a privileged holder the PIN (0006's default stamps it at
-// the start). `privileged` is what the caller read of the person's roles in this same transaction
-// (access/world.ts privilegedNow, D46): it sets the shorter PRIVILEGED_SESSION lifetime and is
-// carried on signin.started and auth.sign_in (C0.14's DPO alert reads it there). The caller
-// acts as the org's system principal (no session exists yet), so the event names the person as its
-// actor, as the audit row does.
+// the sign-in just proved the code, and for a PIN-role holder the PIN (0006's default stamps it at
+// the start). `pinRule` is what the caller read of the person's roles in this same transaction
+// (access/world.ts holdsPinRoleNow, D46): it issues the session under the PIN rule, with the shorter
+// PIN_RULE_SESSION lifetime, and is carried on signin.started (pin_rule) and auth.sign_in (pinRule),
+// where C0.14's DPO alert reads it. The caller acts as the org's system principal (no session
+// exists yet), so the event names the person as its actor, as the audit row does.
 export async function issueSession(
   trx: InOrg,
   input: {
@@ -168,13 +168,13 @@ export async function issueSession(
     phoneNumberId: string
     label: string
     method: 'sms' | 'sms_new_pin' | 'sms_pin' | 'sms_passkey'
-    privileged: boolean
+    pinRule: boolean
     ip: string | null
     requestId: string
   },
 ): Promise<IssuedSession> {
-  const { orgId, personId, privileged } = input
-  const lifetime = privileged ? PRIVILEGED_SESSION : SESSION
+  const { orgId, personId, pinRule } = input
+  const lifetime = pinRule ? PIN_RULE_SESSION : SESSION
   if (!(await numberStillTheirs(trx, orgId, personId, input.phoneNumberId))) throw new AttemptStale()
   const token = newSecret()
   let deviceId: string
@@ -205,7 +205,7 @@ export async function issueSession(
     actor: { id: personId, kind: 'human' },
     subjects: [personId],
     purpose: 'accounts',
-    ids: { device: deviceId, session: sessionId, method: input.method, privileged },
+    ids: { device: deviceId, session: sessionId, method: input.method, pin_rule: pinRule },
   })
   await writeAudit(trx, {
     orgId,
@@ -216,7 +216,7 @@ export async function issueSession(
     deviceId,
     ip: input.ip,
     requestId: input.requestId,
-    details: { method: input.method, privileged },
+    details: { method: input.method, pinRule },
   })
   return { token, sessionId, deviceId, label: input.label, maxAgeSeconds: lifetime.lifetimeSeconds }
 }
