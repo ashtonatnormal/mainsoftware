@@ -1,15 +1,16 @@
 // How the guard tests read a GitHub Actions workflow without a YAML parser: its jobs, each job's
-// runs-on, and each step as text. It reads only the shape this repo's workflows are written in
-// (two-space indents: job ids at two, a job's keys at four, its steps at six), so a test that uses
-// it first checks it found the jobs and steps it expects, and a reformatted file fails the test
-// rather than passing unread.
+// runs-on and timeout-minutes, and each step as text. It reads only the shape this repo's
+// workflows are written in (two-space indents: job ids at two, a job's keys at four, its steps at
+// six), so a test that uses it first checks it found the jobs and steps it expects, and a
+// reformatted file fails the test rather than passing unread.
 
-// One job: its id, its runner, and its steps, each as its own lines with the indent and the
-// step's leading "- " taken off (so `run: npm test`, or `uses: …` then `with:` and its keys), and
-// comment and blank lines left out.
+// One job: its id, its runner, its timeout in minutes, and its steps, each as its own lines with
+// the indent and the step's leading "- " taken off (so `run: npm test`, or `uses: …` then `with:`
+// and its keys), and comment and blank lines left out.
 export interface WorkflowJob {
   id: string
   runsOn: string | undefined
+  timeoutMinutes: number | undefined
   steps: string[]
 }
 
@@ -34,7 +35,7 @@ export function workflowJobs(text: string): WorkflowJob[] {
     const header = /^ {2}([\w-]+):\s*(?:#.*)?$/.exec(line)
     if (header) {
       endStep()
-      job = { id: header[1] ?? '', runsOn: undefined, steps: [] }
+      job = { id: header[1] ?? '', runsOn: undefined, timeoutMinutes: undefined, steps: [] }
       jobs.push(job)
       inSteps = false
       continue
@@ -45,6 +46,7 @@ export function workflowJobs(text: string): WorkflowJob[] {
       endStep()
       inSteps = key[1] === 'steps'
       if (key[1] === 'runs-on') job.runsOn = withoutComment(key[2] ?? '')
+      if (key[1] === 'timeout-minutes') job.timeoutMinutes = Number(withoutComment(key[2] ?? ''))
       continue
     }
     if (!inSteps) continue

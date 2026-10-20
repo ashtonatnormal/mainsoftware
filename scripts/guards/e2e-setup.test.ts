@@ -358,4 +358,15 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(codesIn(log, PERSONAS.kelvin.e164)).toEqual(['654321'])
     expect(codesIn(log, PERSONAS.rachel.e164)).toEqual([])
   })
+
+  it("ES-13 K-51 T21: in CI the suite stops itself (globalTimeout, web servers and global setup included) within half the check job's timeout-minutes, so a stuck run fails and its report uploads instead of the job being cancelled; local runs have no limit", () => {
+    const text = codeOf('playwright.config.ts', readRepoFile(`${WEB}playwright.config.ts`))
+    const minutes = Number(/^\s*globalTimeout: CI \? (\d+) \* 60_?000 : undefined,$/m.exec(text)?.[1])
+    expect(minutes, 'globalTimeout in CI').toBeGreaterThan(0)
+    expect(config.globalTimeout).toBe(process.env.CI ? minutes * 60_000 : undefined)
+    // The other half is for every step before the suite and the upload after it.
+    const jobMinutes = checkJob().timeoutMinutes ?? Number.NaN
+    expect(jobMinutes, "the check job's timeout-minutes").toBeGreaterThan(0)
+    expect(minutes * 2).toBeLessThanOrEqual(jobMinutes)
+  })
 })

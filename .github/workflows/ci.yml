@@ -51,7 +51,9 @@ jobs:
     # Pinned, not ubuntu-latest: the visual baselines are made on this image only, so moving to a
     # newer one is a deliberate PR that re-adopts them (T21, D-07, K-26).
     runs-on: ubuntu-24.04
-    # A server that hangs instead of failing would otherwise hold the runner for six hours.
+    # A server that hangs instead of failing would otherwise hold the runner for six hours. The e2e
+    # suite stops itself at half of this (globalTimeout in apps/web/playwright.config.ts), so a
+    # stuck run fails, and the failure() upload runs, before GitHub cancels the job (ES-13).
     timeout-minutes: 30
     steps:
       # A failed, cancelled or skipped dependency would skip this job, and GitHub counts a skipped
