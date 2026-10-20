@@ -55,7 +55,7 @@ describe('The suite itself', () => {
     }
   })
 
-  test('keeps the cases BUILD-PLAN names (C0.4 open items, BUILD-PLAN.md:841)', () => {
+  test('keeps the cases BUILD-PLAN names (BUILD-PLAN 1D, open items: the C0.4 row)', () => {
     const named = (id: string) => all.find(c => c.id === id)
     expect(named('R2-01')?.name).toContain('covers(audienceOf(#general), CFO-DM item) = false')
     expect(named('R2-01')?.status).toBe('c0')

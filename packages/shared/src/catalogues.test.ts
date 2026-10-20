@@ -26,7 +26,7 @@ function stageRank(stage: string): number {
 }
 
 // Past tense, so each name says what happened. task.overdue is the one adjective: a time-based
-// event a delayed job appends (BUILD-PLAN 230).
+// event a delayed job appends (BUILD-PLAN C2.1).
 const IRREGULAR = new Set(['set', 'reset', 'written', 'overdue'])
 function nameProblem(name: string): string | undefined {
   const match = /^([a-z][a-z_]*)\.([a-z][a-z_]*)$/.exec(name)

@@ -1,7 +1,7 @@
 // The flags a process keeps (TECH-SPEC T17 items 6 and 7). Postgres holds every org's flags
 // (feature_flags, migration 0007); each process holds a copy of the orgs it serves, so it can
 // decide whether a feature is on for someone without a query. A change reaches every process within
-// 10 s (PRD-65, BUILD-PLAN 150) two ways:
+// 10 s (PRD-65, BUILD-PLAN C0's done-when list) two ways:
 //   - the api publishes on the flags channel after the change commits (channel.ts), and each
 //     process reloads that org at once;
 //   - each process polls every org it keeps every 2 s (±10%, so processes drift apart), so a lost

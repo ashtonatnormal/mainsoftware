@@ -134,7 +134,7 @@ export const EVENTS = {
     // consumers drop live state; rows: an item's stored ACL was rewritten (from C1.1, with the
     // snapshot and its new epoch). C0.16 adds its reasons for team and role changes.
     ids: z.strictObject({ change: z.enum(['keys', 'rows']), reason: z.enum(['deactivated']) }),
-    description: 'Who can read something changed (BUILD-PLAN 840)',
+    description: 'Who can read something changed (BUILD-PLAN 1D, open items: the C0.6 outbox-envelope row)',
   }),
   'flag.changed': emitted({
     entity: 'feature_flag',
@@ -150,13 +150,17 @@ export const EVENTS = {
   'person.phone_changed': reserved('C0.16', 'person', 'A person’s phone number changed'),
   'department.changed': reserved('C0.16', 'department', 'A department was added or changed'),
   'team.changed': reserved('C0.16', 'team', 'A team was added, changed or archived'),
-  'team.membership_changed': reserved('C0.16', 'person', 'Someone joined or left a team (BUILD-PLAN 849)'),
+  'team.membership_changed': reserved(
+    'C0.16',
+    'person',
+    'Someone joined or left a team (BUILD-PLAN 1D, open items: the C2.3 row)',
+  ),
   'role.changed': reserved('C0.16', 'person', 'A role was granted or revoked'),
   'profile.updated': reserved('C0.15', 'person', 'A profile or working hours changed'),
   'notice.published': reserved('C0.9', 'notice', 'A privacy notice version was published'),
   'notice.acknowledged': reserved('C0.9', 'person', 'A person acknowledged a notice'),
   'message.created': reserved('C1.1', 'message', 'A message was posted'),
-  'message.updated': reserved('C1.1', 'message', 'A message was edited (BUILD-PLAN 845)'),
+  'message.updated': reserved('C1.1', 'message', 'A message was edited (BUILD-PLAN 1D, open items: the C1.1 row)'),
   'message.deleted': reserved('C1.1', 'message', 'A message was deleted', true),
   'voice_message.created': reserved('C1.6', 'voice_message', 'A voice message was posted'),
   'task.created': reserved('C2.1', 'task', 'A task was created'),

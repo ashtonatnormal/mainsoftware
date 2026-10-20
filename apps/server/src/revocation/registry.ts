@@ -1,6 +1,7 @@
-// The revocation registry (BUILD-PLAN 669; TECH-SPEC T19 items 2-4; REG-01, REG-02, REG-06): what
-// drops someone's live access, for anyone, for any reason, durably. The offboarding registry
-// (offboarding.ts) does what a departure does to someone's things; this one takes live access away.
+// The revocation registry (BUILD-PLAN 1D, seams checklist: the revocation handler registry row;
+// TECH-SPEC T19 items 2-4; REG-01, REG-02, REG-06): what drops someone's live access, for anyone,
+// for any reason, durably. The offboarding registry (offboarding.ts) does what a departure does to
+// someone's things; this one takes live access away.
 // A deactivation reaches it as signin.ended {deactivated} and acl.changed {keys, deactivated}, both
 // appended in the deactivation's own transaction (T16 item 8), so it needn't read person.deactivated.
 //
