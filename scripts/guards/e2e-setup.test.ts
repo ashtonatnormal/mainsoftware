@@ -5,7 +5,6 @@
 // matrix, and the files around them as text, and CI's workflows for the check job's runner and its
 // e2e step (ES-05, ES-10).
 import { execFileSync } from 'node:child_process'
-import { EventEmitter } from 'node:events'
 import { relative } from 'node:path'
 import { maskNumber } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
@@ -23,8 +22,8 @@ import {
   STATE_DIR,
   TLS_DIR,
 } from '../../apps/web/e2e/support/env'
-import { PageGuard, SESSION_401 } from '../../apps/web/e2e/support/fixtures'
 import { PERSONAS, type Persona, type Stage } from '../../apps/web/e2e/support/personas'
+import { SESSION_401, SignedOutContexts } from '../../apps/web/e2e/support/signed-out'
 import { VISUAL_SHOTS } from '../../apps/web/e2e/support/visual-matrix'
 import config from '../../apps/web/playwright.config'
 import { codeOf } from './imports'
@@ -58,25 +57,6 @@ function screenshotCalls(path: string, source: string): string[] {
       /(expect(?:\.soft)?)\s*\([^()]*\)\s*\.\s*toHaveScreenshot\s*\(|\btoHaveScreenshot\b/g,
     ),
   ].map(match => match[1] ?? 'toHaveScreenshot')
-}
-
-// A context and its one page, as far as the page guard reads them: the page's events, and a
-// response a test sends through it.
-function fakeContext() {
-  const page = Object.assign(new EventEmitter(), { context: () => context, url: () => `${E2E_ORIGIN}/` })
-  const context = {
-    exposeBinding: async () => {},
-    addInitScript: async () => {},
-    pages: () => [page],
-    on: () => {},
-  }
-  const respond = (path: string, status: number, method = 'GET') =>
-    page.emit('response', {
-      url: () => `${E2E_ORIGIN}${path}`,
-      status: () => status,
-      request: () => ({ method: () => method, allHeaders: async () => ({}) }),
-    })
-  return { context: context as unknown as Parameters<PageGuard['watch']>[0], respond }
 }
 
 // The persona table as a list.
@@ -418,34 +398,34 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(workers * pagesPerTest).toBeLessThan(perSession)
   })
 
-  it('ES-15 T21 item 11: the page guard expects a signed-out context’s GET /api/session 401 only until the context is signed in; a later one counts unless the test declares it', async () => {
-    const undeclared = `undeclared 401 from GET ${SESSION_401.path}`
-    // Signed out, then signed in (a 200 from GET /api/session), then the session ends unexpectedly.
-    const guard = new PageGuard()
-    const signedOut = fakeContext()
-    await guard.watch(signedOut.context)
-    guard.expectSignedOut(signedOut.context)
-    signedOut.respond(SESSION_401.path, 401)
-    signedOut.respond(SESSION_401.path, 401)
-    expect(guard.report()).toEqual([])
-    signedOut.respond(SESSION_401.path, 200)
-    signedOut.respond(SESSION_401.path, 401)
-    expect(guard.report()).toEqual([undeclared])
+  it('ES-15 T21 item 11: the page guard expects a signed-out context’s GET /api/session 401 only until a 2xx from GET /api/session there shows it signed in; any other context, path or status gets nothing', () => {
+    const contexts = new SignedOutContexts<object>()
+    const [signedOut, other] = [{}, {}]
+    contexts.expect(signedOut)
+    // Each signed-out boot, a reload included, is expected.
+    expect(contexts.allows(signedOut, SESSION_401.path, 401)).toBe(true)
+    contexts.saw(signedOut, SESSION_401.path, 401)
+    expect(contexts.allows(signedOut, SESSION_401.path, 401)).toBe(true)
+    // Nothing else is: another context, another path, another status.
+    expect(contexts.allows(other, SESSION_401.path, 401)).toBe(false)
+    expect(contexts.allows(signedOut, '/api/flags', 401)).toBe(false)
+    expect(contexts.allows(signedOut, SESSION_401.path, 503)).toBe(false)
+    // A 2xx elsewhere, or a session answer in another context, signs nothing in.
+    contexts.saw(signedOut, '/api/flags', 200)
+    contexts.saw(other, SESSION_401.path, 200)
+    expect(contexts.allows(signedOut, SESSION_401.path, 401)).toBe(true)
+    // Signed in: a later session 401 is the test's to declare.
+    contexts.saw(signedOut, SESSION_401.path, 200)
+    expect(contexts.allows(signedOut, SESSION_401.path, 401)).toBe(false)
 
-    // A 401 the test declares holds after the sign-in; another context, never signed out, has no
-    // allowance; and any other path's 401 counts as before.
-    const declared = new PageGuard()
-    const first = fakeContext()
-    const other = fakeContext()
-    await declared.watch(first.context)
-    await declared.watch(other.context)
-    declared.expectSignedOut(first.context)
-    first.respond(SESSION_401.path, 200)
-    other.respond(SESSION_401.path, 401)
-    first.respond('/api/flags', 401)
-    expect(declared.report()).toEqual([undeclared, 'undeclared 401 from GET /api/flags'])
-    declared.expectResponses([SESSION_401])
-    first.respond(SESSION_401.path, 401)
-    expect(declared.report()).toHaveLength(2)
+    // The guard routes every declaration through it: open() marks a signed-out context, every
+    // response from the app's origin is shown to it, and both the response and its console line
+    // ask it.
+    const guard = codeOf('fixtures.ts', readRepoFile(`${E2E}support/fixtures.ts`))
+    expect(guard).toMatch(/if \(signedIn === false\)\s*guard\.expectSignedOut\(context\)/)
+    expect(guard).not.toMatch(/expectResponses\(\[SESSION_401\]\)/)
+    expect(guard).toMatch(/this\.#signedOut\.saw\(page\.context\(\), url\.pathname, status\)/)
+    expect(guard).toMatch(/return this\.#signedOut\.allows\(page\.context\(\), path, status\)/)
+    expect([...guard.matchAll(/this\.#declared\([^)]*, page\)/g)]).toHaveLength(2)
   })
 })

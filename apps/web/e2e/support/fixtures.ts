@@ -17,9 +17,9 @@
 //   - any 4xx or 5xx from the app's origin that the test didn't declare (a test that answers a
 //     request with a 503 itself declares it).
 //   A signed-out page's boot answers GET /api/session 401. open() expects that of a context it
-//   opens signed out only until the context is signed in (a 2xx from GET /api/session there), so a
-//   401 after the sign-in is the test's to declare; a spec whose default page is signed out declares
-//   it itself.
+//   opens signed out only until the context is signed in (a 2xx from GET /api/session there;
+//   signed-out.ts), so a 401 after the sign-in is the test's to declare; a spec whose default page
+//   is signed out declares it itself.
 import {
   type BrowserContext,
   test as base,
@@ -29,7 +29,9 @@ import {
   type Request,
 } from '@playwright/test'
 import { E2E_ORIGIN } from './env.ts'
+import { SignedOutContexts } from './signed-out.ts'
 
+export { SESSION_401 } from './signed-out.ts'
 export { expect }
 
 export interface OpenOptions {
@@ -89,8 +91,7 @@ const BLOCKED = /^csp$|ERR_BLOCKED_BY_CSP|NS_ERROR_CONTENT_BLOCKED|Content Secur
 
 const BINDING = '__e2eCspViolation'
 
-// Exported for its own test (scripts/guards/e2e-setup.test.ts ES-15); specs use the guard fixture.
-export class PageGuard implements Guard {
+class PageGuard implements Guard {
   readonly problems: string[] = []
   // What the pages did after the test body ended (end()), printed by the guard, never counted.
   readonly late: string[] = []
@@ -102,7 +103,7 @@ export class PageGuard implements Guard {
   readonly #failed: (string | RegExp)[] = []
   readonly #watched = new WeakSet<BrowserContext>()
   // Contexts still signed out since expectSignedOut().
-  readonly #signedOut = new WeakSet<BrowserContext>()
+  readonly #signedOut = new SignedOutContexts<BrowserContext>()
   // Requests to another origin, unless the CSP blocks them before they leave (requestfailed).
   readonly #elsewhere = new Set<Request>()
 
@@ -137,13 +138,13 @@ export class PageGuard implements Guard {
   }
 
   expectSignedOut(context: BrowserContext): void {
-    this.#signedOut.add(context)
+    this.#signedOut.expect(context)
   }
 
   // Declared by the test, or a signed-out boot's session check in a context not yet signed in.
   #declared(path: string, status: number, page: Page): boolean {
     if (this.#responses.some(entry => entry.status === status && matches(entry.path, path))) return true
-    return path === SESSION_401.path && status === SESSION_401.status && this.#signedOut.has(page.context())
+    return this.#signedOut.allows(page.context(), path, status)
   }
 
   #failedAllowed(path: string): boolean {
@@ -215,8 +216,7 @@ export class PageGuard implements Guard {
       const url = new URL(response.url())
       if (url.origin !== E2E_ORIGIN) return
       const status = response.status()
-      // A session answer: the context is signed in, and its signed-out allowance ends.
-      if (url.pathname === SESSION_401.path && status >= 200 && status < 300) this.#signedOut.delete(page.context())
+      this.#signedOut.saw(page.context(), url.pathname, status)
       if (status >= 400 && !this.#declared(url.pathname, status, page)) {
         const line = `undeclared ${status} from ${response.request().method()} ${url.pathname}`
         if (this.#ended) {
@@ -262,8 +262,6 @@ const phoneOptions = (browserName: string) =>
   browserName === 'firefox'
     ? { hasTouch: true, deviceScaleFactor: 2 }
     : { isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
-
-export const SESSION_401 = { path: '/api/session', status: 401 } as const
 
 export const test = base.extend<{ guard: Guard; open: Open }>({
   guard: [
