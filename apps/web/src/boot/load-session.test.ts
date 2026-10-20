@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { loadSession } from './load-session.ts'
+import { loadSession, SESSION_TIMEOUT_MS } from './load-session.ts'
 
 const answer = (response: Response | Error) =>
   (async () => {
@@ -28,6 +28,19 @@ describe('T21 D-01: who the document belongs to (boot/load-session.ts)', () => {
       json(403, { error: 'Forbidden' }),
     ])
       expect(await loadSession(answer(failed))).toEqual({ kind: 'unavailable' })
+  })
+
+  it('BT-01 T21 items 5 and 10: an answer that never comes reads as unavailable once the time limit passes', async () => {
+    expect(SESSION_TIMEOUT_MS).toBe(15_000)
+    let signal: AbortSignal | undefined
+    // A connection that hangs: nothing settles until the request is aborted.
+    const hangs = (async (_url: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        signal = init?.signal ?? undefined
+        signal?.addEventListener('abort', () => reject(signal?.reason))
+      })) as typeof fetch
+    expect(await loadSession(hangs, 20)).toEqual({ kind: 'unavailable' })
+    expect(signal?.aborted).toBe(true)
   })
 
   it('BT-01 SW-03: an answer with an empty zone signs in with the pilot zone', async () => {
