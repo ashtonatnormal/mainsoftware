@@ -22,7 +22,9 @@
 //   requests and 20 code checks a rolling day. The code lives in the number's one challenge record
 //   (codes.ts), owned by `r:<session id>`, so a re-authentication code replaces a pending sign-in
 //   code and the reverse; re-authentication codes don't count against sign-in's per-number windows.
-//   Its refusals carry no floor: the caller is signed in, and there's nothing to hide.
+//   Its refusals carry no floor: the caller is signed in, and there's nothing to hide. An approved
+//   code is kept until its stamp commits (REAUTH.approvedMs), so a stamp that fails (409 try_again)
+//   is retried with no second code.
 import type { CodeSentSchema, ReauthenticatedSchema, ReauthMethod } from '@hearth/shared'
 import { sql } from 'kysely'
 import type { z } from 'zod'
@@ -256,6 +258,23 @@ export async function reauthCodeVerify(
     await actingBy(trx, session, 'code')
     return currentNumber(trx, session)
   })
+  // The provider approved this session's code for this number, and the stamp failed before it
+  // committed (409 try_again, Postgres lost): any 6 digits stamp it now with no second check, as
+  // sign-in's verified step finishes a sign-in (T20 items 4 and 6). No provider is asked, so the
+  // day's check is given back.
+  const approvedKey = api.names.reauthApproved(session.sessionId)
+  if ((await fromValkey(info, api.valkey.get(approvedKey))) === number.id) {
+    await giveBack(api, info, [day], member)
+    if (await stampByCode(api, info, session, number.id, approvedKey)) return reauthenticated
+    await inSession(api, info, session, trx =>
+      writeAudit(trx, {
+        ...audit(session, info),
+        action: 'auth.code_failed',
+        details: { during: 'reauth', result: 'expired' },
+      }),
+    )
+    throw new ApiError(401, 'code_expired')
+  }
   if (api.otp.breaker.isOpen()) {
     await giveBack(api, info, [day], member)
     throw new ApiError(503, 'unavailable')
@@ -295,19 +314,10 @@ export async function reauthCodeVerify(
     check = reserved
   }
   if (check.result === 'approved') {
-    // Transaction B: the method again (a grant committed since refuses, and the spent code stamps
-    // nothing), and the number still theirs. Read with no lock: acting() has already taken the
-    // person, device and session FOR SHARE, and phone_numbers comes before devices and sessions in
-    // the lock order (0006, CLAUDE.md). The person's row, held FOR SHARE, already serialises this
-    // against a phone change, which takes it FOR NO KEY UPDATE first and ends every session.
-    const stamped = await inSession(api, info, session, async trx => {
-      await actingBy(trx, session, 'code')
-      if (!(await numberStillTheirs(trx, session.orgId, session.userId, number.id, { locked: false }))) return false
-      await stampReauth(trx, session)
-      await writeAudit(trx, { ...audit(session, info), action: 'auth.reauth', details: { method: 'sms' } })
-      return true
-    })
-    if (stamped) return reauthenticated
+    // SETTLE has used the record up, so the approval is kept until the stamp commits: a retry
+    // after a failed stamp needs no second code (above).
+    await fromValkey(info, api.valkey.set(approvedKey, number.id, 'PX', REAUTH.approvedMs))
+    if (await stampByCode(api, info, session, number.id, approvedKey)) return reauthenticated
     check = { result: 'expired', tries: 0 }
   }
   const result = check.result
@@ -317,6 +327,31 @@ export async function reauthCodeVerify(
   if (result === 'expired') throw new ApiError(401, 'code_expired')
   if (result === 'dead') throw new ApiError(401, 'code_dead')
   throw new ApiError(401, 'code_wrong', { triesLeft: OTP.maxTries - check.tries })
+}
+
+// Transaction B, after an approved code: the method again (a grant committed since refuses, and the
+// spent code stamps nothing), and the number still theirs, then the stamp. The number is read with
+// no lock: acting() has already taken the person, device and session FOR SHARE, and phone_numbers
+// comes before devices and sessions in the lock order (0006, CLAUDE.md). The person's row, held FOR
+// SHARE, already serialises this against a phone change, which takes it FOR NO KEY UPDATE first and
+// ends every session. The approval is used up as the last statement before COMMIT, so only a stamp
+// that didn't commit leaves it for a retry; a COMMIT that then fails asks for a new code, as a
+// sign-in's does (T20 item 4). False when the number is no longer theirs.
+async function stampByCode(
+  api: Api,
+  info: ReqInfo,
+  session: SessionIds,
+  numberId: string,
+  approvedKey: string,
+): Promise<boolean> {
+  return inSession(api, info, session, async trx => {
+    await actingBy(trx, session, 'code')
+    if (!(await numberStillTheirs(trx, session.orgId, session.userId, numberId, { locked: false }))) return false
+    await stampReauth(trx, session)
+    await writeAudit(trx, { ...audit(session, info), action: 'auth.reauth', details: { method: 'sms' } })
+    await fromValkey(info, api.valkey.del(approvedKey))
+    return true
+  })
 }
 
 // --- POST /api/auth/reauth/passkey/options --------------------------------------------------

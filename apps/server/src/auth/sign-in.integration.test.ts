@@ -1393,6 +1393,51 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     for (const { ms } of replies) expect(ms).toBeLessThan(1_500)
   })
 
+  it('T20 item 6: an approved re-authentication code whose stamp waits past its lock timeout answers 409 try_again, and a retry with any 6 digits stamps it with no second check', async () => {
+    // Budgets: R 1 code request (the sign-in; re-authentication codes count against their own windows).
+    const r = await s.person()
+    const rc = await s.signIn(r)
+    const { id: sessionId } = await s.sessionOf(rc)
+    await s.age(sessionId, '6 minutes')
+    const fresh = async () =>
+      (
+        await s.query<{ fresh: boolean }>(
+          "select reauthenticated_at > now() - interval '5 minutes' as fresh from sessions where id = $1",
+          [sessionId],
+        )
+      )[0]?.fresh
+    expect((await rc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+    const code = await s.sms.nextCode(r.e164)
+    const checksBefore = s.sms.checks.length
+    await s.query('begin')
+    let blocked: Awaited<ReturnType<Client['post']>>
+    try {
+      // The superuser holds the session's row FOR SHARE, which the acting session's reads share, so
+      // only the stamp's UPDATE waits out its 2 s.
+      await s.query('select id from sessions where id = $1 for share', [sessionId])
+      blocked = await rc.post('/api/auth/reauth/code/verify', { code })
+    } finally {
+      await s.query('commit')
+    }
+    expect([blocked.status, blocked.error]).toEqual([409, 'try_again'])
+    expect(s.sms.checks.length).toBe(checksBefore + 1)
+    expect(await fresh()).toBe(false)
+    // The retry the client makes after try_again stamps it without asking the provider again.
+    const retried = await rc.post('/api/auth/reauth/code/verify', { code: '000000' })
+    expect([retried.status, retried.body]).toEqual([200, { status: 'reauthenticated', validForSeconds: 300 }])
+    expect(s.sms.checks.length).toBe(checksBefore + 1)
+    expect(await fresh()).toBe(true)
+    // The approval is used up with the stamp: the code is spent, and nothing is left to retry.
+    expect(await s.valkey.exists(s.names.reauthApproved(sessionId))).toBe(0)
+    expect((await rc.post('/api/auth/reauth/code/verify', { code })).error).toBe('code_expired')
+    const rows = (await auditOf(r)).filter(row => row.details.during === 'reauth' || row.action === 'auth.reauth')
+    expect(rows.map(row => [row.action, row.details])).toEqual([
+      ['auth.code_requested', { during: 'reauth', send: 'attempted' }],
+      ['auth.reauth', { method: 'sms' }],
+      ['auth.code_failed', { during: 'reauth', result: 'expired' }],
+    ])
+  })
+
   it('D46 AQ-02 I2: a session issued under the PIN rule never re-authenticates by SMS, even after its role is removed and given again', async () => {
     // Budgets: A 1 code request, T 0.
     const a = await s.person({ roles: ['admin'], pin: s.newPin() })

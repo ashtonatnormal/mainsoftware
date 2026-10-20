@@ -21,6 +21,9 @@ export function valkeyKeys(prefix: string) {
     attempt: (attemptKey: string) => `${prefix}att:${attemptKey}`,
     // A passkey challenge: for a sign-in by attempt key, for re-auth or registration by session id.
     challenge: (kind: 'signin' | 'reauth' | 'register', id: string) => `${prefix}pk:${kind}:${id}`,
+    // A session's approved SMS re-authentication code whose stamp hasn't committed yet, by session
+    // id: the id of the number it was sent to (account.ts, T20 item 6).
+    reauthApproved: (sessionId: string) => `${prefix}reauth-ok:${sessionId}`,
     // A sliding window (limiter.ts).
     limit: (name: string, subject: string) => `${prefix}rl:{auth}:${name}:${subject}`,
     // The pub/sub channel on which the api tells the realtime role which sessions ended (v1, C0.5;

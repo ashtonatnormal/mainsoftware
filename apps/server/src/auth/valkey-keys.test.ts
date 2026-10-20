@@ -10,6 +10,7 @@ describe('T14 C0.6 T17 C0.7 T19 the Valkey keys and channels the server uses', (
     expect(keys.attempt('KEY')).toBe('h:prod:att:KEY')
     expect(keys.challenge('signin', 'KEY')).toBe('h:prod:pk:signin:KEY')
     expect(keys.challenge('reauth', 'S')).toBe('h:prod:pk:reauth:S')
+    expect(keys.reauthApproved('S')).toBe('h:prod:reauth-ok:S')
     expect(keys.revoked).toBe('h:prod:revoked')
     expect(keys.flags).toBe('h:prod:flags')
     expect(keys.access).toBe('h:prod:access')
