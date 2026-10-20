@@ -58,8 +58,9 @@ export class ApiFailure extends Error {
 export interface RequestOptions {
   // The fetch to use; the browser's own when absent.
   fetch?: typeof fetch
-  // Ends the request early: Query's cancellation, or sign-in's 20 s limit (AbortSignal.timeout,
-  // T21 item 13). An ended request reads as network.
+  // Ends the request early: Query's cancellation, the boot's 15 s limit (boot/load-session.ts,
+  // T21 item 5) or sign-in's 20 s limit (AbortSignal.timeout, T21 item 13). An ended request reads
+  // as network.
   signal?: AbortSignal
 }
 

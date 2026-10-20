@@ -602,6 +602,31 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
     expect(clock.pending()).toBe(0)
   })
 
+  it('GW-24 (7) T21 item 4: a stalled probe is held for 20 s exactly: a signed_out 1 ms before signs out, and one at 20 s, before the next probe, changes nothing', async () => {
+    for (const [after, signedOut, status] of [
+      [19_999, 1, 'stopped'],
+      [20_000, 0, 'stalled'],
+    ] as const) {
+      const reason = `answered ${after} ms after asking`
+      let refusing = false
+      const { client, clock, net, seen, setProbe } = setup({ random: () => 0.5, refuse: () => refusing })
+      client.start()
+      net.last().connect()
+      refusing = true
+      const answers = heldProbes(setProbe)
+      net.last().serverClose(1006)
+      clock.advance(32_500)
+      expect(seen.probes, reason).toEqual([32_500])
+      // Before the next probe at 62.5 s, so nothing but the deadline has let the first one go.
+      clock.advance(after)
+      answers[0]?.('signed_out')
+      await flush()
+      expect(seen.probes, reason).toEqual([32_500])
+      expect(seen.signedOut, reason).toBe(signedOut)
+      expect(client.status(), reason).toBe(status)
+    }
+  })
+
   it('GW-24 (7) T21 item 4: a paused probe unanswered after 20 s is let go the same way (4426, 4403)', async () => {
     for (const [code, reason] of [
       [4426, 'client_outdated'],
