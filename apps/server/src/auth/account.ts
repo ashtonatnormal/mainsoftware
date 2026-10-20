@@ -22,7 +22,8 @@
 //   requests and 20 code checks a rolling day. The code lives in the number's one challenge record
 //   (codes.ts), owned by `r:<session id>`, so a re-authentication code replaces a pending sign-in
 //   code and the reverse; re-authentication codes don't count against sign-in's per-number windows.
-//   Its refusals carry no floor: the caller is signed in, and there's nothing to hide. An approved
+//   A session sends one code at a time: a code request that overlaps another from the same session
+//   answers 409 try_again before anything is opened or sent (sendLock). Its refusals carry no floor: the caller is signed in, and there's nothing to hide. An approved
 //   code is kept until its stamp commits (REAUTH.approvedMs), so a stamp that fails (409 try_again)
 //   is retried with no second code.
 import { randomUUID } from 'node:crypto'
