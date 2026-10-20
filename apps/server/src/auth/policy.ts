@@ -42,8 +42,9 @@ export const SESSION = {
 export const PIN_RULE_SESSION = { lifetime: '168 hours', lifetimeSeconds: 604_800 } as const
 
 // Admin actions, and adding or removing a passkey, need a re-authentication from the last 5 minutes
-// (§9.4): the PIN for a session issued under the PIN rule, a fresh SMS code for anyone else
-// (D46, AQ-01; packages/access reauthMethodOf). approvedMs: how long an approved SMS code whose stamp
+// (§9.4): the PIN for a session issued under the PIN rule, a fresh SMS code for any other, and none for one
+// that only a new sign-in mends, however fresh its stamp (D46, AQ-01; packages/access reauthMethodOf and
+// reauthenticated()). approvedMs: how long an approved SMS code whose stamp
 // failed (409 try_again, Postgres lost) still stamps the session on a retry with no second check,
 // until the session asks for a new code (account.ts, T20 item 6); short, so a retry can't stretch
 // the 5 minutes by much. sendLockMs: the longest a session's SMS code request holds its send lock,
