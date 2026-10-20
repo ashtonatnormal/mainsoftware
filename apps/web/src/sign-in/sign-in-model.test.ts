@@ -486,26 +486,34 @@ describe('T20 T21: the sign-in model (sign-in/sign-in-model.ts)', () => {
     }
   })
 
-  it('X6: a code request in flight holds nothing: Use a different number goes back, and its late answer is stale and changes nothing', () => {
+  it('X6: while a new code is requested, Use a different number is held with the sending text, since the answer sets the attempt cookie (Qodo review), and its answer frees it', () => {
+    // Left behind, the request's answer could land after a newer request's and put its older attempt
+    // cookie back, so the newly texted code would read as expired.
     const ready = transition(atCode(), { kind: 'tick', now: T0 + RESEND_WAIT_MS }).state
     const resending = transition(ready, { kind: 'resend', now: T0 + 40_000 }).state
     expect(resending.pending?.kind).toBe('request_code')
-    expect(startAgainHeld(resending)).toBeUndefined()
-    const back = transition(resending, { kind: 'start_again' })
-    expect(back.state.step).toEqual({ kind: 'phone' })
-    expect(back.state.pending).toBeUndefined()
+    expect(startAgainHeld(resending)).toBe(SIGN_IN.busy.sending)
+    const pressed = transition(resending, { kind: 'start_again' })
+    expect(pressed.state).toBe(resending)
+    expect(pressed.cue).toBeUndefined()
     const id = resending.pending?.id ?? 0
-    const late = transition(back.state, {
+    const sent = transition(resending, {
       kind: 'answer',
       id,
       now: T0 + 41_000,
       answer: { kind: 'code_sent', reply: CODE_SENT },
     })
-    expect(late.state).toBe(back.state)
-    expect(late.cue).toBeUndefined()
-    expect(
-      transition(back.state, { kind: 'failed', id, now: T0 + 41_000, failure: failure('too_many_requests') }).state,
-    ).toBe(back.state)
+    expect(startAgainHeld(sent.state)).toBeUndefined()
+    expect(transition(sent.state, { kind: 'start_again' }).state.step).toEqual({ kind: 'phone' })
+    // A refusal, or the 20 s limit (network), frees it too.
+    const refused = transition(resending, {
+      kind: 'failed',
+      id,
+      now: T0 + 41_000,
+      failure: failure('too_many_requests'),
+    })
+    expect(startAgainHeld(refused.state)).toBeUndefined()
+    expect(transition(refused.state, { kind: 'start_again' }).state.step).toEqual({ kind: 'phone' })
   })
 
   it('one call at a time: a second submit or a resend while one is in flight does nothing, and the busy text names it', () => {

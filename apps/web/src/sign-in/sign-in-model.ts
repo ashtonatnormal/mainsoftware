@@ -513,17 +513,17 @@ export function resendHeld(state: SignInState): string | undefined {
   return state.step.resend.ready ? undefined : state.step.resend.reason
 }
 
-// What "Use a different number" and "Start again" say while they can't act: a code or a PIN being
-// checked. Either answer may sign the person in, and a signed-in answer sets the session cookie
-// (the server's sign-in.ts), which the browser keeps whatever the script makes of the reply. Leaving
-// the step then would show the phone step over a live session the tab doesn't know about, and a
-// second sign-in would leave the first session and its device orphaned until they expire, a second
-// signin.started included. So they wait for the answer, at most 20 s
-// (sign-in/api.ts AUTH_TIMEOUT_MS), and, when it was lost, for the session check after it
-// (mayHaveSignedIn). A code request signs nobody in, so it never holds them: its late answer is
-// stale and changes nothing.
+// What "Use a different number" and "Start again" say while they can't act: any call in flight.
+// A code or a PIN being checked may sign the person in, and a signed-in answer sets the session
+// cookie (the server's sign-in.ts), which the browser keeps whatever the script makes of the reply.
+// Leaving the step then would show the phone step over a live session the tab doesn't know about,
+// and a second sign-in would leave the first session and its device orphaned until they expire, a
+// second signin.started included. A code request ("Send a new code") signs nobody in, but its answer
+// sets the attempt cookie: left behind, it could land after a newer request's and put the older
+// attempt back, so the newly texted code would read as expired (Qodo review). So they wait for the
+// answer, at most 20 s (sign-in/api.ts AUTH_TIMEOUT_MS), after which the request is ended and sets
+// nothing, and, when a check's answer was lost, for the session check after it (mayHaveSignedIn).
 export function startAgainHeld(state: SignInState): string | undefined {
-  if (state.pending === undefined || state.pending.kind === 'request_code') return undefined
   return busyText(state)
 }
 

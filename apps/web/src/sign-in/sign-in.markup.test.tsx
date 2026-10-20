@@ -195,7 +195,7 @@ describe('T20 T21: the sign-in steps’ markup', () => {
     expect(spinner).toContain('aria-hidden="true"')
   })
 
-  it('X6: while a code or PIN is being checked, Use a different number and Start again are aria-disabled with the busy text; a code request holds neither', () => {
+  it('X6: while a code or PIN is being checked, Use a different number and Start again are aria-disabled with the busy text, and so are they while a new code is requested', () => {
     const typed = { phone: PRIYA, code: '123456', pin: '482913', pin2: '482913' }
     const held = (markup: string, label: string) => {
       const button = buttonNamed(markup, label)
@@ -215,12 +215,13 @@ describe('T20 T21: the sign-in steps’ markup', () => {
       ),
       SIGN_IN.startAgain,
     )
-    // At rest, and while a new code is being requested, they act.
+    // At rest they act; while a new code is being requested, both buttons wait for its answer, which
+    // sets the attempt cookie (Qodo review).
     expect(buttonNamed(STEPS.code, SIGN_IN.differentNumber)?.has('aria-disabled')).toBe(false)
     expect(buttonNamed(STEPS.enter_pin, SIGN_IN.startAgain)?.has('aria-disabled')).toBe(false)
     const resending = at(CODE, { pending: { id: 2, kind: 'request_code', e164: MARCUS }, nextId: 3 })
     expect(buttonNamed(resending, SIGN_IN.resend)?.get('aria-disabled')).toBe('true')
-    expect(buttonNamed(resending, SIGN_IN.differentNumber)?.has('aria-disabled')).toBe(false)
+    expect(buttonNamed(resending, SIGN_IN.differentNumber)?.get('aria-disabled')).toBe('true')
   })
 
   it('WCAG 3.3.8 SHL-49 AQ-02: Choose a PIN has two password fields for a new password, numeric, with no maxlength, a hidden username, and Show PIN', () => {
