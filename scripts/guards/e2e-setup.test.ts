@@ -318,7 +318,7 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     }
   })
 
-  it('ES-10 CL Testing and CI: npm run e2e is a step of the check job, the last but the report upload, after the browser install; the upload runs on failure and never takes playwright/.auth; no other job runs the suite', () => {
+  it('ES-10 CL Testing and CI: npm run e2e is a step of the check job, the last but the report upload, after the browser install; the upload runs on failure and on a cancelled job and never takes playwright/.auth; no other job runs the suite', () => {
     const steps = checkJob().steps
     const e2e = steps.findIndex(step => /^run: npm run e2e$/m.test(step))
     expect(e2e, 'the e2e step').toBeGreaterThan(-1)
@@ -331,7 +331,9 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(install, 'the browser install').toBeGreaterThan(-1)
     expect(install).toBeLessThan(e2e)
     const upload = steps.at(-1) ?? ''
-    expect(upload).toMatch(/^if: failure\(\)$/m)
+    // failure() is false once GitHub cancels the job (at its timeout-minutes or by hand), so a run
+    // stopped mid-suite uploads only through cancelled() (ES-13).
+    expect(upload).toMatch(/^if: failure\(\) \|\| cancelled\(\)$/m)
     // By tag, or by commit with the tag in a comment, as Renovate's helpers:pinGitHubActionDigests
     // writes it; the parser keeps a step line's comment, so the pattern allows one.
     const uploadAction = /^uses: actions\/upload-artifact@(?:v\d+|[0-9a-f]{40})(?:\s+#.*)?$/m
@@ -394,15 +396,18 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(codesIn(log, PERSONAS.rachel.e164)).toEqual([])
   })
 
-  it("ES-13 T21 item 11: in CI the suite stops itself (globalTimeout, web servers and global setup included) within half the check job's timeout-minutes, so a stuck run fails and its report uploads instead of the job being cancelled; local runs have no limit", () => {
+  it("ES-13 T21 item 11: in CI the suite stops itself (globalTimeout, web servers and global setup included) inside the check job's timeout-minutes with room for every step before it and the upload after it, so a stuck run fails and its report uploads instead of the job being cancelled; local runs have no limit", () => {
     const text = codeOf('playwright.config.ts', readRepoFile(`${WEB}playwright.config.ts`))
     const minutes = Number(/^\s*globalTimeout: CI \? (\d+) \* 60_?000 : undefined,$/m.exec(text)?.[1])
     expect(minutes, 'globalTimeout in CI').toBeGreaterThan(0)
     expect(config.globalTimeout).toBe(process.env.CI ? minutes * 60_000 : undefined)
-    // The other half is for every step before the suite and the upload after it.
     const jobMinutes = checkJob().timeoutMinutes ?? Number.NaN
     expect(jobMinutes, "the check job's timeout-minutes").toBeGreaterThan(0)
-    expect(minutes * 2).toBeLessThanOrEqual(jobMinutes)
+    // The steps before the suite took 4 to 5.5 minutes on CI in October 2026: the job leaves them
+    // four times that, and the suite's teardown and the upload after it 5 more.
+    const beforeSuite = 20
+    const afterSuite = 5
+    expect(beforeSuite + minutes + afterSuite).toBeLessThanOrEqual(jobMinutes)
   })
 
   it("ES-14 T21 item 11 T14: every run, local or CI, uses a fixed number of workers whose signed-in pages stay below the realtime role's sockets per session, which every page on a project's persona shares", () => {

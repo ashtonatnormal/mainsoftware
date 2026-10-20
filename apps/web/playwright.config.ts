@@ -86,11 +86,14 @@ export default defineConfig({
   // still closing from tests just finished (ES-14).
   workers: 2,
   timeout: 60_000,
-  // In CI the whole run (web servers and global setup included) stops and fails at 15 minutes, half
-  // the check job's timeout-minutes. Actions have no timeout of their own, so a build that never
-  // shows what the specs wait for would hold each of the 75 tests its full 60 s on 2 workers,
-  // about 38 minutes, and the job would be cancelled at its limit instead: a cancelled job skips
-  // the failure() upload, losing the report, traces and logs of the run that needs them (ES-13).
+  // In CI the whole run (web servers and global setup included) stops and fails at 15 minutes, well
+  // inside the check job's timeout-minutes in ci.yml, which also holds every step before the suite
+  // and the report upload after it. Actions have no timeout of their own, so a build that never
+  // shows what the specs wait for would hold each of the 76 tests its full 60 s on 2 workers,
+  // about 38 minutes, which with the steps before it comes within minutes of the job's limit, or
+  // past it on a slow runner, where GitHub would cancel the job instead, stopping the run before it
+  // writes its report: the upload runs on a cancelled job too, but with only what the run had
+  // written by then (ES-13).
   // Not maxFailures: a first run fails every visual test by design and must write all their actuals.
   globalTimeout: CI ? 15 * 60_000 : undefined,
   reporter: CI ? [['list'], ['html', { open: 'never' }]] : 'list',

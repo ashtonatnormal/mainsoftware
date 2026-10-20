@@ -44,17 +44,19 @@ jobs:
   # with this job. It waits for secrets and audit, so it gates merging on them too. From C0.8 it
   # also installs Playwright's browsers, checks the web bundle against its budget and scans what it
   # ships (scripts/check-web-dist.ts) straight after the build, and runs the web app's end-to-end
-  # suite last (npm run e2e), uploading its report when a step fails (T21).
+  # suite last (npm run e2e), uploading its report when a step fails or the job is cancelled (T21).
   check:
     needs: [secrets, audit]
     if: always()
     # Pinned, not ubuntu-latest: the visual baselines are made on this image only, so moving to a
     # newer one is a deliberate PR that re-adopts them (T21, D-07).
     runs-on: ubuntu-24.04
-    # A server that hangs instead of failing would otherwise hold the runner for six hours. The e2e
-    # suite stops itself at half of this (globalTimeout in apps/web/playwright.config.ts), so a
-    # stuck run fails, and the failure() upload runs, before GitHub cancels the job (ES-13).
-    timeout-minutes: 30
+    # A server that hangs instead of failing would otherwise hold the runner for six hours. The
+    # steps before the e2e suite take about 5 minutes (4 to 5.5 in October 2026's runs), and the
+    # suite stops itself at 15 (globalTimeout in apps/web/playwright.config.ts), so this leaves the
+    # steps before it four times their time and the upload after it room: a stuck run fails, and its
+    # report uploads, before GitHub cancels the job (ES-13).
+    timeout-minutes: 45
     steps:
       # A failed, cancelled or skipped dependency would skip this job, and GitHub counts a skipped
       # required check as passed.
@@ -123,7 +125,9 @@ jobs:
       # the visual baselines: apps/web/e2e/support/adopt-baselines.ts), and the servers' logs, which
       # hold the fake provider's codes for the seed's fictional numbers. Not playwright/.auth, the
       # storage state; every session a trace or log shows ended with the run's throwaway database.
-      - if: failure()
+      # On a failed step, and on a cancelled job too (at timeout-minutes or by hand), where failure()
+      # is false; it then holds what the run had written when GitHub stopped it (ES-10, ES-13).
+      - if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
           name: e2e-report
