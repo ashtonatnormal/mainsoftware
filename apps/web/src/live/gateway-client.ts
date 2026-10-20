@@ -40,8 +40,9 @@
 //    random point in the next 5 s and every 30 s after while it lasts; signed_out signs out. A
 //    welcome ends the episode. While paused there is no socket to hear a 4401, so probe() runs at a
 //    random point in the first 30 s and every 30 s after until resume(), and signed_out signs out
-//    there too (T21 item 4). A probe unanswered after 20 s is let go: the next runs on time, and the
-//    late answer counts for nothing.
+//    there too (T21 item 4). A probe unanswered after 20 s is let go and its request ended (probe()'s
+//    signal aborts, as it does on stop()): the next runs on time, and a late answer counts for
+//    nothing.
 //
 // Known limit (T21 item 4): realtime refuses a session's 9th socket at the upgrade with 429, which
 // the browser shows as a 1006 close, so a 9th tab retries and reads as stalled while its probe
@@ -105,8 +106,9 @@ export interface GatewayDeps {
   onNoticeRequired(): void
   // 4426, or a welcome in a version this build doesn't speak.
   onOutdated(): void
-  // GET /api/flags, to learn whether the session still holds (T19 item 11).
-  probe(): Promise<ProbeAnswer>
+  // GET /api/flags, to learn whether the session still holds (T19 item 11). The signal aborts when
+  // the probe is let go (20 s unanswered) or the client stops: the request ends then.
+  probe(signal: AbortSignal): Promise<ProbeAnswer>
   onStatus(status: LiveStatus): void
   // Where the client says what it refused to do (a topic past the limit, say); console.warn.
   warn?(message: string): void
@@ -305,8 +307,10 @@ export class GatewayClient {
   #stalled = false
   #stalledTimer: number | undefined
   #probeTimer: number | undefined
-  // The probe waiting for its answer, by number, until it answers or is let go.
+  // The probe waiting for its answer, by number, until it answers or is let go, and what ends its
+  // request.
   #probing: number | undefined
+  #probeAbort: AbortController | undefined
   #probes = 0
   // Whether the client has ever had a welcome since start() or resume(): until then it's connecting.
   #everLive = false
@@ -571,22 +575,27 @@ export class GatewayClient {
 
   // Asks whether the session still holds, then again every 30 s while the episode or the pause
   // lasts. One probe at a time: one still waiting skips the next, until its 20 s are up and it is
-  // let go, its answer then counting for nothing. An answer counts only in the episode or pause
-  // that asked: a welcome or resume() since then has ended it.
+  // let go, its request ended and its answer then counting for nothing. An answer counts only in
+  // the episode or pause that asked: a welcome or resume() since then has ended it.
   #probe(): void {
     this.#probeTimer = this.#timers.set(() => this.#probe(), CLIENT_POLICY.probeEveryMs)
     if (this.#probing !== undefined) return
     this.#probes += 1
     const probe = this.#probes
     this.#probing = probe
+    const ends = new AbortController()
+    this.#probeAbort = ends
     const deadline = this.#timers.set(() => {
-      if (this.#probing === probe) this.#probing = undefined
+      if (this.#probing !== probe) return
+      this.#probing = undefined
+      this.#probeAbort = undefined
+      ends.abort()
     }, CLIENT_POLICY.probeTimeoutMs)
     const episode = this.#failingSince
     const paused = this.#paused
     let answer: Promise<ProbeAnswer>
     try {
-      answer = this.#deps.probe()
+      answer = this.#deps.probe(ends.signal)
     } catch {
       answer = Promise.resolve('unknown')
     }
@@ -596,6 +605,7 @@ export class GatewayClient {
         // Let go at its deadline: a later probe has the say.
         if (this.#probing !== probe) return
         this.#probing = undefined
+        this.#probeAbort = undefined
         this.#timers.clear(deadline)
         if (said !== 'signed_out' || this.#stopped) return
         if (this.#failingSince === episode && this.#paused === paused) this.#signedOut()
@@ -630,9 +640,13 @@ export class GatewayClient {
     )
   }
 
-  // Everything off for good: the socket closed 1000, every timer cleared, nothing held.
+  // Everything off for good: the socket closed 1000, every timer cleared, nothing held, and a
+  // probe's request ended.
   #halt(): void {
     this.#stopped = true
+    const probing = this.#probeAbort
+    this.#probeAbort = undefined
+    probing?.abort()
     const socket = this.#socket
     if (socket !== undefined) {
       this.#detach(socket)

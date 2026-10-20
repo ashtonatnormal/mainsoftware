@@ -31,6 +31,8 @@ function setup(options: { random?: () => number; refuse?: () => boolean } = {}) 
     statuses: [] as LiveStatus[],
     warnings: [] as string[],
     probes: [] as number[],
+    // Each probe's signal, in order.
+    signals: [] as AbortSignal[],
   }
   let probe: () => Promise<ProbeAnswer> = async () => 'signed_in'
   const client = new GatewayClient({
@@ -45,8 +47,9 @@ function setup(options: { random?: () => number; refuse?: () => boolean } = {}) 
     onSignedOut: () => seen.signedOut++,
     onNoticeRequired: () => seen.notice++,
     onOutdated: () => seen.outdated++,
-    probe: () => {
+    probe: signal => {
       seen.probes.push(clock.now())
+      seen.signals.push(signal)
       return probe()
     },
     onStatus: status => seen.statuses.push(status),
@@ -588,9 +591,16 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
     net.last().serverClose(1006)
     clock.advance(32_500)
     expect(seen.probes).toEqual([32_500])
-    // The first never answers; 30 s later the next one still runs.
-    clock.advance(30_000)
+    // The first never answers: at 20 s its request is ended, before the next probe starts.
+    clock.advance(19_999)
+    expect(seen.signals[0]?.aborted).toBe(false)
+    clock.advance(1)
+    expect(seen.signals[0]?.aborted).toBe(true)
+    expect(seen.probes).toEqual([32_500])
+    // 30 s after the first, the next one still runs.
+    clock.advance(10_000)
     expect(seen.probes).toEqual([32_500, 62_500])
+    expect(seen.signals[1]?.aborted).toBe(false)
     answers[0]?.('signed_out')
     await flush()
     expect(seen.signedOut).toBe(0)
@@ -617,8 +627,10 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
       net.last().serverClose(1006)
       clock.advance(32_500)
       expect(seen.probes, reason).toEqual([32_500])
-      // Before the next probe at 62.5 s, so nothing but the deadline has let the first one go.
+      // Before the next probe at 62.5 s, so nothing but the deadline has let the first one go, and
+      // ended its request.
       clock.advance(after)
+      expect(seen.signals[0]?.aborted, reason).toBe(after >= 20_000)
       answers[0]?.('signed_out')
       await flush()
       expect(seen.probes, reason).toEqual([32_500])
@@ -637,7 +649,9 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
       socket.serverClose(code, reason)
       clock.advance(15_000)
       expect(seen.probes, reason).toEqual([15_000])
-      clock.advance(30_000)
+      clock.advance(20_000)
+      expect(seen.signals[0]?.aborted, reason).toBe(true)
+      clock.advance(10_000)
       expect(seen.probes, reason).toEqual([15_000, 45_000])
       answers[0]?.('signed_out')
       await flush()
@@ -648,6 +662,21 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
       expect(seen.signedOut, reason).toBe(1)
       expect(client.status(), reason).toBe('stopped')
     }
+  })
+
+  it('GW-24 (7) T21 item 4: stop() ends a probe’s request in flight, and its late answer changes nothing', async () => {
+    const { client, clock, seen, setProbe, socket } = connected({ random: () => 0.5 })
+    const answers = heldProbes(setProbe)
+    socket.serverClose(4403, 'notice_required')
+    clock.advance(15_000)
+    expect(seen.signals[0]?.aborted).toBe(false)
+    client.stop()
+    expect(seen.signals[0]?.aborted).toBe(true)
+    answers[0]?.('signed_out')
+    await flush()
+    expect(seen.signedOut).toBe(0)
+    expect(client.status()).toBe('stopped')
+    expect(clock.pending()).toBe(0)
   })
 
   it('GW-16 P6: an unknown t or bad JSON is skipped and the socket stays open', () => {

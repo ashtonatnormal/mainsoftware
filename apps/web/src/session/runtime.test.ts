@@ -485,8 +485,10 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(net.sockets.length).toBeGreaterThan(tried)
   })
 
-  it('RT-07 T19 item 11 T21 item 4: a probe whose request hangs is let go, so the next one 30 s later sends its own, and its 401 ends the session', async () => {
+  it('RT-07 T19 item 11 T21 item 4: a probe whose request hangs is let go and its request ended at 20 s, so the next one 30 s later sends its own, and its 401 ends the session', async () => {
+    const { env, left, storage, clock } = fakeEnv(() => {}, { random: () => 0.5, refuse: true })
     const calls: string[] = []
+    const ended: number[] = []
     let answer: (() => Response) | undefined
     vi.stubGlobal('fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
       calls.push(String(url))
@@ -494,17 +496,27 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
       // The first request never answers; it ends only when it is cancelled.
       if (next === undefined)
         return new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+          init?.signal?.addEventListener('abort', () => {
+            ended.push(clock.now())
+            reject(init.signal?.reason)
+          })
         })
       return next()
     })
-    const { env, left, storage, clock } = fakeEnv(() => {}, { random: () => 0.5, refuse: true })
     runtimeModule.startSessionRuntime(MARCUS, env)
     clock.advance(32_500)
     await tick()
     expect(calls).toEqual(['/api/flags'])
+    clock.advance(19_999)
+    await tick()
+    expect(ended).toEqual([])
+    // Let go at 20 s, and its request ended then, before the next probe at 62.5 s.
+    clock.advance(1)
+    await tick()
+    expect(ended).toEqual([52_500])
+    expect(calls).toEqual(['/api/flags'])
     answer = signedOut
-    clock.advance(30_000)
+    clock.advance(10_000)
     await tick()
     expect(calls).toEqual(['/api/flags', '/api/flags'])
     expect(left).toEqual(['replace /sign-in'])

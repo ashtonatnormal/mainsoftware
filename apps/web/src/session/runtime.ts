@@ -134,15 +134,22 @@ export const topicKey = (topic: string) => ['topic', topic] as const
 // no, anything else can't tell. It sends one request of its own at once, whatever the network says,
 // since the gateway asks again in 30 s. A flags fetch already in flight is cancelled first: Query
 // would otherwise hand the probe that fetch, with its retries and its wait for the network, so a
-// poll paused offline, or an earlier probe's request that hangs (the gateway lets that probe go
-// after 20 s), would hold this one too.
-async function probeSession(queryClient: QueryClient): Promise<ProbeAnswer> {
+// poll paused offline would hold this one too. When the gateway lets the probe go (unanswered
+// after 20 s, or the client stopping), its signal cancels the flags fetch the probe waits on, so a
+// request that hangs doesn't stay open until the next probe. Query owns that fetch's own signal,
+// and Safari 16.4 lacks AbortSignal.any, so the cancel goes through Query.
+async function probeSession(queryClient: QueryClient, signal: AbortSignal): Promise<ProbeAnswer> {
+  const letGo = () => void queryClient.cancelQueries({ queryKey: flagsQuery.queryKey, exact: true })
+  signal.addEventListener('abort', letGo, { once: true })
   try {
     await queryClient.cancelQueries({ queryKey: flagsQuery.queryKey, exact: true })
+    if (signal.aborted) return 'unknown'
     await queryClient.fetchQuery({ ...flagsQuery, staleTime: 0, retry: false, networkMode: 'always' })
     return 'signed_in'
   } catch (error) {
     return error instanceof ApiFailure && error.code === 'signed_out' ? 'signed_out' : 'unknown'
+  } finally {
+    signal.removeEventListener('abort', letGo)
   }
 }
 
@@ -180,7 +187,7 @@ export function startSessionRuntime(info: SessionInfo, env: RuntimeEnv): Session
     onOutdated: () => {
       if (reloadForUpdate(env) === 'blocked') live.set({ updateBlocked: true })
     },
-    probe: () => probeSession(queryClient),
+    probe: signal => probeSession(queryClient, signal),
     onStatus: status => live.set({ status }),
   })
   gateway.start()
