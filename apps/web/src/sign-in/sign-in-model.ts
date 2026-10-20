@@ -113,8 +113,8 @@ export interface SignInState {
   // The call in flight; an answer to any other is stale and changes nothing.
   readonly pending?: { readonly id: number; readonly kind: CallKind; readonly e164?: string }
   readonly nextId: number
-  // Why the last document left (the status line under the first phone step's h1), until the
-  // person moves on.
+  // Why the last document left (the plain line under the first phone step's h1, which the store's
+  // first start() says once through the announcer), until the person moves on.
   readonly left?: string
 }
 

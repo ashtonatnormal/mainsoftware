@@ -7,7 +7,7 @@
 //
 // What may cross a document load is sessionStorage, and only these keys (WS-01 keeps every other
 // file off sessionStorage, and off localStorage, IndexedDB and Cache Storage entirely):
-// - hearth:left: why the last document left (a LeftReason), for the sign-in screen's status line;
+// - hearth:left: why the last document left (a LeftReason), for the line under the sign-in h1;
 // - hearth:return-to: an app path (APP_PATHS) a signed-out visit asked for, opened after sign-in;
 // - hearth:reloaded-at: when reloadForUpdate last reloaded (epoch ms), so it reloads once a minute;
 // - hearth:focus-heading: '1', for one load: the next document's first route focuses its h1;
