@@ -65,9 +65,19 @@ describe('C0.2 redacting logs', () => {
         databaseUrl: 'postgres://u:pg-secret@h/d',
         valkeyUrl: 'rediss://default:valkey-secret@cache:6379',
         s3: { credentials: { accessKeyId: 'hearth-local', secretAccessKey: 's3-secret' } },
+        auth: {
+          secret: 'auth-secret',
+          smsProvider: 'twilio',
+          twilio: { apiKeySid: 'SK-test', apiKeySecret: 'twilio-secret', serviceSid: 'VA-test' },
+        },
       },
     })
-    for (const secret of ['pg-secret', 'valkey-secret', 's3-secret']) expect(lines.join('')).not.toContain(secret)
+    // The Twilio key's secret too, logged whole or as config.auth (C0.8, T20 item 10).
+    logger.info({ auth: { twilio: { apiKeySecret: 'twilio-secret' } } })
+    const out = lines.join('')
+    for (const secret of ['pg-secret', 'valkey-secret', 's3-secret', 'auth-secret', 'twilio-secret']) {
+      expect(out).not.toContain(secret)
+    }
   })
 
   it('keeps ordinary fields, and tags every line with the role', () => {
