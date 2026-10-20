@@ -212,3 +212,35 @@ test('LV-06 T21 item 4: a 4426 close reloads once, and a second within 60 s show
   expect(loads).toBe(2)
   await expect.poll(said).toContain('Hearth has been updated. Reload to continue.')
 })
+
+test("LV-07 T21 item 4 T19 item 11: with the 4426 reload held back on Rooms (no flags poll), the paused connection's probe still reads GET /api/flags, and its 401 ends the session", async ({
+  page,
+  guard,
+}) => {
+  // As LV-05, both answers are routed, so Kelvin's real session survives.
+  guard.expectResponses([{ path: '/api/flags', status: 401 }, SESSION_401])
+  await page.clock.install()
+  await page.routeWebSocket('/ws', ws => ws.close({ code: 4426, reason: 'client_outdated' }))
+  await page.goto('/rooms')
+  await expect(banner(page, 'Hearth has been updated. Reload to continue.')).toBeVisible()
+  await expect(h1(page)).toHaveText('Rooms')
+  await markDocument(page)
+  const signedOut = {
+    status: 401,
+    contentType: 'application/json',
+    headers: { 'Cache-Control': 'no-store' },
+    body: JSON.stringify({
+      error: 'signed_out',
+      message: "You've been signed out. Sign in again to keep using Hearth.",
+    }),
+  }
+  await page.route('**/api/flags', route => route.fulfill(signedOut))
+  await page.route('**/api/session', route => route.fulfill(signedOut))
+
+  // Paused, the client probes at a random point in the first 30 s; Rooms shows no FlagSlot, so no
+  // flags poll runs, and 31 s is under the session answer's minute.
+  await page.clock.runFor(31_000)
+  await expect(page).toHaveURL(/\/sign-in$/)
+  await expect(h1(page)).toHaveText('Sign in to Hearth')
+  expect(await isOldDocument(page)).toBe(false)
+})

@@ -496,6 +496,26 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(runtime.live.snapshot()).toEqual({ status: 'paused', updateBlocked: true })
   })
 
+  it('RT-11 T21 item 4 T19 item 11: with a 4426 reload held back, the paused connection still probes GET /api/flags, and its 401 ends the session', async () => {
+    const { env, left, net, storage, clock } = fakeEnv(() => {}, { random: () => 0.5 })
+    // The last reload was a moment ago, so this 4426 is held back.
+    storage.map.set('hearth:reloaded-at', String(Date.now()))
+    const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
+    goLive(net.last())
+    net.last().serverClose(4426, 'client_outdated')
+    expect(left).toEqual([])
+    expect(runtime.live.snapshot()).toEqual({ status: 'paused', updateBlocked: true })
+
+    // The session is revoked meanwhile: no socket hears a 4401, but the probe's 401 ends it.
+    const calls = stubFetch({ '/api/flags': signedOut })
+    clock.advance(15_000)
+    await tick()
+    expect(calls).toEqual(['/api/flags'])
+    expect(left).toEqual(['replace /sign-in'])
+    expect(storage.map.get('hearth:left')).toBe('session_ended')
+    expect(runtime.live.snapshot().status).toBe('stopped')
+  })
+
   it("T21 item 2: another tab's identity message ends the session with other_tab, which reloads", async () => {
     const { env, left, storage, FakeChannel } = fakeEnv()
     runtimeModule.startSessionRuntime(MARCUS, env)

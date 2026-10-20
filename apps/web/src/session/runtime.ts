@@ -9,11 +9,13 @@
 //   queries use (none exists in C0.8);
 // - a topic refused or dropped: remove ['topic', <topic>], wiping what was cached (Rule 6);
 // - the flags nudge: invalidate the flags query, so it is fetched again (T17 item 11);
-// - 4401, or a stalled connection's probe answering 401: end the session (T21 item 4, T19 item 11);
+// - 4401, or the probe answering 401 while the connection is stalled or paused: end the session
+//   (T21 item 4, T19 item 11);
 // - 4426: reload for the new deploy, at most once a minute; when that is held back the live store
-//   says so and ConnectionBanner offers a Reload button (T21 item 4);
-// - 4403: nothing until C0.9 shows the notice and resumes the connection. Nothing is wiped
-//   (T19 item 10).
+//   says so and ConnectionBanner offers a Reload button (T21 item 4), and the paused connection's
+//   probe still ends a session that ends meanwhile;
+// - 4403: nothing until C0.9 shows the notice and resumes the connection, the probe running as for
+//   4426. Nothing is wiped (T19 item 10).
 // The probe fetches the flags query only to learn whether the session still holds: it reads no
 // flag (WS-11), and a 401 from it ends the session through the QueryClient like any other.
 //

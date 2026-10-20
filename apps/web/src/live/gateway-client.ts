@@ -38,7 +38,9 @@
 //    episode; every later failure, and every socket that never opened, waits full jitter from 1 s
 //    to 30 s. 30 s into an episode the status is stalled, and probe() (GET /api/flags) runs at a
 //    random point in the next 5 s and every 30 s after while it lasts; signed_out signs out. A
-//    welcome ends the episode.
+//    welcome ends the episode. While paused there is no socket to hear a 4401, so probe() runs at a
+//    random point in the first 30 s and every 30 s after until resume(), and signed_out signs out
+//    there too (T21 item 4).
 //
 // Known limit (T21 item 4): realtime refuses a session's 9th socket at the upgrade with 429, which
 // the browser shows as a 1006 close, so a 9th tab retries and reads as stalled while its probe
@@ -561,13 +563,15 @@ export class GatewayClient {
     )
   }
 
-  // Asks whether the session still holds, then again every 30 s while the episode lasts. One probe
-  // at a time: one still waiting skips the next.
+  // Asks whether the session still holds, then again every 30 s while the episode or the pause
+  // lasts. One probe at a time: one still waiting skips the next. An answer counts only in the
+  // episode or pause that asked: a welcome or resume() since then has ended it.
   #probe(): void {
     this.#probeTimer = this.#timers.set(() => this.#probe(), CLIENT_POLICY.probeEveryMs)
     if (this.#probing) return
     this.#probing = true
     const episode = this.#failingSince
+    const paused = this.#paused
     let answer: Promise<ProbeAnswer>
     try {
       answer = this.#deps.probe()
@@ -578,7 +582,8 @@ export class GatewayClient {
       .catch((): ProbeAnswer => 'unknown')
       .then(said => {
         this.#probing = false
-        if (said === 'signed_out' && !this.#stopped && this.#failingSince === episode) this.#signedOut()
+        if (said !== 'signed_out' || this.#stopped) return
+        if (this.#failingSince === episode && this.#paused === paused) this.#signedOut()
       })
   }
 
@@ -594,7 +599,9 @@ export class GatewayClient {
   }
 
   // 4403 and 4426: no reconnect until resume(); the holds and every cached topic stay
-  // (T19 item 10).
+  // (T19 item 10). With no socket, nothing would hear a 4401, so the probe keeps asking whether
+  // the session holds (header item 7), first at a random point in the next 30 s, so the tabs one
+  // 4403 paused together don't ask together.
   #pause(): void {
     if (this.#socket !== undefined) this.#detach(this.#socket)
     this.#paused = true
@@ -602,6 +609,10 @@ export class GatewayClient {
     this.#reconnectTimer = undefined
     this.#endEpisode()
     this.#setStatus('paused')
+    this.#probeTimer = this.#timers.set(
+      () => this.#probe(),
+      withinSpread(CLIENT_POLICY.probeEveryMs, () => this.#deps.random()),
+    )
   }
 
   // Everything off for good: the socket closed 1000, every timer cleared, nothing held.
