@@ -17,6 +17,23 @@ const env = {
 
 const WORKER_URL = 'postgres://hearth_worker:a-worker-password@127.0.0.1:5432/hearth'
 
+// Localhost origins beyond localhost, 127.0.0.1 and [::1], each a valid APP_ORIGIN: names under
+// localhost, a trailing dot, the rest of 127.0.0.0/8, the unspecified addresses and IPv4-mapped
+// forms. Twilio must be refused at every one (T14 item 1, T20 item 10).
+const LOOPBACK = [
+  'http://hearth.localhost:5173',
+  'https://hearth.localhost',
+  'http://localhost.:5173',
+  'http://a.localhost.:5173',
+  'http://127.0.0.2:3000',
+  'http://127.255.255.254:3000',
+  'http://0.0.0.0:3000',
+  'http://[::]:3000',
+  'http://[::ffff:7f00:1]:3000',
+  'http://[::ffff:7fff:fffe]:3000',
+  'http://[::ffff:0:0]:3000',
+] as const
+
 function problems(load: () => unknown): string {
   try {
     load()
@@ -222,7 +239,8 @@ describe('C0.5 T14 sign-in settings', () => {
         /SMS_PROVIDER: twilio sends real texts/,
       )
     }
-    for (const appOrigin of ['http://localhost:5173', 'http://127.0.0.1:3000']) {
+    // Every localhost origin, however it is written, not just the three common spellings.
+    for (const appOrigin of [...LOOPBACK, 'http://localhost:5173', 'http://127.0.0.1:3000']) {
       expect(problems(() => loadConfig({ ...real, DEPLOY_ENV: 'nonprod', APP_ORIGIN: appOrigin }))).toMatch(
         /SMS_PROVIDER: twilio sends real texts/,
       )
@@ -279,8 +297,24 @@ describe('C0.5 T14 sign-in settings', () => {
     expect(isLoopbackOrigin('https://localhost')).toBe(true)
     expect(isLoopbackOrigin('http://127.0.0.1:3000')).toBe(true)
     expect(isLoopbackOrigin('http://[::1]:5173')).toBe(true)
-    for (const origin of ['https://hearth.example', 'http://localhost.example', 'not a url']) {
-      expect(isLoopbackOrigin(origin)).toBe(false)
+    for (const origin of LOOPBACK) expect(isLoopbackOrigin(origin), origin).toBe(true)
+    // Written another way, as createTwilioVerify may be given it: the URL parser settles each.
+    for (const origin of ['http://LOCALHOST:5173', 'http://127.1:3000', 'http://[0:0:0:0:0:0:0:1]:5173']) {
+      expect(isLoopbackOrigin(origin), origin).toBe(true)
+    }
+    for (const origin of [
+      'https://hearth.example',
+      'http://localhost.example',
+      'http://localhost.example.',
+      'http://notlocalhost:5173',
+      'http://127.0.0.1.example',
+      'http://128.0.0.1:3000',
+      'http://10.0.0.1:3000',
+      'http://[::2]:3000',
+      'http://[::ffff:a00:1]:3000',
+      'not a url',
+    ]) {
+      expect(isLoopbackOrigin(origin), origin).toBe(false)
     }
   })
 

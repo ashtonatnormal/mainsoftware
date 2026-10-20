@@ -26,10 +26,19 @@ export const LOCAL_AUTH_SECRET = 'hearth-local-hearth-local-hearth-local-hearth'
 
 // True when the app's origin is on this machine. A deployment people use can't have one, because
 // their browsers' Origin header would never match it, so this is a second condition for the
-// local-only settings, independent of DEPLOY_ENV (T14).
+// local-only settings, independent of DEPLOY_ENV (T14). It allows the fake provider and the local
+// AUTH_SECRET and refuses Twilio, so it must know every localhost origin, or Twilio's refusal
+// fails open: the name localhost or any name under it, with or without a trailing dot (browsers
+// treat both as this machine), 127.0.0.0/8, ::1, and the unspecified addresses 0.0.0.0 and ::,
+// which connect to this machine too, each also in IPv4-mapped form. The URL parser has already
+// lower-cased the name and written each address one way (127.1 as 127.0.0.1, ::0:1 as ::1).
 export function isLoopbackOrigin(appOrigin: string): boolean {
   if (!URL.canParse(appOrigin)) return false
-  return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(appOrigin).hostname)
+  const host = new URL(appOrigin).hostname
+  const name = host.endsWith('.') ? host.slice(0, -1) : host
+  if (name === 'localhost' || name.endsWith('.localhost')) return true
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || host === '0.0.0.0') return true
+  return ['[::1]', '[::]', '[::ffff:0:0]'].includes(host) || /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/.test(host)
 }
 
 // TRUST_PROXY: a comma-separated list of IP addresses or CIDR ranges. Fastify ignores a hop count

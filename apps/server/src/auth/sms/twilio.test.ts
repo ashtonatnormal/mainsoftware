@@ -270,13 +270,21 @@ describe('T7 T20 Twilio Verify adapter, against a loopback fake', () => {
     }
   })
 
-  it('createTwilioVerify refuses this machine: DEPLOY_ENV local or test, or a localhost APP_ORIGIN', () => {
+  it('createTwilioVerify refuses this machine: DEPLOY_ENV anything but nonprod or prod, or any localhost APP_ORIGIN', () => {
     const keys = { apiKeySid: 'k', apiKeySecret: 's', serviceSid: 'v' }
     for (const [deployEnv, appOrigin] of [
       ['local', 'https://hearth.example'],
       ['test', 'https://hearth.example'],
+      ['production', 'https://hearth.example'],
+      ['', 'https://hearth.example'],
       ['nonprod', 'http://localhost:5173'],
       ['prod', 'http://127.0.0.1:3000'],
+      // Localhost origins beyond the three common spellings (T20 item 10).
+      ['nonprod', 'http://app.localhost:5173'],
+      ['prod', 'http://localhost.:5173'],
+      ['nonprod', 'http://127.0.0.2:5173'],
+      ['prod', 'http://0.0.0.0:3000'],
+      ['nonprod', 'http://[::ffff:7f00:1]:3000'],
     ] as const) {
       expect(() => createTwilioVerify({ ...keys, deployEnv, appOrigin }), `${deployEnv} ${appOrigin}`).toThrow(
         /never runs on this machine/,

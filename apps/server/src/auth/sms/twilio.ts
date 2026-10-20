@@ -233,8 +233,8 @@ function unavailable(error: unknown): Error {
   return error instanceof SmsProviderError ? error : new SmsProviderError('unavailable')
 }
 
-// The provider for main.ts: Twilio's own URL, and never on this machine (DEPLOY_ENV local or test,
-// or a localhost APP_ORIGIN), refused here independently of config.ts.
+// The provider for main.ts: Twilio's own URL, and never on this machine (DEPLOY_ENV anything but
+// nonprod or prod, or a localhost APP_ORIGIN), refused here independently of config.ts.
 export function createTwilioVerify(options: {
   deployEnv: string
   appOrigin: string
@@ -242,8 +242,8 @@ export function createTwilioVerify(options: {
   apiKeySecret: string
   serviceSid: string
 }): TwilioVerify {
-  const localOrTest = options.deployEnv === 'local' || options.deployEnv === 'test'
-  if (localOrTest || isLoopbackOrigin(options.appOrigin)) {
+  const deployed = options.deployEnv === 'nonprod' || options.deployEnv === 'prod'
+  if (!deployed || isLoopbackOrigin(options.appOrigin)) {
     throw new Error(
       'Twilio Verify sends real texts, so it never runs on this machine (DEPLOY_ENV nonprod or prod, and an APP_ORIGIN other than localhost)',
     )
