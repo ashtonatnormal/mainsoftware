@@ -36,8 +36,10 @@
 // Sign out in flight: the server revokes the session and publishes it, so this tab's socket can
 // close 4401, or a query here answer 401, before the POST's own answer arrives. While signOut()
 // waits, an end for session_ended is read as signed_out_here, so the person who pressed Sign out
-// reads "You've signed out.", not "You've been signed out." A sign-out that fails (no answer, a
-// 5xx) leaves the session, and its live connection, running.
+// reads "You've signed out.", not "You've been signed out." A sign-out that fails (a 5xx, no
+// answer, or none within 20 s, SIGN_OUT_TIMEOUT_MS, when the POST is abandoned) leaves the session,
+// and its live connection, running, and Sign out can be pressed again. If the server did end the
+// session meanwhile, the socket's 4401 or the next 401 still ends the document.
 import { type QueryClient, QueryObserver } from '@tanstack/react-query'
 import { ApiFailure, apiPost, haltRequests } from '@/api/http.ts'
 import { flagsQuery, sessionQuery } from '@/api/queries.ts'
@@ -86,12 +88,17 @@ export interface SessionRuntime {
   readonly gateway: GatewayClient
   // The live connection's status for ConnectionBanner.
   readonly live: LiveSource
-  // POST /api/auth/sign-out: a 2xx or a 401 ends the session ('ended'); anything else leaves it
-  // running ('failed'), and the caller says so.
+  // POST /api/auth/sign-out: a 2xx or a 401 ends the session ('ended'); anything else, no answer
+  // within SIGN_OUT_TIMEOUT_MS included, leaves it running ('failed'), and the caller says so.
   signOut(): Promise<'ended' | 'failed'>
   // Idempotent; see the steps above.
   end(reason: SessionEndReason): void
 }
+
+// How long Sign out waits for its answer, as sign-in waits for each of its calls
+// (sign-in/api.ts AUTH_TIMEOUT_MS). Past it the POST is abandoned and reads as network, so a stalled
+// request can't leave the press pending for good, and the person can press again.
+export const SIGN_OUT_TIMEOUT_MS = 20_000
 
 // The browser's timers, on a clock that only moves forward.
 const browserClock: GatewayClock = {
@@ -205,8 +212,11 @@ export function startSessionRuntime(info: SessionInfo, env: RuntimeEnv): Session
   }
 
   async function sendSignOut(): Promise<'ended' | 'failed'> {
+    // The deadline runs on the live connection's clock, which the tests drive.
+    const deadline = new AbortController()
+    const timer = env.live.clock.set(() => deadline.abort(), SIGN_OUT_TIMEOUT_MS)
     try {
-      await apiPost('/api/auth/sign-out', {})
+      await apiPost('/api/auth/sign-out', {}, undefined, { signal: deadline.signal })
     } catch (error) {
       // A 401 means the session had already gone; halted means it is ending anyway.
       const gone = ended || (error instanceof ApiFailure && (error.status === 401 || error.code === 'halted'))
@@ -214,6 +224,8 @@ export function startSessionRuntime(info: SessionInfo, env: RuntimeEnv): Session
         signingOut = undefined
         return 'failed'
       }
+    } finally {
+      env.live.clock.clear(timer)
     }
     end('signed_out_here')
     return 'ended'

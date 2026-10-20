@@ -263,6 +263,44 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(left).toEqual(['replace /sign-in'])
   })
 
+  it('RT-03 OD-05: a sign-out unanswered after 20 s is abandoned and answers failed, keeping the session, and the next press sends a POST of its own', async () => {
+    const calls: string[] = []
+    let answer: (() => Response) | undefined
+    vi.stubGlobal('fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(String(url))
+      const next = answer
+      // The first POST never answers; it ends only when its signal aborts.
+      if (next === undefined)
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+        })
+      return next()
+    })
+    const { env, left, clock, net } = fakeEnv()
+    const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
+    goLive(net.last())
+    const first = runtime.signOut()
+    let settled = false
+    void first.then(() => {
+      settled = true
+    })
+    clock.advance(runtimeModule.SIGN_OUT_TIMEOUT_MS - 1)
+    await tick()
+    expect(settled).toBe(false)
+    // A press while it waits joins it.
+    expect(runtime.signOut()).toBe(first)
+    clock.advance(1)
+    expect(await first).toBe('failed')
+    expect(left).toEqual([])
+    expect(runtime.live.snapshot().status).toBe('live')
+    expect(runtime.queryClient.getQueryData(['session'])).toEqual(MARCUS)
+
+    answer = () => json(200, { status: 'signed_out' })
+    expect(await runtime.signOut()).toBe('ended')
+    expect(calls).toEqual(['/api/auth/sign-out', '/api/auth/sign-out'])
+    expect(left).toEqual(['replace /sign-in'])
+  })
+
   it('RT-04 CHT-60: a session answer naming another person ends with person_changed; one naming the same person changes nothing', async () => {
     const { env, left, storage } = fakeEnv()
     const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
