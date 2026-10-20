@@ -1442,6 +1442,62 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     for (const { ms } of replies) expect(ms).toBeLessThan(1_500)
   })
 
+  it('T20 item 6: a session sends one re-authentication code at a time: an overlapping request answers 409 try_again and sends nothing, and a later one works', async () => {
+    // Budgets: D 1 code request (a sign-in); re-authentication codes count against their own windows.
+    const d = await s.person()
+    const dc = await s.signIn(d)
+    await s.sms.nextCode(d.e164)
+    const { id: sessionId } = await s.sessionOf(dc)
+    // The first request waits inside the provider's start until the second has answered: a double
+    // tap, whose two requests own the record as one session.
+    let release = () => {}
+    const held = new Promise<void>(resolve => {
+      release = resolve
+    })
+    let entered = () => {}
+    const inStart = new Promise<void>(resolve => {
+      entered = resolve
+    })
+    const start = s.sms.start.bind(s.sms)
+    const slow = vi.spyOn(s.sms, 'start').mockImplementationOnce(async to => {
+      entered()
+      await held
+      return start(to)
+    })
+    const sentBefore = s.sms.countTo(d.e164)
+    try {
+      const first = dc.post('/api/auth/reauth/code/request', {})
+      await inStart
+      const second = await dc.post('/api/auth/reauth/code/request', {})
+      expect([second.status, second.error]).toEqual([409, 'try_again'])
+      expect(s.sms.countTo(d.e164)).toBe(sentBefore)
+      release()
+      expect((await first).status).toBe(200)
+    } finally {
+      release()
+      slow.mockRestore()
+    }
+    expect(s.sms.countTo(d.e164)).toBe(sentBefore + 1)
+    expect(await s.valkey.exists(s.names.reauthSending(sessionId))).toBe(0)
+    // Logged as its own line, never as a database conflict, and audited nowhere: nothing was opened.
+    const busy = s.logs.filter(line => line.event === 'reauth_code_busy' && line.personId === d.id)
+    expect(busy.map(line => line.level)).toEqual([30])
+    expect(s.logs.filter(line => line.event === 'db_conflict' && line.reqId === busy[0]?.reqId)).toEqual([])
+    const requested = (await auditOf(d)).filter(
+      row => row.action === 'auth.code_requested' && row.details.during === 'reauth',
+    )
+    expect(requested).toHaveLength(1)
+
+    // Freed: a later request replaces the first code with a new one, which stamps the session.
+    const again = await dc.post('/api/auth/reauth/code/request', {})
+    expect(again.status).toBe(200)
+    expect(s.sms.countTo(d.e164)).toBe(sentBefore + 2)
+    await s.sms.nextCode(d.e164)
+    const code = await s.sms.nextCode(d.e164)
+    const stamped = await dc.post('/api/auth/reauth/code/verify', { code })
+    expect([stamped.status, stamped.body]).toEqual([200, { status: 'reauthenticated', validForSeconds: 300 }])
+  })
+
   it('T20 item 6: an approved re-authentication code whose stamp waits past its lock timeout answers 409 try_again, and a retry with any 6 digits stamps it with no second check', async () => {
     // Budgets: R 1 code request (the sign-in; re-authentication codes count against their own windows).
     const r = await s.person()
