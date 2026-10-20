@@ -35,6 +35,16 @@ const webPackage = JSON.parse(readRepoFile(`${WEB}package.json`)) as { scripts: 
 const servers = [config.webServer].flat().filter(server => server !== undefined)
 const serverNamed = (name: string) => servers.find(server => server.name === name)
 
+// Every toHaveScreenshot in a file's code: `expect.soft` or `expect` when it is called on
+// `expect(<a plain argument>)`, and `toHaveScreenshot` for any other use (ES-04).
+function screenshotCalls(path: string, source: string): string[] {
+  return [
+    ...codeOf(path, source).matchAll(
+      /(expect(?:\.soft)?)\s*\([^()]*\)\s*\.\s*toHaveScreenshot\s*\(|\btoHaveScreenshot\b/g,
+    ),
+  ].map(match => match[1] ?? 'toHaveScreenshot')
+}
+
 // The persona table as a list.
 const personas: Persona[] = Object.values(PERSONAS)
 
@@ -146,12 +156,29 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(serverNamed('preview')?.command).toBe('node e2e/support/preview.ts')
   })
 
-  it('ES-04 K-26 K-27 D-07: updateSnapshots none, ignoreSnapshots off only in CI, a snapshot path without {platform}, no retries, forbidOnly', () => {
-    expect(config.updateSnapshots).toBe('none')
+  it("ES-04 K-26 K-27 D-07: updateSnapshots none except on GitHub's runner (missing, so a failing run writes every actual), ignoreSnapshots off only in CI, every screenshot a soft expect, a snapshot path without {platform}, no retries, forbidOnly", () => {
+    const onRunner = !!process.env.CI && process.env.GITHUB_ACTIONS === 'true'
+    expect(config.updateSnapshots).toBe(onRunner ? 'missing' : 'none')
     expect(config.ignoreSnapshots).toBe(!process.env.CI)
     const text = codeOf('playwright.config.ts', readRepoFile(`${WEB}playwright.config.ts`))
     expect(text).toMatch(/const CI = !!process\.env\.CI/)
+    expect(text).toMatch(/const ON_RUNNER = CI && process\.env\.GITHUB_ACTIONS === ["']true["']/)
+    expect(text).toMatch(/updateSnapshots: ON_RUNNER \? ["']missing["'] : ["']none["']/)
     expect(text).toMatch(/ignoreSnapshots: !CI/)
+    // A hard expect would stop its test at the first changed shot, and the run would write that
+    // one actual only, hiding every later change: every screenshot in the suite is soft.
+    expect(screenshotCalls('a.spec.ts', 'await expect.soft(page).toHaveScreenshot("a.png")')).toEqual(['expect.soft'])
+    expect(
+      screenshotCalls(
+        'a.spec.ts',
+        'await expect(page).toHaveScreenshot("a.png"); await expect.soft(page.getByRole("main")).toHaveScreenshot()',
+      ),
+    ).toEqual(['expect', 'toHaveScreenshot'])
+    const shots = files
+      .filter(path => path.startsWith(E2E) && path.endsWith('.ts'))
+      .flatMap(path => screenshotCalls(path, readRepoFile(path)).map(call => `${relative(E2E, path)}: ${call}`))
+    expect(shots).toContain('visual.spec.ts: expect.soft')
+    expect(shots.filter(shot => !shot.endsWith(': expect.soft'))).toEqual([])
     expect(config.snapshotPathTemplate).toBe('{testDir}/__screenshots__/{testFilePath}/{arg}{ext}')
     expect(config.snapshotPathTemplate).not.toContain('{platform}')
     expect(config.retries).toBe(0)

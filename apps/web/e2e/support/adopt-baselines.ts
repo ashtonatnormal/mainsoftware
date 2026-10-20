@@ -4,8 +4,10 @@
 // 2. runs `node apps/web/e2e/support/adopt-baselines.ts <that folder>`;
 // 3. looks at every PNG it copied, in both themes, and commits them.
 // It copies only `<name>-actual.png` files whose name is in VISUAL_SHOTS, into
-// e2e/__screenshots__/visual.spec.ts/<name>.png, and says which shots it found no file for. It runs
-// under plain Node 24, so its relative imports name the .ts file.
+// e2e/__screenshots__/visual.spec.ts/<name>.png, and says which shots it found no file for. A
+// failing run writes the actual of every missing or changed shot (playwright.config.ts), so one
+// artifact holds all 34 on a first run, and on a later one every shot that changed. It runs under
+// plain Node 24, so its relative imports name the .ts file.
 import { copyFileSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { WEB_DIR } from './env.ts'

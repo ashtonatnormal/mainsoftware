@@ -25,7 +25,8 @@
 //    that runs before any app module's own code could call z.config() (the e2e guard caught it).
 //    zod keeps its settings in one global object, which it adopts when it loads if one is there
 //    (zod/v4/core/core.js: globalThis.__zod_globalConfig ??= {}), so this sets jitless there first;
-//    boot/zod-preset.test.ts checks zod still adopts it.
+//    boot/zod-preset.test.ts checks zod still adopts it. It is the one __ member the app may write
+//    (the web source guard's WS-02 names it).
 
 // Every key the router's scroll cache has used or may use (`tsr-scroll-restoration-v1_3` today).
 export const SCROLL_CACHE_PREFIX = 'tsr-scroll-restoration'

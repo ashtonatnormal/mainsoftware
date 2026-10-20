@@ -305,6 +305,115 @@ export const QUERY_CLIENT_FILE = 'session/query-client.ts'
 export const CODE_FROM_STRINGS =
   /\beval\s*\(|\bnew\s+Function\s*\(|\bFunction\s*\(|\b(?:window|globalThis|self)\s*(?:\.\s*__|\[\s*['"`]__)/g
 
+// WS-02: the __ members a file writes may be written only where this names them. CODE_FROM_STRINGS
+// sees `window.__x` only when it is spelt so; dunderWrites() sees a write through an alias too.
+export const DUNDER_WRITES_ALLOWED: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  // zod's own settings object, which zod adopts when it loads (zod/v4/core/core.js:
+  // `globalThis.__zod_globalConfig ??= {}`). preBoot() sets jitless there before zod loads, so zod
+  // builds no code from strings and the CSP's missing 'unsafe-eval' raises no violation report on
+  // every load (pre-boot.ts item 4; K-01, K-05; boot/zod-preset.test.ts checks zod still adopts it).
+  ['boot/pre-boot.ts', new Set(['__zod_globalConfig'])],
+])
+
+const UPDATES = new Set([ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken])
+const isDunder = (name: string) => name.startsWith('__')
+
+// A string key written literally: 'a', "a" or `a`.
+const literalKey = (node: ts.Node | undefined) => (node && ts.isStringLiteralLike(node) ? node.text : undefined)
+
+// The __ members an access chain passes through: `w.__a.b = 1` writes into __a, so it names __a.
+function dunderChain(target: ts.Expression): string[] {
+  const names: string[] = []
+  for (
+    let at = bare(target);
+    ts.isPropertyAccessExpression(at) || ts.isElementAccessExpression(at);
+    at = bare(at.expression)
+  ) {
+    const name = accessedName(at)
+    if (name !== undefined && isDunder(name)) names.push(name)
+  }
+  return names
+}
+
+// The members a destructuring assignment writes (`({ a: w.__x } = o)`, `[w.__y] = list`). A default
+// (`[w.__z = 1] = list`) is an assignment of its own, which the walk meets anyway.
+function patternTargets(left: ts.Expression): ts.Expression[] {
+  const at = bare(left)
+  if (ts.isObjectLiteralExpression(at))
+    return at.properties.flatMap(property =>
+      ts.isPropertyAssignment(property)
+        ? patternTargets(property.initializer)
+        : ts.isSpreadAssignment(property)
+          ? patternTargets(property.expression)
+          : [],
+    )
+  if (ts.isArrayLiteralExpression(at))
+    return at.elements.flatMap(element => patternTargets(ts.isSpreadElement(element) ? element.expression : element))
+  if (ts.isBinaryExpression(at)) return []
+  return [at]
+}
+
+// The __ keys an object literal names (`{ __a: f }`, `{ '__b': f }`, `{ ['__c']: f }`, `{ __d }`,
+// `{ __e() {} }`).
+function dunderKeys(node: ts.Expression | undefined): string[] {
+  const at = node === undefined ? undefined : bare(node)
+  if (at === undefined || !ts.isObjectLiteralExpression(at)) return []
+  return at.properties.flatMap(property => {
+    const name = property.name
+    const key =
+      name === undefined
+        ? undefined
+        : ts.isIdentifier(name)
+          ? name.text
+          : ts.isComputedPropertyName(name)
+            ? literalKey(name.expression)
+            : literalKey(name)
+    return key !== undefined && isDunder(key) ? [key] : []
+  })
+}
+
+// Calls that define members by key: Object.assign(o, { __a }), Object.defineProperty(o, '__b', d),
+// Object.defineProperties(o, { __c: d }), Reflect.set(o, '__d', v), Reflect.defineProperty(o, '__e', d).
+function definedDunders(call: ts.CallExpression): string[] {
+  const callee = bare(call.expression)
+  if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)) return []
+  const how = `${callee.expression.text}.${callee.name.text}`
+  const [, second, ...rest] = call.arguments
+  if (how === 'Object.assign') return [second, ...rest].flatMap(dunderKeys)
+  if (how === 'Object.defineProperties') return dunderKeys(second)
+  if (how === 'Object.defineProperty' || how === 'Reflect.set' || how === 'Reflect.defineProperty') {
+    const key = literalKey(second)
+    return key !== undefined && isDunder(key) ? [key] : []
+  }
+  return []
+}
+
+// Every write to a __-prefixed member in a file, on any object, by the member's name: an
+// assignment of any operator (destructuring and for…of/in targets included), ++ and --, delete,
+// and the calls above. A window hook can hide behind an alias the source can't trace (a parameter
+// typed as the window, a cast, a variable), so no object is let off; DUNDER_WRITES_ALLOWED names
+// the exceptions. A key held in a variable (`w[k] = f`) can't be seen.
+export function dunderWrites(path: string, source: string): string[] {
+  const found: string[] = []
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    )
+      found.push(...patternTargets(node.left).flatMap(dunderChain))
+    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && UPDATES.has(node.operator))
+      found.push(...dunderChain(node.operand))
+    if (ts.isDeleteExpression(node)) found.push(...dunderChain(node.expression))
+    if ((ts.isForOfStatement(node) || ts.isForInStatement(node)) && !ts.isVariableDeclarationList(node.initializer))
+      found.push(...patternTargets(node.initializer).flatMap(dunderChain))
+    if (ts.isCallExpression(node)) found.push(...definedDunders(node))
+    ts.forEachChild(node, visit)
+  }
+  visit(parse(path, source))
+  return found
+}
+
 // WS-03: the network, only through its two clients, and only to this origin.
 export const FETCH_FILES = new Set(['api/http.ts'])
 export const WEBSOCKET_FILES = new Set(['live/gateway-client.ts', 'session/runtime.ts'])

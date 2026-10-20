@@ -2,7 +2,9 @@
 // screenshot is named in support/visual-matrix.ts, and its baseline is made only on CI's runner and
 // adopted from the check job's artifact (support/adopt-baselines.ts). A local run walks the same
 // screens and takes no screenshot (ignoreSnapshots), so it can't write or compare a PNG. Each shot
-// waits for the self-hosted fonts and runs with reduced motion, and the caret is hidden.
+// waits for the self-hosted fonts and runs with reduced motion, and the caret is hidden. Every shot
+// is a soft expect: a missing or changed one fails the test but doesn't stop it, so one failing CI
+// run writes the actual of every shot that needs adopting (playwright.config.ts, D-07).
 import type { Page } from '@playwright/test'
 import { SIGN_IN } from '../src/strings/sign-in.ts'
 import { fontsReady } from './support/checks.ts'
@@ -24,7 +26,7 @@ async function shoot(page: Page, screen: string, widths: readonly number[], prep
     for (const scheme of SCHEMES) {
       await page.emulateMedia({ colorScheme: scheme })
       await fontsReady(page)
-      await expect(page).toHaveScreenshot(shotName(screen, width, scheme), { fullPage: true })
+      await expect.soft(page).toHaveScreenshot(shotName(screen, width, scheme), { fullPage: true })
     }
   }
 }

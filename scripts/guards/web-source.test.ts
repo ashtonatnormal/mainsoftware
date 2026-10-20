@@ -17,6 +17,8 @@ import {
   clipboardHandlers,
   codeOf,
   DEFAULT_PALETTE,
+  DUNDER_WRITES_ALLOWED,
+  dunderWrites,
   ENTRY_APP,
   entryGraph,
   FETCH_FILES,
@@ -104,7 +106,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     ).toEqual([])
   })
 
-  it('WS-02 D-01 SHL-26: new QueryClient( only in session/query-client.ts; no window.__ assignment, eval or new Function', () => {
+  it("WS-02 D-01 SHL-26 K-01: new QueryClient( only in session/query-client.ts; no eval or new Function; no window.__ read, and no __ member written through any alias but pre-boot's __zod_globalConfig", () => {
     expect(matchesOf(NEW_QUERY_CLIENT, planted('const q = new QueryClient({})'))).toHaveLength(1)
     expect(
       matchesOf(
@@ -122,6 +124,41 @@ describe('T21: the web source guard (apps/web/src)', () => {
       ),
     ).toEqual([])
     expect(found(CODE_FROM_STRINGS)).toEqual([])
+
+    // A __ member written through an alias of the window, or any object, is a write too.
+    expect(
+      dunderWrites(
+        'fixture.ts',
+        [
+          'const w = window; w.__a = f',
+          'function hook(scope: { __b?: object }) { scope.__b ??= {} }',
+          '(window as unknown as Record<string, unknown>).__c = 1',
+          'globalThis["__d"] = 1',
+          'self.__e.list = []',
+          'w.__f += 1; w.__g ||= f; w.__h &&= f',
+          'w.__i++; --w.__j',
+          '({ a: w.__k } = o); [w.__l, ...w.__m] = list; [w.__n = 1] = list',
+          'for (w.__o of list) {}',
+          'delete w.__p',
+          'Object.assign(w, { __q: f }, { ["__r"]: f }); Object.defineProperty(w, "__s", {}); Reflect.set(w, `__t`, 1)',
+          'Object.defineProperties(w, { __u: {} }); Reflect.defineProperty(w!, "__v", {})',
+        ].join(';\n'),
+      ),
+    ).toEqual([...'abcdefghijklmnopqrstuv'].map(letter => `__${letter}`))
+    // Reads, declarations, keys of a plain object, locals and other members aren't.
+    expect(
+      dunderWrites(
+        'fixture.ts',
+        'const v = w.__a; f(w.__b); interface Z { __c?: number }; const o = { __d: 1 }; const { __e } = w; let __f = 1; __f = 2; ({ __g } = w); w.a = 1; w[k] = f; Object.freeze({ __h: 1 })',
+      ),
+    ).toEqual([])
+    // The tree writes only the members DUNDER_WRITES_ALLOWED names, where it names them, and each
+    // allowance is still in use, so it goes when its write does.
+    const writes = scripts.flatMap(path => dunderWrites(path, sources.get(path) ?? '').map(name => `${path}: ${name}`))
+    const allowed = [...DUNDER_WRITES_ALLOWED].flatMap(([path, names]) => [...names].map(name => `${path}: ${name}`))
+    expect(allowed).toEqual(['boot/pre-boot.ts: __zod_globalConfig'])
+    expect(writes.filter(write => !allowed.includes(write))).toEqual([])
+    expect([...new Set(writes)]).toEqual(allowed)
   })
 
   it('WS-03 K-13: fetch only in api/http.ts and WebSocket only in live/gateway-client.ts and session/runtime.ts, never with an absolute URL', () => {

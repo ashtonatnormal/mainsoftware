@@ -18,7 +18,9 @@
 // Projects: Chromium runs every spec but session-end; WebKit and Firefox run the @smoke tests
 // (NFR-01, OD-07, OD-16: CI is their gate); chromium-session-end, which ends the sessions the
 // others share, runs after them all (K-21). Snapshots: local runs never write or compare PNGs, and
-// CI compares against baselines made only on its own runner (D-07).
+// CI compares against baselines made only on its own runner (D-07). One failing CI run writes the
+// actual screenshot of every shot that is missing or changed, all 34 on a first run, so one
+// artifact holds every baseline to adopt (e2e/support/adopt-baselines.ts).
 //
 // Cloud sessions can't download Playwright's browsers. There, PW_CHROMIUM_EXECUTABLE points at a
 // Chromium already on the machine, an unsupported pairing for functional local runs only:
@@ -41,6 +43,9 @@ import {
 } from './e2e/support/env.ts'
 
 const CI = !!process.env.CI
+// GitHub's runner itself, not a local run with CI set (where a written baseline would reach the
+// auto-push hook, K-27).
+const ON_RUNNER = CI && process.env.GITHUB_ACTIONS === 'true'
 
 // A Chromium of the machine's own, when PW_CHROMIUM_EXECUTABLE names one (cloud sessions only).
 const localChromium = () =>
@@ -62,9 +67,13 @@ export default defineConfig({
   testMatch: '**/*.spec.ts',
   outputDir: './test-results',
   snapshotPathTemplate: '{testDir}/__screenshots__/{testFilePath}/{arg}{ext}',
-  // D-07: local runs never write or compare PNGs; CI never writes them either, and fails on a
-  // missing or changed one (adopt-baselines.ts takes them from CI's artifact).
-  updateSnapshots: 'none',
+  // D-07: local runs never write or compare PNGs (ignoreSnapshots), and CI fails on a missing or
+  // changed one. Playwright takes no screenshot at all for a missing baseline under 'none', so on
+  // the runner 'missing' writes the actual (and a copy into the runner's own checkout, thrown away
+  // with the runner and never compared again: retries 0, each name taken once) and fails the test
+  // without stopping it. visual.spec.ts makes every shot soft, so a changed one doesn't stop the
+  // test either. adopt-baselines.ts takes the `-actual` files from CI's artifact.
+  updateSnapshots: ON_RUNNER ? 'missing' : 'none',
   ignoreSnapshots: !CI,
   forbidOnly: true,
   retries: 0,
