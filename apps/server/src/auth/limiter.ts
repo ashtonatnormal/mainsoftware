@@ -69,19 +69,30 @@ end
 return {1, 0}
 `)
 
-// Checks every window and records one hit in all of them if none is full. Atomic. Throws if
+// Checks every window and records one hit in all of them if none is full, under `member` (a
+// random id unless the caller names one, to give it back with release()). Atomic. Throws if
 // Valkey can't answer; sign-in callers then fail closed.
-export async function hit(valkey: Redis, windows: readonly Window[]): Promise<LimitResult> {
+export async function hit(
+  valkey: Redis,
+  windows: readonly Window[],
+  member: string = randomUUID(),
+): Promise<LimitResult> {
   if (windows.length === 0) return { allowed: true }
   const reply = await runScript(
     valkey,
     SLIDING_WINDOW,
     windows.map(w => w.key),
-    [...windows.flatMap(w => [w.windowMs, w.max]), randomUUID()],
+    [...windows.flatMap(w => [w.windowMs, w.max]), member],
   )
   if (!Array.isArray(reply) || reply.length !== 2) throw new Error('the sliding-window script answered unexpectedly')
   const [allowed, retryAfterMs] = reply.map(Number)
   return allowed === 1 ? { allowed: true } : { allowed: false, retryAfterMs: retryAfterMs ?? 0 }
+}
+
+// Takes back the hit hit() recorded under `member` from each of these windows, as though that
+// request had never counted there. Windows not named keep it.
+export async function release(valkey: Pick<Redis, 'zrem'>, windows: readonly Window[], member: string): Promise<void> {
+  await Promise.all(windows.map(w => valkey.zrem(w.key, member)))
 }
 
 // Whose address a per-IP window counts: an IPv4 address as it is (an IPv4-mapped IPv6 address as

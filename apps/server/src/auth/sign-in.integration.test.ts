@@ -739,6 +739,63 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect((await s.signIn(other)).cookie(SESSION_COOKIE)).toBeDefined()
   })
 
+  it('T14 item 5 T20 item 3: a check the provider never answered, failing or refused by the open breaker, spends none of the day’s checks', async () => {
+    // Budgets: P 1 code request, M 1 (re-authentication codes count against their own windows).
+    // Each on an api of its own, whose breaker the test opens; the suite's own api, its breaker
+    // closed, then takes the same cookies.
+    const p = await s.person()
+    const app = await s.startApi({})
+    const pc = s.client({ app })
+    expect((await requestCode(pc, p.e164)).status).toBe(200)
+    const code = await s.sms.nextCode(p.e164)
+    // 9 of the number's 10 checks today already spent.
+    const day = s.names.limit('otp-v24h', tag(s.keys, p.e164))
+    await seedWindow(day, 9, await valkeyNow())
+    const down = vi.spyOn(s.sms, 'check').mockRejectedValue(new Error('the provider is down'))
+    try {
+      // Three failures open the breaker, and seven more presses meet it: each a 503 the person may
+      // press again, and none spends the day's 10th check.
+      for (let press = 1; press <= 10; press++) {
+        const reply = await verifyCode(pc, code)
+        expect([press, reply.status, reply.error]).toEqual([press, 503, 'unavailable'])
+      }
+      expect(down).toHaveBeenCalledTimes(3)
+    } finally {
+      down.mockRestore()
+    }
+    expect(await s.valkey.zcard(day)).toBe(9)
+    // Once the provider answers, the same code signs in: the day's 10th check.
+    const back = s.client()
+    back.setCookie(ATTEMPT_COOKIE, pc.cookie(ATTEMPT_COOKIE) ?? '')
+    const signedIn = await verifyCode(back, code)
+    expect([signedIn.status, signedIn.body]).toMatchObject([200, { status: 'signed_in' }])
+    expect(await s.valkey.zcard(day)).toBe(10)
+
+    // Re-authentication by SMS gives the person's day of checks back the same way.
+    const m = await s.person()
+    const mc = await s.signIn(m)
+    const reauthApp = await s.startApi({})
+    const rc = s.client({ app: reauthApp })
+    rc.setCookie(SESSION_COOKIE, mc.cookie(SESSION_COOKIE) ?? '')
+    expect((await rc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+    const reauthCode = await s.sms.nextCode(m.e164)
+    const checks = s.names.limit('reauth-check-p24h', m.id)
+    await seedWindow(checks, 19, await valkeyNow())
+    const failing = vi.spyOn(s.sms, 'check').mockRejectedValue(new Error('the provider is down'))
+    try {
+      for (let press = 1; press <= 5; press++) {
+        const reply = await rc.post('/api/auth/reauth/code/verify', { code: reauthCode })
+        expect([press, reply.status, reply.error]).toEqual([press, 503, 'unavailable'])
+      }
+      expect(failing).toHaveBeenCalledTimes(3)
+    } finally {
+      failing.mockRestore()
+    }
+    expect(await s.valkey.zcard(checks)).toBe(19)
+    const stamped = await mc.post('/api/auth/reauth/code/verify', { code: reauthCode })
+    expect([stamped.status, stamped.body]).toEqual([200, { status: 'reauthenticated', validForSeconds: 300 }])
+  })
+
   it('C0.5 Done: a number not on the roster gets the identical reply and no SMS (ACC-03, PRD-53)', async () => {
     // Budgets: R 3 code requests, N (not on the roster) 3; a refused request doesn't count.
     const r = await s.person()

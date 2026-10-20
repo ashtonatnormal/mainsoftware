@@ -29,6 +29,7 @@
 // - Valkey errors fail closed: sign-in answers 503 unavailable while Valkey is down.
 // - Nothing here logs a phone number, code, PIN, token, attempt id, challenge or credential id.
 
+import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   type CodeSentSchema,
@@ -55,7 +56,7 @@ import { attemptCookie, clearedCookie, sessionCookie } from '#src/auth/cookies.t
 import { hashPin, keyName, tag, withPinSlot } from '#src/auth/crypto.ts'
 import { deviceLabel } from '#src/auth/device-label.ts'
 import { ApiError } from '#src/auth/errors.ts'
-import { hit, limitSubject, type Window } from '#src/auth/limiter.ts'
+import { hit, limitSubject, release, type Window } from '#src/auth/limiter.ts'
 import {
   type AuthenticationResponse,
   authenticationOptions,
@@ -98,10 +99,25 @@ export function tooManyRequests(retryAfterMs: number): ApiError {
   return new ApiError(429, 'too_many_requests', { retryAfterSeconds })
 }
 
-// Records a hit in every window, or refuses with 429 if any is full. Fails closed.
-export async function enforce(api: Api, info: ReqInfo, windows: readonly Window[]): Promise<void> {
-  const result = await fromValkey(info, hit(api.valkey, windows))
+// Records a hit in every window, or refuses with 429 if any is full. Fails closed. Answers the
+// hit's member, for giveBack().
+export async function enforce(api: Api, info: ReqInfo, windows: readonly Window[]): Promise<string> {
+  const member = randomUUID()
+  const result = await fromValkey(info, hit(api.valkey, windows, member))
   if (!result.allowed) throw tooManyRequests(result.retryAfterMs)
+  return member
+}
+
+// Takes enforce()'s hit back from some of its windows: a code check the provider never answered (it
+// failed, or the breaker refused the check) counts against no day's checks, so retrying through a
+// provider outage can't use up a number's or a person's checks for the day (T14 item 5, T20 item
+// 3). Best effort: the 503 being answered stands, and a failure is logged.
+export async function giveBack(api: Api, info: ReqInfo, windows: readonly Window[], member: string): Promise<void> {
+  try {
+    await release(api.valkey, windows, member)
+  } catch (error) {
+    info.log.warn({ err: error, event: 'limit_give_back_failed' }, 'a code check could not be given back')
+  }
 }
 
 // The per-IP subject: an IPv4 address, or an IPv6 /64, as a keyed hash.
@@ -502,13 +518,13 @@ export async function verifyCode(
   // conflict, Valkey or Postgres down): any 6 digits finish it, with no second check (T20).
   if (attempt.step === 'verified') return finishAgain(api, info, key, attempt)
   if (attempt.step !== 'code_sent') throw new ApiError(409, 'wrong_step')
-  // At most 10 code checks per number per rolling day, counted for every number alike.
-  await enforce(api, info, [
-    windowOf(api, LIMITS.authPerIp, ipTag(api, info)),
-    windowOf(api, LIMITS.verifyPerNumber, attempt.numberTag),
-  ])
-  // The provider keeps failing: every check is refused for a while, named or not, without asking it.
+  // The provider keeps failing: every check is refused for a while, named or not, without asking it
+  // and before any window counts it.
   if (api.otp.breaker.isOpen()) throw new ApiError(503, 'unavailable')
+  // At most 10 code checks per number per rolling day, counted for every number alike; a check the
+  // provider couldn't answer is given back below.
+  const day = windowOf(api, LIMITS.verifyPerNumber, attempt.numberTag)
+  const member = await enforce(api, info, [windowOf(api, LIMITS.authPerIp, ipTag(api, info)), day])
   const reserved = await fromValkey(info, reserveCode(api.valkey, api.names, attempt.numberTag, key))
   // The outcome: approved, or a refusal with the tries counted so far.
   let check: { result: 'approved' | 'wrong' | 'dead' | 'expired'; tries: number }
@@ -531,8 +547,12 @@ export async function verifyCode(
       }
     }
     const settled = await fromValkey(info, settleCode(api.valkey, api.names, attempt.numberTag, key, reserved, verdict))
-    // The provider couldn't answer: the try was given back, and the attempt stays at the code.
-    if (settled.result === 'failed') throw new ApiError(503, 'unavailable')
+    // The provider couldn't answer: the try was given back, and so is the day's check (the per-IP
+    // window still counts the request), and the attempt stays at the code.
+    if (settled.result === 'failed') {
+      await giveBack(api, info, [day], member)
+      throw new ApiError(503, 'unavailable')
+    }
     if (settled.result === 'displaced') {
       // A newer request replaced the record during the check. The newest request wins: this check
       // signs nobody in, whatever the provider said, and touches and cancels nothing of the newer

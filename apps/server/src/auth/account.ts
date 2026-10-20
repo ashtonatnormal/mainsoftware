@@ -50,6 +50,7 @@ import {
   credentialFor,
   enforce,
   fromValkey,
+  giveBack,
   livePasskeys,
   pinRefusal,
   providerFailure,
@@ -245,17 +246,20 @@ export async function reauthCodeVerify(
 ): Promise<Answer> {
   const sms = api.sms
   if (sms === undefined) throw new ApiError(503, 'unavailable')
-  await enforce(api, info, [
-    windowOf(api, LIMITS.reauthPerSession, session.sessionId),
-    windowOf(api, LIMITS.reauthCheckPerPerson, session.userId),
-  ])
+  // A check the provider never answered (the breaker open, or the provider failing) gives the day's
+  // check back (sign-in.ts giveBack); the per-session window still counts the request.
+  const day = windowOf(api, LIMITS.reauthCheckPerPerson, session.userId)
+  const member = await enforce(api, info, [windowOf(api, LIMITS.reauthPerSession, session.sessionId), day])
   const owner = ownerOf(session)
   // Transaction A writes nothing: the method is decided before any provider check is spent.
   const number = await inSession(api, info, session, async trx => {
     await actingBy(trx, session, 'code')
     return currentNumber(trx, session)
   })
-  if (api.otp.breaker.isOpen()) throw new ApiError(503, 'unavailable')
+  if (api.otp.breaker.isOpen()) {
+    await giveBack(api, info, [day], member)
+    throw new ApiError(503, 'unavailable')
+  }
   const numberTag = tag(api.keys, number.e164)
   const reserved = await fromValkey(info, reserveCode(api.valkey, api.names, numberTag, owner))
   let check: { result: 'approved' | 'wrong' | 'dead' | 'expired'; tries: number }
@@ -271,8 +275,11 @@ export async function reauthCodeVerify(
       )
     }
     const settled = await fromValkey(info, settleCode(api.valkey, api.names, numberTag, owner, reserved, verdict))
-    // The provider couldn't answer: the try was given back.
-    if (settled.result === 'failed') throw new ApiError(503, 'unavailable')
+    // The provider couldn't answer: the try was given back, and the day's check.
+    if (settled.result === 'failed') {
+      await giveBack(api, info, [day], member)
+      throw new ApiError(503, 'unavailable')
+    }
     // A sign-in request replaced this session's code during the check: it no longer counts.
     if (settled.result === 'displaced') check = { result: 'expired', tries: 0 }
     else check = 'tries' in settled ? settled : { result: 'expired', tries: 0 }

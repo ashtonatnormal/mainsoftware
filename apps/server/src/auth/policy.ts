@@ -69,7 +69,8 @@ export const LIMITS = {
     { name: 'otp-n10m', windowMs: 600_000, max: 3 },
     { name: 'otp-n24h', windowMs: 86_400_000, max: 10 },
   ],
-  // Code checks per number per rolling day, the same for every number.
+  // Code checks per number per rolling day, the same for every number. A check the provider never
+  // answered doesn't count, here or in reauthCheckPerPerson (sign-in.ts giveBack).
   verifyPerNumber: { name: 'otp-v24h', windowMs: 86_400_000, max: 10 },
   // Code requests per IP.
   otpPerIp: { name: 'otp-ip', windowMs: 600_000, max: 30 },

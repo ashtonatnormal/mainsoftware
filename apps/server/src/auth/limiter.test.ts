@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { Redis } from 'ioredis'
 import { describe, expect, it } from 'vitest'
-import { hit, limitSubject, runScript, SLIDING_WINDOW, script } from '#src/auth/limiter.ts'
+import { hit, limitSubject, release, runScript, SLIDING_WINDOW, script } from '#src/auth/limiter.ts'
 
 // The Lua itself runs against Valkey in the integration test (npm run test:integration), which also
 // checks that a refused request records nothing in any window.
@@ -44,6 +44,7 @@ function fakeValkey(answers: (unknown | Error)[]) {
   const valkey = {
     evalsha: (...args: unknown[]) => answer('evalsha', args),
     eval: (...args: unknown[]) => answer('eval', args),
+    zrem: (...args: unknown[]) => answer('zrem', args),
   } as unknown as Redis
   return { valkey, calls }
 }
@@ -71,6 +72,18 @@ describe('T14 INF-RATELIMIT running the sliding-window script', () => {
     expect(rest.slice(0, 6)).toEqual(['it:rl:{auth}:a:x', 'it:rl:{auth}:b:x', 600_000, 3, 86_400_000, 10])
     expect(rest[6]).toMatch(/^[0-9a-f-]{36}$/)
     expect(rest).toHaveLength(7)
+  })
+
+  it('T14 item 5: records the hit under the member the caller names, and release() takes it back from the windows named alone', async () => {
+    const { valkey, calls } = fakeValkey([[1, 0], 1])
+    const windows = [
+      { key: 'it:rl:{auth}:a:x', windowMs: 600_000, max: 100 },
+      { key: 'it:rl:{auth}:b:x', windowMs: 86_400_000, max: 10 },
+    ]
+    expect(await hit(valkey, windows, 'm-1')).toEqual({ allowed: true })
+    expect(calls[0]?.args.at(-1)).toBe('m-1')
+    await release(valkey, windows.slice(1), 'm-1')
+    expect(calls.slice(1)).toEqual([{ command: 'zrem', args: ['it:rl:{auth}:b:x', 'm-1'] }])
   })
 
   it('touches nothing for no windows', async () => {
