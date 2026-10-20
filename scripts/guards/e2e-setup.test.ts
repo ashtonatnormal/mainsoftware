@@ -331,8 +331,9 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(install, 'the browser install').toBeGreaterThan(-1)
     expect(install).toBeLessThan(e2e)
     const upload = steps.at(-1) ?? ''
-    // failure() is false once GitHub cancels the job (at its timeout-minutes or by hand), so a run
-    // stopped mid-suite uploads only through cancelled() (ES-13).
+    // failure() is false once GitHub cancels the job at its timeout-minutes, so a run stopped
+    // mid-suite uploads only through cancelled() (ES-13). A run cancelled by hand doesn't cancel
+    // this job: its job-level if: always() keeps it running.
     expect(upload).toMatch(/^if: failure\(\) \|\| cancelled\(\)$/m)
     // By tag, or by commit with the tag in a comment, as Renovate's helpers:pinGitHubActionDigests
     // writes it; the parser keeps a step line's comment, so the pattern allows one.

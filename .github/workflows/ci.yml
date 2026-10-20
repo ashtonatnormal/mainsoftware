@@ -125,8 +125,10 @@ jobs:
       # the visual baselines: apps/web/e2e/support/adopt-baselines.ts), and the servers' logs, which
       # hold the fake provider's codes for the seed's fictional numbers. Not playwright/.auth, the
       # storage state; every session a trace or log shows ended with the run's throwaway database.
-      # On a failed step, and on a cancelled job too (at timeout-minutes or by hand), where failure()
-      # is false; it then holds what the run had written when GitHub stopped it (ES-10, ES-13).
+      # On a failed step, and on a job cancelled at its timeout-minutes too, where failure() is false;
+      # it then holds what the run had written when GitHub stopped it, and has GitHub's 5-minute
+      # cancellation window to upload (ES-10, ES-13). Cancelling a run by hand doesn't cancel this
+      # job, whose if: always() keeps it running, so its upload then goes by failure() as usual.
       - if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
