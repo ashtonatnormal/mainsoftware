@@ -154,6 +154,26 @@ describe('T21: the api client (api/http.ts)', () => {
     expect(await failureOf(pending)).toMatchObject({ status: 0, code: 'network' })
   })
 
+  it('HT-03 T21 item 13: aborted while a refusal’s body is read, the request reads as network too', async () => {
+    const controller = new AbortController()
+    // A refusal whose body never arrives: reading it fails once the request is aborted, as in a
+    // browser.
+    const fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = new ReadableStream<Uint8Array>({
+        start: stream => {
+          init?.signal?.addEventListener('abort', () => stream.error(init.signal?.reason))
+        },
+      })
+      return new Response(body, { status: 503, headers: { 'content-type': 'application/json' } })
+    }) as typeof globalThis.fetch
+    const pending = failureOf(
+      http.apiGet('/api/session', SessionResponseForClient, { fetch, signal: controller.signal }),
+    )
+    await new Promise(resolve => setTimeout(resolve, 0))
+    controller.abort(new DOMException('The operation timed out.', 'TimeoutError'))
+    expect(await pending).toMatchObject({ status: 0, code: 'network', serverMessage: API_COPY.network })
+  })
+
   it('HT-04 D-01 CHT-60: after haltRequests() no fetch is called, and apiGet and apiPost reject with halted', async () => {
     const { fetch, calls } = fakeFetch(json(200, PERSON))
     http.haltRequests()

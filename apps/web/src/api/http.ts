@@ -73,6 +73,7 @@ export function haltRequests(): void {
 }
 
 const haltedFailure = () => new ApiFailure(0, 'halted', MESSAGES.internal)
+const networkFailure = () => new ApiFailure(0, 'network', API_COPY.network)
 const unreadable = (status: number) => new ApiFailure(status, 'invalid_response', MESSAGES.internal)
 
 // The copy for a refusal: the server's own, else MESSAGES' for a code it lists, else generic.
@@ -128,21 +129,25 @@ async function request<T>(
       signal: options.signal,
     })
   } catch {
-    throw halted ? haltedFailure() : new ApiFailure(0, 'network', API_COPY.network)
+    throw halted ? haltedFailure() : networkFailure()
   }
   // An answer that lands after the halt belongs to a session that is ending: drop it, whether the
   // halt came before its headers or while its body was read.
   if (halted) throw haltedFailure()
   if (!response.ok) {
     const failure = await failureOf(response)
-    throw halted ? haltedFailure() : failure
+    if (halted) throw haltedFailure()
+    // A refusal whose body couldn't be read because the request was ended reads as network, as an
+    // ended request does everywhere else here.
+    if (failure.code === 'invalid_response' && options.signal?.aborted) throw networkFailure()
+    throw failure
   }
   if (schema === undefined) return undefined
   let json: unknown
   try {
     json = await response.json()
   } catch {
-    throw options.signal?.aborted ? new ApiFailure(0, 'network', API_COPY.network) : unreadable(response.status)
+    throw options.signal?.aborted ? networkFailure() : unreadable(response.status)
   }
   if (halted) throw haltedFailure()
   const parsed = schema.safeParse(json)
