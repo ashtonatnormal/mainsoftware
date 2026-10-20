@@ -171,7 +171,7 @@ function answerError(error: unknown, request: FastifyRequest, reply: FastifyRepl
   if (known === undefined) {
     request.log.error({ err: error }, 'request failed')
     known = new ApiError(500, 'internal')
-  } else if (known.code === 'try_again') {
+  } else if (known.code === 'try_again' && !(error instanceof ApiError)) {
     // Another transaction got there first; the client tries again. (A try_again the server
     // answers itself, such as a re-authentication code request already in progress, logs its own
     // line.)
