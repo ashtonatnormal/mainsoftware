@@ -15,11 +15,19 @@ export type BootState =
   | { readonly kind: 'signed_out' }
   | { readonly kind: 'unavailable' }
 
-// 200 → signed_in; 401 → signed_out; anything else (offline, a 5xx, an answer that doesn't read)
-// → unavailable.
-export async function loadSession(fetchImpl?: typeof fetch): Promise<BootState> {
+// How long the boot waits for the answer, its body included. A connection that hangs would
+// otherwise leave "Loading Hearth…" up for good; past this the boot shows its error screen, with
+// Try again.
+export const SESSION_TIMEOUT_MS = 15_000
+
+// 200 → signed_in; 401 → signed_out; anything else (offline, no answer within timeoutMs, a 5xx, an
+// answer that doesn't read) → unavailable.
+export async function loadSession(fetchImpl?: typeof fetch, timeoutMs = SESSION_TIMEOUT_MS): Promise<BootState> {
   try {
-    const session = await apiGet('/api/session', SessionResponseForClient, { fetch: fetchImpl })
+    const session = await apiGet('/api/session', SessionResponseForClient, {
+      fetch: fetchImpl,
+      signal: AbortSignal.timeout(timeoutMs),
+    })
     return { kind: 'signed_in', session }
   } catch (error) {
     if (error instanceof ApiFailure && error.status === 401) return { kind: 'signed_out' }
