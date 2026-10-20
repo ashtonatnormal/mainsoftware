@@ -1446,7 +1446,6 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     // Budgets: D 1 code request (a sign-in); re-authentication codes count against their own windows.
     const d = await s.person()
     const dc = await s.signIn(d)
-    await s.sms.nextCode(d.e164)
     const { id: sessionId } = await s.sessionOf(dc)
     // The first request waits inside the provider's start until the second has answered: a double
     // tap, whose two requests own the record as one session.
