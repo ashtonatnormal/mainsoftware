@@ -11,7 +11,9 @@
 // - "Use a different number": back to the phone step with the number kept. While the code is being
 //   checked it is held, with the busy text as its reason (startAgainHeld): the answer may sign the
 //   person in.
-import { CircleAlert, LoaderCircle } from 'lucide-react'
+// Once "Send a new code" has its answer, a note at the top of the form says a new code is on its way
+// and earlier ones no longer work. It has no live role: the model's cue says it once.
+import { CircleAlert, LoaderCircle, MessageSquareText } from 'lucide-react'
 import { useId } from 'react'
 import { SIGN_IN } from '@/strings/sign-in.ts'
 import { Button } from '@/ui/Button.tsx'
@@ -31,6 +33,12 @@ export function CodeStep({ state, step, controller, refs }: StepProps & { step: 
     >
       <StepForm onSubmit={controller.submit}>
         {state.notice !== undefined && <Notice text={state.notice} ref={refs.notice} />}
+        {step.resent && (
+          <p className="flex items-start gap-2 rounded-xl bg-surface-2 p-3 text-fg">
+            <MessageSquareText aria-hidden size={18} className="mt-0.5 shrink-0" />
+            <span>{SIGN_IN.newCode}</span>
+          </p>
+        )}
         <CodeField
           ref={refs.code}
           label={SIGN_IN.codeLabel(step.codeLength)}

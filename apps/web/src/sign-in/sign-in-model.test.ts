@@ -343,6 +343,15 @@ describe('T20 T21: the sign-in model (sign-in/sign-in-model.ts)', () => {
     expect(sent.cue).toEqual({ say: SIGN_IN.newCode, politeness: 'polite' })
     expect(sent.state.step).toMatchObject({ kind: 'code', resend: { at: T0 + 41_000 + RESEND_WAIT_MS, ready: false } })
     expect(sent.state.values.code).toBe('')
+    // Shown as well as said (resent), until a code dies; the first code's step doesn't show it.
+    expect(code.step).not.toHaveProperty('resent')
+    expect(sent.state.step).toMatchObject({ resent: true })
+    const verifyingNew = transition(transition(sent.state, { kind: 'input', field: 'code', value: '123456' }).state, {
+      kind: 'submit',
+      now: T0 + 42_000,
+    }).state
+    const dead = fail(verifyingNew, failure('code_expired'))
+    expect(dead.state.step).toMatchObject({ dead: MESSAGES.code_expired, resent: undefined })
   })
 
   it('T21 item 13: a 503, a network failure or a second try_again at the code keeps the code for another press, in the notice, said assertively', () => {

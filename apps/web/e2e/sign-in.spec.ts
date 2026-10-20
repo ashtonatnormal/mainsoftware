@@ -179,7 +179,7 @@ test("SI-04 ACC-01: a number the shared normaliser can't read shows invalid_phon
   expect(sent).toEqual([])
 })
 
-test('SI-08 SHL-07 X11 PRD-53: Send a new code is aria-disabled with its reason for 30 s, then said once, and sends one request', async ({
+test('SI-08 SHL-07 X11 PRD-53 T21 item 13: Send a new code is aria-disabled with its reason for 30 s, then said once, and sends one request, whose new code is shown and said once', async ({
   page,
 }) => {
   await page.clock.install()
@@ -207,6 +207,10 @@ test('SI-08 SHL-07 X11 PRD-53: Send a new code is aria-disabled with its reason 
   await expect(h1(page)).toHaveText(SIGN_IN.steps.code)
   // Held again for the next 30 s.
   await expect(resend).toHaveAttribute('aria-disabled', 'true')
+  // The new code is shown on the step as well as said, and said once.
+  await expect(main(page).getByText(SIGN_IN.newCode, { exact: true })).toBeVisible()
+  await expect.poll(said).toContain(SIGN_IN.newCode)
+  expect((await said()).filter(text => text === SIGN_IN.newCode)).toHaveLength(1)
 })
 
 test(

@@ -27,7 +27,9 @@
 //   and said assertively, and focus stays where it is;
 // - code_dead and code_expired disable the code field and focus "Send a new code", which they
 //   enable at once and which carries the message;
-// - statuses (a new code sent, the wait for one over, signed in) are said politely.
+// - statuses (a new code sent, the wait for one over, signed in) are said politely. A new code
+//   sent is also shown on the code step (resent), with no live role, so a sighted person sees it
+//   too and it is still said once.
 // Every outcome carries at most one cue, so every message is spoken exactly once.
 import {
   type CodeSent,
@@ -76,6 +78,9 @@ export type Step =
       // The code can't be used any more (code_dead, code_expired): the message, which "Send a new
       // code" carries; the field is cleared and disabled until a new code is sent.
       readonly dead?: string
+      // "Send a new code" got its answer: the step shows newCode (earlier codes no longer work)
+      // until a code dies.
+      readonly resent?: true
     }
   | { readonly kind: 'set_pin'; readonly e164: string }
   | { readonly kind: 'enter_pin'; readonly e164: string; readonly pin: PinOk }
@@ -317,7 +322,7 @@ function answered(state: SignInState, answer: Answer, now: number): Outcome {
       return {
         state: {
           ...settled,
-          step: { ...settled.step, ...shape, resend: waitingResend(now), dead: undefined },
+          step: { ...settled.step, ...shape, resend: waitingResend(now), dead: undefined, resent: true },
           values: { ...settled.values, code: '' },
           error: undefined,
           notice: undefined,
@@ -398,7 +403,7 @@ function failed(state: SignInState, failure: Failure, now: number): Outcome {
         return {
           state: {
             ...settled,
-            step: { ...step, resend, dead: message },
+            step: { ...step, resend, dead: message, resent: undefined },
             values: { ...settled.values, code: '' },
             error: undefined,
             notice: undefined,

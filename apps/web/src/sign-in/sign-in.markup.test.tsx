@@ -304,6 +304,14 @@ describe('T20 T21: the sign-in steps’ markup', () => {
     }
   })
 
+  it('SHM-10 T21 item 13 X11: after Send a new code, the code step shows newCode at the top of its form, with no live role (the cue says it once); the first code step does not', () => {
+    const resent = at({ ...CODE, resent: true })
+    expect(textsOf(resent)).toContain(SIGN_IN.newCode)
+    expect(resent).toMatch(/<form[^>]*><p class="[^"]*bg-surface-2[^"]*">.*?<span>If the number is registered/)
+    expect(resent).not.toMatch(/role="(status|alert|log)"|aria-live/)
+    expect(textsOf(STEPS.code)).not.toContain(SIGN_IN.newCode)
+  })
+
   it('SHM-09 D-01 T21 item 13: the screen opens on the phone step, in its own main, with no left-reason line when none was kept; a kept reason is plain text under the h1, with no live role (the store says it)', () => {
     const markup = html(<SignInScreen />)
     expect(tags(markup, 'main')).toHaveLength(1)
