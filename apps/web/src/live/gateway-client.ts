@@ -594,7 +594,7 @@ export class GatewayClient {
       .catch((): ProbeAnswer => 'unknown')
       .then(said => {
         // Let go at its deadline: a later probe has the say.
-        if (this.#probing !== probe) return
+        if (this.#probing !== undefined && this.#probing !== probe) return
         this.#probing = undefined
         this.#timers.clear(deadline)
         if (said !== 'signed_out' || this.#stopped) return
