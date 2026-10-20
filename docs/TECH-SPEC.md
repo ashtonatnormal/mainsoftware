@@ -844,7 +844,7 @@ The owner decided the five tabs (OD-02), the hidden Search bar (OD-04) and the h
 10. **`GET /api/session` and `GET /api/flags`** (`apps/server/src/web/`; D-05: no new write and no migration).
     - `GET /api/session` answers `{ personId, name, timeZone }`: the profile's display name and zone, else the roster's name and the org's zone. No number and no roles; C0.16 adds capability booleans when a screen needs one.
     - `GET /api/flags` answers `{ flags }` (T17 item 11).
-    - One access action decides both, `session.read_own`, for any active person and without re-authentication, in a read-only transaction. The flags' subject comes from the `World` that `can()` decided on.
+    - One access action decides both, `session.read_own`, for any active person and without re-authentication, in a read-only transaction. The flags' subject comes from the `World` that `can()` decided on. Its one refusal, someone who has left (a deactivation that commits after the acting session was re-read), answers 401 `signed_out` like an ended session, never 404.
     - The session GET counts as use of the session (the existing after-response touch, exempt from the outbox). The flags GET doesn't touch it (OD-14), so a polling tab can't keep an idle session alive. Neither answers a revision.
     - **A GET never clears the session cookie:** their 401 carries no `Set-Cookie`, so a boot's 401 can't delete a session another tab has just made. Clearing stays with sign-out and the sign-in steps. The older GETs (your devices, the admin device list) still clear; C0.16 aligns them.
 11. **Tests.**

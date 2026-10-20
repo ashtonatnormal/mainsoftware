@@ -59,6 +59,9 @@ interface Script {
   session?: string | 'none' | 'fails'
   // Whether the acting session is still live when the request's own transaction re-reads it.
   live?: boolean
+  // The person's deactivation as the World's own read finds it: a deactivation that committed
+  // after the acting session was re-read live (READ COMMITTED).
+  leftMidRequest?: boolean
   // The person's role rows (each unrevoked).
   roles?: { role: string; team_id: string | null }[]
   // What the session answer's read finds.
@@ -79,7 +82,9 @@ function signedIn(script: Script = {}) {
     if (text.includes('join devices d on')) {
       return script.live === false ? [] : [{ fresh: false, pin_set: false, issued_under_pin_rule: false }]
     }
-    if (text.includes('from "people"')) return [{ id: PERSON, deactivated_at: null }]
+    if (text.includes('from "people"')) {
+      return [{ id: PERSON, deactivated_at: script.leftMidRequest === true ? new Date() : null }]
+    }
     // TEAM is live, so a team_admin row of it counts as held (World.rolesOf).
     if (text.includes('from "teams"')) return [{ id: TEAM, archived_at: null }]
     if (text.includes('from "role_assignments"')) {
@@ -190,7 +195,11 @@ describe('C0.8 T21 item 10 GET /api/session and GET /api/flags: refusals', () =>
     // A session that ended between the lookup and the request's own transaction (a leaver, a sign-
     // out elsewhere): authorise()'s 401 clears the cookie on every other route, never here.
     const ended = setup({ db: signedIn({ live: false }).db })
-    for (const app of [stale, ended]) {
+    // A deactivation that commits after the acting session was re-read live, before the World's
+    // reads: can() refuses session.read_own for someone who has left, and that is 401 signed_out
+    // too, never 404 not_found, which the boot would show as a failed load.
+    const left = setup({ db: signedIn({ leftMidRequest: true }).db })
+    for (const app of [stale, ended, left]) {
       for (const url of ROUTES) {
         const response = await app.get(url, COOKIE)
         expect([url, response.statusCode]).toEqual([url, 401])

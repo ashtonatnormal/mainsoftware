@@ -8,7 +8,7 @@
 // it knows whether anyone is signed in, and one that answered after another tab had just signed in
 // would delete that tab's new session, costing the person another code. So their refusals carry no
 // Set-Cookie: no session is 401 signed_out as is, and one that ends past the lookup (a leaver, by
-// authorise()) is rethrown without its clear (keepCookie()). A stale cookie left in place is
+// readOwn()) is rethrown without its clear (keepCookie()). A stale cookie left in place is
 // harmless: the server refuses it. Clearing stays with sign-out and the sign-in steps; the older
 // GETs (your devices, the admin device list) still clear, which C0.16 aligns.
 import type { FastifyInstance, FastifyRequest } from 'fastify'

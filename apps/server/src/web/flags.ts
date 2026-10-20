@@ -17,13 +17,13 @@
 //   is 503 unavailable, never a guess, and the client keeps the values it last had (R-53, P6).
 import type { World } from '@hearth/access'
 import { COHORT_ROLES, type FlagSpec, type FlagsJSON } from '@hearth/shared'
-import { authorise } from '#src/access/world.ts'
 import type { Api } from '#src/api.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { inSession, type SessionIds } from '#src/auth/sessions.ts'
 import { FLAG_READ_WAIT_MS, type FlagVerdict } from '#src/flags/cache.ts'
 import type { FlagSubject } from '#src/flags/evaluate.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
+import { readOwn } from '#src/web/session.ts'
 
 const isCohortRole = (role: string): boolean => (COHORT_ROLES as readonly string[]).includes(role)
 
@@ -90,11 +90,7 @@ export async function readFlags(
     api,
     info,
     session,
-    async trx =>
-      flagSubjectOf(
-        await authorise(trx, session, { action: 'session.read_own' }, 'not_found', { lock: false }),
-        session.userId,
-      ),
+    async trx => flagSubjectOf(await readOwn(trx, session), session.userId),
     { touch: false, readOnly: true },
   )
   const keys = clientFlagKeys(api.flags.registry)
