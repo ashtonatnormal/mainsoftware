@@ -59,6 +59,10 @@ export interface Guard {
   watch(context: BrowserContext): Promise<void>
   // Every CSP violation seen so far.
   readonly violations: readonly Violation[]
+  // open() calls it when the test body ends, before it closes its contexts: what happens from then
+  // on is the harness's, not the page's (closing a context, Playwright takes a throwaway screenshot
+  // of each page, which in WebKit adds an inline style the CSP blocks), so it is printed, not counted.
+  end(): void
 }
 
 export interface Violation {
@@ -81,7 +85,10 @@ const BINDING = '__e2eCspViolation'
 
 class PageGuard implements Guard {
   readonly problems: string[] = []
+  // What the pages did after the test body ended (end()), printed by the guard, never counted.
+  readonly late: string[] = []
   readonly violations: Violation[] = []
+  #ended = false
   readonly #responses: { path: string | RegExp; status: number }[] = []
   readonly #directives = new Set<string>()
   readonly #console: RegExp[] = []
@@ -97,6 +104,15 @@ class PageGuard implements Guard {
 
   expectResponses(list: readonly { path: string | RegExp; status: number }[]): void {
     this.#responses.push(...list)
+  }
+
+  end(): void {
+    this.#ended = true
+  }
+
+  #problem(line: string): void {
+    if (this.#ended) this.late.push(line)
+    else this.problems.push(line)
   }
 
   allowViolation(directive: string): void {
@@ -124,20 +140,24 @@ class PageGuard implements Guard {
     this.#watched.add(context)
     await context.exposeBinding(BINDING, (source, detail: { directive: string; blocked: string; source: string }) => {
       const violation = { ...detail, page: source.page.url() }
-      this.violations.push(violation)
-      if (!this.#directives.has(detail.directive)) {
-        this.problems.push(
-          `CSP violation: ${detail.directive} blocked ${detail.blocked} on ${violation.page} (from ${detail.source})`,
-        )
+      const line = `CSP violation: ${detail.directive} blocked ${detail.blocked} on ${violation.page} (from ${detail.source})`
+      if (this.#ended) {
+        this.late.push(line)
+        return
       }
+      this.violations.push(violation)
+      if (!this.#directives.has(detail.directive)) this.problems.push(line)
     })
     await context.addInitScript(binding => {
       document.addEventListener('securitypolicyviolation', event => {
         const report = (window as unknown as Record<string, (detail: unknown) => void>)[binding]
+        // What was blocked, as well as where: an inline style or script with no file to name
+        // (one an engine or a library inserted) is found by the element it was on.
+        const target = event.target instanceof Element ? event.target.outerHTML.slice(0, 120) : ''
         report?.({
           directive: event.effectiveDirective,
           blocked: event.blockedURI,
-          source: `${event.sourceFile}:${event.lineNumber}:${event.columnNumber}`,
+          source: `${event.sourceFile}:${event.lineNumber}:${event.columnNumber}${target === '' ? '' : `, on ${target}`}`,
         })
       })
     }, BINDING)
@@ -146,20 +166,22 @@ class PageGuard implements Guard {
   }
 
   #attach(page: Page): void {
-    page.on('pageerror', error => this.problems.push(`page error: ${error.message}`))
+    page.on('pageerror', error => this.#problem(`page error: ${error.message}`))
     page.on('console', message => this.#onConsole(message))
     page.on('request', request => {
       const url = request.url()
       if (url.startsWith('data:') || url.startsWith('blob:') || url === 'about:blank') {
-        if (!url.startsWith('about:')) this.problems.push(`request to ${url.slice(0, 40)}`)
+        if (!url.startsWith('about:')) this.#problem(`request to ${url.slice(0, 40)}`)
         return
       }
-      if (new URL(url).origin !== E2E_ORIGIN) this.#elsewhere.add(request)
+      if (new URL(url).origin === E2E_ORIGIN) return
+      if (this.#ended) this.late.push(`request to another origin: ${url}`)
+      else this.#elsewhere.add(request)
     })
     page.on('websocket', socket => {
       const url = new URL(socket.url())
       if (`https://${url.host}` !== E2E_ORIGIN || url.protocol !== 'wss:') {
-        this.problems.push(`socket to another origin: ${socket.url()}`)
+        this.#problem(`socket to another origin: ${socket.url()}`)
       }
     })
     page.on('requestfailed', request => {
@@ -172,14 +194,30 @@ class PageGuard implements Guard {
       }
       if (this.#elsewhere.has(request)) return
       if (CANCELLED.test(why) || this.#failedAllowed(path)) return
-      this.problems.push(`request failed: ${request.method()} ${path} (${why})`)
+      this.#problem(`request failed: ${request.method()} ${path} (${why})`)
     })
     page.on('response', response => {
       const url = new URL(response.url())
       if (url.origin !== E2E_ORIGIN) return
       const status = response.status()
       if (status >= 400 && !this.#declared(url.pathname, status)) {
-        this.problems.push(`undeclared ${status} from ${response.request().method()} ${url.pathname}`)
+        const line = `undeclared ${status} from ${response.request().method()} ${url.pathname}`
+        if (this.#ended) {
+          this.late.push(line)
+          return
+        }
+        const at = this.problems.push(line) - 1
+        // A 403 is most often the Origin hook's: name the Origin the request carried (allHeaders,
+        // since headers() leaves out the security-related ones).
+        if (status === 403) {
+          response
+            .request()
+            .allHeaders()
+            .then(headers => {
+              this.problems[at] = `${line} (Origin: ${headers.origin ?? 'none'})`
+            })
+            .catch(() => {})
+        }
       }
     })
   }
@@ -198,7 +236,7 @@ class PageGuard implements Guard {
     if (/Content Security Policy/i.test(text) && [...this.#directives].some(directive => text.includes(directive))) {
       return
     }
-    this.problems.push(`console error: ${text}`)
+    this.#problem(`console error: ${text}`)
   }
 }
 
@@ -216,6 +254,8 @@ export const test = base.extend<{ guard: Guard; open: Open }>({
       const guard = new PageGuard()
       await guard.watch(context)
       await use(guard)
+      if (guard.late.length > 0)
+        console.log(`the page guard, after the test (not counted):\n  ${guard.late.join('\n  ')}`)
       // Checked after the test, so a test that already failed reports its own error first.
       if (testInfo.status === testInfo.expectedStatus) expect(guard.report(), 'the page guard').toEqual([])
     },
@@ -248,6 +288,7 @@ export const test = base.extend<{ guard: Guard; open: Open }>({
       await guard.watch(context)
       return context.newPage()
     })
+    guard.end()
     for (const context of contexts) await context.close()
   },
 })

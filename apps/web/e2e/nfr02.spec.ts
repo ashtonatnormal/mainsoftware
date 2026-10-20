@@ -165,14 +165,16 @@ test('NF-09 WCAG 1.4.4: 200% text loses nothing at 320 and 390; tab labels wrap 
     await page.setViewportSize(size)
     await page.goto('/chats')
     await expect(h1(page)).toHaveText('Chats')
+    // The bar measured before and after on the same page, so nothing between the two can replace it.
     const before = (await mainNav(page).boundingBox())?.height ?? 0
+    await withTextZoom(page, 2)
+    const after = (await mainNav(page).boundingBox())?.height ?? 0
+    expect(after, `the tab bar grows with the text at ${at(size)}`).toBeGreaterThan(before)
     await eachScreen(page, size, async label => {
       await withTextZoom(page, 2)
       expect(await noClippedText(page), label).toEqual([])
       expect(await noSidewaysScroll(page), label).toEqual([])
     })
-    const after = (await mainNav(page).boundingBox())?.height ?? 0
-    expect(after, at(size)).toBeGreaterThan(before)
   }
 })
 

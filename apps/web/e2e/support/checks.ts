@@ -1,7 +1,7 @@
 // What the suite checks on a screen as it stands (T21; NFR-02, PRD-66, WCAG 2.2 AA, decision 8;
 // T21 item 11). Each reads the page in the browser and answers a list of what is wrong,
 // empty when nothing is, so a failure names every offender at once: expect(await check(page)).toEqual([]).
-import type { Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { AI_COPY } from '../../src/strings/ai-copy.ts'
 
 // What can be pressed or typed in: links, buttons, form controls and anything else in the tab order.
@@ -146,11 +146,26 @@ export async function withTextSpacing(page: Page): Promise<void> {
     content:
       '* { line-height: 1.5 !important; letter-spacing: 0.12em !important; word-spacing: 0.16em !important; } p { margin-bottom: 2em !important; }',
   })
+  // The browser may apply an added style a moment after addStyleTag returns, so wait until it
+  // shows; a check run before then would pass on text at its normal spacing.
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.body).letterSpacing), {
+      message: 'the text spacing style applies',
+    })
+    .not.toBe('normal')
 }
 
 // NF-09 WCAG 1.4.4: text at `factor` times its size (rem-based, as the kit is). bypassCSP, as above.
+// It waits until the root font size has changed (the browser may apply the added style a moment
+// after addStyleTag returns, which made CI's first run measure the tab bar before it grew), and
+// fails if it never does, so a check run after it can't pass on text at its normal size.
 export async function withTextZoom(page: Page, factor: number): Promise<void> {
   await page.addStyleTag({ content: `html { font-size: ${factor * 100}% !important; }` })
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).fontSize), {
+      message: `text at ${factor * 100} % applies`,
+    })
+    .toBe(`${factor * 16}px`)
 }
 
 // NF-08 NF-09: no shown text is cut off by a box that hides its overflow (a visually hidden element,
