@@ -1,11 +1,12 @@
 // The Content Security Policy guard (BUILD-PLAN C0.8, T21 item 7, R-59, R-61, R-65, R-75). The
 // web app's document headers come from one builder, documentHeaders() in
-// packages/shared/src/web-headers.ts, which Vite's dev server serves, and the e2e preview and
-// C0.12's CloudFront policy will (D-04). This guard reads the policy the builder makes, parses it,
-// and holds it to its own allow-list below, so no CDN or model host, wildcard or unsafe source can
-// enter connect-src or any other directive unseen. A new source (C0.13's RUM endpoint, C2's
-// LiveKit host) changes the builder and this allow-list in the same reviewed PR, or the browser
-// blocks it.
+// packages/shared/src/web-headers.ts. Vite's dev server serves documentHeaders(…, { dev: true })
+// and the e2e preview documentHeaders(E2E_ORIGIN); from C0.12, CloudFront's response-headers
+// policy will serve documentHeaders(appOrigin) (D-04). This guard reads the policy the builder
+// makes, parses it, and holds it to its own allow-list below, so no CDN or model host, wildcard or
+// unsafe source can enter connect-src or any other directive unseen. A new source (C0.13's RUM
+// endpoint, C2's LiveKit host) changes the builder and this allow-list in the same reviewed PR, or
+// the browser blocks it.
 //
 // CSP-07 and CSP-08 read apps/web/index.html, the page the policy governs: a policy without
 // 'unsafe-inline' holds only while the page itself carries nothing inline. CSP-09 reads the two

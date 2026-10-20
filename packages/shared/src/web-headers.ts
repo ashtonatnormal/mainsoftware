@@ -1,10 +1,11 @@
 // The one builder of the web app's document headers and Content Security Policy (T21 item 7, D-04,
-// OD-40). Vite's dev server serves documentHeaders(…, { dev: true }) (apps/web/vite.config.ts); the
-// e2e preview and, from C0.12, CloudFront's response-headers policy will serve
-// documentHeaders(appOrigin), so what the tests see is what people get. Every source is
-// derived from the app's own origin: the browser talks to nothing else, so no CDN or model host can
-// enter the policy (R-59–R-61). scripts/guards/csp.test.ts parses the result against its own
-// allow-list, and a new source (C0.13's RUM endpoint, C2's LiveKit host) changes both in one PR.
+// OD-40). Vite's dev server serves documentHeaders(…, { dev: true }) (apps/web/vite.config.ts) and
+// the e2e preview documentHeaders(E2E_ORIGIN) (apps/web/e2e/support/preview.ts); from C0.12,
+// CloudFront's response-headers policy will serve documentHeaders(appOrigin), so what the tests see
+// is what people get. Every source is derived from the app's own origin: the browser talks to
+// nothing else, so no CDN or model host can enter the policy (R-59–R-61).
+// scripts/guards/csp.test.ts parses the result against its own allow-list, and a new source
+// (C0.13's RUM endpoint, C2's LiveKit host) changes both in one PR.
 //
 // The server loads this package on Node (T2) and the package compiles with no DOM or Node types,
 // so the origin is read with a regular expression, not the URL global.
@@ -90,7 +91,7 @@ function socketOrigin({ scheme, host, port }: AppOrigin): string {
 }
 
 // The policy as directives and their sources, in the order they're sent. Production (what the e2e
-// preview and CloudFront will serve):
+// preview serves and CloudFront will):
 //   default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self';
 //   connect-src 'self' wss://<host[:port]>; base-uri 'none'; form-action 'none';
 //   frame-ancestors 'none'; object-src 'none'; report-uri /api/csp-report

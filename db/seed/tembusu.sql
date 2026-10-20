@@ -4,9 +4,10 @@
 -- for itself, below. Production's first Owner comes from the reviewed bootstrap script instead
 -- (CLAUDE.md, Database).
 --
--- The phone numbers are made up, and the local SMS provider only logs (C0.5). The ids are fixed,
--- so local links and tests can name them: the org ends 0001, principals start b0, departments
--- c0, teams d0 and the notice e0. The demo's agents and assistant arrive with A4 and A5.
+-- The phone numbers are made up, and the local fake SMS provider sends nothing: it prints each
+-- code to the api's terminal, with the number masked (T20). The ids are fixed, so local links and
+-- tests can name them: the org ends 0001, principals start b0, departments c0, teams d0 and the
+-- notice e0. The demo's agents and assistant arrive with A4 and A5.
 --
 -- It runs as hearth_owner, which owns the tables and so is not held to row level security, in
 -- one transaction on an empty database: run it twice and the second run fails on the first row.
