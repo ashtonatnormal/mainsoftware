@@ -10,7 +10,8 @@
 //                         enter_pin ──pin_locked | pin_reset_needed──▶ pin_locked
 //   any step ──attempt_expired | wrong_step | pin_already_set──▶ phone (the number kept, the notice focused)
 //   any step ──"Use a different number" / "Start again"──▶ phone (the number kept; held while a
-//                                                           code or PIN is being checked)
+//                                                           call is in flight: a code or PIN being
+//                                                           checked, or a new code requested)
 //
 // The step lives here and in component state only: never in the URL, storage or history
 // (T21 item 5), so a reload starts again at the phone step. The attempt cookie carries the server's
@@ -521,8 +522,9 @@ export function resendHeld(state: SignInState): string | undefined {
 // second signin.started included. A code request ("Send a new code") signs nobody in, but its answer
 // sets the attempt cookie: left behind, it could land after a newer request's and put the older
 // attempt back, so the newly texted code would read as expired (Qodo review). So they wait for the
-// answer, at most 20 s (sign-in/api.ts AUTH_TIMEOUT_MS), after which the request is ended and sets
-// nothing, and, when a check's answer was lost, for the session check after it (mayHaveSignedIn).
+// answer: a code request's at most 20 s (sign-in/api.ts AUTH_TIMEOUT_MS), after which the request
+// is ended and sets nothing; a check's 20 s for each try (one repeat on try_again), then, when its
+// answer was lost, the session check after it (mayHaveSignedIn).
 export function startAgainHeld(state: SignInState): string | undefined {
   return busyText(state)
 }

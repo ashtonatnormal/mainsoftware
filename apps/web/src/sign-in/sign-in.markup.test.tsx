@@ -197,11 +197,11 @@ describe('T20 T21: the sign-in steps’ markup', () => {
 
   it('X6: while a code or PIN is being checked, Use a different number and Start again are aria-disabled with the busy text, and so are they while a new code is requested', () => {
     const typed = { phone: PRIYA, code: '123456', pin: '482913', pin2: '482913' }
-    const held = (markup: string, label: string) => {
+    const held = (markup: string, label: string, busy: string = SIGN_IN.busy.checking) => {
       const button = buttonNamed(markup, label)
       expect(button?.get('aria-disabled'), label).toBe('true')
       const reasonId = (button?.get('aria-describedby') ?? '').split(' ').at(-1) ?? ''
-      expect(markup, label).toMatch(new RegExp(`id="${reasonId}"[^>]*>${SIGN_IN.busy.checking}<`))
+      expect(markup, label).toMatch(new RegExp(`id="${reasonId}"[^>]*>${busy}<`))
     }
     held(at(CODE, { pending: { id: 2, kind: 'verify_code' }, nextId: 3, values: typed }), SIGN_IN.differentNumber)
     held(
@@ -221,7 +221,7 @@ describe('T20 T21: the sign-in steps’ markup', () => {
     expect(buttonNamed(STEPS.enter_pin, SIGN_IN.startAgain)?.has('aria-disabled')).toBe(false)
     const resending = at(CODE, { pending: { id: 2, kind: 'request_code', e164: MARCUS }, nextId: 3 })
     expect(buttonNamed(resending, SIGN_IN.resend)?.get('aria-disabled')).toBe('true')
-    expect(buttonNamed(resending, SIGN_IN.differentNumber)?.get('aria-disabled')).toBe('true')
+    held(resending, SIGN_IN.differentNumber, SIGN_IN.busy.sending)
   })
 
   it('WCAG 3.3.8 SHL-49 AQ-02: Choose a PIN has two password fields for a new password, numeric, with no maxlength, a hidden username, and Show PIN', () => {
