@@ -97,7 +97,10 @@ jobs:
       # and from C0.6 the outbox's events beside every write (each suite sweeps every committed
       # write for its event), changing flags and their reach to every process, and the worker:
       # the job queue, the scheduler and the outbox consumers, exactly once in effect through
-      # crashes, zombies, retries and shutdowns (C0.6's "Done when"), listed case by case. Each run
+      # crashes, zombies, retries and shutdowns (C0.6's "Done when"), listed case by case. From C0.7
+      # the realtime gateway (T19), and from C0.8 sign-in by code for everyone with the PIN steps for
+      # PIN roles, the code challenge's scripts, the dormant passkeys (the only suite that switches
+      # them on) and the web shell's two GETs, none calling a real SMS provider (T20, T21). Each run
       # builds a throwaway database and its own Valkey key prefix, so it can run again.
       - run: npm run test:integration
       - run: scripts/check-server.sh
