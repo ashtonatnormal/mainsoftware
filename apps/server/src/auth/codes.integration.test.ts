@@ -200,7 +200,7 @@ describe('T14 T20 PRD-53 the code challenge record on Valkey', () => {
     expect(await valkey.hget(keys.otp(n), 'tries')).toBe('1')
   })
 
-  it('an approved verdict uses the record up, and gone expires it', async () => {
+  it('an approved verdict uses the record up, and gone expires it: marked, it answers as a deleted record would', async () => {
     const n = fresh()
     await openCode(valkey, keys, n, 'a')
     await attachCode(valkey, keys, n, 'a', 'VE1')
@@ -214,6 +214,62 @@ describe('T14 T20 PRD-53 the code challenge record on Valkey', () => {
     await attachCode(valkey, keys, n, 'a', 'VE2')
     await reserveCode(valkey, keys, n, 'a')
     expect(await settleCode(valkey, keys, n, 'a', { ref: 'VE2', tries: 1 }, 'gone')).toEqual({ result: 'expired' })
+    expect(await valkey.hget(keys.otp(n), 'gone')).toBe('1')
+    // RESERVE: expired with no ref to cancel, the record left as it is; ATTACH: lost.
+    expect(await reserveCode(valkey, keys, n, 'a')).toEqual({ result: 'expired', ref: undefined })
+    expect(await valkey.hget(keys.otp(n), 'tries')).toBe('1')
+    expect(await attachCode(valkey, keys, n, 'a', 'VE3')).toBe('lost')
+    // A SETTLE of any other verdict answers from its own count, as at a deleted record.
+    for (const verdict of ['wrong', 'gone', 'failed'] as const) {
+      expect(await settleCode(valkey, keys, n, 'a', { ref: 'VE2', tries: 2 }, verdict)).toEqual({
+        result: 'wrong',
+        tries: 2,
+      })
+      expect(await settleCode(valkey, keys, n, 'a', { ref: 'VE2', tries: 5 }, verdict)).toEqual({
+        result: 'dead',
+        tries: 5,
+      })
+    }
+    expect(await valkey.hget(keys.otp(n), 'tries')).toBe('1')
+    // OPEN answers no ref for it: the provider no longer holds that code.
+    expect(await openCode(valkey, keys, n, 'b')).toBeUndefined()
+    expect(await valkey.hget(keys.otp(n), 'gone')).toBeNull()
+  })
+
+  it('T20 item 2: two checks of the right code in parallel, the gone one settled first, still approve the other', async () => {
+    const n = fresh()
+    await openCode(valkey, keys, n, 'a')
+    await attachCode(valkey, keys, n, 'a', 'VE1')
+    // Two tabs of one attempt send the right code at once: both reach the provider, which approves
+    // the first and answers the second gone, since it has just used the code up.
+    const first = await reserveCode(valkey, keys, n, 'a')
+    const second = await reserveCode(valkey, keys, n, 'a')
+    expect([first, second]).toEqual([
+      { result: 'check', ref: 'VE1', tries: 1 },
+      { result: 'check', ref: 'VE1', tries: 2 },
+    ])
+    // The gone reply settles first: that check answers expired.
+    expect(await settleCode(valkey, keys, n, 'a', { ref: 'VE1', tries: 2 }, 'gone')).toEqual({ result: 'expired' })
+    // A third check meanwhile answers expired and leaves the record for the approval.
+    expect(await reserveCode(valkey, keys, n, 'a')).toEqual({ result: 'expired', ref: undefined })
+    // The approval settles last and still signs in, using the record up.
+    expect(await settleCode(valkey, keys, n, 'a', { ref: 'VE1', tries: 1 }, 'approved')).toEqual({
+      result: 'approved',
+      tries: 1,
+    })
     expect(await valkey.exists(keys.otp(n))).toBe(0)
+    // A newer request's record is never approved by an older check marked gone.
+    const m = fresh()
+    await openCode(valkey, keys, m, 'a')
+    await attachCode(valkey, keys, m, 'a', 'VE1')
+    await reserveCode(valkey, keys, m, 'a')
+    await reserveCode(valkey, keys, m, 'a')
+    await settleCode(valkey, keys, m, 'a', { ref: 'VE1', tries: 2 }, 'gone')
+    await openCode(valkey, keys, m, 'b')
+    expect(await settleCode(valkey, keys, m, 'a', { ref: 'VE1', tries: 1 }, 'approved')).toEqual({
+      result: 'displaced',
+      tries: 1,
+    })
+    expect(await valkey.hgetall(keys.otp(m))).toMatchObject({ owner: 'b', tries: '0' })
   })
 })
