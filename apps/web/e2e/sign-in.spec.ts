@@ -235,6 +235,8 @@ test(
     await expect(h1(page)).toHaveText(SIGN_IN.steps.enter_pin)
     const pin = page.getByLabel(SIGN_IN.pinLabel, { exact: true })
     await expect(pin).toHaveAttribute('autocomplete', 'current-password')
+    // Forgotten your PIN? keeps the list-item display that draws its disclosure marker.
+    await expect(main(page).locator('summary', { hasText: SIGN_IN.forgotPin })).toHaveCSS('display', 'list-item')
     await axeStep(page, 'Enter your PIN', testInfo)
     expect(await noAiCopy(page)).toEqual([])
     await pin.fill(E2E_PIN)

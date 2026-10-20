@@ -253,7 +253,7 @@ describe('T20 T21: the sign-in steps’ markup', () => {
     ).toEqual(['text', 'text'])
   })
 
-  it('T14 item 9 ACC-06: Enter your PIN is one current-password field; after earlier failures its hint says the tries left; Forgotten your PIN? opens in a 44 px summary', () => {
+  it('T14 item 9 ACC-06: Enter your PIN is one current-password field; after earlier failures its hint says the tries left; Forgotten your PIN? opens in a 44 px summary that keeps its disclosure marker', () => {
     const markup = STEPS.enter_pin
     const field = visibleInputs(markup).filter(input => input.get('role') !== 'switch')
     expect(field).toHaveLength(1)
@@ -261,6 +261,14 @@ describe('T20 T21: the sign-in steps’ markup', () => {
     expect(field[0]?.get('type')).toBe('password')
     expect(field[0]?.has('aria-describedby')).toBe(false)
     expect(markup).toMatch(/<summary[^>]*class="[^"]*min-h-11[^"]*"[^>]*>Forgotten your PIN\?<\/summary>/)
+    // No display utility: a summary draws its disclosure marker only as a list-item (preflight's).
+    const summary = tags(markup, 'summary')
+    expect(summary).toHaveLength(1)
+    expect(
+      classesOf(summary[0] ?? new Map()).filter(name =>
+        /^(?:flex|inline-flex|grid|inline-grid|block|inline-block|inline|contents|table|flow-root|hidden)$/.test(name),
+      ),
+    ).toEqual([])
     const failed = at({
       kind: 'enter_pin',
       e164: PRIYA,
