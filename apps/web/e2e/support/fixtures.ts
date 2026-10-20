@@ -16,8 +16,10 @@
 //     before it left the page (the violation is then the guard's to judge);
 //   - any 4xx or 5xx from the app's origin that the test didn't declare (a test that answers a
 //     request with a 503 itself declares it).
-//   A signed-out page's boot answers GET /api/session 401: open() declares it; a spec whose default
-//   page is signed out declares it itself.
+//   A signed-out page's boot answers GET /api/session 401. open() expects that of a context it
+//   opens signed out only until the context is signed in (a 2xx from GET /api/session there), so a
+//   401 after the sign-in is the test's to declare; a spec whose default page is signed out declares
+//   it itself.
 import {
   type BrowserContext,
   test as base,
@@ -55,6 +57,10 @@ export interface Guard {
   allowConsole(pattern: RegExp): void
   // A request the test aborts itself (route.abort()), and its console line.
   allowFailedRequest(path: string | RegExp): void
+  // The context starts signed out: its boots' GET /api/session 401 is expected until it is signed
+  // in, which a 2xx from GET /api/session in it shows (open() calls this). A 401 from then on is
+  // undeclared unless the test declares it.
+  expectSignedOut(context: BrowserContext): void
   // Starts watching a context and its pages (open() and the default context do this).
   watch(context: BrowserContext): Promise<void>
   // Every CSP violation seen so far.
@@ -83,7 +89,8 @@ const BLOCKED = /^csp$|ERR_BLOCKED_BY_CSP|NS_ERROR_CONTENT_BLOCKED|Content Secur
 
 const BINDING = '__e2eCspViolation'
 
-class PageGuard implements Guard {
+// Exported for its own test (scripts/guards/e2e-setup.test.ts ES-15); specs use the guard fixture.
+export class PageGuard implements Guard {
   readonly problems: string[] = []
   // What the pages did after the test body ended (end()), printed by the guard, never counted.
   readonly late: string[] = []
@@ -94,6 +101,8 @@ class PageGuard implements Guard {
   readonly #console: RegExp[] = []
   readonly #failed: (string | RegExp)[] = []
   readonly #watched = new WeakSet<BrowserContext>()
+  // Contexts still signed out since expectSignedOut().
+  readonly #signedOut = new WeakSet<BrowserContext>()
   // Requests to another origin, unless the CSP blocks them before they leave (requestfailed).
   readonly #elsewhere = new Set<Request>()
 
@@ -127,8 +136,14 @@ class PageGuard implements Guard {
     this.#failed.push(path)
   }
 
-  #declared(path: string, status: number): boolean {
-    return this.#responses.some(entry => entry.status === status && matches(entry.path, path))
+  expectSignedOut(context: BrowserContext): void {
+    this.#signedOut.add(context)
+  }
+
+  // Declared by the test, or a signed-out boot's session check in a context not yet signed in.
+  #declared(path: string, status: number, page: Page): boolean {
+    if (this.#responses.some(entry => entry.status === status && matches(entry.path, path))) return true
+    return path === SESSION_401.path && status === SESSION_401.status && this.#signedOut.has(page.context())
   }
 
   #failedAllowed(path: string): boolean {
@@ -167,7 +182,7 @@ class PageGuard implements Guard {
 
   #attach(page: Page): void {
     page.on('pageerror', error => this.#problem(`page error: ${error.message}`))
-    page.on('console', message => this.#onConsole(message))
+    page.on('console', message => this.#onConsole(message, page))
     page.on('request', request => {
       const url = request.url()
       if (url.startsWith('data:') || url.startsWith('blob:') || url === 'about:blank') {
@@ -200,7 +215,9 @@ class PageGuard implements Guard {
       const url = new URL(response.url())
       if (url.origin !== E2E_ORIGIN) return
       const status = response.status()
-      if (status >= 400 && !this.#declared(url.pathname, status)) {
+      // A session answer: the context is signed in, and its signed-out allowance ends.
+      if (url.pathname === SESSION_401.path && status >= 200 && status < 300) this.#signedOut.delete(page.context())
+      if (status >= 400 && !this.#declared(url.pathname, status, page)) {
         const line = `undeclared ${status} from ${response.request().method()} ${url.pathname}`
         if (this.#ended) {
           this.late.push(line)
@@ -222,7 +239,7 @@ class PageGuard implements Guard {
     })
   }
 
-  #onConsole(message: ConsoleMessage): void {
+  #onConsole(message: ConsoleMessage, page: Page): void {
     if (message.type() !== 'error') return
     const text = message.text()
     if (this.#console.some(pattern => pattern.test(text))) return
@@ -231,7 +248,7 @@ class PageGuard implements Guard {
     if (/Failed to load resource/i.test(text) && where !== '') {
       const url = new URL(where, E2E_ORIGIN)
       const status = Number(/status of (\d{3})/.exec(text)?.[1] ?? Number.NaN)
-      if (this.#declared(url.pathname, status) || this.#failedAllowed(url.pathname)) return
+      if (this.#declared(url.pathname, status, page) || this.#failedAllowed(url.pathname)) return
     }
     if (/Content Security Policy/i.test(text) && [...this.#directives].some(directive => text.includes(directive))) {
       return
@@ -284,7 +301,7 @@ export const test = base.extend<{ guard: Guard; open: Open }>({
         ...(options.phone ? phoneOptions(browserName) : {}),
       })
       contexts.push(context)
-      if (signedIn === false) guard.expectResponses([SESSION_401])
+      if (signedIn === false) guard.expectSignedOut(context)
       await guard.watch(context)
       return context.newPage()
     })
