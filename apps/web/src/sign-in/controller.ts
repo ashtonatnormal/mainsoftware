@@ -8,7 +8,9 @@
 // - the busy timer: a call still in flight after a second says "Sending…" or "Checking…" politely,
 //   once (WCAG 4.1.3), since a wrong code takes at least 2 s (the server's floor).
 // Cues (a focus move or a message to say) go to the screen, which owns the elements and the
-// announcer. A signed-in answer calls enter(), which opens the app in a new document (D-01).
+// announcer. A signed-in answer calls enter(), which opens the app in a new document (D-01). So
+// does a code or PIN step whose answer was lost when GET /api/session then names a person
+// (sign-in-model.ts mayHaveSignedIn); otherwise the failure is shown as it came.
 //
 // The screen subscribes with useSyncExternalStore, starts the timers when it mounts and stops them
 // when it unmounts; a call's answer that arrives after that changes only this store. The first
@@ -25,6 +27,7 @@ import {
   type Failure,
   type FieldName,
   initialState,
+  mayHaveSignedIn,
   nextDeadline,
   type SignInEvent,
   type SignInState,
@@ -118,7 +121,13 @@ export function createSignInController(deps: ControllerDeps, left?: string): Sig
             }))
     answer.then(
       answered => dispatch({ kind: 'answer', id: call.id, now: deps.now(), answer: answered }),
-      (error: unknown) => dispatch({ kind: 'failed', id: call.id, now: deps.now(), failure: failureOf(error) }),
+      async (error: unknown) => {
+        const failure = failureOf(error)
+        // The call stays pending while the session is checked, so Start again stays held.
+        const held = mayHaveSignedIn(call.kind, failure) && (await deps.api.sessionHeld().catch(() => false))
+        if (held) dispatch({ kind: 'answer', id: call.id, now: deps.now(), answer: { kind: 'signed_in' } })
+        else dispatch({ kind: 'failed', id: call.id, now: deps.now(), failure })
+      },
     )
     sayBusyLater(call.id)
   }

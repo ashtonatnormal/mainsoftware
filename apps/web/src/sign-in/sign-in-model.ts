@@ -519,11 +519,21 @@ export function resendHeld(state: SignInState): string | undefined {
 // the step then would show the phone step over a live session the tab doesn't know about, and a
 // second sign-in would leave the first session and its device orphaned until they expire, a second
 // signin.started included. So they wait for the answer, at most 20 s
-// (sign-in/api.ts AUTH_TIMEOUT_MS). A code request signs nobody in, so it never holds them: its late
-// answer is stale and changes nothing.
+// (sign-in/api.ts AUTH_TIMEOUT_MS), and, when it was lost, for the session check after it
+// (mayHaveSignedIn). A code request signs nobody in, so it never holds them: its late answer is
+// stale and changes nothing.
 export function startAgainHeld(state: SignInState): string | undefined {
   if (state.pending === undefined || state.pending.kind === 'request_code') return undefined
   return busyText(state)
+}
+
+// Whether a failed call may still have signed the person in: a code or PIN step whose answer was
+// lost (network: none, or none within 20 s) or didn't read (invalid_response). The server may have
+// issued the session and set its cookie before the answer went missing, so the controller asks
+// GET /api/session (sign-in/api.ts sessionHeld) before it shows the retry, and opens the app when
+// it names a person, as a signed-in answer does (T21 item 2: a session is a document).
+export function mayHaveSignedIn(kind: CallKind, failure: Pick<Failure, 'code'>): boolean {
+  return kind !== 'request_code' && (failure.code === 'network' || failure.code === 'invalid_response')
 }
 
 // The busy text for the call in flight: sending a code, or checking one or a PIN.

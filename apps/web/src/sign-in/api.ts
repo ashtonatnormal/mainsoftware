@@ -9,7 +9,9 @@
 //   AQ-02);
 // - setPin, enterPin: POST /api/auth/pin/set and /pin/verify {pin} → 200 signed_in.
 // A refusal arrives as an ApiFailure with the server's code, message and extras; sign-in-model.ts
-// decides by the code alone.
+// decides by the code alone. sessionHeld isn't the sign-in contract: it asks GET /api/session
+// through the boot's own check (boot/load-session.ts, its 15 s limit included), after a code or PIN
+// step's answer was lost, whether the cookie now names a person (sign-in-model.ts mayHaveSignedIn).
 //
 // Two rules hold for every call:
 // - it is abandoned after 20 s (AUTH_TIMEOUT_MS), which covers a provider's 4 s check plus the 2 s
@@ -28,6 +30,7 @@ import {
 } from '@hearth/shared'
 import type { z } from 'zod'
 import { ApiFailure, type ApiPath, apiPost } from '@/api/http.ts'
+import { loadSession } from '@/boot/load-session.ts'
 
 export const AUTH_TIMEOUT_MS = 20_000
 // The wait before the one repeat of a try_again: 0.5 s plus up to 1 s more, at random.
@@ -80,12 +83,19 @@ export function enterPin(pin: string, env: AuthCallEnv = browserAuthEnv()): Prom
   return post('/api/auth/pin/verify', { pin }, SignedInSchema, env)
 }
 
+// Whether this browser's cookie names a signed-in person: GET /api/session answered 200. A 401, or
+// no answer the boot could read, says no; it never throws.
+export async function sessionHeld(fetchImpl?: typeof fetch): Promise<boolean> {
+  return (await loadSession(fetchImpl)).kind === 'signed_in'
+}
+
 // The calls as one object, which the screen's controller takes (and its tests replace).
 export interface SignInApi {
   requestCode(phone: string): Promise<CodeSent>
   verifyCode(code: string): Promise<OtpVerifyReply>
   setPin(pin: string): Promise<SignedIn>
   enterPin(pin: string): Promise<SignedIn>
+  sessionHeld(): Promise<boolean>
 }
 
 export const signInApi: SignInApi = {
@@ -93,4 +103,5 @@ export const signInApi: SignInApi = {
   verifyCode: code => verifyCode(code),
   setPin: pin => setPin(pin),
   enterPin: pin => enterPin(pin),
+  sessionHeld: () => sessionHeld(),
 }

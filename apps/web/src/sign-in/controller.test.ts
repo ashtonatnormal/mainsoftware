@@ -3,11 +3,12 @@
 import { MESSAGES } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import { ApiFailure } from '@/api/http.ts'
+import { API_COPY } from '@/strings/api.ts'
 import { SIGN_IN } from '@/strings/sign-in.ts'
 import type { SignInApi } from './api.ts'
 import { BUSY_SAY_MS, createSignInController, failureOf } from './controller.ts'
 import type { Cue } from './sign-in-model.ts'
-import { RESEND_WAIT_MS } from './sign-in-model.ts'
+import { RESEND_WAIT_MS, startAgainHeld } from './sign-in-model.ts'
 
 // A clock and timers that move only when told.
 function fakeTime(start = Date.UTC(2026, 9, 19, 9, 0, 0)) {
@@ -55,6 +56,7 @@ function fakeApi() {
     verifyCode: call('verifyCode'),
     setPin: call('setPin'),
     enterPin: call('enterPin'),
+    sessionHeld: () => call('sessionHeld')(''),
   }
   return { api, calls }
 }
@@ -154,6 +156,74 @@ describe('T20 T21: the sign-in store (sign-in/controller.ts)', () => {
     await flush()
     expect(controller.snapshot().step.kind).toBe('signed_in')
     expect(entered()).toBe(1)
+  })
+
+  it('T21 item 2 D-01: a code or PIN step whose answer is lost asks GET /api/session before showing the retry, and opens the app when it names a person', async () => {
+    const network = () => new ApiFailure(0, 'network', API_COPY.network)
+    const unreadable = () => new ApiFailure(200, 'invalid_response', MESSAGES.internal)
+    // The code step, for a number on the roster.
+    const atCode = async () => {
+      const harness = setup()
+      harness.controller.input('phone', '+6580000002')
+      harness.controller.submit()
+      harness.calls[0]?.resolve(CODE_SENT)
+      await flush()
+      harness.controller.input('code', '123456')
+      harness.controller.submit()
+      return harness
+    }
+
+    // The code was right and the session issued, but the answer was cut off at 20 s.
+    for (const lost of [network, unreadable]) {
+      const { calls, controller, entered } = await atCode()
+      calls[1]?.reject(lost())
+      await flush()
+      expect(calls.map(call => call.kind)).toEqual(['requestCode', 'verifyCode', 'sessionHeld'])
+      // Still checking: nothing shown yet, and Start again still held.
+      expect(controller.snapshot().notice).toBeUndefined()
+      expect(startAgainHeld(controller.snapshot())).toBe(SIGN_IN.busy.checking)
+      calls[2]?.resolve(true)
+      await flush()
+      expect(controller.snapshot().step.kind).toBe('signed_in')
+      expect(entered()).toBe(1)
+    }
+
+    // No session after all: the failure shows as it came, and Start again is free.
+    const signedOut = await atCode()
+    signedOut.calls[1]?.reject(network())
+    await flush()
+    signedOut.calls[2]?.resolve(false)
+    await flush()
+    expect(signedOut.controller.snapshot()).toMatchObject({ step: { kind: 'code' }, notice: API_COPY.network })
+    expect(startAgainHeld(signedOut.controller.snapshot())).toBeUndefined()
+    expect(signedOut.entered()).toBe(0)
+
+    // The PIN step the same way.
+    const pin = await atCode()
+    pin.calls[1]?.resolve({ status: 'code_verified', next: 'set_pin' })
+    await flush()
+    pin.controller.input('pin', '482913')
+    pin.controller.input('pin2', '482913')
+    pin.controller.submit()
+    pin.calls[2]?.reject(network())
+    await flush()
+    expect(pin.calls[3]?.kind).toBe('sessionHeld')
+    pin.calls[3]?.resolve(true)
+    await flush()
+    expect(pin.entered()).toBe(1)
+
+    // A refusal the server named, and a code request (which signs nobody in), ask nothing.
+    const refused = await atCode()
+    refused.calls[1]?.reject(new ApiFailure(401, 'code_wrong', MESSAGES.code_wrong))
+    await flush()
+    const request = setup()
+    request.controller.input('phone', '+6580000002')
+    request.controller.submit()
+    request.calls[0]?.reject(network())
+    await flush()
+    expect(refused.calls.map(call => call.kind)).toEqual(['requestCode', 'verifyCode'])
+    expect(request.calls.map(call => call.kind)).toEqual(['requestCode'])
+    expect(request.controller.snapshot().notice).toBe(API_COPY.network)
   })
 
   it('PRD-53: a 429 holds the submit until the wait ends, then lets go on the timer; stop() clears every timer and start() catches up', async () => {

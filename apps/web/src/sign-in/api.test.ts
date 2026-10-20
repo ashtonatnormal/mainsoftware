@@ -9,6 +9,7 @@ import {
   RETRY_MIN_MS,
   RETRY_SPREAD_MS,
   requestCode,
+  sessionHeld,
   setPin,
   verifyCode,
 } from './api.ts'
@@ -149,5 +150,27 @@ describe('T20 T21: the sign-in calls (sign-in/api.ts)', () => {
     }
     const extras = await refusal(verifyCode('123456', env([json(401, { error: 'code_wrong', triesLeft: 4 })])))
     expect(extras.extra).toEqual({ triesLeft: 4 })
+  })
+
+  it('T21 item 2: sessionHeld asks GET /api/session: a person named says yes; a 401, a 5xx or no answer says no', async () => {
+    const asked: string[] = []
+    const answering = (answer: () => Response) =>
+      (async (url: RequestInfo | URL) => {
+        asked.push(String(url))
+        return answer()
+      }) as typeof fetch
+    // Marcus, from the Tembusu seed (db/seed/tembusu.sql).
+    const marcus = { personId: 'b0000000-0000-4000-8000-000000000003', name: 'Marcus', timeZone: 'Asia/Singapore' }
+    expect(await sessionHeld(answering(() => json(200, marcus)))).toBe(true)
+    expect(await sessionHeld(answering(() => json(401, { error: 'signed_out' })))).toBe(false)
+    expect(await sessionHeld(answering(() => json(503, { error: 'unavailable' })))).toBe(false)
+    expect(
+      await sessionHeld(
+        answering(() => {
+          throw new TypeError('Failed to fetch')
+        }),
+      ),
+    ).toBe(false)
+    expect(asked).toEqual(['/api/session', '/api/session', '/api/session', '/api/session'])
   })
 })
