@@ -31,8 +31,9 @@ services:
       start_interval: 500ms
 
   # Valkey 9.1, the line ElastiCache for Valkey runs. Nothing is persisted: it holds only caches,
-  # rate-limit counters, sign-in state between steps (attempts, codes' keyed hashes and passkey
-  # challenges, each for minutes) and fan-out, such as the channel that closes a signed-out
+  # rate-limit counters, sign-in state between steps (attempts, code challenges and passkey
+  # challenges, each for minutes; a code challenge holds the provider's reference and a count of
+  # tries, never a code or a number) and fan-out, such as the channel that closes a signed-out
   # session's sockets (C0.5).
   valkey:
     image: valkey/valkey:9.1.2-alpine@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
