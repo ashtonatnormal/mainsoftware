@@ -53,12 +53,17 @@ async function axeStep(page: Page, label: string, testInfo: TestInfo): Promise<v
   await page.setViewportSize(CHECK_SIZES[0] ?? { width: 320, height: 568 })
 }
 
-// Signs out through the avatar menu, and waits for the sign-in screen's new document.
+// Signs out through the avatar menu, and waits for the sign-in screen's new document: its h1 has
+// focus, the reason shows under it, and the announcer says the reason once (T21 item 13, X11).
 async function signOut(page: Page): Promise<void> {
+  const said = await recordAnnouncements(page)
   await page.getByRole('button', { name: /^Account, / }).click()
   await page.getByRole('menuitem', { name: 'Sign out' }).click()
   await expect(page).toHaveURL(/\/sign-in$/)
-  await expect(page.getByRole('status')).toHaveText(SIGN_IN.signedOutHere)
+  await expect(main(page).getByText(SIGN_IN.signedOutHere, { exact: true })).toBeVisible()
+  await expect(h1(page)).toBeFocused()
+  await expect.poll(said).toContain(SIGN_IN.signedOutHere)
+  expect((await said()).filter(text => text === SIGN_IN.signedOutHere)).toHaveLength(1)
 }
 
 // The description a control's aria-describedby names.

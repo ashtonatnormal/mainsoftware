@@ -46,13 +46,22 @@ export function focusAfter(
   fallback: FocusFallback = 'heading',
   env: FocusEnv = browserEnv(),
 ): void {
-  env.queueMicrotask(() =>
-    env.requestFrame(() => {
-      const next = target()
-      if (next && visible(next)) next.focus({ preventScroll: true })
-      else focusFallback(fallback, env)
-    }),
-  )
+  afterCommit(() => {
+    const next = target()
+    if (next && visible(next)) next.focus({ preventScroll: true })
+    else focusFallback(fallback, env)
+  }, env)
+}
+
+// Runs the task when focusAfter() moves focus: once React has committed (a microtask, then a
+// frame). The sign-in screen says its messages this way, so the text reaches the announcer's region
+// a frame after any focus move the same commit asked for, and the screen reader reads the newly
+// focused element first instead of cutting the message short.
+export function afterCommit(
+  task: () => void,
+  env: Pick<FocusEnv, 'queueMicrotask' | 'requestFrame'> = browserEnv(),
+): void {
+  env.queueMicrotask(() => env.requestFrame(task))
 }
 
 // Focus the screen's visible h1 now, or #main when the screen has none.

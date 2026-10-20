@@ -304,13 +304,13 @@ describe('T20 T21: the sign-in steps’ markup', () => {
     }
   })
 
-  it('SHM-09 D-01: the screen opens on the phone step, in its own main, with no left-reason line when none was kept', () => {
+  it('SHM-09 D-01 T21 item 13: the screen opens on the phone step, in its own main, with no left-reason line when none was kept; a kept reason is plain text under the h1, with no live role (the store says it)', () => {
     const markup = html(<SignInScreen />)
     expect(tags(markup, 'main')).toHaveLength(1)
     expect(markup).toContain(`>${SIGN_IN.heading}</h1>`)
     expect(markup).not.toContain('role="status"')
-    expect(at({ kind: 'phone' }, { left: SIGN_IN.signedOut })).toMatch(
-      /<p role="status"[^>]*>You&#x27;ve been signed out\.<\/p>/,
-    )
+    const left = at({ kind: 'phone' }, { left: SIGN_IN.signedOut })
+    expect(left).toMatch(/<\/h1><p class="text-muted">You&#x27;ve been signed out\.<\/p>/)
+    expect(left).not.toMatch(/role="(status|alert|log)"|aria-live/)
   })
 })

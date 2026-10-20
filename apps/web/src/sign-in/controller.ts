@@ -11,7 +11,9 @@
 // announcer. A signed-in answer calls enter(), which opens the app in a new document (D-01).
 //
 // The screen subscribes with useSyncExternalStore, starts the timers when it mounts and stops them
-// when it unmounts; a call's answer that arrives after that changes only this store.
+// when it unmounts; a call's answer that arrives after that changes only this store. The first
+// start() also says why the last document left, once, politely: the line under the h1 is rendered
+// with its text already in it, which a live region wouldn't read (T21 item 13).
 import { MESSAGES } from '@hearth/shared'
 import { ApiFailure } from '@/api/http.ts'
 import type { SignInApi } from './api.ts'
@@ -69,6 +71,7 @@ export function createSignInController(deps: ControllerDeps, left?: string): Sig
   let state = initialState(left)
   const listeners = new Set<() => void>()
   let running = false
+  let leftSaid = false
   let deadline: { at: number; handle: unknown } | undefined
   let busy: unknown
 
@@ -145,6 +148,10 @@ export function createSignInController(deps: ControllerDeps, left?: string): Sig
     startAgain: () => dispatch({ kind: 'start_again' }),
     start() {
       running = true
+      if (!leftSaid && state.left !== undefined) {
+        leftSaid = true
+        deps.cue({ say: state.left, politeness: 'polite' })
+      }
       // A deadline that passed while stopped is caught up at once.
       dispatch({ kind: 'tick', now: deps.now() })
     },

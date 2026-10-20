@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { type FocusEnv, type FocusTarget, focusAfter, focusScreenHeading } from './focus.ts'
+import { afterCommit, type FocusEnv, type FocusTarget, focusAfter, focusScreenHeading } from './focus.ts'
 
 interface FakeTarget extends FocusTarget {
   name: string
@@ -74,5 +74,24 @@ describe('T21: focusAfter (X6)', () => {
 
     focusScreenHeading(fake.env)
     expect(focused.at(-1)).toBe('h1')
+  })
+
+  it('FA-02 X11 T21 item 13: afterCommit runs a task after the same microtask and frame, so a focus move asked for first has happened when it runs', () => {
+    focused = []
+    const fake = fakeEnv([target('h1')], null)
+    const order: string[] = []
+    focusAfter(
+      () => {
+        order.push('focus')
+        return target('h1')
+      },
+      'heading',
+      fake.env,
+    )
+    afterCommit(() => order.push('say'), fake.env)
+    expect(order).toEqual([])
+    fake.run()
+    expect(order).toEqual(['focus', 'say'])
+    expect(fake.steps).toEqual(['microtask', 'microtask', 'frame', 'frame'])
   })
 })

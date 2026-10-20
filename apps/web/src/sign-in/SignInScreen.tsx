@@ -10,16 +10,18 @@
 // - a step change focuses the new h1 (or the notice, when it carries the reason) and sets the
 //   document's title (X6);
 // - a field error focuses the field, or is said assertively when the field has focus already;
-// - a status is said through the app's one announcer (X11).
+// - a status is said through the app's one announcer (X11), once React has committed and any focus
+//   move has happened (lib/focus.ts afterCommit), so the focused element is read first.
 // Signed in, the app opens in a new document (session/document.ts enterDocument, D-01): it tells the
 // other tabs, and the new document's first route focuses its h1.
 //
-// When the last document left with a reason (session/document.ts, takeLeftReason), a status line
-// under the phone step's h1 says so: "You've signed out." after this tab's own Sign out, "You've
-// been signed out." after anything else. The reason is read once, when the screen first renders,
-// and the line goes once the person moves on.
+// When the last document left with a reason (session/document.ts, takeLeftReason), a line under the
+// phone step's h1 says so: "You've signed out." after this tab's own Sign out, "You've been signed
+// out." after anything else. The reason is read once, when the screen first renders, and said once,
+// politely, after the first route has focused the h1 (the store's first start()); the line goes once
+// the person moves on.
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import { type FocusTarget as FocusableElement, focusAfter } from '@/lib/focus.ts'
+import { afterCommit, type FocusTarget as FocusableElement, focusAfter } from '@/lib/focus.ts'
 import { browserDocumentEnv, enterDocument, type LeftReason, takeLeftReason } from '@/session/document.ts'
 import { documentTitle } from '@/strings/shell.ts'
 import { SIGN_IN } from '@/strings/sign-in.ts'
@@ -54,7 +56,7 @@ function selecting(element: HTMLElement): FocusableElement {
 // Turns a cue into focus or speech (T21 item 13): one or the other, never both.
 function applyCue(cue: Cue, refs: SignInRefs): void {
   if ('say' in cue) {
-    announce(cue.say, cue.politeness)
+    afterCommit(() => announce(cue.say, cue.politeness))
     return
   }
   const target = () => refs[cue.focus].current

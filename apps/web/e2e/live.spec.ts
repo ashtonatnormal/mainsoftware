@@ -167,6 +167,7 @@ test("LV-05 T19 item 11: after 30 s of refused reconnects, the probe's 401 from 
   // Both answers are routed, so Kelvin's real session survives, and the new document's own boot
   // reads signed out too (else /sign-in would send it back to /chats).
   guard.expectResponses([{ path: '/api/flags', status: 401 }, SESSION_401])
+  const said = await recordAnnouncements(page)
   await page.clock.install()
   const sockets = await routeSockets(page)
   await page.goto('/chats')
@@ -191,7 +192,8 @@ test("LV-05 T19 item 11: after 30 s of refused reconnects, the probe's 401 from 
   await page.clock.runFor(36_000)
   await expect(page).toHaveURL(/\/sign-in$/)
   await expect(h1(page)).toHaveText('Sign in to Hearth')
-  await expect(page.getByRole('status')).toHaveText("You've been signed out.")
+  await expect(page.locator('#main').getByText("You've been signed out.", { exact: true })).toBeVisible()
+  await expect.poll(said).toContain("You've been signed out.")
   expect(await isOldDocument(page)).toBe(false)
 })
 

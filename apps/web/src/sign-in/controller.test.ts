@@ -61,21 +61,24 @@ function fakeApi() {
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
-function setup() {
+function setup(left?: string) {
   const time = fakeTime()
   const { api, calls } = fakeApi()
   const cues: Cue[] = []
   let entered = 0
-  const controller = createSignInController({
-    api,
-    now: time.now,
-    setTimeout: time.setTimeout,
-    clearTimeout: time.clearTimeout,
-    cue: cue => cues.push(cue),
-    enter: () => {
-      entered += 1
+  const controller = createSignInController(
+    {
+      api,
+      now: time.now,
+      setTimeout: time.setTimeout,
+      clearTimeout: time.clearTimeout,
+      cue: cue => cues.push(cue),
+      enter: () => {
+        entered += 1
+      },
     },
-  })
+    left,
+  )
   controller.start()
   return { time, calls, cues, controller, entered: () => entered }
 }
@@ -168,6 +171,15 @@ describe('T20 T21: the sign-in store (sign-in/controller.ts)', () => {
     expect(controller.snapshot().hold).toBeUndefined()
     controller.submit()
     expect(calls).toHaveLength(2)
+  })
+
+  it('T21 item 13 X11: the first start() says why the last document left, once, politely; a later start() and a screen with no reason say nothing', () => {
+    const { cues, controller } = setup(SIGN_IN.signedOut)
+    expect(cues).toEqual([{ say: SIGN_IN.signedOut, politeness: 'polite' }])
+    controller.stop()
+    controller.start()
+    expect(cues).toHaveLength(1)
+    expect(setup().cues).toEqual([])
   })
 
   it('P6: anything thrown that is not an ApiFailure reads as internal, with the generic copy', () => {

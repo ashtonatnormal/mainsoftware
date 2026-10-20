@@ -3,6 +3,7 @@
 // after every other project has finished with them (T21 item 11), one at a time.
 import type { Page } from '@playwright/test'
 import { SIGN_IN } from '../src/strings/sign-in.ts'
+import { recordAnnouncements } from './support/checks.ts'
 import { logOffset, readCode } from './support/codes.ts'
 import { E2E_ORIGIN, stateFile } from './support/env.ts'
 import { expect, SESSION_401, test } from './support/fixtures.ts'
@@ -12,6 +13,8 @@ import { SIZES } from './support/viewports.ts'
 test.describe.configure({ mode: 'serial' })
 
 const h1 = (page: Page) => page.getByRole('heading', { level: 1 })
+// The sign-in screen's reason line, inside <main>, not the announcer's copy, which sits outside.
+const leftLine = (page: Page, text: string) => page.locator('main').getByText(text, { exact: true })
 const timeOrigin = (page: Page) => page.evaluate(() => performance.timeOrigin)
 const scrollKeys = (page: Page) =>
   page.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('tsr-scroll-restoration')))
@@ -38,6 +41,7 @@ test('SE-01 SE-02 CHT-60 PRD-74 D-01 D-02 T21 item 2: with Marcus on /today → 
 }) => {
   guard.expectResponses([SESSION_401])
   const page = await open({ ...SIZES.w390, signedIn: stateFile('chromium') })
+  const said = await recordAnnouncements(page)
   await page.goto('/today')
   await expect(h1(page)).toHaveText('Today')
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Chats' }).click()
@@ -46,7 +50,9 @@ test('SE-01 SE-02 CHT-60 PRD-74 D-01 D-02 T21 item 2: with Marcus on /today → 
 
   await signOutByMenu(page)
   await expect(page).toHaveURL(/\/sign-in$/)
-  await expect(page.getByRole('status')).toHaveText(SIGN_IN.signedOutHere)
+  await expect(leftLine(page, SIGN_IN.signedOutHere)).toBeVisible()
+  await expect.poll(said).toContain(SIGN_IN.signedOutHere)
+  expect((await said()).filter(text => text === SIGN_IN.signedOutHere)).toHaveLength(1)
   expect(await timeOrigin(page)).not.toBe(before)
   const cookies = await page.context().cookies(E2E_ORIGIN)
   expect(cookies.map(cookie => cookie.name)).not.toContain('__Host-hearth_session')
@@ -93,6 +99,7 @@ test("SE-04 ACC-04 ACC-05 T19 item 10 (7): with Daniel's one session in two brow
 }) => {
   guard.expectResponses([SESSION_401, { path: '/api/flags', status: 401 }])
   const watcher = await open({ ...SIZES.w390, signedIn: stateFile('firefox') })
+  const said = await recordAnnouncements(watcher)
   let acked = false
   let closed = false
   watcher.on('websocket', socket => {
@@ -112,6 +119,9 @@ test("SE-04 ACC-04 ACC-05 T19 item 10 (7): with Daniel's one session in two brow
   expect(answer.status()).toBe(200)
 
   await expect(watcher).toHaveURL(/\/sign-in$/, { timeout: 10_000 })
-  await expect(watcher.getByRole('status')).toHaveText(SIGN_IN.signedOut)
+  await expect(leftLine(watcher, SIGN_IN.signedOut)).toBeVisible()
+  await expect(h1(watcher)).toBeFocused()
+  await expect.poll(said).toContain(SIGN_IN.signedOut)
+  expect((await said()).filter(text => text === SIGN_IN.signedOut)).toHaveLength(1)
   expect(closed).toBe(true)
 })
