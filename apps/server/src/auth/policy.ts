@@ -7,9 +7,10 @@ import { GATEWAY_CLOSE } from '@hearth/shared'
 // A sign-in code: 6 digits, valid 5 minutes, dead after 5 wrong tries (PRD-53). Its challenge record
 // (codes.ts) is kept 10 minutes, so a check after the 5 minutes finds it and cancels the provider's
 // code; checks are refused from 5 minutes after the request, on Valkey's clock.
-// - verifyFloorMs: a refused check (code_wrong, code_dead, code_expired) answers no sooner than this
-//   after the request arrived, so the provider's round trip for a roster number can't be timed
-//   against a number off the roster (T14 item 3, T20). Successes aren't padded.
+// - verifyFloorMs: a refused check (code_wrong, code_dead, code_expired), and one the provider
+//   failed (503 unavailable), answers no sooner than this after the request arrived, so the
+//   provider's round trip for a roster number can't be timed against a number off the roster (T14
+//   item 3, T20). Successes aren't padded.
 // - breaker: after `failures` provider failures within `windowMs`, every check answers 503
 //   unavailable for `openMs` without asking the provider (T20).
 export const OTP = {

@@ -6,8 +6,9 @@
 // person holds a PIN role is read in the transaction that acts on it (access/world.ts
 // holdsPinRoleNow), and decides whether the session is issued under the PIN rule, with its shorter
 // lifetime (PIN_RULE_SESSION).
-// - A refused code check answers no sooner than OTP.verifyFloorMs after it arrived, and a provider
-//   that keeps failing trips the breaker, which refuses every check for a while (api.otp, T20).
+// - A refused code check, and one the provider failed (503), answers no sooner than
+//   OTP.verifyFloorMs after it arrived, and a provider that keeps failing trips the breaker, which
+//   refuses every check for a while (api.otp, T20).
 //
 // - Every number gets the same reply to a code request, and nothing touches Postgres before that
 //   reply. The roster lookup, the audit row and the text run after it, even when the client hangs
@@ -496,8 +497,9 @@ export async function cancelQuietly(sms: SmsProvider, info: ReqInfo, ref: string
 
 // --- POST /api/auth/otp/verify --------------------------------------------------------------
 
-// A refused check answers no sooner than the floor after the request arrived (T20), so a roster
-// number's round trip to the provider can't be told from a number off the roster's instant answer.
+// A refused check, or one the provider failed, answers no sooner than the floor after the request
+// arrived (T20), so a roster number's round trip to the provider can't be told from a number off
+// the roster's instant answer.
 async function floored(api: Api, arrived: number, error: ApiError): Promise<never> {
   const wait = arrived + api.otp.verifyFloorMs - Date.now()
   if (wait > 0) await delay(wait)
@@ -550,9 +552,11 @@ export async function verifyCode(
     // The provider couldn't answer: the try was given back (on this attempt's own live record), and
     // so is the day's check (the per-IP window still counts the request), even when a newer request
     // replaced the record or another check used it meanwhile, and the attempt stays at the code.
+    // Floored as a refusal is, so a provider that fails slowly or at once can't be timed against a
+    // number off the roster's answer (T14 item 3).
     if (settled.result === 'failed') {
       await giveBack(api, info, [day], member)
-      throw new ApiError(503, 'unavailable')
+      return floored(api, arrived, new ApiError(503, 'unavailable'))
     }
     if (settled.result === 'displaced') {
       // A newer request replaced the record during the check. The newest request wins: this check

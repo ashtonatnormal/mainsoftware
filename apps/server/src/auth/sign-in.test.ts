@@ -555,6 +555,23 @@ describe('D46 T20 the code-only finish, the verified step, the floor and the bre
     expect((await verifyCode(right.api, code, ATTEMPT_ID, right.info)).body).toMatchObject({ status: 'signed_in' })
     expect(Date.now() - begun).toBeLessThan(5_000)
   })
+
+  it('T14 item 3 T20 item 3: a check the provider failed answers 503 unavailable no sooner than the floor', async () => {
+    // The provider fails at once: the 503 still waits out the floor, as a roster number's refusal
+    // and a number off the roster's do.
+    const failed = context(
+      valkeyWith({ v: 1, numberTag: 't', step: 'code_sent', ...named }, ['check', 'VE1', 1], ['failed', 1]).valkey,
+      scriptedPool(),
+      checking(new Error('cut off')).sms,
+    )
+    failed.api.otp = { ...failed.api.otp, verifyFloorMs: 150 }
+    const started = Date.now()
+    expect(await refusal(verifyCode(failed.api, code, ATTEMPT_ID, failed.info))).toMatchObject({
+      status: 503,
+      code: 'unavailable',
+    })
+    expect(Date.now() - started).toBeGreaterThanOrEqual(149)
+  })
 })
 
 describe('ACC-03 T14 sending a code after the reply', () => {
