@@ -2067,8 +2067,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('PRD-53 T14: every limit is wired to the live Valkey', async () => {
-    // Budgets: P1 3 code requests, P2 1, P5 1, P6 1, P7 1, P8 1, P9 1, P10 1; the other requests are
-    // refused before any.
+    // Budgets: P1 3 code requests, P2 1, P5 1, P6 1, P7 1, P8 1, P9 1, P10 1, P11 2; the other
+    // requests are refused before any.
     // Each window is filled to the number PRD-53 or T14 sets (never policy.ts's own max, which a
     // change there would follow), and a request it covers is then refused.
     const filled = new Set<string>()
@@ -2167,15 +2167,23 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const reauth = await c6.post('/api/auth/reauth/pin', { pin: pinOf(p6) })
     expect([reauth.status, reauth.error]).toEqual([429, 'too_many_requests'])
 
-    // SMS re-authentication code requests and checks per person per rolling day (D46, AQ-09).
+    // SMS re-authentication code requests and checks per person per rolling day (D46, AQ-09), each
+    // window on its own person, so a refusal shows which window refused: a full code window refuses
+    // a code request and no check, and a full check window a check and no code request.
     const p10 = await s.person()
     const c10 = await s.signIn(p10)
     await fill('reauth-code-p24h', p10.id, 20)
     const codes = await c10.post('/api/auth/reauth/code/request', {})
     expect([codes.status, codes.error]).toEqual([429, 'too_many_requests'])
-    await fill('reauth-check-p24h', p10.id, 20)
-    const checks = await c10.post('/api/auth/reauth/code/verify', { code: '000000' })
+    // Past every limit, the check finds no code.
+    const unlimited = await c10.post('/api/auth/reauth/code/verify', { code: '000000' })
+    expect([unlimited.status, unlimited.error]).toEqual([401, 'code_expired'])
+    const p11 = await s.person()
+    const c11 = await s.signIn(p11)
+    await fill('reauth-check-p24h', p11.id, 20)
+    const checks = await c11.post('/api/auth/reauth/code/verify', { code: '000000' })
     expect([checks.status, checks.error]).toEqual([429, 'too_many_requests'])
+    expect((await c11.post('/api/auth/reauth/code/request', {})).status).toBe(200)
 
     // Every limit policy.ts names was filled and refused above.
     expect([...filled].sort()).toEqual(
