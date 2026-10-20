@@ -1,6 +1,6 @@
 // The dormant passkeys (D46): kept, switched off in production (auth/policy.ts PASSKEYS_ON), and
-// switched on here alone, through the harness's passkeysForTests (scripts/guards/
-// api-test-overrides.test.ts). This suite keeps the dormant code working, so turning passkeys back
+// switched on only in tests, through passkeysForTests (scripts/guards/api-test-overrides.test.ts):
+// here, through the harness, and in one api.test.ts body-limit case. This suite keeps the dormant code working, so turning passkeys back
 // on is a reviewed change of a constant, not a rewrite. `npm run test:integration` runs it against
 // the Compose stack, on a throwaway database and Valkey key prefix of its own.
 //

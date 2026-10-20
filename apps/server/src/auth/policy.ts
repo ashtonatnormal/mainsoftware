@@ -80,7 +80,9 @@ export const LIMITS = {
   // SMS re-authentication code requests, and code checks, per person per rolling day (D46, AQ-09).
   reauthCodePerPerson: { name: 'reauth-code-p24h', windowMs: 86_400_000, max: 20 },
   reauthCheckPerPerson: { name: 'reauth-check-p24h', windowMs: 86_400_000, max: 20 },
-  // Texts actually sent, across all numbers (checked after the reply, before the send).
+  // Code sends asked of the provider, across all numbers, sign-in and re-authentication alike: one
+  // per code request Hearth delivers, checked before the provider is asked. A start's one retry, or
+  // a foreign reply's cancel and second start, can add a text it doesn't count (TECH-SPEC T14 item 5).
   smsGlobal: { name: 'sms-global', windowMs: 3_600_000, max: 100 },
 } as const
 
@@ -100,6 +102,6 @@ export const SIGNED_OUT_CLOSE = GATEWAY_CLOSE.signedOut
 // D46: passkeys are kept, switched off. A passkey stands in for a set PIN, and only PIN-role
 // holders have PINs. While off, the passkey routes aren't registered (an /api 404), the step-up
 // reply has no passkey key and GET /api/devices lists no passkeys. policy.test.ts pins this false,
-// so turning it on is a reviewed change; never a flag or an env var. The integration harness turns
-// them on for the dormant suite only (ApiDeps.passkeysForTests).
+// so turning it on is a reviewed change; never a flag or an env var. Only tests turn them on
+// (ApiDeps.passkeysForTests): the dormant integration suite, and one api.test.ts body-limit case.
 export const PASSKEYS_ON = false
