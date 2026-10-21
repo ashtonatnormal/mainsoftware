@@ -8,7 +8,9 @@
 //   - an identifier naming a cookie, a session, the database, Valkey, the outbox or the job queue;
 //   - a read of the api's dependencies other than appOrigin.
 // It also holds origin.ts to one exception: CSP_REPORT_PATH named once in its code, inside
-// isSameOriginCspReport, which the hook calls once. The fixture cases prove each check bites.
+// isSameOriginCspReport, which the hook calls once, and every way out of the hook either a pass on
+// one of its three conditions (GET or HEAD, the app's Origin, the exception) or the 403. The fixture
+// cases prove each check bites.
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 import { moduleImports } from './imports'
@@ -93,6 +95,49 @@ function originUses(path: string, source: string): { path: string[]; calls: numb
   return { path: uses, calls }
 }
 
+// Every way out of the Origin hook (the function refuseCrossSiteWrites hands to addHook), in order: a
+// pass is named by the condition that guards it (a call by its callee, anything else by its text,
+// and 'unconditional' when nothing does), the refusal by 'refuse' (a return of reply.…). Nested
+// functions are their own, so their returns don't count.
+function hookExits(path: string, source: string): string[] {
+  const file = parse(path, source)
+  const register = file.statements.find(
+    (statement): statement is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(statement) && statement.name?.text === 'refuseCrossSiteWrites',
+  )
+  const hook = register?.body?.statements
+    .flatMap(statement => (ts.isExpressionStatement(statement) ? [statement.expression] : []))
+    .filter(ts.isCallExpression)
+    .flatMap(call => call.arguments)
+    .find(
+      (argument): argument is ts.ArrowFunction | ts.FunctionExpression =>
+        ts.isArrowFunction(argument) || ts.isFunctionExpression(argument),
+    )
+  if (hook === undefined) return ['no hook']
+  const exits: string[] = []
+  const guardOf = (node: ts.Node): string => {
+    for (let at: ts.Node = node; at.parent !== undefined && at !== hook; at = at.parent) {
+      const parent = at.parent
+      if (ts.isIfStatement(parent) && at !== parent.expression) {
+        const condition = parent.expression
+        const name = ts.isCallExpression(condition) ? condition.expression.getText(file) : condition.getText(file)
+        return at === parent.elseStatement ? `else of ${name}` : name
+      }
+    }
+    return 'unconditional'
+  }
+  const visit = (node: ts.Node): void => {
+    if (node !== hook && ts.isFunctionLike(node)) return
+    if (ts.isReturnStatement(node)) {
+      const refusal = node.expression !== undefined && /^reply\./.test(node.expression.getText(file))
+      exits.push(refusal ? 'refuse' : guardOf(node))
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(hook.body)
+  return exits
+}
+
 describe('T21 item 9: the CSP report route the Origin hook lets through stays stateless', () => {
   it('CG-01 OD-12 T21 item 9: csp-report.ts loads only what it loads today', () => {
     expect(importsOf(ROUTE, readRepoFile(ROUTE)).sort()).toEqual([...ALLOWED_IMPORTS].sort())
@@ -126,5 +171,30 @@ describe('T21 item 9: the CSP report route the Origin hook lets through stays st
         "import { CSP_REPORT_PATH } from '@hearth/shared'\nfunction hook() { if (url.startsWith(CSP_REPORT_PATH)) return }",
       ),
     ).toEqual({ path: ['import', 'hook'], calls: 0 })
+  })
+
+  it('CG-04 OD-12 T21 item 9: the Origin hook passes a request only on GET or HEAD, the app’s Origin or the exception, and otherwise refuses it', () => {
+    const expected = ['SAFE_METHODS.has', 'isAppOrigin', 'isSameOriginCspReport', 'refuse']
+    expect(hookExits(ORIGIN, readRepoFile(ORIGIN))).toEqual(expected)
+    // The fixtures: the hook as it is, then each way a second pass could slip in.
+    const hook = (body: string) =>
+      `export function refuseCrossSiteWrites(app, appOrigin) {\n  app.addHook('onRequest', async (request, reply) => {\n${body}\n  })\n}`
+    const today = [
+      'if (SAFE_METHODS.has(request.method)) return',
+      'if (isAppOrigin(origin, appOrigin)) return',
+      'if (isSameOriginCspReport({ method: request.method, route, origin, fetchSite })) return',
+      "return reply.code(403).send({ error: 'Forbidden' })",
+    ]
+    expect(hookExits('a.ts', hook(today.join('\n')))).toEqual(expected)
+    const extra = [...today.slice(0, 3), "if (origin === 'null') return", ...today.slice(3)]
+    expect(hookExits('a.ts', hook(extra.join('\n')))).toEqual([...expected.slice(0, 3), "origin === 'null'", 'refuse'])
+    const braced = [...today.slice(0, 3), "if (request.url === '/x') { return }", ...today.slice(3)]
+    expect(hookExits('a.ts', hook(braced.join('\n')))).toContain("request.url === '/x'")
+    expect(hookExits('a.ts', hook(['return', ...today].join('\n')))[0]).toBe('unconditional')
+    const elsePass = ['if (isAppOrigin(origin, appOrigin)) {} else return', ...today]
+    expect(hookExits('a.ts', hook(elsePass.join('\n')))[0]).toBe('else of isAppOrigin')
+    // A callback inside the hook has returns of its own, which aren't the hook's.
+    const nested = ['const keep = [1].filter(n => { return n > 0 })', ...today]
+    expect(hookExits('a.ts', hook(nested.join('\n')))).toEqual(expected)
   })
 })
