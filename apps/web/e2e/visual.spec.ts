@@ -61,10 +61,18 @@ test('VS-01 BP C0.8 T21 item 11: Chats, the avatar menu open and Page not found 
   await shoot(page, 'chats', VISUAL_WIDTHS)
 
   const menu = page.getByRole('menu', { name: 'Account' })
+  // A new document at each width, so every width opens the menu from the same state. Closing the
+  // last width's menu with Escape would leave keyboard modality behind, and the reopened menu's
+  // first item would show its focus ring at that width only.
   await shoot(page, 'avatar-menu', VISUAL_WIDTHS, async () => {
-    if (await menu.isVisible()) await page.keyboard.press('Escape')
+    await page.reload()
+    await expect(h1(page)).toHaveText('Chats')
     await page.getByRole('button', { name: 'Account, Marcus' }).click()
     await expect(menu).toBeVisible()
+    // Opened by the pointer at every width: its first item has focus and shows no ring.
+    const first = menu.getByRole('menuitem').first()
+    await expect(first).toBeFocused()
+    expect(await first.evaluate(item => item.matches(':focus-visible'))).toBe(false)
     await page.mouse.move(0, 0)
   })
   await page.keyboard.press('Escape')
