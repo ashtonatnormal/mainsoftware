@@ -14,8 +14,10 @@
    - --line-strong: the border that identifies a control (an input, the Switch's off track), at 3:1
      on every ground. --line stays for hairlines and dividers, which identify nothing.
    - --wash-a, --wash-b: the brightest points of the wash (app.css's wash utility), finance's teal
-     and lavender over --bg at 25 % in light and 13 % in dark, the strongest at which every pair
-     still passes on them. Each moves every channel the same way from --bg (TK-13).
+     and lavender over --bg, at 25 % and 23 % in light and 13 % in dark: near the strongest at
+     which every pair still passes on them, with room for a renderer that draws a pixel one 8-bit
+     step past the token (muted and error text on it keep 4.51:1 or more). Each moves every channel
+     the same way from --bg (TK-13).
    - --selection: selected text's ground, finance's lavender; app.css paints selected text --fg.
    - --avatar-0 to --avatar-11: avatar fills at oklch(0.52 0.12 h), h = 15° + 30°n, each at least
      4.5:1 under --avatar-fg. They are the same in both themes.
@@ -51,7 +53,7 @@
   --warn-soft: #fdeee3;
   --wall: #f2f0eb; /* the conversation ground */
   --wash-a: #e3edec; /* the wash's teal corner */
-  --wash-b: #ece8ef; /* the wash's lavender corner */
+  --wash-b: #ece9ef; /* the wash's lavender corner */
   --selection: #c9c0ea; /* selected text's ground: finance's lavender */
   --avatar-0: #a24852;
   --avatar-1: #a04f27;
