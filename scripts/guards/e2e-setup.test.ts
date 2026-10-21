@@ -84,8 +84,17 @@ function sessionHooks(path: string, source: string): string[] {
 
 // The screenshot tolerance options a file's code names, in any form: a key plain, quoted, computed
 // or shorthand, a property read or written, or a binding. An e2e file has no reason to name one,
-// and naming one is how a shot would set its own tolerance (ES-17).
-const TOLERANCE_KEYS = new Set(['threshold', 'maxDiffPixels', 'maxDiffPixelRatio', 'comparator', '_comparator'])
+// and naming one is how a shot would set its own tolerance (ES-17). toMatchSnapshot counts too: a
+// screenshot compared through it reads expect.toMatchSnapshot's options, Playwright's default
+// threshold of 0.2, and never the config's toHaveScreenshot block.
+const TOLERANCE_KEYS = new Set([
+  'threshold',
+  'maxDiffPixels',
+  'maxDiffPixelRatio',
+  'comparator',
+  '_comparator',
+  'toMatchSnapshot',
+])
 function toleranceNames(path: string, source: string): string[] {
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
   const names: string[] = []
@@ -522,7 +531,7 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     )
   })
 
-  it("ES-17 VS-01 T21 item 11: screenshots compare at threshold 0.005 with no pixel allowance (maxDiffPixels 0, no ratio, pixelmatch), so a painted token's colour change fails, and no e2e file names a tolerance option of its own", () => {
+  it("ES-17 VS-01 T21 item 11: screenshots compare at threshold 0.005 with no pixel allowance (maxDiffPixels 0, no ratio, pixelmatch), so a painted token's colour change fails, no e2e file names a tolerance option of its own or compares through toMatchSnapshot, and no project sets its own expect", () => {
     expect(config.expect?.toHaveScreenshot).toMatchObject({ threshold: 0.005, maxDiffPixels: 0 })
     expect(config.expect?.toHaveScreenshot).not.toHaveProperty('maxDiffPixelRatio')
     // The comparator Playwright keeps behind an underscore, which would replace pixelmatch.
@@ -537,6 +546,16 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(shot('{ fullPage: true, threshold }')).toEqual(['threshold'])
     expect(shot('{ fullPage: true }')).toEqual([])
     expect(toleranceNames('a.spec.ts', 'options._comparator = "ssim-cie94"')).toEqual(['_comparator'])
+    expect(toleranceNames('a.spec.ts', 'expect(await page.screenshot()).toMatchSnapshot(name)')).toEqual([
+      'toMatchSnapshot',
+    ])
+    expect(toleranceNames('a.spec.ts', 'await expect(page.locator("main")).toMatchAriaSnapshot(tree)')).toEqual([])
+    // A project's expect replaces the config's whole expect block for that project (Playwright
+    // takes the first of the two), so its shots would compare at whatever that block sets, and at
+    // Playwright's defaults for anything it leaves out.
+    expect(
+      (config.projects ?? []).filter(project => project.expect !== undefined).map(project => project.name),
+    ).toEqual([])
     const looser = files
       .filter(path => path.startsWith(E2E) && path.endsWith('.ts'))
       .flatMap(path => toleranceNames(path, readRepoFile(path)).map(name => `${relative(E2E, path)}: ${name}`))
