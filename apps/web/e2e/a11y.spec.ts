@@ -127,36 +127,40 @@ async function axeWithoutWash(page: Page, label: string, sizes: readonly Size[],
 // and the sign-in steps are a card on it.
 const WASH_SIZES = [SIZES.w390, SIZES.desktop] as const
 
-test('A11Y-04 T21 item 6: with the wash taken off, axe checks the contrast it lists as incomplete over the wash, on every shell screen, the phone step and the code step with an error, at 390 and 1440 px, light and dark', async ({
-  open,
-  guard,
-}, testInfo) => {
-  guard.expectResponses([{ path: '/api/auth/otp/verify', status: 401 }])
-  const page = await open({ ...SIZES.w390, signedIn: true, bypassCSP: true })
-  for (const screen of SCREENS) {
-    await page.setViewportSize(SIZES.w390)
+// One test per screen, as A11Y-01 is, so each stays well inside the 60 s a test may take.
+for (const screen of SCREENS) {
+  test(`A11Y-04 T21 item 6: with the wash taken off, axe checks the contrast it lists as incomplete over the wash on ${screen.path} at 390 and 1440 px, light and dark`, async ({
+    open,
+  }, testInfo) => {
+    const page = await open({ ...SIZES.w390, signedIn: true, bypassCSP: true })
     await page.goto(screen.path)
     await expect(h1(page)).toHaveText(screen.title)
     await withoutWash(page)
     await axeWithoutWash(page, screen.path, WASH_SIZES, testInfo)
-  }
+  })
+}
 
-  const signedOut = await open({ ...SIZES.w390, bypassCSP: true })
-  await signedOut.goto('/sign-in')
-  await expect(h1(signedOut)).toHaveText('Sign in to Hearth')
-  await withoutWash(signedOut)
-  await axeWithoutWash(signedOut, 'the phone step', WASH_SIZES, testInfo)
+test('A11Y-04 T21 item 6: with the wash taken off, axe checks the same on the sign-in phone step and the code step with an error at 390 and 1440 px, light and dark', async ({
+  open,
+  guard,
+}, testInfo) => {
+  guard.expectResponses([{ path: '/api/auth/otp/verify', status: 401 }])
+  const page = await open({ ...SIZES.w390, bypassCSP: true })
+  await page.goto('/sign-in')
+  await expect(h1(page)).toHaveText('Sign in to Hearth')
+  await withoutWash(page)
+  await axeWithoutWash(page, 'the phone step', WASH_SIZES, testInfo)
 
   // The code step's field error is red text straight on the wash on a phone. The style tag stays
   // through the step change (the same document), and withoutWash checks again that it holds.
-  await signedOut.setViewportSize(SIZES.w390)
-  await signedOut.getByLabel('Mobile number').fill(typed(PERSONAS.a11yWash))
-  await signedOut.getByRole('button', { name: 'Send code' }).click()
-  await expect(h1(signedOut)).toHaveText('Enter your code')
+  await page.setViewportSize(SIZES.w390)
+  await page.getByLabel('Mobile number').fill(typed(PERSONAS.a11yWash))
+  await page.getByRole('button', { name: 'Send code' }).click()
+  await expect(h1(page)).toHaveText('Enter your code')
   // A number off the roster gets no text, so any code is wrong (PRD-53).
-  await signedOut.getByLabel('6-digit code').fill('000000')
-  await signedOut.getByRole('button', { name: 'Sign in' }).click()
-  await expect(signedOut.getByLabel('6-digit code')).toHaveAttribute('aria-invalid', 'true')
-  await withoutWash(signedOut)
-  await axeWithoutWash(signedOut, 'the code step with an error', WASH_SIZES, testInfo)
+  await page.getByLabel('6-digit code').fill('000000')
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  await expect(page.getByLabel('6-digit code')).toHaveAttribute('aria-invalid', 'true')
+  await withoutWash(page)
+  await axeWithoutWash(page, 'the code step with an error', WASH_SIZES, testInfo)
 })
