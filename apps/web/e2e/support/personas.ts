@@ -88,6 +88,9 @@ export const PERSONAS = {
   si01: person('not on the roster', '+6580009021', offRoster, [{ what: 'SI-01', stage: 'chromium', requests: 1 }]),
   si08: person('not on the roster', '+6580009023', offRoster, [{ what: 'SI-08', stage: 'chromium', requests: 2 }]),
   a11y: person('not on the roster', '+6580009024', offRoster, [{ what: 'A11Y-03', stage: 'chromium', requests: 1 }]),
+  a11yWash: person('not on the roster', '+6580009027', offRoster, [
+    { what: 'A11Y-04', stage: 'chromium', requests: 1 },
+  ]),
   visual: person('not on the roster', '+6580009025', offRoster, [{ what: 'VS-01', stage: 'chromium', requests: 1 }]),
   nfr02: person('not on the roster', '+6580009026', offRoster, [
     { what: 'NF-01 NF-06', stage: 'chromium', requests: 1 },

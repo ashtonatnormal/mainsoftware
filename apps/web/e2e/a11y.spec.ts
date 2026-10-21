@@ -7,7 +7,7 @@ import { expectAxeClean } from './support/axe.ts'
 import { noAiCopy } from './support/checks.ts'
 import { expect, test } from './support/fixtures.ts'
 import { PERSONAS, typed } from './support/personas.ts'
-import { CHECK_SIZES, SCHEMES, SCREENS, SIZES } from './support/viewports.ts'
+import { CHECK_SIZES, SCHEMES, SCREENS, SIZES, type Size } from './support/viewports.ts'
 
 const h1 = (page: Page) => page.getByRole('heading', { level: 1 })
 
@@ -92,25 +92,71 @@ test('A11Y-03 decision 8 T21 item 13: the sign-in phone step, and the code step 
 // element needs the CSP bypassed, as NF-08's does.
 const WITHOUT_WASH = '.wash { background-image: none; }'
 
-test('A11Y-04 T21 item 6: with the wash taken off, axe checks the contrast it lists as incomplete over the wash, on every shell screen and the phone step at 390 px, light and dark', async ({
-  open,
-}, testInfo) => {
-  const page = await open({ ...SIZES.w390, signedIn: true, bypassCSP: true })
-  for (const screen of SCREENS) {
-    await page.goto(screen.path)
-    await expect(h1(page)).toHaveText(screen.title)
-    await page.addStyleTag({ content: WITHOUT_WASH })
+// Takes the wash off and waits until it is off: the page has a .wash element and none still draws
+// an image. axe only reports what it lists as incomplete (support/axe.ts), so a style the browser
+// applied late, or a wash renamed or moved, would leave axe listing the same text as incomplete
+// and the test passing having checked nothing (as withTextSpacing waits, support/checks.ts).
+async function withoutWash(page: Page): Promise<void> {
+  await page.addStyleTag({ content: WITHOUT_WASH })
+  await expect(page.locator('.wash'), 'a .wash element to take the wash off').not.toHaveCount(0)
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() =>
+          [...document.querySelectorAll('.wash')]
+            .map(element => getComputedStyle(element).backgroundImage)
+            .filter(image => image !== 'none'),
+        ),
+      { message: 'the wash is taken off' },
+    )
+    .toEqual([])
+}
+
+// axe in both schemes at each size, with the wash already off.
+async function axeWithoutWash(page: Page, label: string, sizes: readonly Size[], testInfo: TestInfo) {
+  for (const size of sizes) {
+    await page.setViewportSize(size)
     for (const scheme of SCHEMES) {
       await page.emulateMedia({ colorScheme: scheme })
-      await expectAxeClean(page, `${screen.path} without the wash at 390 ${scheme}`, testInfo)
+      await expectAxeClean(page, `${label} without the wash at ${size.width} ${scheme}`, testInfo)
     }
   }
+}
+
+// At 390 px the wash is behind every screen's text; at 1440 px the rail and the screen sit on it,
+// and the sign-in steps are a card on it.
+const WASH_SIZES = [SIZES.w390, SIZES.desktop] as const
+
+test('A11Y-04 T21 item 6: with the wash taken off, axe checks the contrast it lists as incomplete over the wash, on every shell screen, the phone step and the code step with an error, at 390 and 1440 px, light and dark', async ({
+  open,
+  guard,
+}, testInfo) => {
+  guard.expectResponses([{ path: '/api/auth/otp/verify', status: 401 }])
+  const page = await open({ ...SIZES.w390, signedIn: true, bypassCSP: true })
+  for (const screen of SCREENS) {
+    await page.setViewportSize(SIZES.w390)
+    await page.goto(screen.path)
+    await expect(h1(page)).toHaveText(screen.title)
+    await withoutWash(page)
+    await axeWithoutWash(page, screen.path, WASH_SIZES, testInfo)
+  }
+
   const signedOut = await open({ ...SIZES.w390, bypassCSP: true })
   await signedOut.goto('/sign-in')
   await expect(h1(signedOut)).toHaveText('Sign in to Hearth')
-  await signedOut.addStyleTag({ content: WITHOUT_WASH })
-  for (const scheme of SCHEMES) {
-    await signedOut.emulateMedia({ colorScheme: scheme })
-    await expectAxeClean(signedOut, `the phone step without the wash at 390 ${scheme}`, testInfo)
-  }
+  await withoutWash(signedOut)
+  await axeWithoutWash(signedOut, 'the phone step', WASH_SIZES, testInfo)
+
+  // The code step's field error is red text straight on the wash on a phone. The style tag stays
+  // through the step change (the same document), and withoutWash checks again that it holds.
+  await signedOut.setViewportSize(SIZES.w390)
+  await signedOut.getByLabel('Mobile number').fill(typed(PERSONAS.a11yWash))
+  await signedOut.getByRole('button', { name: 'Send code' }).click()
+  await expect(h1(signedOut)).toHaveText('Enter your code')
+  // A number off the roster gets no text, so any code is wrong (PRD-53).
+  await signedOut.getByLabel('6-digit code').fill('000000')
+  await signedOut.getByRole('button', { name: 'Sign in' }).click()
+  await expect(signedOut.getByLabel('6-digit code')).toHaveAttribute('aria-invalid', 'true')
+  await withoutWash(signedOut)
+  await axeWithoutWash(signedOut, 'the code step with an error', WASH_SIZES, testInfo)
 })

@@ -47,8 +47,10 @@ test('VS-01 BP C0.8 T21 item 11: the sign-in phone step, and the code step with 
   await page.getByLabel('6-digit code').fill('000000')
   await page.getByRole('button', { name: SIGN_IN.signIn, exact: true }).click()
   await expect(page.getByLabel('6-digit code')).toHaveAttribute('aria-invalid', 'true')
-  // The same picture whichever element has focus.
+  // The same picture whichever element has focus, and with the pointer off Sign in, so the
+  // button shows its resting fill, not its hover.
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.mouse.move(0, 0)
   await shoot(page, 'sign-in-code-error', VISUAL_WIDTHS)
 })
 
