@@ -98,9 +98,11 @@ export default defineConfig({
   reporter: CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   globalSetup: './e2e/global-setup.ts',
   expect: {
+    // MEASURING, not for merge: zero tolerance for one CI run, so the log reports how many pixels
+    // each shot differs by from its baseline (T21 item 11). The next commit sets the real values.
     toHaveScreenshot: {
-      maxDiffPixelRatio: 0.005,
-      threshold: 0.2,
+      maxDiffPixels: 0,
+      threshold: 0,
       animations: 'disabled',
       caret: 'hide',
       scale: 'css',
