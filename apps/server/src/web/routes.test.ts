@@ -20,7 +20,7 @@ import { AfterResponse, type ReqInfo } from '#src/http.ts'
 import { createLogger } from '#src/logger.ts'
 import { staticFlags } from '#src/testing/flags.ts'
 import { type Statement, scriptedPool } from '#src/testing/pool.ts'
-import { CSP_REPORT_LIMIT } from '#src/web/csp-report.ts'
+import { CSP_LOG_PER_MINUTE, CSP_REPORT_LIMIT } from '#src/web/csp-report.ts'
 import { readFlags } from '#src/web/flags.ts'
 import { keepCookie } from '#src/web/routes.ts'
 
@@ -489,17 +489,27 @@ describe('C0.8 OD-12 POST /api/csp-report', () => {
     expect(reportLines(logs)).toEqual([])
   })
 
-  it('CR-02 OD-12 CL Security T21 item 9: a report from another Origin, or "null", is refused 403 by the root hook; one with no Origin, as Safari sends every report, is taken and logged', async () => {
+  it('CR-02 OD-12 CL Security T21 item 9: a report from another Origin, or none, is refused 403 by the root hook; Safari\'s, whose Origin is "null", is taken, and logged only when its page is on the app origin', async () => {
     const { post, logs } = setup()
-    for (const origin of ['https://evil.example', 'https://usercontent.hearth.example.com', 'null']) {
+    for (const origin of ['https://evil.example', 'https://usercontent.hearth.example.com', undefined]) {
       const response = await post(CSP_REPORT_PATH, REPORT, { origin })
       expect([origin, response.statusCode, response.json()]).toEqual([origin, 403, { error: 'Forbidden' }])
     }
     expect(reportLines(logs)).toEqual([])
-    const safari = await post(CSP_REPORT_PATH, REPORT, { origin: undefined })
+    // Another site that named this path as its report-uri: Safari sends its visitors' reports with
+    // a "null" Origin too. They are answered and never logged, so however many arrive, they spend
+    // none of the log's allowance.
+    const elsewhere = { 'csp-report': { ...REPORT['csp-report'], 'document-uri': 'https://evil.example/page' } }
+    for (let sent = 0; sent < CSP_LOG_PER_MINUTE + 5; sent++) {
+      const response = await post(CSP_REPORT_PATH, elsewhere, { origin: 'null' })
+      expect([response.statusCode, response.body]).toEqual([204, ''])
+    }
+    expect(reportLines(logs)).toEqual([])
+    const safari = await post(CSP_REPORT_PATH, REPORT, { origin: 'null' })
     expect([safari.statusCode, safari.body]).toEqual([204, ''])
     expect(reportLines(logs)).toHaveLength(1)
     expect(reportLines(logs)[0]).toMatchObject(REDUCED)
+    expect(logs.filter(line => line.event === 'csp_reports_dropped')).toEqual([])
   })
 
   it('CR-03 OD-12: malformed JSON or a body over 8 KiB is 400 invalid_request, never 500', async () => {
