@@ -5,6 +5,11 @@
 // readers with `srOnlyTitle` (X16). Back goes through the router's history when there is a page
 // to go back to in this tab, else to the screen's fallback, never a store of its own (CHT-44).
 // `actions` sit at the end of the row (the avatar menu on phones).
+//
+// The h1 is finance's page title, Newsreader 600 drawn tight, at 36 px from the rail breakpoint as
+// finance's is, and 24 px on a phone, where finance's is 30 (T21 item 6): this bar never scrolls
+// away (D-08) and shares its row with Back and the avatar menu, so at 320 px with 200 % text the
+// h1 has 152 px, where Today and Rooms at 30 px (157 and 176 px) would break mid-word.
 import { useCanGoBack, useRouter } from '@tanstack/react-router'
 import { ArrowLeft } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -24,7 +29,11 @@ export function ScreenHeader({ title, srOnlyTitle = false, back, actions }: Scre
     <h1
       tabIndex={-1}
       data-screen-title
-      className={cx(srOnlyTitle ? 'sr-only' : 'min-w-0 flex-1 break-words font-display text-xl font-semibold')}
+      className={cx(
+        srOnlyTitle
+          ? 'sr-only'
+          : 'min-w-0 flex-1 break-words font-display text-2xl font-semibold tracking-tight rail:text-4xl',
+      )}
     >
       {title}
     </h1>

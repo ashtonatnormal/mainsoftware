@@ -15,7 +15,7 @@ export function EmptyState({ icon: Icon, title, body, action }: EmptyStateProps)
   return (
     <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
       <Icon aria-hidden size={32} className="mb-1 text-muted" />
-      <h2 className="font-display text-lg font-semibold">{title}</h2>
+      <h2 className="break-words font-display text-xl font-semibold">{title}</h2>
       {body !== undefined && <p className="max-w-sm text-muted">{body}</p>}
       {action}
     </div>

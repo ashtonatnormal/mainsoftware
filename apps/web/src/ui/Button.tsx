@@ -23,16 +23,18 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   ref?: Ref<HTMLButtonElement>
 }
 
-// Each variant's fill and ink at rest, under the pointer and pressed (X8, WCAG 1.4.3). The
-// primary's hover and press swap the ember fill for accent-ink, which is deeper in light and
-// brighter in dark, so its ink gains contrast in both themes (accent-fg on accent-ink, TEXT_PAIRS).
-// A brightness() filter dims or brightens the ink with the fill, and the demo's brightness-105
-// took white on ember under 4.5:1 in light. Secondary and danger keep a 5 % brightness step, which
-// leaves their ink over 4.5:1 in both themes. TK-11 (styles/contrast.test.ts) reads these strings
-// and holds every state, filter included, to 4.5:1, so a class changed here is checked.
+// Each variant's fill and ink at rest, under the pointer and pressed (X8, WCAG 1.4.3), after
+// finance's buttons (T21 item 6). The primary is finance's brand-deep with white ink; its hover and
+// press swap the fill for accent-ink (finance's own #276d85 in light, a lighter blue in dark), so
+// its ink gains contrast in both themes (accent-fg on accent-ink, TEXT_PAIRS). A brightness()
+// filter dims or brightens the ink with the fill, and brightness-105 on brand-deep would take white
+// under 4.5:1 in light. Secondary is finance's outline button: the surface, its hairline edge
+// (BUTTON_EDGES), and the canvas under the pointer. Danger keeps a 5 % brightness step, which leaves
+// its ink over 4.5:1 in both themes. TK-11 (styles/contrast.test.ts) reads these strings and holds
+// every state, filter included, to 4.5:1, so a class changed here is checked.
 export const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary: 'bg-accent text-accent-fg hover:bg-accent-ink active:bg-accent-ink',
-  secondary: 'bg-surface-2 text-fg hover:brightness-95',
+  secondary: 'bg-surface text-fg hover:bg-bg',
   ghost: 'text-fg hover:bg-surface-2',
   danger: 'bg-rec text-rec-fg hover:brightness-105 active:brightness-95',
 }
@@ -42,15 +44,21 @@ export const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
 // class is left to change its fill or ink.
 export const INERT_BUTTON = 'bg-surface-2 text-muted cursor-not-allowed'
 
-// Every button's shape and size: at least 44×44 at every width (X7).
-const BUTTON_SHAPE =
-  'inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full font-semibold transition'
-const BUTTON_SIZES = { md: 'px-4 text-body', lg: 'px-6 text-base' } as const
+// Every button's shape and size: at least 44×44 at every width (X7), finance's pill in its medium
+// weight; lg is finance's 48 px main action (the sign-in steps' submit). Every button has a 1 px
+// border, so one that is held and then can act again (CodeStep's Send a new code) keeps its size:
+// finance's hairline on a live secondary, transparent otherwise (edgeOf). The edge identifies
+// nothing (the label does), so it is --line, in no contrast pair.
+const BUTTON_SHAPE = 'inline-flex min-w-11 items-center justify-center gap-2 rounded-full border font-medium transition'
+const BUTTON_SIZES = { md: 'min-h-11 px-5 text-body', lg: 'min-h-12 px-6 text-base' } as const
+const BUTTON_EDGES: Partial<Record<ButtonVariant, string>> = { secondary: 'border-line' }
+const edgeOf = (variant: ButtonVariant, inert: boolean) =>
+  (inert ? undefined : BUTTON_EDGES[variant]) ?? 'border-transparent'
 
 // A button's shape, size and variant, for a link that looks like one (the not-found and error
 // screens' "Go to Chats"): a link that navigates stays a link, and keeps the 44 px target.
 export function buttonClass(variant: ButtonVariant = 'secondary', size: 'md' | 'lg' = 'md'): string {
-  return cx(BUTTON_SHAPE, BUTTON_SIZES[size], BUTTON_VARIANTS[variant])
+  return cx(BUTTON_SHAPE, BUTTON_SIZES[size], BUTTON_VARIANTS[variant], edgeOf(variant, false))
 }
 
 // The props every button shares once a reason may hold it back: aria-disabled and the description
@@ -102,9 +110,15 @@ export function Button({
         // A reason replaces `disabled`, so the button stays in the tab order.
         disabled={disabledReason === undefined ? disabled : undefined}
         type={type}
-        className={cx(BUTTON_SHAPE, BUTTON_SIZES[size], inert ? INERT_BUTTON : BUTTON_VARIANTS[variant], className)}
+        className={cx(
+          BUTTON_SHAPE,
+          BUTTON_SIZES[size],
+          inert ? INERT_BUTTON : BUTTON_VARIANTS[variant],
+          edgeOf(variant, inert),
+          className,
+        )}
       >
-        {Icon && <Icon aria-hidden size={size === 'lg' ? 20 : 18} className="shrink-0" />}
+        {Icon && <Icon aria-hidden size={16} className="shrink-0" />}
         {children}
       </button>
       {held.reason}
@@ -120,6 +134,7 @@ export type IconButtonProps = Omit<ButtonProps, 'children' | 'size' | 'icon' | '
 
 // A button that shows only an icon: 44×44, named by `label` (never a title tooltip, which touch
 // can't reach), the icon hidden from assistive technology, and aria-pressed only when it toggles.
+// Pressed is finance's selected state: surface ink on an ink fill (surface on fg, TEXT_PAIRS).
 export function IconButton({
   label,
   icon,
@@ -145,8 +160,9 @@ export function IconButton({
         aria-label={label}
         aria-pressed={pressed}
         className={cx(
-          'inline-grid size-11 shrink-0 place-items-center rounded-full transition',
-          inert ? INERT_BUTTON : pressed ? 'bg-accent-soft text-accent-ink' : BUTTON_VARIANTS[variant],
+          'inline-grid size-11 shrink-0 place-items-center rounded-full border transition',
+          inert ? INERT_BUTTON : pressed ? 'bg-fg text-surface' : BUTTON_VARIANTS[variant],
+          edgeOf(variant, inert || pressed === true),
           className,
         )}
       >

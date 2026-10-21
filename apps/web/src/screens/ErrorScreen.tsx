@@ -44,7 +44,7 @@ export function ErrorScreen({ error }: ErrorComponentProps) {
   return (
     <Page>
       <div className="flex flex-col items-center gap-4 px-6 py-12 text-center">
-        <h2 className="font-display text-lg font-semibold">{SHELL.error.title}</h2>
+        <h2 className="break-words font-display text-xl font-semibold">{SHELL.error.title}</h2>
         {actions}
       </div>
     </Page>

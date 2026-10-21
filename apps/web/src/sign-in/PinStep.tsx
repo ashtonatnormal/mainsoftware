@@ -103,7 +103,7 @@ export function EnterPinStep({ state, step, controller, refs }: StepProps & { st
       {/* The summary keeps its display: list-item, which is what draws its disclosure marker, the
           one sign it opens; padding, not flex, brings its text to the middle of its 44 px. */}
       <details className="rounded-xl">
-        <summary className="min-h-11 cursor-pointer py-2.5 font-semibold">{SIGN_IN.forgotPin}</summary>
+        <summary className="min-h-11 cursor-pointer py-2.5 font-medium">{SIGN_IN.forgotPin}</summary>
         <p className="text-muted">{SIGN_IN.forgotPinBody}</p>
       </details>
       <StartAgain onPress={controller.startAgain} held={startAgainHeld(state)} />

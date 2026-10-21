@@ -34,7 +34,7 @@ export function CodeStep({ state, step, controller, refs }: StepProps & { step: 
       <StepForm onSubmit={controller.submit}>
         {state.notice !== undefined && <Notice text={state.notice} ref={refs.notice} />}
         {step.resent && (
-          <p className="flex items-start gap-2 rounded-xl bg-surface-2 p-3 text-fg">
+          <p className="flex items-start gap-2 rounded-xl border border-accent/30 bg-accent-soft px-4 py-3 text-fg">
             <MessageSquareText aria-hidden size={18} className="mt-0.5 shrink-0" />
             <span>{SIGN_IN.newCode}</span>
           </p>
@@ -64,7 +64,7 @@ export function CodeStep({ state, step, controller, refs }: StepProps & { step: 
           aria-describedby={step.dead === undefined ? undefined : deadId}
           onClick={controller.resend}
         >
-          {resending && <LoaderCircle aria-hidden size={18} className="shrink-0 animate-spin" />}
+          {resending && <LoaderCircle aria-hidden size={16} className="shrink-0 animate-spin" />}
           {SIGN_IN.resend}
         </Button>
         <Button

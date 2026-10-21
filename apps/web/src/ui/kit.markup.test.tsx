@@ -64,11 +64,11 @@ describe('T21: the kit’s markup', () => {
     expect(one(html(<IconButton label="Close" icon={<Bell />} />), 'button').get('type')).toBe('button')
   })
 
-  it('KM-02 X7: Button, IconButton, Field controls, Switch rows and Segmented labels carry the 44 px minimum classes', () => {
-    for (const size of ['md', 'lg'] as const) {
-      const button = one(html(<Button size={size}>Go</Button>), 'button')
-      for (const name of MIN_44) expect(classesOf(button), size).toContain(name)
-    }
+  it('KM-02 X7: Button, IconButton, Field controls, Switch rows and Segmented labels carry the 44 px minimum classes (a large Button is finance’s 48 px)', () => {
+    for (const name of MIN_44) expect(classesOf(one(html(<Button>Go</Button>), 'button'))).toContain(name)
+    const large = classesOf(one(html(<Button size="lg">Go</Button>), 'button'))
+    expect(large).toEqual(expect.arrayContaining(['min-h-12', 'min-w-11']))
+    expect(large).not.toContain('min-h-11')
     expect(classesOf(one(html(<IconButton label="Close" icon={<Bell />} />), 'button'))).toContain('size-11')
     expect(CONTROL_CLASS.split(' ')).toEqual(expect.arrayContaining(['min-h-11', 'text-base', 'border-line-strong']))
     const select = one(
@@ -333,6 +333,15 @@ describe('T21: the kit’s markup', () => {
     }
     const live = classesOf(one(html(<Button variant="primary">Send</Button>), 'button'))
     expect(live).toEqual(expect.arrayContaining(['bg-accent', 'hover:bg-accent-ink']))
+    // Every button has a 1 px border; only a live secondary paints it (finance's outline edge), so a
+    // held button that can act again keeps its size. A held secondary's edge is transparent.
+    expect(live).toEqual(expect.arrayContaining(['border', 'border-transparent']))
+    const outline = classesOf(one(html(<Button>Send a new code</Button>), 'button'))
+    expect(outline).toEqual(expect.arrayContaining(['border', 'border-line', 'bg-surface']))
+    expect(outline).not.toContain('border-transparent')
+    const heldOutline = classesOf(one(html(<Button disabledReason="Wait.">Send a new code</Button>), 'button'))
+    expect(heldOutline).toEqual(expect.arrayContaining(['border', 'border-transparent']))
+    expect(heldOutline).not.toContain('border-line')
 
     const free = one(html(<Button aria-describedby="other">Send</Button>), 'button')
     expect(free.get('aria-describedby')).toBe('other')

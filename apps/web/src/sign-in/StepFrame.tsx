@@ -50,7 +50,7 @@ export interface StepFrameProps {
 
 export function StepFrame({ title, h1, intro, children }: StepFrameProps) {
   return (
-    <div className="flex w-full flex-1 flex-col gap-8 px-6 py-8 rail:max-w-md rail:flex-none rail:rounded-2xl rail:border rail:border-line rail:bg-surface rail:shadow-card">
+    <div className="flex w-full flex-1 flex-col gap-8 px-6 py-8 rail:max-w-md rail:flex-none rail:rounded-3xl rail:border rail:border-line rail:bg-surface rail:p-8 rail:shadow-card">
       <div className="flex flex-col gap-3">
         <span aria-hidden className="grid size-12 place-items-center rounded-2xl bg-accent text-accent-fg">
           <Flame size={26} />
@@ -67,7 +67,11 @@ export function StepFrame({ title, h1, intro, children }: StepFrameProps) {
 
 export function Notice({ text, ref }: { text: string; ref: RefObject<HTMLParagraphElement | null> }) {
   return (
-    <p ref={ref} tabIndex={-1} className="flex items-start gap-2 rounded-xl bg-rec-soft p-3 text-rec">
+    <p
+      ref={ref}
+      tabIndex={-1}
+      className="flex items-start gap-2 rounded-xl border border-rec/30 bg-rec-soft px-4 py-3 text-rec"
+    >
       <CircleAlert aria-hidden size={18} className="mt-0.5 shrink-0" />
       <span>{text}</span>
     </p>
@@ -77,7 +81,7 @@ export function Notice({ text, ref }: { text: string; ref: RefObject<HTMLParagra
 export function SubmitButton({ label, held, busy }: { label: string; held: string | undefined; busy: boolean }) {
   return (
     <Button type="submit" variant="primary" size="lg" className="w-full" disabledReason={held}>
-      {busy && <LoaderCircle aria-hidden size={20} className="shrink-0 animate-spin" />}
+      {busy && <LoaderCircle aria-hidden size={16} className="shrink-0 animate-spin" />}
       {label}
     </Button>
   )

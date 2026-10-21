@@ -151,7 +151,7 @@ export function Menu({ label, items, placement = 'bottom-end', heading, trigger 
             aria-describedby={disabled ? `${id}reason${index}` : undefined}
             onKeyDown={onItemKeyDown}
             onClick={() => activate(index)}
-            className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-left hover:bg-surface-2 focus-visible:bg-surface-2 aria-disabled:cursor-not-allowed aria-disabled:text-muted"
+            className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-left hover:bg-bg focus-visible:bg-bg aria-disabled:cursor-not-allowed aria-disabled:text-muted"
           >
             {Icon && <Icon aria-hidden size={18} className="shrink-0" />}
             <span className="min-w-0 flex-1">{item.label}</span>
@@ -176,7 +176,7 @@ export function Menu({ label, items, placement = 'bottom-end', heading, trigger 
         list
       ) : (
         <div hidden={!state.open} className={cx(POPUP, PLACEMENT[placement])}>
-          <p aria-hidden className="break-words px-3 pt-2 pb-1 text-small font-semibold text-muted">
+          <p aria-hidden className="break-words px-3 pt-2 pb-1 text-small font-medium text-muted">
             {heading}
           </p>
           {list}

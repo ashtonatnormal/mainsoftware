@@ -84,3 +84,33 @@ test('A11Y-03 decision 8 T21 item 13: the sign-in phone step, and the code step 
   await axeEverywhere(page, 'the code step with an error', testInfo)
   expect(await noAiCopy(page)).toEqual([])
 })
+
+// The wash (app.css) is a gradient, so axe can't read the ground under text that sits on it and
+// lists that text as incomplete, not passed (support/axe.ts); the token tests bound those pixels
+// instead (TK-01, TK-13). Taken off here, the same text sits on --bg, the wash's own ground, and
+// axe checks its contrast as rendered, which catches a pair the token list misses. The style
+// element needs the CSP bypassed, as NF-08's does.
+const WITHOUT_WASH = '.wash { background-image: none; }'
+
+test('A11Y-04 T21 item 6: with the wash taken off, axe checks the contrast it lists as incomplete over the wash, on every shell screen and the phone step at 390 px, light and dark', async ({
+  open,
+}, testInfo) => {
+  const page = await open({ ...SIZES.w390, signedIn: true, bypassCSP: true })
+  for (const screen of SCREENS) {
+    await page.goto(screen.path)
+    await expect(h1(page)).toHaveText(screen.title)
+    await page.addStyleTag({ content: WITHOUT_WASH })
+    for (const scheme of SCHEMES) {
+      await page.emulateMedia({ colorScheme: scheme })
+      await expectAxeClean(page, `${screen.path} without the wash at 390 ${scheme}`, testInfo)
+    }
+  }
+  const signedOut = await open({ ...SIZES.w390, bypassCSP: true })
+  await signedOut.goto('/sign-in')
+  await expect(h1(signedOut)).toHaveText('Sign in to Hearth')
+  await signedOut.addStyleTag({ content: WITHOUT_WASH })
+  for (const scheme of SCHEMES) {
+    await signedOut.emulateMedia({ colorScheme: scheme })
+    await expectAxeClean(signedOut, `the phone step without the wash at 390 ${scheme}`, testInfo)
+  }
+})

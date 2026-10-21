@@ -2,8 +2,10 @@
 // it as tabs (role="tablist") with no panels; here it is what it is, a radio group: a <fieldset>
 // with a legend (visually hidden: the context names it on screen) and native radios, so arrow keys
 // move and select, Tab enters and leaves the group in one step, and a screen reader says "1 of 3".
-// Each radio covers its segment, so the segment is the 44 px target and gets the focus ring. The
-// chosen one is shown by its fill and by a check mark, never by colour alone.
+// Each radio covers its segment, so the segment is the 44 px target and gets the focus ring. It is
+// finance's large segmented control (T21 item 6): a hairline-edged surface track, its segments
+// inset, the chosen one ink with surface text (surface on fg, TEXT_PAIRS) and a check mark, so it
+// is never shown by colour alone.
 import { Check } from 'lucide-react'
 import { useId } from 'react'
 import { cx } from './cx.ts'
@@ -20,15 +22,15 @@ export function Segmented<T extends string>({ label, value, options, onChange }:
   return (
     <fieldset className="m-0 min-w-0 border-0 p-0">
       <legend className="sr-only">{label}</legend>
-      <div className="inline-flex max-w-full flex-wrap gap-1 rounded-3xl bg-surface-2 p-1">
+      <div className="inline-flex max-w-full flex-wrap gap-2 rounded-2xl border border-line bg-surface p-1.5">
         {options.map(option => {
           const chosen = option.value === value
           return (
             <label
               key={option.value}
               className={cx(
-                'relative inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-full px-4 font-semibold transition',
-                chosen ? 'bg-surface text-fg shadow-card' : 'text-muted hover:text-fg',
+                'relative inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-xl px-4 py-2.5 font-medium transition',
+                chosen ? 'bg-fg text-surface' : 'text-fg hover:bg-bg',
               )}
             >
               <input
@@ -37,7 +39,7 @@ export function Segmented<T extends string>({ label, value, options, onChange }:
                 value={option.value}
                 checked={chosen}
                 onChange={() => onChange(option.value)}
-                className="absolute inset-0 m-0 size-full cursor-pointer appearance-none rounded-full"
+                className="absolute inset-0 m-0 size-full cursor-pointer appearance-none rounded-xl"
               />
               {chosen && <Check aria-hidden size={16} className="shrink-0" />}
               <span>{option.label}</span>

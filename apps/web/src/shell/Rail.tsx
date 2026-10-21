@@ -16,7 +16,7 @@ import { currentOf, RAIL } from './nav.ts'
 export function Rail() {
   const pathname = useLocation({ select: location => location.pathname })
   return (
-    <header className="hidden min-h-0 w-[calc(5rem+env(safe-area-inset-left,0px))] shrink-0 flex-col items-center border-r border-line bg-surface pt-safe pb-safe pl-safe rail:flex">
+    <header className="hidden min-h-0 w-[calc(5rem+env(safe-area-inset-left,0px))] shrink-0 flex-col items-center border-r border-line bg-bg pt-safe pb-safe pl-safe rail:flex">
       <span
         aria-hidden
         className="mt-3 mb-2 grid size-10 shrink-0 place-items-center rounded-2xl bg-accent text-accent-fg"
