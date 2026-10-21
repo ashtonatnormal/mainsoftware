@@ -1,6 +1,7 @@
 // The web e2e suite's set-up guard (T21 item 11; CLAUDE.md Testing and CI, PRD-53). The suite runs
 // only where its config says (its own ports, database, Valkey DB and provider), never inside
-// `npm test`, never writes a PNG outside CI, and spends sign-in codes only within PRD-53's windows.
+// `npm test`, never writes a PNG outside CI, spends sign-in codes only within PRD-53's windows, and
+// compares every screenshot at the one tolerance its config pins (ES-17).
 // This guard reads the Playwright config by importing it, the persona table and the screenshot
 // matrix, and the files around them as text, and CI's workflows for the check job's runner and its
 // e2e step (ES-05, ES-10).
@@ -483,5 +484,37 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     expect(signIn).toMatch(
       /async function signOut\(page: Page, guard: Guard\)[\s\S]*?guard\.expectSignedOut\(page\.context\(\)\)[\s\S]*?name: ["']Sign out["']/,
     )
+  })
+  it("ES-17 T21 item 11: every screenshot compares at the config's one tolerance, threshold 0.01 and a fixed budget of 25 pixels with no ratio or other comparator, and no spec, support file or project sets its own", () => {
+    expect(config.expect?.toHaveScreenshot).toEqual({
+      threshold: 0.01,
+      maxDiffPixels: 25,
+      animations: 'disabled',
+      caret: 'hide',
+      scale: 'css',
+    })
+    // A screenshot compared through toMatchSnapshot would skip the toHaveScreenshot block altogether.
+    const setsTolerance = (path: string, source: string) =>
+      /\b(?:threshold|maxDiffPixels|maxDiffPixelRatio|_?comparator|toMatchSnapshot)\b/.test(codeOf(path, source))
+    expect(
+      setsTolerance('a.spec.ts', 'await expect.soft(page).toHaveScreenshot("a.png", { maxDiffPixelRatio: 0.1 })'),
+    ).toBe(true)
+    expect(setsTolerance('a.spec.ts', 'await expect(page).toHaveScreenshot({ threshold: 0.3 })')).toBe(true)
+    expect(
+      setsTolerance('a.spec.ts', 'const loose = { maxDiffPixels: 500 }\nawait expect(page).toHaveScreenshot(loose)'),
+    ).toBe(true)
+    expect(setsTolerance('a.spec.ts', 'expect(await page.screenshot()).toMatchSnapshot("a.png")')).toBe(true)
+    expect(setsTolerance('a.spec.ts', 'await expect(page.locator("main")).toMatchAriaSnapshot("- heading")')).toBe(
+      false,
+    )
+    expect(setsTolerance('a.spec.ts', '// threshold 0.2\nawait expect(page).toHaveScreenshot("a.png")')).toBe(false)
+    expect(
+      files.filter(
+        path => path.startsWith(E2E) && /\.[cm]?[jt]s$/.test(path) && setsTolerance(path, readRepoFile(path)),
+      ),
+    ).toEqual([])
+    expect(
+      (config.projects ?? []).filter(project => project.expect !== undefined).map(project => project.name),
+    ).toEqual([])
   })
 })

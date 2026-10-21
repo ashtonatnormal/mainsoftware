@@ -98,11 +98,20 @@ export default defineConfig({
   reporter: CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   globalSetup: './e2e/global-setup.ts',
   expect: {
-    // MEASURING, not for merge: zero tolerance for one CI run, so the log reports how many pixels
-    // each shot differs by from its baseline (T21 item 11). The next commit sets the real values.
+    // VS-01's tolerance (T21 item 11, ES-17). A pixel counts once its colour moves a grey step of
+    // 3 levels of 255 or more (threshold 0.01), so swapping any two of tokens.css's neutrals counts
+    // (the closest pair, dark --bg and --wall, counts at any threshold under 0.0113), while ±2 on
+    // every channel doesn't. One budget of 25 pixels at every size, not a ratio: 0.005 of
+    // 1440 × 900 at threshold 0.2 let the whole re-theme of Chats through at 4,589 pixels (#23).
+    // A CI run at threshold 0 with a budget of 0 pixels matched all 34 baselines, which two earlier
+    // runs had made (#26). Pixels pixelmatch takes for anti-aliasing (a shade between its
+    // neighbours, next to flat ground) never count: that absorbs the glyph and shape edges that
+    // move between CI hosts, and can also hide a change to a 1 px line between two grounds. The
+    // same values decide when two captures in a row are stable. Loosening either is a reviewed
+    // change that says why.
     toHaveScreenshot: {
-      maxDiffPixels: 0,
-      threshold: 0,
+      threshold: 0.01,
+      maxDiffPixels: 25,
       animations: 'disabled',
       caret: 'hide',
       scale: 'css',
