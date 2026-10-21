@@ -98,10 +98,21 @@ export default defineConfig({
   globalTimeout: CI ? 15 * 60_000 : undefined,
   reporter: CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   globalSetup: './e2e/global-setup.ts',
+  // VS-01 compares with no tolerance, so a design token's colour change fails it, not only moved
+  // text or shapes (T21 item 11). pixelmatch counts a pixel as changed only when its colour
+  // difference passes 35215 × threshold² (YIQ): Playwright's default threshold of 0.2 lets a grey
+  // shift of up to about 52 levels in 255 through, and 0.02 one of about 5, and the re-theme (#23)
+  // passed four old-look baselines at 0.2 with a 0.5% ratio. A ratio lets small things through
+  // too: 0.5% of a 1440 × 900 shot is 6,480 pixels, more than a button, a hairline or a line of
+  // error text holds. No tolerance is safe because the pinned runner draws every shot pixel for
+  // pixel the same from run to run: at threshold 0, all 34 matched baselines another run had made,
+  // in every probe run. pixelmatch still skips the pixels it takes for anti-aliasing. A Playwright
+  // upgrade that changes how Chromium draws fails VS-01, and its baselines are adopted again, as
+  // for a new runner image (D-07).
   expect: {
     toHaveScreenshot: {
-      maxDiffPixelRatio: 0.005,
-      threshold: 0.2,
+      maxDiffPixels: 0,
+      threshold: 0,
       animations: 'disabled',
       caret: 'hide',
       scale: 'css',

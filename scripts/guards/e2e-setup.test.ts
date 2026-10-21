@@ -484,4 +484,18 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
       /async function signOut\(page: Page, guard: Guard\)[\s\S]*?guard\.expectSignedOut\(page\.context\(\)\)[\s\S]*?name: ["']Sign out["']/,
     )
   })
+
+  it("ES-17 VS-01 T21 item 11: screenshots compare with no tolerance (threshold 0, maxDiffPixels 0, no ratio, pixelmatch), so a token's colour change fails, and no e2e file sets a tolerance of its own", () => {
+    expect(config.expect?.toHaveScreenshot).toMatchObject({ threshold: 0, maxDiffPixels: 0 })
+    expect(config.expect?.toHaveScreenshot).not.toHaveProperty('maxDiffPixelRatio')
+    // The comparator Playwright keeps behind an underscore, which would replace pixelmatch.
+    expect(config.expect?.toHaveScreenshot).not.toHaveProperty('_comparator')
+    // A shot's own options would override the config's for that shot alone.
+    const tolerance = /\b(?:threshold|maxDiffPixels|maxDiffPixelRatio|_?comparator)\s*:/
+    const looser = files
+      .filter(path => path.startsWith(E2E) && path.endsWith('.ts'))
+      .filter(path => tolerance.test(codeOf(path, readRepoFile(path))))
+    expect(looser).toEqual([])
+    expect(tolerance.test('toHaveScreenshot(name, { fullPage: true, threshold: 0.2 })')).toBe(true)
+  })
 })
