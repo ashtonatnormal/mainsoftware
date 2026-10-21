@@ -51,12 +51,9 @@ test('CS-02 SHL-69: a tour of every route makes only same-origin requests, both 
   expect(guard.violations).toEqual([])
 })
 
-test('CS-03 BP C0.8 Done OD-12: a blocked image raises a violation that reaches /api/csp-report, is answered 204 and is logged reduced', async ({
-  page,
-  guard,
-  browserName,
-}) => {
-  test.skip(browserName !== 'chromium', 'the report path was verified on Chromium (T21 item 11)')
+test('CS-03 BP C0.8 Done OD-12 T21 item 9: a blocked image raises a violation that reaches /api/csp-report, is answered 204 and is logged reduced, in every engine (WebKit sends Origin null)', {
+  tag: '@smoke',
+}, async ({ page, guard }) => {
   guard.allowViolation('img-src')
   await page.goto('/chats')
   await expect(h1(page)).toHaveText('Chats')
@@ -65,13 +62,17 @@ test('CS-03 BP C0.8 Done OD-12: a blocked image raises a violation that reaches 
     timeout: 10_000,
   })
   // An image from another origin, which img-src 'self' blocks before any request leaves the page.
-  await page.evaluate(() => {
+  // Its host names the project, so each engine's run finds its own report's line in the shared log.
+  const blocked = `https://cs03-${test.info().project.name}.example.invalid`
+  await page.evaluate(src => {
     const image = document.createElement('img')
     image.alt = ''
-    image.src = 'https://example.invalid/x.png?secret=1'
+    image.src = src
     document.body.append(image)
-  })
+  }, `${blocked}/x.png?secret=1`)
   const sent = await report
+  // WebKit sends every report with Origin null; the root hook lets it through on its same-origin
+  // fetch metadata alone (apps/server/src/origin.ts). Chromium and Firefox send the page's origin.
   expect((await sent.response())?.status()).toBe(204)
   await expect.poll(() => guard.violations.map(violation => violation.directive)).toContain('img-src')
   // The api logged it reduced: the directive and the blocked origin, never the query.
@@ -81,12 +82,11 @@ test('CS-03 BP C0.8 Done OD-12: a blocked image raises a violation that reaches 
       line =
         logSince(from)
           .split('\n')
-          .find(entry => entry.includes('"event":"csp_report"')) ?? ''
+          .find(entry => entry.includes('"event":"csp_report"') && entry.includes(blocked)) ?? ''
       return line
     })
     .not.toBe('')
   expect(line).toContain('img-src')
-  expect(line).toContain('https://example.invalid')
   expect(line).not.toContain('secret')
   expect(line).not.toContain('x.png')
 })

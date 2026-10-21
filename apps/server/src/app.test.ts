@@ -140,6 +140,14 @@ describe('Origin check on state changes (CLAUDE.md, Security and privacy)', () =
     expect((await post({ origin: 'null' })).statusCode).toBe(403)
   })
 
+  it('refuses a "null" Origin with Sec-Fetch-Site same-origin too, anywhere but the CSP report path (T21 item 9: WebKit\'s report alone)', async () => {
+    const webkit = { origin: 'null', 'sec-fetch-site': 'same-origin', 'content-type': 'application/csp-report' }
+    expect((await post(webkit)).statusCode).toBe(403)
+    // The exemption is the api's report route; a role without it answers that path 404.
+    const report = await app().inject({ method: 'POST', url: '/api/csp-report', headers: webkit, payload: '{}' })
+    expect(report.statusCode).toBe(404)
+  })
+
   it('refuses a POST from the user-content origin', async () => {
     expect((await post({ origin: USER_CONTENT_ORIGIN })).statusCode).toBe(403)
   })
@@ -229,6 +237,14 @@ describe('C0.5 the api role through buildApp (CLAUDE.md, Security and privacy)',
       })
       expect(res.statusCode, origin).toBe(403)
     }
+    // Same-origin fetch metadata with a "null" Origin passes only a CSP report (T21 item 9).
+    const webkit = await app.inject({
+      method: 'POST',
+      url: '/api/auth/otp/request',
+      headers: { origin: 'null', 'sec-fetch-site': 'same-origin' },
+      payload: { phone: '+6581234567' },
+    })
+    expect(webkit.statusCode).toBe(403)
     expect(touched).toEqual([])
   })
 
