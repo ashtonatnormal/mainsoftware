@@ -24,14 +24,14 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 }
 
 // Each variant's fill and ink at rest, under the pointer and pressed (X8, WCAG 1.4.3), after
-// finance's buttons (T21 item 6). The primary is finance's brand-deep with white ink; its hover and
-// press swap the fill for accent-ink (finance's own #276d85 in light, a lighter blue in dark), so
-// its ink gains contrast in both themes (accent-fg on accent-ink, TEXT_PAIRS). A brightness()
-// filter dims or brightens the ink with the fill, and brightness-105 on brand-deep would take white
-// under 4.5:1 in light. Secondary is finance's outline button: the surface, its hairline edge
-// (BUTTON_EDGES), and the canvas under the pointer. Danger keeps a 5 % brightness step, which leaves
-// its ink over 4.5:1 in both themes. TK-11 (styles/contrast.test.ts) reads these strings and holds
-// every state, filter included, to 4.5:1, so a class changed here is checked.
+// finance's buttons (T21 item 6). The primary is finance's brand-deep with white ink; its hover
+// and press swap the fill for accent-ink (finance's own button hover in light, a lighter blue in
+// dark), so its ink gains contrast in both themes (accent-fg on accent-ink, TEXT_PAIRS). A
+// brightness() filter dims or brightens the ink with the fill, and brightness-105 on brand-deep
+// would take white under 4.5:1 in light. Secondary is finance's outline button: the surface, its
+// hairline edge (BUTTON_EDGES), and the canvas under the pointer. Danger keeps a 5 % brightness
+// step, which leaves its ink over 4.5:1 in both themes. TK-11 (styles/contrast.test.ts) reads these
+// strings and holds every state, filter included, to 4.5:1, so a class changed here is checked.
 export const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary: 'bg-accent text-accent-fg hover:bg-accent-ink active:bg-accent-ink',
   secondary: 'bg-surface text-fg hover:bg-bg',
