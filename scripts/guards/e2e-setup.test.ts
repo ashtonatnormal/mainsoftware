@@ -82,6 +82,21 @@ function sessionHooks(path: string, source: string): string[] {
   return hooks
 }
 
+// The screenshot tolerance options a file's code names, in any form: a key plain, quoted, computed
+// or shorthand, a property read or written, or a binding. An e2e file has no reason to name one,
+// and naming one is how a shot would set its own tolerance (ES-17).
+const TOLERANCE_KEYS = new Set(['threshold', 'maxDiffPixels', 'maxDiffPixelRatio', 'comparator', '_comparator'])
+function toleranceNames(path: string, source: string): string[] {
+  const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  const names: string[] = []
+  const visit = (node: ts.Node): void => {
+    if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && TOLERANCE_KEYS.has(node.text)) names.push(node.text)
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return names
+}
+
 // Playwright's own PNG codec and screenshot comparator, loaded as the e2e run loads them: apps/web's
 // @playwright/test, its playwright, and that one's playwright-core (ES-18).
 interface Png {
@@ -507,21 +522,30 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     )
   })
 
-  it("ES-17 VS-01 T21 item 11: screenshots compare at threshold 0.005 with no pixel allowance (maxDiffPixels 0, no ratio, pixelmatch), so a token's colour change fails, and no e2e file sets a tolerance of its own", () => {
+  it("ES-17 VS-01 T21 item 11: screenshots compare at threshold 0.005 with no pixel allowance (maxDiffPixels 0, no ratio, pixelmatch), so a painted token's colour change fails, and no e2e file names a tolerance option of its own", () => {
     expect(config.expect?.toHaveScreenshot).toMatchObject({ threshold: 0.005, maxDiffPixels: 0 })
     expect(config.expect?.toHaveScreenshot).not.toHaveProperty('maxDiffPixelRatio')
     // The comparator Playwright keeps behind an underscore, which would replace pixelmatch.
     expect(config.expect?.toHaveScreenshot).not.toHaveProperty('_comparator')
-    // A shot's own options would override the config's for that shot alone.
-    const tolerance = /\b(?:threshold|maxDiffPixels|maxDiffPixelRatio|_?comparator)\s*:/
+    // A shot's own options would override the config's for that shot alone. The detector, on
+    // every form a shot could use:
+    const shot = (options: string) =>
+      toleranceNames('a.spec.ts', `await expect.soft(page).toHaveScreenshot(name, ${options})`)
+    expect(shot('{ fullPage: true, threshold: 0.2 }')).toEqual(['threshold'])
+    expect(shot("{ 'maxDiffPixels': 10 }")).toEqual(['maxDiffPixels'])
+    expect(shot("{ ['maxDiffPixelRatio']: 0.01 }")).toEqual(['maxDiffPixelRatio'])
+    expect(shot('{ fullPage: true, threshold }')).toEqual(['threshold'])
+    expect(shot('{ fullPage: true }')).toEqual([])
+    expect(toleranceNames('a.spec.ts', 'options._comparator = "ssim-cie94"')).toEqual(['_comparator'])
     const looser = files
       .filter(path => path.startsWith(E2E) && path.endsWith('.ts'))
-      .filter(path => tolerance.test(codeOf(path, readRepoFile(path))))
+      .flatMap(path => toleranceNames(path, readRepoFile(path)).map(name => `${relative(E2E, path)}: ${name}`))
     expect(looser).toEqual([])
-    expect(tolerance.test('toHaveScreenshot(name, { fullPage: true, threshold: 0.2 })')).toBe(true)
   })
 
-  it("ES-18 VS-01 T21 item 11: under the config's tolerance, Playwright's own comparator passes every ±1 rounding of each token's colour and fails each token moved by 2 levels", () => {
+  // The comparator's side only: whether a token's change reaches VS-01 also depends on a shot
+  // painting it, and no shot paints a token no screen uses yet (--wall, --agent, --ok, --warn).
+  it("ES-18 VS-01 T21 item 11: on a patch of each token's colour, Playwright's own comparator under the config's tolerance passes every ±1 rounding and fails a 2-level move", () => {
     const { PNG, compare } = playwrightImages()
     const options = config.expect?.toHaveScreenshot ?? {}
     // An 8 × 8 patch of one colour, as a PNG.
