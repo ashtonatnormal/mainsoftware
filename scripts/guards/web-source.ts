@@ -446,12 +446,17 @@ export function textOpacity(colours: readonly string[]): RegExp {
   return new RegExp(`(?<![\\w-])text-(?:${colours.map(c => c.replace(/[-]/g, '\\-')).join('|')})\\/`, 'g')
 }
 
-// WS-14: Newsreader ships at weight 600 only (T21 items 1 and 6), so a class list that sets
-// font-display sets font-semibold too; any other weight would be one the browser fakes.
+// WS-14: Newsreader ships at weight 600 upright only (T21 items 1 and 6), so a class list that
+// sets font-display (at any variant) sets font-semibold for every width and state, and no other
+// weight, bare, behind a variant (rail:font-normal) or arbitrary (font-[650]), and no italic: each
+// would be a face the browser fakes. not-italic is fine.
 export const DISPLAY_FAMILY = /(?<![\w-])font-display(?![\w-])/
-export const DISPLAY_WEIGHT = /(?<![\w-])font-semibold(?![\w-])/
-export const displayWithoutWeight = (texts: readonly string[]): string[] =>
-  texts.filter(text => DISPLAY_FAMILY.test(text) && !DISPLAY_WEIGHT.test(text))
+// font-semibold with no variant in front, so it holds at every width and state.
+export const DISPLAY_WEIGHT = /(?<![\w:-])font-semibold(?![\w-])/
+export const OTHER_DISPLAY_FACE =
+  /(?<![\w-])(?:font-(?:thin|extralight|light|normal|medium|bold|extrabold|black)|font-\[[^\]]*\]|italic)(?![\w-])/
+export const displayOffFace = (texts: readonly string[]): string[] =>
+  texts.filter(text => DISPLAY_FAMILY.test(text) && (!DISPLAY_WEIGHT.test(text) || OTHER_DISPLAY_FACE.test(text)))
 
 // WS-06: a focus ring is never taken away.
 export const NO_OUTLINE_CLASS = /(?<![\w-])outline-(?:none|0|hidden)(?![\w-])/g

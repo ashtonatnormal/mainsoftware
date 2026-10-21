@@ -102,7 +102,7 @@ describe('T21: the kit’s markup', () => {
     expect(skip.filter(name => /outline/.test(name))).toEqual([])
   })
 
-  it('KM-03 SHL-47: IconButton is named by label, icon hidden, aria-pressed only when given', () => {
+  it('KM-03 SHL-47 T21 item 6: IconButton is named by label, icon hidden, aria-pressed only when given; pressed is finance’s ink fill with no edge', () => {
     const plain = html(<IconButton label="Notifications" icon={<Bell />} />)
     const button = one(plain, 'button')
     expect(button.get('aria-label')).toBe('Notifications')
@@ -113,6 +113,20 @@ describe('T21: the kit’s markup', () => {
     expect(one(html(<IconButton label="Mute" icon={<Bell />} pressed={false} />), 'button').get('aria-pressed')).toBe(
       'false',
     )
+    // Pressed is surface ink on an ink fill (surface on fg, TEXT_PAIRS), and its edge is
+    // transparent even on a variant that has one, so the fill reads as one shape.
+    for (const variant of ['ghost', 'secondary'] as const) {
+      const pressed = classesOf(
+        one(html(<IconButton label="Mute" icon={<Bell />} variant={variant} pressed />), 'button'),
+      )
+      expect(pressed, variant).toEqual(expect.arrayContaining(['bg-fg', 'text-surface', 'border-transparent']))
+      expect(pressed.filter(name => /^(?:bg|text|border)-/.test(name)).sort(), variant).toEqual(
+        ['bg-fg', 'border-transparent', 'text-surface'].sort(),
+      )
+    }
+    const outline = classesOf(one(html(<IconButton label="Mute" icon={<Bell />} variant="secondary" />), 'button'))
+    expect(outline).toEqual(expect.arrayContaining(['bg-surface', 'text-fg', 'border-line']))
+    expect(outline).not.toContain('bg-fg')
   })
 
   it('KM-04 SHL-41 QA-01: Avatar is role=img named, or aria-hidden when decorative, with the AVATAR_BG class for its id and text-avatar-fg', () => {
@@ -221,6 +235,13 @@ describe('T21: the kit’s markup', () => {
     // Each radio sits in its label, so the label names it; the chosen one also carries a check.
     expect(markup).toMatch(/<label[^>]*><input[^>]*value="all"[^>]*\/><span>All<\/span><\/label>/)
     expect(markup).toMatch(/<label[^>]*><input[^>]*value="mine"[^>]*\/><svg[^>]*aria-hidden="true"/)
+    // The chosen segment is finance's ink fill with surface text (surface on fg, TEXT_PAIRS); the
+    // others are ink on the track, with the canvas under the pointer.
+    const [all, mine] = tags(markup, 'label').map(classesOf)
+    expect(mine).toEqual(expect.arrayContaining(['bg-fg', 'text-surface']))
+    expect(all).toEqual(expect.arrayContaining(['text-fg', 'hover:bg-bg']))
+    expect(all).not.toContain('bg-fg')
+    expect(mine).not.toContain('text-fg')
   })
 
   it('KM-08 SHL-37: Switch is a checkbox with role switch, aria-checked matching checked, and a line-strong track; the on track and the knob carry the classes forced colours draw (TK-12)', () => {

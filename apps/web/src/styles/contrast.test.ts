@@ -7,6 +7,7 @@
 // on nothing.
 import { describe, expect, it } from 'vitest'
 import indexHtml from '../../index.html?raw'
+import faviconSvg from '../../public/favicon.svg?raw'
 import { BUTTON_VARIANTS, INERT_BUTTON } from '../ui/Button.tsx'
 import { GROUNDS, type Pair, TEXT_PAIRS, UI_PAIRS } from './contrast-pairs.ts'
 import {
@@ -149,7 +150,7 @@ describe('T21: the tokens and their contrast', () => {
     expect(sheet.dark.get('color-scheme')).toBe('dark')
   })
 
-  it('TK-09 SHL-11: index.html’s two theme-color metas equal --bg in light and in dark', () => {
+  it('TK-09 SHL-11 T21 item 6: index.html’s two theme-color metas equal --bg in light and in dark, and the favicon draws the flame in light --accent-fg on light --accent', () => {
     const metas = [...indexHtml.matchAll(/<meta\s[^>]*name="theme-color"[^>]*>/g)].map(match => match[0])
     expect(metas).toHaveLength(2)
     const themeColour = (scheme: 'light' | 'dark') => {
@@ -159,6 +160,15 @@ describe('T21: the tokens and their contrast', () => {
     for (const theme of THEMES) expect(themeColour(theme), theme).toBe(tokenValue(sheet, theme, 'bg'))
     // The canvas and form controls follow the system before the CSS arrives.
     expect(indexHtml).toMatch(/<meta name="color-scheme" content="light dark" \/>/)
+    // The favicon has no theme of its own: Hearth's mark as the light theme draws it, its tile the
+    // accent and its flame the accent's ink, and no other colour.
+    const svg = faviconSvg.replace(/<!--[\s\S]*?-->/g, '')
+    expect(svg.match(/<rect\b[^>]*\sfill="([^"]*)"/)?.[1]).toBe(tokenValue(sheet, 'light', 'accent'))
+    expect(svg.match(/<path\b[^>]*\sstroke="([^"]*)"/)?.[1]).toBe(tokenValue(sheet, 'light', 'accent-fg'))
+    const colours = [...svg.matchAll(/\s(?:fill|stroke|stop-color|color)="([^"]*)"/g)].map(match => match[1])
+    expect(new Set(colours)).toEqual(
+      new Set(['none', tokenValue(sheet, 'light', 'accent'), tokenValue(sheet, 'light', 'accent-fg')]),
+    )
   })
 
   it('TK-11 X8 WCAG 1.4.3: every Button variant keeps 4.5:1 at rest, under the pointer and pressed, in both themes, read from Button.tsx’s own classes (a brightness() filter scales the ink with the fill)', () => {

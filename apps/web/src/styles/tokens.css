@@ -1,7 +1,7 @@
 /* The design tokens (T21 item 6, X8, QA-01, SHL-23, OD-08). Every colour the app draws is one of
    these, through the Tailwind names app.css maps them to (bg-surface, text-muted …); no other file
-   in src/ holds a colour literal. Outside src/, index.html's two theme-color metas copy --bg (TK-09
-   holds them to it), and public/favicon.svg draws the light accent.
+   in src/ holds a colour literal. Outside src/, index.html's two theme-color metas copy --bg, and
+   public/favicon.svg draws the light --accent and --accent-fg (TK-09 holds both to them).
 
    The look follows the-newnormal/finance's visual guidelines (owner, 21 Oct 2026; T21 item 6):
    its canvas, surface, ink, brand-deep, brand, danger and lavender, and its email palette's tones

@@ -1,9 +1,8 @@
 // The theme stylesheet's rules (SHL-46, SHL-69, X9, T21 items 5 and 6): only the tokens compile as
 // colours, reduced motion stops everything, the rail needs room both ways, forced colours keep the
 // Switch's state visible, the wash stays inside what the contrast pairs cover, and no stylesheet
-// fetches from another host. app.css and tokens.css come
-// in with ?raw, as in contrast.test.ts, so TK-10 fails on an empty or unparsed sheet instead of
-// every other case passing on nothing.
+// fetches from another host. app.css and tokens.css come in with ?raw, as in contrast.test.ts, so
+// TK-10 fails on an empty or unparsed sheet instead of every other case passing on nothing.
 import { describe, expect, it } from 'vitest'
 import appCss from './app.css?raw'
 import { GROUNDS } from './contrast-pairs.ts'
@@ -145,6 +144,18 @@ describe('T21: app.css', () => {
       }
     }
     expect(GROUNDS).toEqual(expect.arrayContaining(['bg', 'wash-a', 'wash-b']))
+
+    // Nothing else styles the wash: in either sheet, at any depth (inside @layer, @supports or
+    // @media too), the only rules naming it are the utility and forced colours' plain ground. A
+    // .wash rule with a filter or an opacity elsewhere would move pixels off those lines.
+    const rulesOf = (css: string, within: readonly string[] = []): string[] =>
+      blocksOf(css).flatMap(block => [
+        [...within, block.prelude].join(' > '),
+        ...(block.prelude.startsWith('@') ? rulesOf(block.body, [...within, block.prelude]) : []),
+      ])
+    const namesWash = (rule: string) => /(?:\.wash|^@utility wash|> @utility wash)(?![\w-])/.test(rule)
+    expect(rulesOf(appCss).filter(namesWash)).toEqual(['@utility wash', '@media (forced-colors: active) > .wash'])
+    expect(rulesOf(tokensCss).filter(namesWash)).toEqual([])
   })
 
   it('TK-08 SHL-69: no url() or @import names another host', () => {

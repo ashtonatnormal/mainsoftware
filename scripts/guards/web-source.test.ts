@@ -18,9 +18,8 @@ import {
   codeOf,
   DEFAULT_PALETTE,
   DISPLAY_FAMILY,
-  DISPLAY_WEIGHT,
   DUNDER_WRITES_ALLOWED,
-  displayWithoutWeight,
+  displayOffFace,
   dunderWrites,
   ENTRY_APP,
   entryGraph,
@@ -599,10 +598,31 @@ describe('T21: the web source guard (apps/web/src)', () => {
     ).toEqual([])
   })
 
-  it('WS-14 T21 items 1 and 6: every class list that sets font-display also sets font-semibold, the one weight Newsreader ships', () => {
+  it('WS-14 T21 items 1 and 6: every class list that sets font-display sets font-semibold with no variant, and no other weight or italic: the one face Newsreader ships', () => {
     expect(
-      displayWithoutWeight(['font-display text-xl font-semibold', 'font-display text-xl', 'text-small font-medium']),
-    ).toEqual(['font-display text-xl'])
+      displayOffFace([
+        'font-display text-xl font-semibold',
+        'font-display text-xl not-italic font-semibold',
+        'text-small font-medium italic',
+        'font-display text-xl',
+        'font-display rail:font-semibold',
+        'font-display font-semibold font-bold',
+        'font-display font-semibold rail:font-normal',
+        'font-display font-semibold hover:font-medium',
+        'font-display font-semibold font-[650]',
+        'font-display font-semibold italic',
+        'rail:font-display font-semibold md:italic',
+      ]),
+    ).toEqual([
+      'font-display text-xl',
+      'font-display rail:font-semibold',
+      'font-display font-semibold font-bold',
+      'font-display font-semibold rail:font-normal',
+      'font-display font-semibold hover:font-medium',
+      'font-display font-semibold font-[650]',
+      'font-display font-semibold italic',
+      'rail:font-display font-semibold md:italic',
+    ])
     const lists = scripts.flatMap(path =>
       stringsOf(path, sources.get(path) ?? '')
         .filter(text => DISPLAY_FAMILY.test(text))
@@ -610,8 +630,6 @@ describe('T21: the web source guard (apps/web/src)', () => {
     )
     // ScreenHeader, Dialog, EmptyState, StepFrame, PlainScreen and ErrorScreen set it today.
     expect(lists.length).toBeGreaterThanOrEqual(6)
-    expect(lists.filter(({ text }) => !DISPLAY_WEIGHT.test(text)).map(({ path, text }) => `${path}: ${text}`)).toEqual(
-      [],
-    )
+    expect(displayOffFace(lists.map(({ path, text }) => `${path}: ${text}`))).toEqual([])
   })
 })
