@@ -15,9 +15,10 @@
 // The route has its own child scope, whose one body parser takes application/csp-report, the type
 // browsers send to a report-uri, as JSON of at most 8 KiB. Every other /api route keeps JSON only,
 // and this one takes no other type: not JSON, and not application/reports+json, since the policy
-// has no report-to (T21 item 7). The root Origin hook applies with no exemption: a browser's
-// same-origin report carries the page's Origin, which Referrer-Policy same-origin keeps from being
-// null. A report without it is refused 403 and lost, which is harmless.
+// has no report-to (T21 item 7). The root Origin hook lets a report through when it carries no
+// Origin at all, as Safari sends every one (WebKit's report-uri POST has no Origin header), and
+// refuses a "null" or foreign Origin as for any other route (origin.ts, T21 item 9). Chromium and
+// Firefox send the page's Origin, which Referrer-Policy same-origin keeps from being null.
 //
 // The log is capped at 60 reports a minute per process, however many addresses they come from
 // (createLogCap). Past the cap a report is answered as usual and not logged, and the first report

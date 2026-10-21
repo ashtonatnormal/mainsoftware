@@ -51,12 +51,11 @@ test('CS-02 SHL-69: a tour of every route makes only same-origin requests, both 
   expect(guard.violations).toEqual([])
 })
 
-test('CS-03 BP C0.8 Done OD-12: a blocked image raises a violation that reaches /api/csp-report, is answered 204 and is logged reduced', async ({
-  page,
-  guard,
-  browserName,
-}) => {
-  test.skip(browserName !== 'chromium', 'the report path was verified on Chromium (T21 item 11)')
+// In every engine (T21 item 9): Safari sends its reports with no Origin, which the root hook lets
+// through on this path alone (apps/server/src/origin.ts).
+test('CS-03 BP C0.8 Done OD-12 T21 item 9: a blocked image raises a violation that reaches /api/csp-report, is answered 204 and is logged reduced', {
+  tag: '@smoke',
+}, async ({ page, guard }) => {
   guard.allowViolation('img-src')
   await page.goto('/chats')
   await expect(h1(page)).toHaveText('Chats')

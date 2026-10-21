@@ -489,13 +489,17 @@ describe('C0.8 OD-12 POST /api/csp-report', () => {
     expect(reportLines(logs)).toEqual([])
   })
 
-  it('CR-02 OD-12 CL Security: a report with another Origin, or none, is refused 403 by the root hook', async () => {
+  it('CR-02 OD-12 CL Security T21 item 9: a report from another Origin, or "null", is refused 403 by the root hook; one with no Origin, as Safari sends every report, is taken and logged', async () => {
     const { post, logs } = setup()
-    for (const origin of ['https://evil.example', 'https://usercontent.hearth.example.com', 'null', undefined]) {
+    for (const origin of ['https://evil.example', 'https://usercontent.hearth.example.com', 'null']) {
       const response = await post(CSP_REPORT_PATH, REPORT, { origin })
       expect([origin, response.statusCode, response.json()]).toEqual([origin, 403, { error: 'Forbidden' }])
     }
     expect(reportLines(logs)).toEqual([])
+    const safari = await post(CSP_REPORT_PATH, REPORT, { origin: undefined })
+    expect([safari.statusCode, safari.body]).toEqual([204, ''])
+    expect(reportLines(logs)).toHaveLength(1)
+    expect(reportLines(logs)[0]).toMatchObject(REDUCED)
   })
 
   it('CR-03 OD-12: malformed JSON or a body over 8 KiB is 400 invalid_request, never 500', async () => {

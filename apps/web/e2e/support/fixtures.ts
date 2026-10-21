@@ -252,7 +252,11 @@ class PageGuard implements Guard {
       const status = Number(/status of (\d{3})/.exec(text)?.[1] ?? Number.NaN)
       if (this.#declared(url.pathname, status, page) || this.#failedAllowed(url.pathname)) return
     }
-    if (/Content Security Policy/i.test(text) && [...this.#directives].some(directive => text.includes(directive))) {
+    // Chromium and WebKit write "Content Security Policy", Firefox "Content-Security-Policy".
+    if (
+      /Content[- ]Security[- ]Policy/i.test(text) &&
+      [...this.#directives].some(directive => text.includes(directive))
+    ) {
       return
     }
     this.#problem(`console error: ${text}`)

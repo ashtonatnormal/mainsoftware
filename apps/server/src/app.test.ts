@@ -1,4 +1,5 @@
 import { Writable } from 'node:stream'
+import { CSP_REPORT_PATH } from '@hearth/shared'
 import type { Redis } from 'ioredis'
 import { pino } from 'pino'
 import { describe, expect, it } from 'vitest'
@@ -183,6 +184,24 @@ describe('Origin check on state changes (CLAUDE.md, Security and privacy)', () =
     for (const method of ['GET', 'HEAD'] as const) {
       const res = await instance.inject({ method, url: '/health', headers: { origin: 'https://evil.example' } })
       expect(res.statusCode, method).toBe(200)
+    }
+  })
+
+  it('T21 item 9: lets a CSP report with no Origin through, as Safari sends every one, and nothing else without one', async () => {
+    const instance = app()
+    instance.post(CSP_REPORT_PATH, async () => ({ reported: true }))
+    instance.put(CSP_REPORT_PATH, async () => ({ put: true }))
+    const send = (method: 'POST' | 'PUT', url: string, headers: Record<string, string> = {}) =>
+      instance.inject({ method, url, headers })
+    expect((await send('POST', CSP_REPORT_PATH)).statusCode).toBe(200)
+    // A report that carries an Origin must carry the app's.
+    for (const origin of ['null', 'https://evil.example', USER_CONTENT_ORIGIN]) {
+      expect((await send('POST', CSP_REPORT_PATH, { origin })).statusCode, origin).toBe(403)
+    }
+    // Any other method, path or spelling of the path without an Origin is refused as before.
+    expect((await send('PUT', CSP_REPORT_PATH)).statusCode).toBe(403)
+    for (const url of [`${CSP_REPORT_PATH}/`, CSP_REPORT_PATH.toUpperCase(), '/echo', '/nowhere']) {
+      expect((await send('POST', url)).statusCode, url).toBe(403)
     }
   })
 

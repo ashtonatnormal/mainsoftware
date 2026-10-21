@@ -128,8 +128,9 @@ export function cspDirectives(
     ['form-action', ["'none'"]],
     ['frame-ancestors', ["'none'"]],
     ['object-src', ["'none'"]],
-    // Same-origin, so the report carries the page's Origin and passes the server's root Origin
-    // hook with no exemption (OD-12). No 'report-sample': a sample would copy page text into logs.
+    // Same-origin, so Chromium's and Firefox's reports carry the page's Origin and pass the
+    // server's root Origin hook; Safari's carry none, which the hook lets through on this path alone
+    // (OD-12, T21 item 9). No 'report-sample': a sample would copy page text into logs.
     ['report-uri', [CSP_REPORT_PATH]],
   ]
 }
