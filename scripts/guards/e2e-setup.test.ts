@@ -5,7 +5,8 @@
 // matrix, and the files around them as text, and CI's workflows for the check job's runner and its
 // e2e step (ES-05, ES-10).
 import { execFileSync } from 'node:child_process'
-import { relative } from 'node:path'
+import { createRequire } from 'node:module'
+import { join, relative } from 'node:path'
 import { maskNumber } from '@hearth/shared'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
@@ -79,6 +80,27 @@ function sessionHooks(path: string, source: string): string[] {
   }
   visit(file)
   return hooks
+}
+
+// Playwright's own PNG codec and screenshot comparator, loaded as the e2e run loads them: apps/web's
+// @playwright/test, its playwright, and that one's playwright-core (ES-18).
+interface Png {
+  readonly data: Buffer
+}
+interface PngCodec {
+  new (size: { width: number; height: number }): Png
+  readonly sync: { write: (png: Png) => Buffer }
+}
+type Comparator = (actual: Buffer, expected: Buffer, options: object) => { errorMessage: string } | null
+function playwrightImages() {
+  const fromWeb = createRequire(join(root, WEB, 'package.json'))
+  const fromTest = createRequire(fromWeb.resolve('@playwright/test/package.json'))
+  const fromPlaywright = createRequire(fromTest.resolve('playwright/package.json'))
+  const { PNG } = fromPlaywright('playwright-core/lib/utilsBundle') as { PNG: PngCodec }
+  const { utils } = fromPlaywright('playwright-core/lib/coreBundle') as {
+    utils: { getComparator: (mime: string) => Comparator }
+  }
+  return { PNG, compare: utils.getComparator('image/png') }
 }
 
 // The persona table as a list.
@@ -485,8 +507,8 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     )
   })
 
-  it("ES-17 VS-01 T21 item 11: screenshots compare with no tolerance (threshold 0, maxDiffPixels 0, no ratio, pixelmatch), so a token's colour change fails, and no e2e file sets a tolerance of its own", () => {
-    expect(config.expect?.toHaveScreenshot).toMatchObject({ threshold: 0, maxDiffPixels: 0 })
+  it("ES-17 VS-01 T21 item 11: screenshots compare at threshold 0.005 with no pixel allowance (maxDiffPixels 0, no ratio, pixelmatch), so a token's colour change fails, and no e2e file sets a tolerance of its own", () => {
+    expect(config.expect?.toHaveScreenshot).toMatchObject({ threshold: 0.005, maxDiffPixels: 0 })
     expect(config.expect?.toHaveScreenshot).not.toHaveProperty('maxDiffPixelRatio')
     // The comparator Playwright keeps behind an underscore, which would replace pixelmatch.
     expect(config.expect?.toHaveScreenshot).not.toHaveProperty('_comparator')
@@ -497,5 +519,35 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
       .filter(path => tolerance.test(codeOf(path, readRepoFile(path))))
     expect(looser).toEqual([])
     expect(tolerance.test('toHaveScreenshot(name, { fullPage: true, threshold: 0.2 })')).toBe(true)
+  })
+
+  it("ES-18 VS-01 T21 item 11: under the config's tolerance, Playwright's own comparator passes every ±1 rounding of each token's colour and fails each token moved by 2 levels", () => {
+    const { PNG, compare } = playwrightImages()
+    const options = config.expect?.toHaveScreenshot ?? {}
+    // An 8 × 8 patch of one colour, as a PNG.
+    const patch = (rgb: readonly number[]) => {
+      const png = new PNG({ width: 8, height: 8 })
+      for (let at = 0; at < png.data.length; at += 4) png.data.set([...rgb, 255], at)
+      return PNG.sync.write(png)
+    }
+    const fails = (from: readonly number[], to: readonly number[]) => compare(patch(to), patch(from), options) !== null
+    const css = readRepoFile(`${WEB}src/styles/tokens.css`).replace(/\/\*[\s\S]*?\*\//g, '')
+    const tokens = [...css.matchAll(/(--[a-z0-9-]+):\s*#([0-9a-f]{6});/gi)]
+    // Both themes' colours: light's 36 and dark's 23.
+    expect(tokens).toHaveLength(59)
+    const wrong: string[] = []
+    for (const [, name, hex = ''] of tokens) {
+      const rgb = [0, 2, 4].map(at => Number.parseInt(hex.slice(at, at + 2), 16))
+      // Off-by-one rounding, each channel either way: the jitter seen on the runner (T21 item 11).
+      for (const signs of [-1, 1].flatMap(r => [-1, 1].flatMap(g => [-1, 1].map(b => [r, g, b])))) {
+        const nudged = rgb.map((channel, i) => Math.min(255, Math.max(0, channel + (signs[i] ?? 0))))
+        if (fails(rgb, nudged)) wrong.push(`${name} #${hex} nudged by ${signs.join(',')} fails`)
+      }
+      // The same colour 2 levels lighter, or darker where it can't go lighter.
+      const step = Math.max(...rgb) <= 253 ? 2 : -2
+      const moved = rgb.map(channel => channel + step)
+      if (!fails(rgb, moved)) wrong.push(`${name} #${hex} moved by ${step} passes`)
+    }
+    expect(wrong).toEqual([])
   })
 })
