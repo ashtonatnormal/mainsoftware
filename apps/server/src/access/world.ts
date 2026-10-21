@@ -1,9 +1,20 @@
 // How the server asks packages/access (Principle 1: every access check goes through can()). An
 // action re-reads the acting session in its own transaction, loads the facts C0.5's requests need
 // into a World, and lets can() decide, with the session's re-authentication as context.
-import { can, type Facts, type Request, type RoleFact, World } from '@hearth/access'
+import {
+  can,
+  type Facts,
+  holdsPinRole,
+  type ReauthFacts,
+  type Request,
+  type RoleFact,
+  reauthenticated,
+  reauthMethodOf,
+  World,
+} from '@hearth/access'
+import type { ReauthMethod } from '@hearth/shared'
 import { sql } from 'kysely'
-import { ApiError } from '#src/auth/errors.ts'
+import { ApiError, reauthRefusal } from '#src/auth/errors.ts'
 import { REAUTH, SESSION } from '#src/auth/policy.ts'
 import { signedOut } from '#src/auth/sessions.ts'
 import type { InOrg } from '#src/db/database.ts'
@@ -27,33 +38,45 @@ export interface ActingOptions {
 
 // The acting session, re-read in the action's own transaction, because the pre-org lookup's
 // locks ended with its transaction. Undefined unless the person, device and session are all still
-// live; otherwise whether the session re-authenticated in the last 5 minutes. The rows are taken
-// FOR SHARE, person, device, session (the lock order), so a deactivation, sign-out or revocation
-// in progress either waits for this action, or makes it wait and then refuse (CLAUDE.md,
-// Database).
+// live; otherwise its raw re-authentication facts (D46): whether it re-authenticated in the last 5
+// minutes, whether its person has a PIN, and whether it was issued under the PIN rule (its lifetime
+// is shorter than SESSION's: only issueSession writes expires_at, from the same now() as
+// created_at, policy.ts PIN_RULE_SESSION). The rows are taken FOR SHARE, person, device, session
+// (the lock order); the users row is read with no lock (FOR SHARE OF names only p, d and s), so a
+// deactivation, sign-out or revocation in progress either waits for this action, or makes it wait
+// and then refuse (CLAUDE.md, Database).
 export async function actingSession(
   trx: InOrg,
   session: SessionIds,
   options: ActingOptions = {},
-): Promise<{ fresh: boolean } | undefined> {
+): Promise<ReauthFacts | undefined> {
   const locking =
     options.lock === false
       ? sql``
       : options.person === 'no_key_update'
         ? sql`for no key update of p for share of d, s`
         : sql`for share of p, d, s`
-  const { rows } = await sql<{ fresh: boolean }>`
-    select s.reauthenticated_at > now() - ${REAUTH.window}::interval as fresh
+  const { rows } = await sql<{ fresh: boolean; pin_set: boolean; issued_under_pin_rule: boolean }>`
+    select s.reauthenticated_at > now() - ${REAUTH.window}::interval as fresh,
+      u.pin_hash is not null as pin_set,
+      s.expires_at - s.created_at < ${SESSION.lifetime}::interval as issued_under_pin_rule
     from people p
     join devices d on d.org_id = p.org_id and d.user_id = p.id
     join sessions s on s.org_id = d.org_id and s.device_id = d.id
+    join users u on u.org_id = p.org_id and u.id = p.id
     where p.org_id = ${session.orgId} and p.id = ${session.userId}
       and d.id = ${session.deviceId} and s.id = ${session.sessionId}
       and s.revoked_at is null and s.expires_at > now() and s.last_seen_at > now() - ${SESSION.idle}::interval
       and d.signed_out_at is null and p.deactivated_at is null
     ${locking}`.execute(trx)
   const row = rows[0]
-  return row === undefined ? undefined : { fresh: row.fresh === true }
+  return row === undefined
+    ? undefined
+    : {
+        stampFresh: row.fresh === true,
+        pinSet: row.pin_set === true,
+        issuedUnderPinRule: row.issued_under_pin_rule === true,
+      }
 }
 
 const ms = (time: Date | null): number | null => (time === null ? null : time.getTime())
@@ -105,7 +128,8 @@ export async function loadWorld(trx: InOrg, orgId: string, options: { credential
 // membership not removed and every role row not revoked, and every team of the org, so keysOf() is
 // exact for each of them. Nothing else is loaded, and can() is asked only about those people, and
 // only topic requests (realtime/topics.ts). No row is locked: teams and memberships are never
-// locked, so the lock order (CLAUDE.md, Database) is unchanged.
+// locked, so the lock order (CLAUDE.md, Database) is unchanged, and a writing transaction may use it
+// too (holdsPinRoleNow and reauthMethodNow below).
 export async function loadTopicWorld(trx: InOrg, orgId: string, people: readonly string[]): Promise<World> {
   const ids = [...new Set(people)]
   const { rows: persons } = await sql<{ id: string; deactivated_at: Date | null }>`
@@ -129,6 +153,19 @@ export async function loadTopicWorld(trx: InOrg, orgId: string, people: readonly
     teams: teams.map(t => ({ id: t.id, archivedAt: ms(t.archived_at) })),
     teamMembers: members.map(m => ({ teamId: m.team_id, personId: m.person_id, removedAt: ms(m.removed_at) })),
   })
+}
+
+// Whether the person holds a PIN role now (D46, AQ-02): read in the transaction that acts on
+// it (a sign-in's finish, a PIN step), after the person's row was read FOR SHARE, as its own
+// statement with no lock on role_assignments. The person's row is where a sign-in and a grant meet.
+export async function holdsPinRoleNow(trx: InOrg, orgId: string, personId: string): Promise<boolean> {
+  return holdsPinRole(await loadTopicWorld(trx, orgId, [personId]), personId)
+}
+
+// How the acting session re-authenticates now (D46, packages/access reauthMethodOf), from its facts
+// and its person's roles, read in the transaction that acts on it, with no lock on role_assignments.
+export async function reauthMethodNow(trx: InOrg, session: SessionIds, facts: ReauthFacts): Promise<ReauthMethod> {
+  return reauthMethodOf(await loadTopicWorld(trx, session.orgId, [session.userId]), session.userId, facts)
 }
 
 // A World of these facts, every other one empty, and the settings the strictest, so a request the
@@ -172,7 +209,7 @@ function worldOf(
 export type Verdict = 'allowed' | 'reauth_required' | 'refused'
 
 // can()'s answer for a person, with whether only a fresh re-authentication is missing, so the web
-// app can ask for the PIN or a passkey and try again.
+// app can ask for it, by the method the refusal names, and try again.
 export function decide(world: World, me: string, request: Request, fresh: boolean): Verdict {
   const subject = { kind: 'human', id: me } as const
   if (can(world, subject, request, { reauthenticated: fresh })) return 'allowed'
@@ -191,9 +228,9 @@ export async function authorise(
   refusal: 'forbidden' | 'not_found',
   options: ActingOptions = {},
 ): Promise<World> {
-  const { world, verdict } = await consider(trx, session, request, options)
+  const { world, verdict, method } = await consider(trx, session, request, options)
   if (verdict === 'allowed') return world
-  throw refusalFor(verdict, refusal)
+  throw refusalFor(verdict, refusal, { method, person: session.userId })
 }
 
 // authorise() without the throw on a refusal, for a service that answers some refusals itself (a
@@ -203,24 +240,35 @@ export async function consider(
   session: SessionIds,
   request: Request,
   options: ActingOptions = {},
-): Promise<{ world: World; verdict: Verdict; fresh: boolean }> {
+): Promise<{ world: World; verdict: Verdict; fresh: boolean; method: ReauthMethod }> {
   const acting = await actingSession(trx, session, options)
   if (acting === undefined) throw signedOut()
+  const me = session.userId
   // Every C0.5 request about devices or passkeys is about the session's own person.
-  let world = await loadWorld(trx, session.orgId, { credentialsOf: session.userId })
-  let verdict = decide(world, session.userId, request, acting.fresh)
+  let world = await loadWorld(trx, session.orgId, { credentialsOf: me })
+  // A stamp counts only when it was made by the session's own method: never on a session that only
+  // a new sign-in mends (D46, reauthenticated()).
+  let fresh = reauthenticated(world, me, acting)
+  let verdict = decide(world, me, request, fresh)
   // The target's row only once can() has allowed the action, so a refused caller never waits on
   // or holds anyone else's row; then can() decides again on what that lock let commit.
   if (verdict === 'allowed' && options.target !== undefined) {
     await sql`select 1 from people where org_id = ${session.orgId} and id = ${options.target}
       for no key update`.execute(trx)
-    world = await loadWorld(trx, session.orgId, { credentialsOf: session.userId })
-    verdict = decide(world, session.userId, request, acting.fresh)
+    world = await loadWorld(trx, session.orgId, { credentialsOf: me })
+    fresh = reauthenticated(world, me, acting)
+    verdict = decide(world, me, request, fresh)
   }
-  return { world, verdict, fresh: acting.fresh }
+  return { world, verdict, fresh, method: reauthMethodOf(world, me, acting) }
 }
 
-export function refusalFor(verdict: Exclude<Verdict, 'allowed'>, refusal: 'forbidden' | 'not_found'): ApiError {
-  if (verdict === 'reauth_required') return new ApiError(403, 'reauth_required')
+// The refusal for a verdict. reauth_required names the session's method (403 {method}), and one
+// whose method is sign_in is logged by the error handler with the person's id (D46).
+export function refusalFor(
+  verdict: Exclude<Verdict, 'allowed'>,
+  refusal: 'forbidden' | 'not_found',
+  acting: { method: ReauthMethod; person: string },
+): ApiError {
+  if (verdict === 'reauth_required') return reauthRefusal('reauth_required', acting.method, acting.person)
   return refusal === 'forbidden' ? new ApiError(403, 'forbidden') : new ApiError(404, 'not_found')
 }

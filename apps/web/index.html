@@ -1,0 +1,23 @@
+<!doctype html>
+<!--
+  The app's one page (T21). Nothing here is inline, because the CSP allows only same-origin
+  scripts and styles (T21 item 7): one module script, /src/main.ts, loads everything, and Vite links its
+  CSS in the head at build. The two theme-color values copy --bg from src/styles/tokens.css
+  (SHL-11; contrast.test.ts TK-09 compares them). Zoom stays allowed (WCAG 1.4.4).
+  scripts/guards/csp.test.ts holds this file to these rules (CSP-07, CSP-08).
+-->
+<html lang="en-GB">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f5f7" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1218" />
+    <title>Hearth</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
+    <div id="root">Loading Hearth…</div>
+  </body>
+</html>

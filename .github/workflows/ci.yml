@@ -41,15 +41,22 @@ jobs:
   # check (scripts/check-server.sh) from source and from the image, and the image's migrate step.
   # The tests include the guards in scripts/guards/ (no AI packages, no secret-shaped VITE_
   # variables, files the server loads that Node can run). Keep CLAUDE.md (Testing and CI) in step
-  # with this job. It waits for secrets and audit, so it gates merging on them too.
+  # with this job. It waits for secrets and audit, so it gates merging on them too. From C0.8 it
+  # also installs Playwright's browsers, checks the web bundle against its budget and scans what it
+  # ships (scripts/check-web-dist.ts) straight after the build, and runs the web app's end-to-end
+  # suite last (npm run e2e), uploading its report when a step fails or the job is cancelled (T21).
   check:
     needs: [secrets, audit]
     if: always()
-    runs-on: ubuntu-latest
-    # A server that hangs instead of failing would otherwise hold the runner for six hours.
-    timeout-minutes: 30
-    env:
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"  # only demo's local screenshot script uses it
+    # Pinned, not ubuntu-latest: the visual baselines are made on this image only, so moving to a
+    # newer one is a deliberate PR that re-adopts them (T21, D-07).
+    runs-on: ubuntu-24.04
+    # A server that hangs instead of failing would otherwise hold the runner for six hours. The
+    # steps before the e2e suite take about 5 minutes (4 to 5.5 in October 2026's runs), and the
+    # suite stops itself at 15 (globalTimeout in apps/web/playwright.config.ts), so this leaves the
+    # steps before it four times their time and the upload after it room: a stuck run fails, and its
+    # report uploads, before GitHub cancels the job (ES-13).
+    timeout-minutes: 45
     steps:
       # A failed, cancelled or skipped dependency would skip this job, and GitHub counts a skipped
       # required check as passed.
@@ -63,6 +70,11 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      # Playwright's browsers for the e2e step (C0.8, T21): Chromium runs every spec, WebKit and
+      # Firefox the @smoke ones (NFR-01, OD-07). They come from Playwright's own CDN, not npm, so npm
+      # audit doesn't see them; their version is the lockfile's Playwright. Neither Playwright package
+      # has an install script, so npm ci fetched none. Tried three times, since apt or the CDN can blip.
+      - run: for i in 1 2 3; do npx playwright install --with-deps --only-shell chromium webkit firefox && exit 0; sleep 15; done; exit 1
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
@@ -70,6 +82,11 @@ jobs:
       # (BUILD-PLAN C0.4, T10). `npm test` above already ran it; this prints the names.
       - run: npx vitest run packages/access/rules.test.ts --reporter=verbose
       - run: npm run build
+      # The web bundle against apps/web/bundle-budget.json (initial JS and CSS, the largest lazy
+      # chunk and the latin fonts; OD-15), and a scan of what it ships: nothing inline in index.html,
+      # no data: URL, public npm CDN, model host or Google Fonts, no test hook, and every avatar fill
+      # compiled (T21 item 12).
+      - run: node scripts/check-web-dist.ts
       # Node runs the server's .ts source with no build step (T2), so prove that every role
       # starts, answers /health and /ready against the local Compose stack (polled, since the
       # worker is ready once each of its loops has run), logs nothing at error level, and stops
@@ -82,7 +99,10 @@ jobs:
       # and from C0.6 the outbox's events beside every write (each suite sweeps every committed
       # write for its event), changing flags and their reach to every process, and the worker:
       # the job queue, the scheduler and the outbox consumers, exactly once in effect through
-      # crashes, zombies, retries and shutdowns (C0.6's "Done when"), listed case by case. Each run
+      # crashes, zombies, retries and shutdowns (C0.6's "Done when"), listed case by case. From C0.7
+      # the realtime gateway (T19), and from C0.8 sign-in by code for everyone with the PIN steps for
+      # PIN roles, the code challenge's scripts, the dormant passkeys (the only suite that switches
+      # them on) and the web shell's two GETs, none calling a real SMS provider (T20, T21). Each run
       # builds a throwaway database and its own Valkey key prefix, so it can run again.
       - run: npm run test:integration
       - run: scripts/check-server.sh
@@ -94,6 +114,31 @@ jobs:
           docker run --rm --read-only --network host
           -e MIGRATION_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/hearth
           hearth-server node src/db/migrate.ts
+      # The web app end to end (C0.8, T21 item 11), last, so a red run still shows every step above.
+      # The built app over Vite's preview with a throwaway TLS certificate and the production CSP;
+      # the api and realtime roles from source on their own hearth_e2e database, rebuilt by the run
+      # (DEPLOY_ENV test, Valkey DB 9, the fake SMS provider); Chromium in full (axe at 320, 390 and
+      # 1440 px in both schemes, visual regression against baselines made only on this runner, the
+      # NFR-02 phone suite, keyboard, CSP, sign-in and session end) and the WebKit and Firefox smoke.
+      - run: npm run e2e
+      # The report, traces, failure screenshots and every *-actual.png (from which a person adopts
+      # the visual baselines: apps/web/e2e/support/adopt-baselines.ts), and the servers' logs, which
+      # hold the fake provider's codes for the seed's fictional numbers. Not playwright/.auth, the
+      # storage state; every session a trace or log shows ended with the run's throwaway database.
+      # On a failed step, and on a job cancelled at its timeout-minutes too, where failure() is false;
+      # it then holds what the run had written when GitHub stopped it, and has GitHub's 5-minute
+      # cancellation window to upload (ES-10, ES-13). Cancelling a run by hand doesn't cancel this
+      # job, whose if: always() keeps it running, so its upload then goes by failure() as usual.
+      - if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-report
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+            apps/web/playwright/logs/
+          retention-days: 7
+          if-no-files-found: ignore
   migrations:
     runs-on: ubuntu-latest
     # A migration or test that hangs would otherwise hold the runner for six hours.

@@ -71,6 +71,15 @@ describe('Vitest modes: every test file runs in exactly one mode (CLAUDE.md, Tes
     }
   })
 
+  it('TM-SPEC T10 T21: a Playwright spec (*.spec.ts) runs in no Vitest mode, so npm test and the integration run never start a browser', () => {
+    for (const path of ['apps/web/e2e/x.spec.ts', 'apps/web/e2e/support/x.spec.ts', 'apps/server/src/x.spec.ts']) {
+      expect(modesOf(path), path).toEqual([])
+    }
+    const specs = repoFiles().filter(path => /\.spec\.[cm]?[jt]sx?$/.test(path))
+    expect(specs.length).toBeGreaterThan(0)
+    expect(specs.filter(path => modesOf(path).length > 0)).toEqual([])
+  })
+
   it('every test file in apps/*, packages/*, infra/ and scripts/ runs in one mode (demo/ keeps its own node:test suite)', () => {
     const tests = repoFiles().filter(
       path => /\.test\.[cm]?[jt]sx?$/.test(path) && /^(?:apps\/|packages\/|infra\/|scripts\/)/.test(path),

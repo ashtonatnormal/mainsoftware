@@ -7,7 +7,6 @@ import {
   keyName,
   newOtp,
   newSecret,
-  otpMac,
   PinSlotsFull,
   sha256,
   tag,
@@ -60,20 +59,6 @@ describe('T6 T14 sign-in keys', () => {
     expect(tag(keys, '+6580000001')).toMatch(/^[A-Za-z0-9_-]{22}$/)
     expect(tag(keys, '+6580000001')).not.toBe(tag(keys, '+6580000002'))
     expect(tag(otherKeys, '+6580000001')).not.toBe(tag(keys, '+6580000001'))
-  })
-
-  it('binds a code MAC to the attempt, the number and the code', () => {
-    const mac = otpMac(keys, 'attempt-a', 'number-a', '123456')
-    expect(mac).toMatch(/^[0-9a-f]{64}$/)
-    expect(otpMac(keys, 'attempt-a', 'number-a', '123456')).toBe(mac)
-    for (const other of [
-      otpMac(keys, 'attempt-b', 'number-a', '123456'),
-      otpMac(keys, 'attempt-a', 'number-b', '123456'),
-      otpMac(keys, 'attempt-a', 'number-a', '123457'),
-      otpMac(otherKeys, 'attempt-a', 'number-a', '123456'),
-    ]) {
-      expect(other).not.toBe(mac)
-    }
   })
 
   it('makes sign-in codes of exactly 6 ASCII digits (PRD-53)', () => {

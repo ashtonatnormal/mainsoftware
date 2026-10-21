@@ -1,58 +1,78 @@
-// The sign-in service (ACC-01, ACC-02, ACC-03, PRD-53, T14). A sign-in is an
-// attempt in Valkey (attempts.ts) that moves through three steps: a code is sent, then a new PIN
-// is set or the step-up is passed (the account PIN or a passkey), and then a device and session
-// are issued and the attempt is used up.
+// The sign-in service (ACC-01, ACC-02, ACC-03, PRD-53, T14, T20, D46). A sign-in is an attempt in
+// Valkey (attempts.ts): a code is sent, the provider approves it (verified), and then someone with
+// no PIN role is signed in on the code alone, while a PIN-role holder (PIN_ROLES: the roles only an
+// Owner grants) goes on to set a new PIN or pass the step-up (the account PIN, or a passkey while
+// those are switched on); a device and session are issued and the attempt is used up. Whether the
+// person holds a PIN role is read in the transaction that acts on it (access/world.ts
+// holdsPinRoleNow), and decides whether the session is issued under the PIN rule, with its shorter
+// lifetime (PIN_RULE_SESSION).
+// - A refused code check, and one the provider failed (503), answers no sooner than
+//   OTP.verifyFloorMs after it arrived, and a provider that keeps failing trips the breaker, which
+//   refuses every check for a while (api.otp, T20).
 //
 // - Every number gets the same reply to a code request, and nothing touches Postgres before that
 //   reply. The roster lookup, the audit row and the text run after it, even when the client hangs
 //   up first. The attempt names the person only on the way to sending their code, just before its
-//   audit row is written and the code is handed to the SMS provider; if the audit row, the commit
-//   or the send then fails, it still names them, and a guess at that code has the same odds as at
-//   one that arrived. An attempt that names nobody answers every code as wrong, even the right one.
+//   audit row is written and the SMS provider is asked to make and send the code; if the audit
+//   row, the commit or the send then fails, it still names them, but no provider reference reaches
+//   its record, so there is no code to guess and every guess answers wrong. An attempt that names
+//   nobody answers every code as wrong, even the right one.
 // - Every transaction before a session exists acts as the org's system principal: whoever holds
 //   the phone hasn't proved anything yet. Each starts by reading the person's row FOR SHARE, the
 //   first row in the lock order (0006), so someone who has left is refused there, before any
 //   code, PIN or passkey is checked.
 // - A failure that writes (a wrong PIN's count, a failed passkey's audit row) is returned from the
 //   transaction, so it commits, and only then becomes an error.
-// - A finished sign-in appends signin.started to the outbox in its transaction, and a first one,
+// - A finished sign-in appends signin.started to the outbox in its transaction (which also makes a
+//   code-only person's account row on their first sign-in), and a PIN-role holder's first one,
 //   which sets the PIN, account.pin_set too (C0.6, T16); a failure writes only counters and audit
 //   rows, which append nothing (outbox/coverage.ts).
 // - Valkey errors fail closed: sign-in answers 503 unavailable while Valkey is down.
 // - Nothing here logs a phone number, code, PIN, token, attempt id, challenge or credential id.
+
+import { randomUUID } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
+import {
+  type CodeSentSchema,
+  type CodeVerifiedSchema,
+  normalisePhone,
+  pinProblem,
+  type SignedInSchema,
+} from '@hearth/shared'
 import { sql } from 'kysely'
+import type { z } from 'zod'
+import { holdsPinRoleNow } from '#src/access/world.ts'
 import type { Api } from '#src/api.ts'
 import {
   type Attempt,
-  checkOtp,
   consumeAttempt,
   createAttempt,
   dropAttempt,
   readAttempt,
-  storeOtp,
   updateAttempt,
 } from '#src/auth/attempts.ts'
 import { writeAudit } from '#src/auth/audit.ts'
+import { attachCode, codeOwner, openCode, reserveCode, settleCode } from '#src/auth/codes.ts'
 import { attemptCookie, clearedCookie, sessionCookie } from '#src/auth/cookies.ts'
-import { hashPin, keyName, newOtp, otpMac, tag, withPinSlot } from '#src/auth/crypto.ts'
+import { hashPin, keyName, tag, withPinSlot } from '#src/auth/crypto.ts'
 import { deviceLabel } from '#src/auth/device-label.ts'
 import { ApiError } from '#src/auth/errors.ts'
-import { hit, limitSubject, type Window } from '#src/auth/limiter.ts'
+import { hit, limitSubject, release, type Window } from '#src/auth/limiter.ts'
 import {
   type AuthenticationResponse,
   authenticationOptions,
   type StoredCredential,
   verifyAuthentication,
 } from '#src/auth/passkeys.ts'
-import { normalisePhone } from '#src/auth/phone.ts'
 import { checkPin, type PinCheck, pinStateJSON } from '#src/auth/pin.ts'
 import { pinState } from '#src/auth/pin-lock.ts'
-import { pinProblem } from '#src/auth/pin-policy.ts'
 import { LIMITS, OTP, PASSKEY_CHALLENGE_TTL_MS } from '#src/auth/policy.ts'
 import { AttemptStale, type IssuedSession, issueSession, numberStillTheirs } from '#src/auth/sessions.ts'
+import { type SmsProvider, SmsProviderError, type Verdict } from '#src/auth/sms/provider.ts'
 import { type InOrg, withOrg } from '#src/db/database.ts'
 import { personByPhone } from '#src/db/pre-org.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
+import { C06_GATE } from '#src/jobs/gate.ts'
 import { appendOutbox } from '#src/outbox/append.ts'
 
 // --- Shared with account.ts -----------------------------------------------------------------
@@ -80,10 +100,25 @@ export function tooManyRequests(retryAfterMs: number): ApiError {
   return new ApiError(429, 'too_many_requests', { retryAfterSeconds })
 }
 
-// Records a hit in every window, or refuses with 429 if any is full. Fails closed.
-export async function enforce(api: Api, info: ReqInfo, windows: readonly Window[]): Promise<void> {
-  const result = await fromValkey(info, hit(api.valkey, windows))
+// Records a hit in every window, or refuses with 429 if any is full. Fails closed. Answers the
+// hit's member, for giveBack().
+export async function enforce(api: Api, info: ReqInfo, windows: readonly Window[]): Promise<string> {
+  const member = randomUUID()
+  const result = await fromValkey(info, hit(api.valkey, windows, member))
   if (!result.allowed) throw tooManyRequests(result.retryAfterMs)
+  return member
+}
+
+// Takes enforce()'s hit back from some of its windows: a code check the provider never answered (it
+// failed, or the breaker refused the check) counts against no day's checks, so retrying through a
+// provider outage can't use up a number's or a person's checks for the day (T14 item 5, T20 item
+// 3). Best effort: the 503 being answered stands, and a failure is logged.
+export async function giveBack(api: Api, info: ReqInfo, windows: readonly Window[], member: string): Promise<void> {
+  try {
+    await release(api.valkey, windows, member)
+  } catch (error) {
+    info.log.warn({ err: error, event: 'limit_give_back_failed' }, 'a code check could not be given back')
+  }
 }
 
 // The per-IP subject: an IPv4 address, or an IPv6 /64, as a keyed hash.
@@ -229,17 +264,25 @@ async function dropQuietly(api: Api, info: ReqInfo, key: string): Promise<void> 
 
 function signedIn(session: IssuedSession): Answer {
   return {
-    body: { status: 'signed_in', device: { id: session.deviceId, label: session.label } },
+    body: { status: 'signed_in', device: { id: session.deviceId, label: session.label } } satisfies z.input<
+      typeof SignedInSchema
+    >,
     cookies: [sessionCookie(session.token, session.maxAgeSeconds), clearedCookie('attempt')],
   }
 }
 
-const sessionInput = (attempt: Named, info: ReqInfo, method: 'sms_new_pin' | 'sms_pin' | 'sms_passkey') => ({
+const sessionInput = (
+  attempt: Named,
+  info: ReqInfo,
+  method: 'sms' | 'sms_new_pin' | 'sms_pin' | 'sms_passkey',
+  pinRule: boolean,
+) => ({
   orgId: attempt.orgId,
   personId: attempt.personId,
   phoneNumberId: attempt.phoneNumberId,
   label: deviceLabel(info.userAgent),
   method,
+  pinRule,
   ip: info.ip,
   requestId: info.requestId,
 })
@@ -277,33 +320,35 @@ export async function requestCode(
     windowOf(api, LIMITS.otpPerIp, ip),
     windowOf(api, LIMITS.authPerIp, ip),
   ])
-  const code = newOtp()
   const attempt: Attempt = { v: 1, numberTag, step: 'code_sent' }
   const created = await fromValkey(info, createAttempt(api.valkey, api.names, attempt))
-  await fromValkey(
-    info,
-    storeOtp(api.valkey, api.names, numberTag, created.key, otpMac(api.keys, created.key, numberTag, code)),
-  )
+  // The new attempt owns the number's challenge from here: a newer request replaces any earlier
+  // code (T14 item 4), whose provider reference is cancelled after the reply.
+  const replacedRef = await fromValkey(info, openCode(api.valkey, api.names, numberTag, created.key))
   // A new request starts a new attempt; the browser's old one goes.
   if (attemptId !== undefined) await dropQuietly(api, info, keyName(attemptId))
-  info.after(() => deliverCode(api, info, { e164, code, attemptKey: created.key, attempt }))
+  info.after(() => deliverCode(api, info, { e164, attemptKey: created.key, attempt, replacedRef }))
   return {
-    body: { status: 'code_sent', expiresInSeconds: OTP.ttlMs / 1000, codeLength: OTP.length },
+    body: { status: 'code_sent', expiresInSeconds: OTP.ttlMs / 1000, codeLength: OTP.length } satisfies z.input<
+      typeof CodeSentSchema
+    >,
     cookies: [attemptCookie(created.id)],
   }
 }
 
-// After the reply: find the number on the roster, and send the code only to a current number of
+// After the reply: find the number on the roster, and send a code only to a current number of
 // someone still at the org, within the global SMS cap. The attempt names them just before the audit
-// row is written and the code is handed to the provider. Its errors are logged with at most a
-// person id, never the number.
+// row is written and the provider is asked to send. The replaced record's code, if any, is cancelled
+// first, so the provider makes a new one. Its errors are logged with at most a person id, never the
+// number.
 async function deliverCode(
   api: Api,
   info: ReqInfo,
-  sending: { e164: string; code: string; attemptKey: string; attempt: Attempt },
+  sending: { e164: string; attemptKey: string; attempt: Attempt; replacedRef: string | undefined },
 ): Promise<void> {
   const sms = api.sms
   if (sms === undefined) return
+  if (sending.replacedRef !== undefined) await cancelQuietly(sms, info, sending.replacedRef)
   const matches = await personByPhone(api.db, sending.e164)
   if (matches.length === 0) {
     info.log.info({ event: 'otp_non_roster' }, 'a code was asked for a number not on the roster')
@@ -316,7 +361,9 @@ async function deliverCode(
   }
   const { orgId, personId, phoneNumberId } = match
   const send = await withOrg(api.db, { orgId, system: true }, async trx => {
-    const audit = (send: 'attempted' | 'skipped_left' | 'skipped_number_removed' | 'skipped_cap') =>
+    const audit = (
+      send: 'attempted' | 'skipped_left' | 'skipped_number_removed' | 'skipped_not_cleared' | 'skipped_cap',
+    ) =>
       writeAudit(trx, {
         orgId,
         actorId: null,
@@ -336,6 +383,16 @@ async function deliverCode(
     // moved since gets no code.
     if (!(await numberStillTheirs(trx, orgId, personId, phoneNumberId))) {
       await audit('skipped_number_removed')
+      return false
+    }
+    // An outside provider receives the number only once PDPA-10's transfer register clears it (C0.9):
+    // until then nothing is sent, and the reply stays the same as for any other request.
+    if (sms.transfer !== null && !(api.gate ?? C06_GATE).providerCleared(orgId, sms.transfer)) {
+      await audit('skipped_not_cleared')
+      info.log.error(
+        { event: 'sms_provider_not_cleared', provider: sms.name, personId },
+        'a sign-in code was not sent: the provider is not cleared in the transfer register',
+      )
       return false
     }
     let capped: 'sms_global_cap' | 'sms_cap_unavailable' | undefined
@@ -358,21 +415,102 @@ async function deliverCode(
   })
   if (!send) return
   try {
-    await sms.sendCode(sending.e164, sending.code)
+    await startCode(api, info, sms, {
+      e164: sending.e164,
+      numberTag: sending.attempt.numberTag,
+      owner: sending.attemptKey,
+      personId,
+    })
   } catch (error) {
     info.log.error(
       {
         event: 'sms_send_failed',
         provider: sms.name,
-        error: error instanceof Error ? error.name : 'unknown',
+        ...providerFailure(error),
         personId,
       },
-      'a sign-in code could not be sent',
+      'a code could not be sent',
+    )
+  }
+}
+
+// Asks the provider for a code and attaches its reference to the owner's record. After every start
+// it first asks whether the owner still holds the record, and only then acts on a verification the
+// provider handed back from someone else (foreign): it cancels it and starts once more, and a second
+// foreign reply is cancelled too and nothing is attached, so the attempt answers as after a lost
+// text; a first cancel that fails throws, with nothing started again or attached. A request that
+// has lost the record to a newer one by the time either start answers leaves that verification
+// alone, so it never cancels the newer owner's: a newer request that starts between this one's
+// cancel and its second start makes the verification this one then gets back as foreign. Answers
+// whether a code is now live for the owner (attached), or not (lost: a newer request owns the
+// record; foreign: twice handed someone else's); account.ts's re-authentication answers 503 for
+// either.
+export async function startCode(
+  api: Api,
+  info: ReqInfo,
+  sms: SmsProvider,
+  sending: { e164: string; numberTag: string; owner: string; personId: string },
+): Promise<'attached' | 'lost' | 'foreign'> {
+  const { numberTag, owner } = sending
+  const stillOwner = async () => (await codeOwner(api.valkey, api.names, numberTag)) === owner
+  let started = await sms.start(sending.e164)
+  if (!(await stillOwner())) return 'lost'
+  if (started.foreign) {
+    // Not cancelQuietly: a cancel that failed most likely left the verification pending, so a second
+    // start would only hand it back as foreign again, texting its code once more, and attach nothing
+    // either way. The failure goes to the caller as a failed send does: nothing is attached, so the
+    // attempt answers as after a lost text (re-authentication answers 503), and the next request,
+    // which replaces the record, tries the cancel again.
+    await sms.cancel(started.ref)
+    started = await sms.start(sending.e164)
+    if (!(await stillOwner())) return 'lost'
+    if (started.foreign) {
+      await cancelQuietly(sms, info, started.ref)
+      info.log.warn(
+        { event: 'provider_foreign_verification', provider: sms.name, personId: sending.personId },
+        'the provider handed back a verification Hearth did not start, twice; nothing was attached',
+      )
+      return 'foreign'
+    }
+  }
+  return attachCode(api.valkey, api.names, numberTag, owner, started.ref)
+}
+
+// What a provider's failure puts in a log line: the error's name, and for an SmsProviderError its
+// kind, the provider's numeric code and the HTTP status (TECH-SPEC T7, T20), so a refusal such as
+// Twilio's 60410 can be told from 60605. Never its message, which can quote the number.
+export function providerFailure(error: unknown) {
+  if (!(error instanceof SmsProviderError)) return { error: error instanceof Error ? error.name : 'unknown' }
+  return { error: error.name, kind: error.kind, providerCode: error.providerCode, httpStatus: error.httpStatus }
+}
+
+// Cancels a provider reference, best effort: a failure is logged (without the reference) and
+// otherwise ignored, since the record no longer accepts that code anyway.
+export async function cancelQuietly(sms: SmsProvider, info: ReqInfo, ref: string): Promise<void> {
+  try {
+    await sms.cancel(ref)
+  } catch (error) {
+    info.log.warn(
+      {
+        event: 'sms_cancel_failed',
+        provider: sms.name,
+        ...providerFailure(error),
+      },
+      'the SMS provider could not cancel a code',
     )
   }
 }
 
 // --- POST /api/auth/otp/verify --------------------------------------------------------------
+
+// A refused check, or one the provider failed, answers no sooner than the floor after the request
+// arrived (T20), so a roster number's round trip to the provider can't be told from a number off
+// the roster's instant answer.
+async function floored(api: Api, arrived: number, error: ApiError): Promise<never> {
+  const wait = arrived + api.otp.verifyFloorMs - Date.now()
+  if (wait > 0) await delay(wait)
+  throw error
+}
 
 export async function verifyCode(
   api: Api,
@@ -380,60 +518,106 @@ export async function verifyCode(
   attemptId: string | undefined,
   info: ReqInfo,
 ): Promise<Answer> {
+  const arrived = Date.now()
   const found = await fromValkey(info, readAttempt(api.valkey, api.names, attemptId))
   if (found === undefined) throw attemptExpired()
   const { key, attempt } = found
+  // The provider approved this attempt's code, and the finish failed before it was used up (a
+  // conflict, Valkey or Postgres down): any 6 digits finish it, with no second check (T20).
+  if (attempt.step === 'verified') return finishAgain(api, info, key, attempt)
   if (attempt.step !== 'code_sent') throw new ApiError(409, 'wrong_step')
-  // At most 10 code checks per number per rolling day, counted for every number alike.
-  await enforce(api, info, [
-    windowOf(api, LIMITS.authPerIp, ipTag(api, info)),
-    windowOf(api, LIMITS.verifyPerNumber, attempt.numberTag),
-  ])
-  const check = await fromValkey(
-    info,
-    checkOtp(api.valkey, api.names, attempt.numberTag, key, otpMac(api.keys, key, attempt.numberTag, body.code)),
-  )
-  const person = named(attempt)
-  let stale: 'left' | 'number_removed' | undefined
-  if (check.result === 'ok' && person !== undefined) {
-    const { orgId, personId, phoneNumberId } = person
-    const account = await withOrg(api.db, { orgId, system: true }, async trx => {
-      if (!(await stillHere(trx, orgId, personId))) return 'left' as const
-      // A number removed or moved since the code went to it moves the sign-in no further, and
-      // shows nothing of the account.
-      if (!(await numberStillTheirs(trx, orgId, personId, phoneNumberId))) return 'number_removed' as const
-      const user = await sql<{
-        pin_hash: string | null
-        pin_failures: number
-        pin_last_failed_at: Date | null
-        now: Date
-      }>`select pin_hash, pin_failures, pin_last_failed_at, now() as now from users
-        where org_id = ${orgId} and id = ${personId}`.execute(trx)
-      const passkeys = await sql<{ n: string }>`select count(*) as n from passkeys
-        where org_id = ${orgId} and user_id = ${personId} and removed_at is null`.execute(trx)
-      return { user: user.rows[0], passkeys: Number(passkeys.rows[0]?.n ?? 0) }
-    })
-    if (typeof account !== 'string') {
-      const { user } = account
-      const pinHash = user?.pin_hash ?? null
-      const next = pinHash === null ? 'set_pin' : 'step_up'
-      if (!(await fromValkey(info, updateAttempt(api.valkey, api.names, key, { ...attempt, step: next })))) {
-        throw attemptExpired()
-      }
-      if (user === undefined || pinHash === null) return { body: { status: 'code_verified', next: 'set_pin' } }
-      const state = pinState({ pinHash, failures: user.pin_failures, lastFailedAt: user.pin_last_failed_at }, user.now)
-      if (state.state === 'unset') throw new Error('a PIN with a hash read as unset')
-      return {
-        body: { status: 'code_verified', next: 'step_up', pin: pinStateJSON(state), passkey: account.passkeys > 0 },
+  // The provider keeps failing: every check is refused for a while, named or not, without asking it
+  // and before any window counts it.
+  if (api.otp.breaker.isOpen()) throw new ApiError(503, 'unavailable')
+  // At most 10 code checks per number per rolling day, counted for every number alike; a check the
+  // provider couldn't answer is given back below.
+  const day = windowOf(api, LIMITS.verifyPerNumber, attempt.numberTag)
+  const member = await enforce(api, info, [windowOf(api, LIMITS.authPerIp, ipTag(api, info)), day])
+  const reserved = await fromValkey(info, reserveCode(api.valkey, api.names, attempt.numberTag, key))
+  // The outcome: approved, or a refusal with the tries counted so far.
+  let check: { result: 'approved' | 'wrong' | 'dead' | 'expired'; tries: number }
+  if (reserved.result === 'check') {
+    const sms = api.sms
+    let verdict: Verdict | 'failed' = 'failed'
+    if (sms !== undefined) {
+      try {
+        verdict = await sms.check(reserved.ref, body.code)
+      } catch (error) {
+        api.otp.breaker.failed()
+        info.log.error(
+          {
+            event: 'sms_check_failed',
+            provider: sms.name,
+            ...providerFailure(error),
+          },
+          'the SMS provider could not check a code',
+        )
       }
     }
-    stale = account
+    const settled = await fromValkey(info, settleCode(api.valkey, api.names, attempt.numberTag, key, reserved, verdict))
+    // The provider couldn't answer: the try was given back (on this attempt's own live record), and
+    // so is the day's check (the per-IP window still counts the request), even when a newer request
+    // replaced the record or another check used it meanwhile, and the attempt stays at the code.
+    // Floored as a refusal is, so a provider that fails slowly or at once can't be timed against a
+    // number off the roster's answer (T14 item 3).
+    if (settled.result === 'failed') {
+      await giveBack(api, info, [day], member)
+      return floored(api, arrived, new ApiError(503, 'unavailable'))
+    }
+    if (settled.result === 'displaced') {
+      // A newer request replaced the record during the check. The newest request wins: this check
+      // signs nobody in, whatever the provider said, and touches and cancels nothing of the newer
+      // record. It answers from its own try, wrong or at the 5th dead, as the same try at a number
+      // off the roster answered at RESERVE, before the newer request landed; code_expired here
+      // would tell a roster number apart (T14 item 3). The attempt's next check finds another
+      // owner's record and answers code_expired, for every number alike.
+      const { tries } = settled
+      check = { result: tries >= OTP.maxTries ? 'dead' : 'wrong', tries }
+    } else {
+      // expired: the provider no longer holds the code. A record gone meanwhile (another check
+      // killed or used it) answers wrong or dead from this check's count, as a number off the
+      // roster would (codes.ts).
+      check = 'tries' in settled ? settled : { result: 'expired', tries: 0 }
+      // The 5th try is dead: this attempt's own code is cancelled after the reply.
+      if (settled.result === 'dead' && sms !== undefined) {
+        const ref = reserved.ref
+        info.after(() => cancelQuietly(sms, info, ref))
+      }
+    }
+  } else if (reserved.result === 'expired') {
+    // Only the caller's own record, past its 5 minutes, answers a ref: cancel it after the reply.
+    const { ref } = reserved
+    const sms = api.sms
+    if (ref !== undefined && sms !== undefined) info.after(() => cancelQuietly(sms, info, ref))
+    check = { result: 'expired', tries: 0 }
+  } else {
+    // No code was sent for this attempt (it names nobody, or the text failed): every guess is wrong.
+    check = reserved
   }
-  // Every failure is answered as a wrong guess at that count would be: a right code on an attempt
-  // that names nobody (a one-in-a-million guess), a leaver, or a number no longer theirs too, so
-  // nothing tells them apart.
-  const tries = check.result === 'ok' ? check.tries + 1 : check.tries
-  const result = check.result === 'ok' ? (tries >= OTP.maxTries ? 'dead' : 'wrong') : check.result
+  const person = named(attempt)
+  let stale: Stale | undefined
+  if (check.result === 'approved' && person !== undefined) {
+    // Approved: from here a retry finishes the sign-in without a second check, until it is used up
+    // or the attempt's 10 minutes end.
+    if (!(await fromValkey(info, updateAttempt(api.valkey, api.names, key, { ...person, step: 'verified' })))) {
+      throw attemptExpired()
+    }
+    const finished = await finish(api, info, key, person)
+    if (finished.kind === 'answer') return finished.answer
+    // Stale on the first pass: the attempt goes back to the code (its record is gone, so its next
+    // check answers code_expired), and the reply is the wrong guess below.
+    try {
+      await updateAttempt(api.valkey, api.names, key, attempt)
+    } catch (error) {
+      info.log.warn({ err: error, event: 'attempt_update_failed' })
+    }
+    stale = finished.stale
+  }
+  // Every failure is answered as a wrong guess at that count would be: an approved code on an attempt
+  // that names nobody, a leaver, or a number no longer theirs too, so nothing tells them apart. The
+  // record is gone (SETTLE deleted it), so the attempt's next check answers code_expired.
+  const { tries } = check
+  const result = check.result === 'approved' ? (tries >= OTP.maxTries ? 'dead' : 'wrong') : check.result
   if (person !== undefined) {
     info.after(() =>
       withOrg(api.db, { orgId: person.orgId, system: true }, trx =>
@@ -456,9 +640,112 @@ export async function verifyCode(
       ),
     )
   }
-  if (result === 'expired') throw new ApiError(401, 'code_expired')
-  if (result === 'dead') throw new ApiError(401, 'code_dead')
-  throw new ApiError(401, 'code_wrong', { triesLeft: OTP.maxTries - tries })
+  if (result === 'expired') return floored(api, arrived, new ApiError(401, 'code_expired'))
+  if (result === 'dead') return floored(api, arrived, new ApiError(401, 'code_dead'))
+  return floored(api, arrived, new ApiError(401, 'code_wrong', { triesLeft: OTP.maxTries - tries }))
+}
+
+// Why a finish found the roster no longer matches: the person left, or the number moved.
+type Stale = 'left' | 'number_removed'
+
+type Finished = { kind: 'answer'; answer: Answer } | { kind: 'stale'; stale: Stale }
+
+// A retry of a verified attempt: only the per-IP window, and a finish. One that finds the roster no
+// longer matches drops the attempt: there's no code to go back to.
+async function finishAgain(api: Api, info: ReqInfo, key: string, found: Attempt): Promise<Answer> {
+  await enforce(api, info, [windowOf(api, LIMITS.authPerIp, ipTag(api, info))])
+  const attempt = named(found)
+  if (attempt === undefined) {
+    await dropQuietly(api, info, key)
+    throw attemptExpired()
+  }
+  const finished = await finish(api, info, key, attempt)
+  if (finished.kind === 'answer') return finished.answer
+  await dropQuietly(api, info, key)
+  throw attemptExpired()
+}
+
+// The sign-in after an approved code (D46). One transaction reads the person FOR SHARE, then their
+// roles, and acts on them, so a role granted meanwhile is either seen here or waits for it:
+// - someone with no PIN role signs in on the code alone: the account row is made if it's
+//   their first, the device and session issued, and the attempt used up as the last statement
+//   before the commit, so a failure before it leaves the attempt verified for a retry (R1);
+// - a PIN-role holder goes on to set their PIN (none yet) or to enter it, with its state.
+// A leaver, or a number gone, answers stale and writes nothing.
+async function finish(api: Api, info: ReqInfo, key: string, attempt: Named): Promise<Finished> {
+  const { orgId, personId, phoneNumberId } = attempt
+  let outcome:
+    | { kind: 'stale'; stale: Stale }
+    | { kind: 'signed_in'; session: IssuedSession }
+    | {
+        kind: 'pin'
+        user: { pin_hash: string | null; pin_failures: number; pin_last_failed_at: Date | null; now: Date } | undefined
+        passkeys: number | undefined
+      }
+  try {
+    outcome = await withOrg(api.db, { orgId, system: true }, async trx => {
+      if (!(await stillHere(trx, orgId, personId))) return { kind: 'stale', stale: 'left' } as const
+      if (!(await holdsPinRoleNow(trx, orgId, personId))) {
+        // The first sign-in makes the account (users comes before phone_numbers in the lock order).
+        await sql`insert into users (id, org_id) values (${personId}, ${orgId}) on conflict (id) do nothing`.execute(
+          trx,
+        )
+        const session = await issueSession(trx, sessionInput(attempt, info, 'sms', false))
+        // Last, so only one request turns the attempt into a session, and a failure before here
+        // leaves it verified.
+        if (!(await fromValkey(info, consumeAttempt(api.valkey, api.names, key)))) throw attemptExpired()
+        return { kind: 'signed_in', session } as const
+      }
+      // A number removed or moved since the code went to it moves the sign-in no further, and shows
+      // nothing of the account.
+      if (!(await numberStillTheirs(trx, orgId, personId, phoneNumberId))) {
+        return { kind: 'stale', stale: 'number_removed' } as const
+      }
+      const user = await sql<{
+        pin_hash: string | null
+        pin_failures: number
+        pin_last_failed_at: Date | null
+        now: Date
+      }>`select pin_hash, pin_failures, pin_last_failed_at, now() as now from users
+        where org_id = ${orgId} and id = ${personId}`.execute(trx)
+      // Passkeys are counted only while they're switched on (D46); off, the reply has no passkey key.
+      if (!api.passkeys) return { kind: 'pin', user: user.rows[0], passkeys: undefined } as const
+      const passkeys = await sql<{ n: string }>`select count(*) as n from passkeys
+        where org_id = ${orgId} and user_id = ${personId} and removed_at is null`.execute(trx)
+      return { kind: 'pin', user: user.rows[0], passkeys: Number(passkeys.rows[0]?.n ?? 0) } as const
+    })
+  } catch (error) {
+    // issueSession found the number gone (or the person left after the read above).
+    if (error instanceof AttemptStale) return { kind: 'stale', stale: 'number_removed' }
+    throw error
+  }
+  if (outcome.kind === 'stale') return outcome
+  if (outcome.kind === 'signed_in') return { kind: 'answer', answer: signedIn(outcome.session) }
+  const { user } = outcome
+  const pinHash = user?.pin_hash ?? null
+  const next = pinHash === null ? 'set_pin' : 'step_up'
+  if (!(await fromValkey(info, updateAttempt(api.valkey, api.names, key, { ...attempt, step: next })))) {
+    throw attemptExpired()
+  }
+  if (user === undefined || pinHash === null) {
+    return {
+      kind: 'answer',
+      answer: { body: { status: 'code_verified', next: 'set_pin' } satisfies z.input<typeof CodeVerifiedSchema> },
+    }
+  }
+  const state = pinState({ pinHash, failures: user.pin_failures, lastFailedAt: user.pin_last_failed_at }, user.now)
+  if (state.state === 'unset') throw new Error('a PIN with a hash read as unset')
+  return {
+    kind: 'answer',
+    answer: {
+      body: {
+        status: 'code_verified',
+        next: 'step_up',
+        pin: pinStateJSON(state),
+        ...(outcome.passkeys === undefined ? {} : { passkey: outcome.passkeys > 0 }),
+      } satisfies z.input<typeof CodeVerifiedSchema>,
+    },
+  }
 }
 
 // --- POST /api/auth/pin/set -----------------------------------------------------------------
@@ -499,6 +786,9 @@ export async function setPin(
     key,
     withOrg(api.db, { orgId, system: true }, async trx => {
       if (!(await stillHere(trx, orgId, personId))) throw new AttemptStale()
+      // Read again here, where the session is issued: a role removed since the code was checked
+      // still finishes with the PIN (stricter), with a normal lifetime (D46).
+      const pinRule = await holdsPinRoleNow(trx, orgId, personId)
       // The first sign-in makes the account; two at once both get here, and one then finds the
       // other's PIN below.
       await sql`insert into users (id, org_id) values (${personId}, ${orgId}) on conflict (id) do nothing`.execute(trx)
@@ -509,7 +799,7 @@ export async function setPin(
         where org_id = ${orgId} and id = ${personId}`.execute(trx)
       // Only one request turns an attempt into a session.
       if (!(await fromValkey(info, consumeAttempt(api.valkey, api.names, key)))) throw attemptExpired()
-      const issued = await issueSession(trx, sessionInput(attempt, info, 'sms_new_pin'))
+      const issued = await issueSession(trx, sessionInput(attempt, info, 'sms_new_pin', pinRule))
       // As Hearth, before a session exists: the event names the person as its actor (T16 item 10).
       await appendOutbox(trx, {
         orgId,
@@ -557,6 +847,7 @@ export async function verifyPinStep(
         // Someone who has left, or whose number has gone, gets the same answer for a right and a
         // wrong PIN, and no count.
         if (!(await stillSigningIn(trx, attempt, { locked: false }))) return { kind: 'left' } as const
+        const pinRule = await holdsPinRoleNow(trx, orgId, personId)
         const check = await checkPin(
           trx,
           api.keys,
@@ -581,7 +872,10 @@ export async function verifyPinStep(
         // Returned, so the failure count and its audit rows commit.
         if (!check.ok) return { kind: 'refused', check } as const
         if (!(await fromValkey(info, consumeAttempt(api.valkey, api.names, key)))) throw attemptExpired()
-        return { kind: 'issued', session: await issueSession(trx, sessionInput(attempt, info, 'sms_pin')) } as const
+        return {
+          kind: 'issued',
+          session: await issueSession(trx, sessionInput(attempt, info, 'sms_pin', pinRule)),
+        } as const
       }),
     ),
   )
@@ -647,6 +941,7 @@ export async function passkeyVerify(
     key,
     withOrg(api.db, { orgId, system: true }, async trx => {
       if (!(await stillSigningIn(trx, attempt, { locked: false }))) return { kind: 'left' } as const
+      const pinRule = await holdsPinRoleNow(trx, orgId, personId)
       const failed = async (passkey?: string) => {
         // As for a refused PIN: a number removed since the unlocked read writes no failure.
         if (!(await numberStillTheirs(trx, orgId, personId, attempt.phoneNumberId))) throw new AttemptStale()
@@ -671,7 +966,10 @@ export async function passkeyVerify(
       // The PIN's failure count is left as it is, and a locked PIN doesn't stop a passkey.
       await recordPasskeyUse(trx, orgId, stored.id, verified.newCounter)
       if (!(await fromValkey(info, consumeAttempt(api.valkey, api.names, key)))) throw attemptExpired()
-      return { kind: 'issued', session: await issueSession(trx, sessionInput(attempt, info, 'sms_passkey')) } as const
+      return {
+        kind: 'issued',
+        session: await issueSession(trx, sessionInput(attempt, info, 'sms_passkey', pinRule)),
+      } as const
     }),
   )
   switch (outcome.kind) {

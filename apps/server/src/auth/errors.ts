@@ -7,72 +7,69 @@
 // transaction's work and becomes an ApiError only after the transaction has committed. A throw
 // inside withOrg() rolls back, so throwing is kept for refusals that write nothing.
 
-export const MESSAGES = {
-  invalid_request: "That request wasn't understood.",
-  invalid_phone:
-    'Enter your mobile number starting with + and the country code, or just the 8 digits of a Singapore number.',
-  invalid_code: 'Enter the 6-digit code.',
-  invalid_pin: 'Your PIN is 6 digits.',
-  pin_too_easy: 'Choose a harder PIN. Avoid repeated digits and runs like 123456.',
-  too_many_requests: 'Too many tries. Try again later.',
-  unavailable: "That isn't available right now. Try again in a few minutes.",
-  attempt_expired: 'That sign-in has expired. Start again.',
-  wrong_step: 'Start signing in again.',
-  code_wrong: "That code isn't right. Check the text and try again.",
-  code_dead: 'Too many tries with that code. Send a new one.',
-  code_expired: 'That code has expired. Send a new one.',
-  pin_wrong: "That PIN isn't right.",
-  pin_locked: 'Too many wrong PINs. Wait for the lock to end, then try again.',
-  pin_already_set: 'Your PIN is already set. Start signing in again.',
-  pin_reset_needed: "Your PIN needs resetting. Ask an admin to reset it. They'll check it's you first.",
-  no_passkey: "There's no passkey on your account. Use your PIN.",
-  passkey_expired: 'That took too long. Try again.',
-  passkey_failed: "That didn't work. Try again or use your PIN.",
-  passkey_exists: 'That passkey is already added.',
-  signed_out: "You've been signed out. Sign in again to keep using Hearth.",
-  reauth_required: "Confirm it's you with your PIN or a passkey first.",
-  forbidden: "You can't do that.",
-  not_found: "We couldn't find that.",
-  no_account: "They haven't signed in yet, so there's no PIN to reset.",
-  // The flags route (C0.6, flags/set.ts).
-  flag_locked: 'That flag is locked: only a release can change it.',
-  purpose_refused: "That feature isn't cleared for use yet.",
-  invalid_cohort:
-    "That cohort can't be used. Name 1 to 1,000 people still at this organisation and roles, or none for everyone.",
-  try_again: 'Something else changed this at the same moment. Try again.',
-  internal: 'Something went wrong on our side. Try again.',
-} as const satisfies Record<string, string>
+import {
+  type ErrorCode,
+  type ErrorExtrasSchema,
+  MESSAGES,
+  REAUTH_METHOD_MESSAGES,
+  type ReauthMethod,
+} from '@hearth/shared'
+import type { z } from 'zod'
 
-export type ErrorCode = keyof typeof MESSAGES
+export { type ErrorCode, MESSAGES }
 
-// pin_locked's copy when only an admin can lift the lock (the extra's pin.state is admin_locked).
-export const PIN_ADMIN_LOCKED_MESSAGE = "Your PIN is locked. Ask an admin to reset it. They'll check it's you first."
+// The extras a refusal may carry, as the shared contract types them (packages/shared), so the
+// server can't send one the web app doesn't read.
+type Extras = z.input<typeof ErrorExtrasSchema>
+
+// pin_locked's copy when an admin reset is needed (in practice an Owner's): the extra's pin.state
+// is admin_locked.
+export const PIN_ADMIN_LOCKED_MESSAGE = "Your PIN is locked. Ask an Owner to reset it. They'll check it's you first."
 
 export class ApiError extends Error {
   override name = 'ApiError'
   readonly status: number
   readonly code: ErrorCode
-  readonly extra: Record<string, unknown>
+  readonly extra: Extras
   readonly clear: readonly ('session' | 'attempt')[]
+  // The acting person, on a re-authentication refusal (reauthRefusal): the error handler logs
+  // reauth_wrong_method on a 409 reauth_method, and pin_rule_session_mismatch when the method is
+  // sign_in, with this id and no other personal data (D46). Never sent.
+  readonly person: string | undefined
 
   constructor(
     status: number,
     code: ErrorCode,
-    extra: Record<string, unknown> = {},
+    extra: Extras = {},
     clear: readonly ('session' | 'attempt')[] = [],
+    person?: string,
   ) {
     super(code)
     this.status = status
     this.code = code
     this.extra = extra
     this.clear = clear
+    this.person = person
   }
 }
 
-// The copy to send with an error: MESSAGES, except pin_locked when only an admin can lift it.
+// 403 reauth_required or 409 reauth_method naming the session's method (D46, AQ-01).
+export function reauthRefusal(
+  code: 'reauth_required' | 'reauth_method',
+  method: ReauthMethod,
+  person: string,
+): ApiError {
+  return new ApiError(code === 'reauth_required' ? 403 : 409, code, { method }, [], person)
+}
+
+// The copy to send with an error: MESSAGES, except pin_locked when an admin reset is needed (in
+// practice an Owner's), and reauth_required and reauth_method, which name the method when they
+// carry one.
 export function messageFor(error: ApiError): string {
-  const pin = error.extra.pin as { state?: unknown } | undefined
-  if (error.code === 'pin_locked' && pin?.state === 'admin_locked') return PIN_ADMIN_LOCKED_MESSAGE
+  if (error.code === 'pin_locked' && error.extra.pin?.state === 'admin_locked') return PIN_ADMIN_LOCKED_MESSAGE
+  const method = error.extra.method
+  if (method !== undefined && error.code === 'reauth_required') return REAUTH_METHOD_MESSAGES[method].required
+  if (method !== undefined && error.code === 'reauth_method') return REAUTH_METHOD_MESSAGES[method].method
   return MESSAGES[error.code]
 }
 

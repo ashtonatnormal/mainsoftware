@@ -18,11 +18,14 @@ const LEFT_AT = new Date('2026-10-01T00:00:00Z')
 const session = (userId: string) => ({ sessionId: SESSION, orgId: ORG, userId, deviceId: MY_DEVICE })
 
 // The org as the loader reads it: an Admin, an Owner, a member, a leaver, one team, and the
-// requester's devices and passkey. `fresh` is the acting session's re-read, or 'ended'.
-function org(fresh: boolean | 'ended' = true) {
+// requester's devices and passkey. `fresh` is the acting session's re-read, or 'ended'; `issued`
+// whether that session was issued under the PIN rule (D46), whose person holds a PIN.
+function org(fresh: boolean | 'ended' = true, issued = true) {
   return scriptedPool((statement: Statement) => {
     const { text } = statement
-    if (text.includes('from people p')) return fresh === 'ended' ? [] : [{ fresh }]
+    if (text.includes('from people p')) {
+      return fresh === 'ended' ? [] : [{ fresh, pin_set: true, issued_under_pin_rule: issued }]
+    }
     if (text.startsWith('select "id", "deactivated_at" from "people"')) {
       return [
         ...[ADMIN, OWNER, MEMBER].map(id => ({ id, deactivated_at: null as Date | null })),
@@ -55,11 +58,16 @@ describe('C0.5 T14 the acting session, re-read in the action’s own transaction
   it('locks person, device and session FOR SHARE by default, and says whether the re-authentication is fresh', async () => {
     const { db, statements } = org(true)
     const acting = await withOrg(db, { orgId: ORG, userId: ADMIN }, trx => actingSession(trx, session(ADMIN)))
-    expect(acting).toEqual({ fresh: true })
+    expect(acting).toEqual({ stampFresh: true, pinSet: true, issuedUnderPinRule: true })
     const read = statements.find(s => s.text.includes('from people p'))
     expect(read?.text).toMatch(/for share of p, d, s$/)
     expect(read?.text).toContain('s.reauthenticated_at > now() - $1::interval as fresh')
-    expect(read?.values).toEqual(['5 minutes', ORG, ADMIN, MY_DEVICE, SESSION, '30 days'])
+    // D46: the users row joins unlocked, and a session issued under the PIN rule is the one whose
+    // lifetime is shorter than SESSION's.
+    expect(read?.text).toContain('u.pin_hash is not null as pin_set')
+    expect(read?.text).toContain('s.expires_at - s.created_at < $2::interval as issued_under_pin_rule')
+    expect(read?.text).toContain('join users u on u.org_id = p.org_id and u.id = p.id')
+    expect(read?.values).toEqual(['5 minutes', '2160 hours', ORG, ADMIN, MY_DEVICE, SESSION, '30 days'])
   })
 
   it('takes the person FOR NO KEY UPDATE for an action that ends all their sessions, and no lock for a GET', async () => {
@@ -70,9 +78,7 @@ describe('C0.5 T14 the acting session, re-read in the action’s own transaction
       const { db, statements } = org(false)
       expect(
         await withOrg(db, { orgId: ORG, userId: ADMIN }, trx => actingSession(trx, session(ADMIN), options)),
-      ).toEqual({
-        fresh: false,
-      })
+      ).toEqual({ stampFresh: false, pinSet: true, issuedUnderPinRule: true })
       expect(statements.find(s => s.text.includes('from people p'))?.text).toMatch(ending)
     }
   })
@@ -145,7 +151,21 @@ describe('C0.5 §9.4 T13 deciding a request with can()', () => {
       withOrg(stale.db, { orgId: ORG, userId: ADMIN }, trx =>
         authorise(trx, session(ADMIN), { action: 'person.deactivate', person: MEMBER }, 'forbidden'),
       ),
-    ).rejects.toMatchObject({ status: 403, code: 'reauth_required' })
+    ).rejects.toMatchObject({ status: 403, code: 'reauth_required', extra: { method: 'pin' } })
+    // D46: an Admin on a code-only session must sign in again, a fresh stamp notwithstanding.
+    const codeOnly = org(true, false)
+    await expect(
+      withOrg(codeOnly.db, { orgId: ORG, userId: ADMIN }, trx =>
+        authorise(trx, session(ADMIN), { action: 'person.deactivate', person: MEMBER }, 'forbidden'),
+      ),
+    ).rejects.toMatchObject({ status: 403, code: 'reauth_required', extra: { method: 'sign_in' }, person: ADMIN })
+    // A Team Admin on a code-only session re-authenticates by SMS code (AQ-01).
+    const member = org(false, false)
+    await expect(
+      withOrg(member.db, { orgId: ORG, userId: MEMBER }, trx =>
+        authorise(trx, session(MEMBER), { action: 'passkeys.add_own' }, 'forbidden'),
+      ),
+    ).rejects.toMatchObject({ status: 403, code: 'reauth_required', extra: { method: 'code' } })
     const fresh = org(true)
     await expect(
       withOrg(fresh.db, { orgId: ORG, userId: ADMIN }, trx =>

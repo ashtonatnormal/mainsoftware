@@ -81,16 +81,22 @@ export type AdminRequest =
   // (packages/shared FLAGS); whether the flag is locked is the database's to say.
   | { action: 'flag.set'; key: string }
 
-// Your own devices and passkeys (ACC-02, ACC-04), for any active person. Listing and signing out
-// devices need no re-authentication and are never refused, though a device you name must be yours
-// and still signed in. Adding or removing a passkey changes how the account is signed in to, so it
-// needs a fresh re-authentication (T14), and a passkey you name must be yours and not removed.
+// Your own session, devices and passkeys (ACC-02, ACC-04, T21), for any active person. Reading your
+// own session, listing and signing out devices need no re-authentication and are never refused,
+// though a device you name must be yours and still signed in. Adding or removing a passkey changes
+// how the account is signed in to, so it needs a fresh re-authentication (T14), and a passkey you
+// name must be yours and not removed.
 export type SelfRequest =
   // No device: this one, or all your others (the server says which).
   | { action: 'devices.sign_out_own'; device?: Id }
   | { action: 'devices.list_own' }
   | { action: 'passkeys.add_own' }
   | { action: 'passkeys.remove_own'; passkey: Id }
+  // Who you are and the client flags evaluated for you (the web shell: GET /api/session and
+  // GET /api/flags; T17 item 11, T21), for any active person; never an assistant, an agent or the
+  // system principal (R9-03), and no re-authentication. It names no one, so it can't reach anyone
+  // else's session.
+  | { action: 'session.read_own' }
 
 // A live topic on the realtime gateway (BUILD-PLAN C0.7, TECH-SPEC T19 item 7): a person's own,
 // their org's, or a team's. C1.1 adds spaces, decided by canRead or by membership (OD-05).
@@ -105,7 +111,7 @@ export type Request = ContentRequest | CreateRequest | AdminRequest | SelfReques
 
 // What the server knows about the session making the request. Every admin request, and adding or
 // removing your own passkey, needs a recent re-authentication (§9.4, T14); the server decides how
-// recent and passes the result.
+// recent and passes the result, computed by reauthenticated() (reauth.ts, D46).
 export interface RequestContext {
   reauthenticated?: boolean
 }
@@ -147,6 +153,7 @@ export const SELF_ACTIONS = new Set<string>([
   'devices.list_own',
   'passkeys.add_own',
   'passkeys.remove_own',
+  'session.read_own',
 ])
 
 export function isSelfRequest(request: Request): request is SelfRequest {

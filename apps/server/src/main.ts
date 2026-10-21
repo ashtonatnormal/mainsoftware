@@ -1,12 +1,13 @@
 // The server's entry point: `node src/main.ts`, with ROLE choosing api, realtime or worker (T2).
 // All three roles come from one image and serve /health and /ready. The api role adds the
-// sign-in, device and admin routes under /api, with its SMS provider (C0.5), and the flags route
-// (C0.6); the realtime role adds the gateway on /ws (C0.7, TECH-SPEC T19): topics, fan-out from each
-// org's Valkey stream on a blocking reader connection of its own, and sockets closed within 60 s of
-// their access ending, plus /ready/local for the load balancer. Both keep the flags of the orgs they
-// serve, polled and told of changes on Valkey (C0.6, T17). The worker connects as hearth_worker and
-// runs the job queue, the scheduler and the outbox consumers (C0.6, T15-T18; worker/index.ts). Each
-// role serves only its own routes (scripts/check-server.sh).
+// sign-in, device and admin routes under /api, with its SMS provider (C0.5), the flags route
+// (C0.6) and the web shell's reads (C0.8, web/routes.ts); the realtime role adds the gateway on
+// /ws (C0.7, TECH-SPEC T19): topics, fan-out from each org's Valkey stream on a blocking reader
+// connection of its own, and sockets closed within 60 s of their access ending, plus /ready/local
+// for the load balancer. Both keep the flags of the orgs they serve, polled and told of changes on
+// Valkey (C0.6, T17). The worker connects as hearth_worker and runs the job queue, the scheduler
+// and the outbox consumers (C0.6, T15-T18; worker/index.ts). Each role serves only its own routes
+// (scripts/check-server.sh).
 import { performance } from 'node:perf_hooks'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { Redis } from 'ioredis'
@@ -14,12 +15,15 @@ import type { Pool } from 'pg'
 import type { ApiDeps } from '#src/api.ts'
 import { buildApp } from '#src/app.ts'
 import { deriveKeys } from '#src/auth/crypto.ts'
-import { createLogSmsProvider } from '#src/auth/sms/log.ts'
+import { createFakeVerify } from '#src/auth/sms/fake.ts'
+import type { SmsProvider } from '#src/auth/sms/provider.ts'
+import { createTwilioVerify } from '#src/auth/sms/twilio.ts'
 import { valkeyKeys, valkeyPrefix } from '#src/auth/valkey-keys.ts'
 import { ConfigError, loadConfig } from '#src/config.ts'
 import { createDatabase } from '#src/db/database.ts'
 import { appRoleCheck, createPool, workerRoleCheck, workerRolesCheck } from '#src/db/pool.ts'
 import { FlagCache } from '#src/flags/cache.ts'
+import { C06_GATE } from '#src/jobs/gate.ts'
 import { createLogger } from '#src/logger.ts'
 import { Subscriptions } from '#src/pubsub.ts'
 import type { RealtimeDeps } from '#src/realtime/index.ts'
@@ -91,6 +95,17 @@ if (config.role === 'api' || config.role === 'realtime') {
   flags = new FlagCache({ db, logger })
   void flags.listen(subscriptions, valkeyKeys(keyPrefix).flags)
 }
+// The SMS provider config names (T20). Unset: no code can be sent, so code requests answer 503
+// unavailable. Each factory refuses the wrong machine again, independently of config.ts.
+function smsProvider(auth: NonNullable<typeof config.auth>): SmsProvider | undefined {
+  if (auth.smsProvider === 'fake') return createFakeVerify({ deployEnv: config.deployEnv, appOrigin: config.appOrigin })
+  if (auth.smsProvider === 'twilio') {
+    if (auth.twilio === undefined) throw new Error('SMS_PROVIDER=twilio has no Twilio settings')
+    return createTwilioVerify({ deployEnv: config.deployEnv, appOrigin: config.appOrigin, ...auth.twilio })
+  }
+  return undefined
+}
+
 if (config.role === 'api' && flags !== undefined) {
   // loadConfig refuses the api role without AUTH_SECRET, so this holds.
   if (config.auth === undefined) throw new Error('the api role has no sign-in settings')
@@ -98,11 +113,10 @@ if (config.role === 'api' && flags !== undefined) {
     db,
     valkey,
     keys: deriveKeys(config.auth.secret),
-    // Unset: no code can be sent, so code requests answer 503 unavailable.
-    sms:
-      config.auth.smsProvider === 'log'
-        ? createLogSmsProvider({ deployEnv: config.deployEnv, appOrigin: config.appOrigin })
-        : undefined,
+    sms: smsProvider(config.auth),
+    // No provider is cleared in the transfer register until C0.9 passes the real gate here
+    // (PDPA-10), so Twilio sends nothing before then.
+    gate: C06_GATE,
     keyPrefix,
     flags,
   }

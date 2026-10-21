@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "description": "Domain types and zod schemas shared by the web app and the server.",
   "exports": {
     ".": "./src/index.ts"

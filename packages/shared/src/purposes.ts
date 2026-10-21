@@ -76,6 +76,7 @@ export function isAiPurpose(key: string): boolean {
 export const PROVIDERS = [
   'aws',
   'aws_sms',
+  'twilio',
   'livekit',
   'openai',
   'bedrock',

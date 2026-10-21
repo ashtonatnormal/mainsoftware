@@ -5,11 +5,11 @@ import { describe, expect, it } from 'vitest'
 import type { ApiDeps } from '#src/api.ts'
 import { buildApp } from '#src/app.ts'
 import { deriveKeys } from '#src/auth/crypto.ts'
+import { FakeVerify } from '#src/auth/sms/fake.ts'
 import type { Database } from '#src/db/database.ts'
 import { createLogger } from '#src/logger.ts'
 import type { Check } from '#src/ready.ts'
 import { staticFlags } from '#src/testing/flags.ts'
-import { MemorySms } from '#src/testing/sms.ts'
 
 const APP_ORIGIN = 'https://hearth.example.com'
 const USER_CONTENT_ORIGIN = 'https://content.hearth.example.net'
@@ -209,7 +209,7 @@ function apiApp(touched: string[]) {
     db: untouchable<Database>('db', touched),
     valkey: untouchable<Redis>('valkey', touched),
     keys: deriveKeys('unit-test-unit-test-unit-test-unit-test'),
-    sms: new MemorySms(),
+    sms: new FakeVerify(),
     keyPrefix: 'it:unit:',
     flags: staticFlags(),
   }

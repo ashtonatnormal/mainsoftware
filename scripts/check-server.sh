@@ -17,8 +17,8 @@
 # (invalid_phone) and 404, the realtime role 404 and 403, and the worker 404 and 404: only the
 # realtime role listens for upgrades, so elsewhere Node passes one to Fastify as a plain request.
 # Both stop before anything is looked up or sent (the number is refused before Valkey, the
-# upgrade before its session lookup), so they need no stack, and the local SMS provider prints
-# nothing that would break the JSON-only check. This is the only check that main.ts puts the
+# upgrade before its session lookup), so they need no stack, and the local fake SMS provider
+# prints nothing that would break the JSON-only check. This is the only check that main.ts puts the
 # routes on the right roles; the unit tests build the app directly. The api role also loads
 # @simplewebauthn/server as it starts, so the image mode proves the image holds it.
 #

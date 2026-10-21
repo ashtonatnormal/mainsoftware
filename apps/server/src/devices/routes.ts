@@ -1,9 +1,10 @@
-// Your own devices (ACC-04, T14 item 7): the list of browsers and phones you're signed in on,
-// with your passkeys, and signing one out, or all but this one. Signing a device out ends its
-// sessions in the same transaction (0003's devices_end_sessions), which appends signin.ended to the
-// outbox (C0.6, T16), and after the commit the realtime role is told to close their sockets
-// (revocation/channels.ts), as the worker's revocation consumer also does from the outbox (C0.7).
-// Your own list shows exact times; an admin's view of it shows dates only (admin/people.ts).
+// Your own devices (ACC-04, T14 item 7): the list of browsers and phones you're signed in on (with
+// your passkeys only while those are switched on, D46), and signing one out, or all but this one.
+// Signing a device out ends its sessions in the same transaction (0003's devices_end_sessions),
+// which appends signin.ended to the outbox (C0.6, T16), and after the commit the realtime role is
+// told to close their sockets (revocation/channels.ts), as the worker's revocation consumer also
+// does from the outbox (C0.7). Your own list shows exact times; an admin's view of it shows dates
+// only (admin/people.ts).
 import type { FastifyInstance } from 'fastify'
 import { sql } from 'kysely'
 import { z } from 'zod'
@@ -74,6 +75,8 @@ export async function listOwn(api: Api, session: SessionIds, info: ReqInfo): Pro
       select d.id, d.label, d.created_at, d.last_seen_at from devices d
       where d.org_id = ${orgId} and d.user_id = ${userId} and d.signed_out_at is null and ${hasLiveSession}
       order by d.last_seen_at desc`.execute(trx)
+    // Passkeys are listed only while they're switched on (D46); off, the reply has no passkeys key.
+    if (!api.passkeys) return { body: { devices: devices.rows.map(d => deviceJSON(d, session.deviceId)) } }
     const passkeys = await sql<{
       id: string
       created_at: Date
@@ -86,13 +89,7 @@ export async function listOwn(api: Api, session: SessionIds, info: ReqInfo): Pro
       order by k.created_at`.execute(trx)
     return {
       body: {
-        devices: devices.rows.map(d => ({
-          id: d.id,
-          label: d.label,
-          createdAt: d.created_at,
-          lastSeenAt: d.last_seen_at,
-          current: d.id === session.deviceId,
-        })),
+        devices: devices.rows.map(d => deviceJSON(d, session.deviceId)),
         passkeys: passkeys.rows.map(k => ({
           id: k.id,
           createdAt: k.created_at,
@@ -103,6 +100,11 @@ export async function listOwn(api: Api, session: SessionIds, info: ReqInfo): Pro
       },
     }
   })
+}
+
+// One device as GET /api/devices lists it.
+function deviceJSON(d: { id: string; label: string; created_at: Date; last_seen_at: Date }, current: string) {
+  return { id: d.id, label: d.label, createdAt: d.created_at, lastSeenAt: d.last_seen_at, current: d.id === current }
 }
 
 // --- POST /api/devices/sign-out -------------------------------------------------------------

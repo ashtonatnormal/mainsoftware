@@ -5,6 +5,8 @@
 //
 // A wrong PIN is never thrown: the failure count and its audit rows are returned with the
 // result, so the transaction commits them before the caller answers (auth/errors.ts).
+
+import type { PinStateJSON } from '@hearth/shared'
 import type { FastifyBaseLogger } from 'fastify'
 import { sql } from 'kysely'
 import { writeAudit } from '#src/auth/audit.ts'
@@ -107,12 +109,9 @@ export async function checkPin(
   return { ok: false, reason: 'wrong', state: next }
 }
 
-// How a PIN's state is shown to the person whose PIN it is (T14 item 9): after a correct code at
-// step-up, or with a refusal. Never for 'unset', which the flow answers by asking for a new PIN.
-export type PinStateJSON =
-  | { state: 'ok'; triesBeforeLock: number; triesBeforeAdminLock: number }
-  | { state: 'locked'; until: string }
-  | { state: 'admin_locked' }
+// How a PIN's state is shown to the person whose PIN it is (T14 item 9); the type is the shared
+// contract's (packages/shared). Never for 'unset', which the flow answers by asking for a new PIN.
+export type { PinStateJSON }
 
 export function pinStateJSON(state: Exclude<PinState, { state: 'unset' }>): PinStateJSON {
   switch (state.state) {

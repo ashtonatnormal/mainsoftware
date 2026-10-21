@@ -300,6 +300,11 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
   })
 
   it('GW-04 GW-05 PRD-108 T19: a person subscribes to their person, org and team topics; another person’s, another org’s, a team they’re not in and an unknown team are refused alike', async () => {
+    // A realtime app of its own, whose periodic check can't decide a topic first (NO_PERIODIC_RECHECK):
+    // a tick that reads a refusal while the sub is deciding drops the topic, and the ack then names
+    // it in no list (frames.ts #ack).
+    const app = await s.startRealtime({ ...NO_PERIODIC_RECHECK, subscribe: true })
+    await ready(app)
     const p = await s.person({ pin: s.newPin() })
     const other = await s.person()
     const elsewhere = await s.person({ org: 'second' })
@@ -307,7 +312,7 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     const theirs = await s.team()
     await s.addMember(mine, p)
     await s.addMember(theirs, other)
-    const socket = await s.gatewaySocket(await s.signIn(p))
+    const socket = await s.gatewaySocket(await s.signIn(p), { url: app.url })
 
     const allowed = [personTopic(p), orgTopic(s.org.id), teamTopic(mine)]
     const granted = await socket.sub(allowed)
@@ -317,6 +322,7 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     const refused = await socket.sub(forbidden)
     expect(refused).toMatchObject({ ok: [], retry: [] })
     expect([...refused.refused].sort()).toEqual([...forbidden].sort())
+    expect(socket.all('dropped')).toEqual([])
     // Missing and forbidden alike: one list, no reason, and the same frame shape as a grant, which
     // carries nothing about the org's stream.
     expect(Object.keys(JSON.parse(socket.texts.at(-1) ?? '{}')).sort()).toEqual(
@@ -324,7 +330,7 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     )
     // Asking again for what is held is acked ok, with no new decision needed.
     expect(await socket.sub([personTopic(p)])).toMatchObject({ ok: [personTopic(p)], refused: [] })
-    expect(s.realtime.server.counts().topics).toBeGreaterThanOrEqual(3)
+    expect(app.server.counts().topics).toBeGreaterThanOrEqual(3)
   })
 
   it('R6-10 ACC-05: a deactivation closes every socket of every device of the person within 60 s by the push (under 2 s)', async () => {
@@ -551,8 +557,9 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
   })
 
   it('R6-10 ACC-04 PRD-53: a PIN reset closes every socket of the person', async () => {
-    const admin = await s.person({ roles: ['admin'], pin: s.newPin() })
-    const r = await s.person({ pin: s.newPin() })
+    // A PIN belongs to a PIN-role holder (D46), and only an Owner resets one.
+    const admin = await s.person({ roles: ['owner'], pin: s.newPin() })
+    const r = await s.person({ roles: ['leadership'], pin: s.newPin() })
     const sockets = [await s.gatewaySocket(await s.signIn(r)), await s.gatewaySocket(await s.signIn(r))]
     const adminBrowser = await s.signIn(admin)
     const started = Date.now()
@@ -563,6 +570,22 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
       expect(closed).toMatchObject(GATEWAY_CLOSE.signedOut)
       expect(closed.at - started).toBeLessThan(2000)
     }
+  })
+
+  it('D46 AQ-05/06 T19 item 13: a PIN-rule session that runs out (168 h) closes its socket by the re-check, its latency from expires_at under 60 s', async () => {
+    const lone = await s.startRealtime({ recheckMs: 500, subscribe: false })
+    const p = await s.person({ roles: ['leadership'] })
+    const browser = await s.signIn(p)
+    const socket = await s.gatewaySocket(browser, { url: lone.url })
+    await socket.sub([personTopic(p)])
+    // A few seconds short of 168 hours, so the record's start (expires_at) is recent.
+    await s.age((await s.sessionOf(browser)).id, '167 hours 59 minutes 57 seconds')
+    const closed = await closeOf(socket, 10_000)
+    expect(closed).toMatchObject(GATEWAY_CLOSE.signedOut)
+    const [applied] = linesOf(lone, 'revocation_applied')
+    expect(applied).toMatchObject({ path: 'recheck' })
+    expect(Number(applied?.latencyMs)).toBeLessThan(60_000)
+    expect(s.logs.filter(line => line.instance === lone.instance && Number(line.level) >= 50)).toEqual([])
   })
 
   it('R6-10 ADM-02: an admin’s sign-out of someone’s devices closes their sockets', async () => {
@@ -1140,6 +1163,11 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
   })
 
   it('GW-09 Rule 6: a reconnect re-authorises every topic: one lost while away is refused, one left and rejoined is ok again (decided now), none of the missed events is replayed, and later events reach only the topics held', async () => {
+    // A realtime app of its own, whose periodic check can't decide a topic first (NO_PERIODIC_RECHECK):
+    // a tick that reads a refusal while the sub is deciding drops the topic, and the ack then names
+    // it in no list (frames.ts #ack).
+    const app = await s.startRealtime({ ...NO_PERIODIC_RECHECK, subscribe: true })
+    await ready(app)
     const org = await s.newOrg()
     const p = await s.person({ org, pin: s.newPin() })
     const watching = await s.person({ org, pin: s.newPin() })
@@ -1150,14 +1178,14 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     const topics = [teamTopic(left), teamTopic(rejoined), personTopic(p)]
     // Someone else's socket keeps the reader on the org's stream; a marker it has seen means the
     // reader has dispatched everything before it (as in the reconnect test above).
-    const watcher = await s.gatewaySocket(await s.signIn(watching))
+    const watcher = await s.gatewaySocket(await s.signIn(watching), { url: app.url })
     await watcher.sub([orgTopic(org.id)])
     const settle = async (): Promise<void> => {
       await publish(org.id, orgTopic(org.id), 'it.marker')
       expect(await watcher.next('ev')).toMatchObject({ type: 'it.marker' })
     }
 
-    const socket = await s.gatewaySocket(browser)
+    const socket = await s.gatewaySocket(browser, { url: app.url })
     expect((await socket.sub(topics)).ok).toEqual(topics)
     socket.ws.close()
     await socket.closed
@@ -1171,7 +1199,7 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
     await publish(org.id, personTopic(p), 'it.missed')
     await settle()
 
-    const back = await s.gatewaySocket(browser)
+    const back = await s.gatewaySocket(browser, { url: app.url })
     expect(await back.sub(topics)).toEqual({
       v: 1,
       t: 'ack',
@@ -1180,6 +1208,7 @@ describe('C0.7 the realtime gateway on the Compose stack (T19, Rule 6, ACC-05)',
       refused: [teamTopic(left)],
       retry: [],
     })
+    expect(back.all('dropped')).toEqual([])
     await settle()
     expect(back.all('ev')).toEqual([])
     // Later events: the held topics' arrive, the refused team's doesn't.

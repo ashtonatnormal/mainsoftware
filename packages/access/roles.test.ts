@@ -1,12 +1,13 @@
 // The per-role matrix for admin actions (CLAUDE.md Database: "The full per-role matrix (Member,
 // Team Admin, Admin, Owner, AI Admin, Leadership, DPO, Compliance Officer, including the roles that
 // must be refused) lives in packages/access's tests"; ACC-10; BUILD-PLAN C0.4). Every admin request
-// in src/requests.ts, the create request and every request about your own devices and passkeys is
-// decided by can() for every actor below, after a fresh re-authentication, and each row writes out
-// exactly who it allows: every other actor must be refused. After the matrix come the dimensions
-// one row can't show: re-authentication, the two-person rule, changing your own roles, ended roles,
-// roles with no admin power yet, and a run of every admin action an Admin may take, which never
-// opens #leadership.
+// in src/requests.ts, the create request and every request about your own session, devices and
+// passkeys is decided by can() for every actor below, after a fresh re-authentication, and each row
+// writes out exactly who it allows: every other actor must be refused. After the matrix come the
+// dimensions one row can't show: re-authentication, the two-person rule, changing your own roles,
+// ended roles, roles with no admin power yet, a run of every admin action an Admin may take, which
+// never opens #leadership, and (from C0.8) the PIN roles and the re-authentication method each
+// session uses (D46).
 //
 // The actors are the fixture org (src/testing) plus one persona per role holding exactly that role,
 // so each role's powers show on their own, and the seed's combined holders, which show that roles
@@ -20,13 +21,19 @@ import {
   can,
   canRead,
   type Facts,
+  holdsPinRole,
   type Id,
   listAccessible,
   type OrgRole,
+  OWNER_ONLY_ROLES,
+  PIN_ROLES,
+  type ReauthFacts,
   type Ref,
   type Request,
   type ResourceKind,
   type RoleProposalFact,
+  reauthenticated,
+  reauthMethodOf,
   type SelfRequest,
   type Subject,
   type Topic,
@@ -42,6 +49,7 @@ import {
   C,
   DEV,
   fixtureFacts,
+  HEARTH,
   human,
   M,
   ORG_2,
@@ -1215,6 +1223,19 @@ const SECTIONS: readonly Section[] = [
       },
     ],
   },
+  {
+    ids: 'T17 T21',
+    title: 'your own session and client flags (no re-authentication)',
+    rows: [
+      {
+        // The web shell's GET /api/session and GET /api/flags (T17 item 11). A leaver, another org's
+        // Owner, an assistant, an agent and the system principal are refused (ACC-05, ACC-11, R9-03).
+        name: 'everyone active reads their own session and client flags',
+        request: { action: 'session.read_own' },
+        allowed: ACTIVE_PEOPLE,
+      },
+    ],
+  },
 ]
 
 const ALL_ROWS: readonly Row[] = SECTIONS.flatMap(s => s.rows)
@@ -1252,12 +1273,13 @@ const ADMIN_ACTION_IDS: Record<AdminRequest['action'], string> = {
 const ADMIN_ACTIONS = Object.keys(ADMIN_ACTION_IDS) as AdminRequest['action'][]
 const isAdminRow = (row: Row) => (ADMIN_ACTIONS as string[]).includes(row.request.action)
 
-// Every request about your own devices and passkeys, the same way.
+// Every request about your own session, devices and passkeys, the same way.
 const SELF_ACTION_IDS: Record<SelfRequest['action'], string> = {
   'devices.sign_out_own': 'ACC-04',
   'devices.list_own': 'ACC-04',
   'passkeys.add_own': 'ACC-02 T14',
   'passkeys.remove_own': 'ACC-02 T14',
+  'session.read_own': 'T17 T21',
 }
 const SELF_KINDS = Object.keys(SELF_ACTION_IDS) as SelfRequest['action'][]
 const PASSKEY_ACTIONS: readonly SelfRequest['action'][] = ['passkeys.add_own', 'passkeys.remove_own']
@@ -1310,7 +1332,7 @@ describe('ACC-10 CLAUDE.md Database: the matrix', () => {
     }
   })
 
-  test('ACC-10 ADM-02 ACC-04: the matrix decides every admin request kind, the create request and every request about your own devices and passkeys', () => {
+  test('ACC-10 ADM-02 ACC-04 T21: the matrix decides every admin request kind, the create request and every request about your own session, devices and passkeys', () => {
     const actions = new Set(ALL_ROWS.map(r => r.request.action))
     for (const action of ADMIN_ACTIONS) expect(actions.has(action), action).toBe(true)
     expect(actions.has('create')).toBe(true)
@@ -1358,18 +1380,23 @@ describe('§9.4 ADM-02: every admin request needs a fresh re-authentication', ()
     })
   }
 
-  test('§9.4 ACC-04: listing and signing out your own devices and creating things need no re-authentication', () => {
+  test('§9.4 ACC-04 T21: reading your own session and client flags, listing and signing out your own devices and creating things need no re-authentication', () => {
     const rows = ALL_ROWS.filter(
       r =>
+        r.request.action === 'session.read_own' ||
         r.request.action === 'devices.sign_out_own' ||
         r.request.action === 'devices.list_own' ||
         r.request.action === 'create',
     )
+    expect(rows.some(r => r.request.action === 'session.read_own')).toBe(true)
     for (const row of rows) {
-      expect(allowedIn(worldOf(row), row.request), row.name).toEqual(
-        ACTORS.filter(a => can(worldOf(row), a.subject, row.request)).map(a => a.key),
-      )
+      for (const context of [undefined, {}, { reauthenticated: false }]) {
+        expect(allowedIn(worldOf(row), row.request), `${JSON.stringify(context)}: ${row.name}`).toEqual(
+          ACTORS.filter(a => can(worldOf(row), a.subject, row.request, context)).map(a => a.key),
+        )
+      }
     }
+    expect(can(W, human(ONE.member), { action: 'session.read_own' })).toBe(true)
     expect(can(W, human(ONE.member), { action: 'devices.sign_out_own' })).toBe(true)
     expect(can(W, human(ONE.member), { action: 'devices.list_own' })).toBe(true)
     expect(can(W, human(P.marcus), { action: 'devices.sign_out_own', device: DEV.marcusPhone })).toBe(true)
@@ -1757,6 +1784,22 @@ describe('R9-03 D16 ACC-11: only a person on this org’s roster holds admin pow
   })
 })
 
+describe('T17 T21: your own session and client flags', () => {
+  test('T21 ACC-05: reading your own session is decided by the acting person alone; a field naming someone else changes nothing', () => {
+    // The request names no one. A field smuggled into it, naming an active person or a leaver,
+    // neither opens it to a leaver nor closes it to an active person (the server never sends one).
+    const read = { action: 'session.read_own' } as const
+    for (const named of [P.ashton, P.formerDpo, ORG_2_PEOPLE.owner]) {
+      const smuggled = { ...read, person: named, userId: named } as unknown as SelfRequest
+      for (const a of ACTORS) {
+        expect(can(W, a.subject, smuggled), `${a.key} naming ${named}`).toBe(can(W, a.subject, read))
+      }
+    }
+    expect(can(W, human(P.formerDpo), read)).toBe(false)
+    expect(can(W, human(P.ashton), read)).toBe(true)
+  })
+})
+
 describe('ACC-04 ACC-06: device sign-out and the lone Owner', () => {
   test('ACC-04: every active person lists and signs out their own devices, either way, and nobody else’s without Admin', () => {
     for (const a of ACTORS) {
@@ -2002,5 +2045,153 @@ describe('Rule 9 ACC-10 ADM-03 ACC-07: no run of admin actions opens content to 
     expect(run.allowed.get('channel.transfer_ownership') ?? 0).toBe(0)
     expect(run.allowed.get('role.grant') ?? 0).toBe(0)
     expect(readable(run.last, P.marcus)).toEqual(before)
+  })
+})
+
+// Who signs in and re-authenticates with the PIN (D46, AQ-02), and the method each session must use
+// (AQ-01). The server reads ReauthFacts from the session in the deciding transaction; can() still
+// receives only the boolean reauthenticated() computes. The exports avoid the word privileged,
+// which means Rule 9 access here (R9-02).
+describe('D46 AQ-02 AQ-01: the PIN roles and the re-authentication method', () => {
+  const facts = (f: Partial<ReauthFacts> = {}): ReauthFacts => ({
+    stampFresh: true,
+    pinSet: true,
+    issuedUnderPinRule: false,
+    ...f,
+  })
+  // The same matrix with every role row of one person revoked.
+  const revoked = (person: Id) =>
+    matrixWorld(f => ({
+      ...f,
+      roles: f.roles.map(r => (r.personId === person ? { ...r, revokedAt: 1 } : r)),
+    }))
+  const SIX = [ONE.owner, ONE.admin, ONE.aiAdmin, ONE.leadership, ONE.dpo, ONE.compliance]
+
+  test('D46 AQ-02 ACC-10: PIN_ROLES is exactly the six Owner-only roles and leaves out Team Admin', () => {
+    expect([...PIN_ROLES]).toEqual([...OWNER_ONLY_ROLES])
+    expect([...PIN_ROLES].sort()).toEqual(['admin', 'ai_admin', 'compliance_officer', 'dpo', 'leadership', 'owner'])
+    expect(PIN_ROLES).not.toContain('team_admin')
+  })
+
+  test('D46 AQ-02: each of the six Owner-only roles is a PIN role on its own', () => {
+    for (const person of SIX) expect(holdsPinRole(W, person), person).toBe(true)
+  })
+
+  test('D46 AQ-02: the seed’s holders add up; its Team Admins and Members sign in on the code alone', () => {
+    // Ashton (Owner, DPO), Arjun (Admin, AI Admin), Priya, Wei Ling and Ahmad (Leadership).
+    for (const person of [P.ashton, P.arjun, P.priya, P.weiling, P.ahmad]) {
+      expect(holdsPinRole(W, person), person).toBe(true)
+    }
+    // Marcus and Hui Min (Team Admins), and Members.
+    for (const person of [P.marcus, P.huimin, P.kelvin, P.nadia, P.rachel, P.daniel, P.cfo]) {
+      expect(holdsPinRole(W, person), person).toBe(false)
+    }
+  })
+
+  test('D46 AQ-02 Rule 6 ACC-05: a revoked row, a leaver, a Team Admin and a Member hold no PIN role', () => {
+    expect(holdsPinRole(W, P.formerAdmin)).toBe(false) // the Admin row was revoked
+    expect(holdsPinRole(W, P.formerDpo)).toBe(false) // has left; the DPO row was never revoked
+    expect(holdsPinRole(W, ONE.teamAdmin)).toBe(false) // Team Admin of a live team
+    expect(holdsPinRole(W, P.farah)).toBe(false) // Team Admin of an archived team
+    expect(holdsPinRole(W, ONE.member)).toBe(false)
+    for (const person of SIX) expect(holdsPinRole(revoked(person), person), person).toBe(false)
+  })
+
+  test('D46 ACC-10: assistants, agents, the system principal and unknown ids hold no PIN role', () => {
+    for (const id of [...Object.values(AS), ...Object.values(AG), HEARTH, X.unknownPerson]) {
+      expect(holdsPinRole(W, id), id).toBe(false)
+      expect(reauthMethodOf(W, id, facts()), id).toBe('code')
+    }
+  })
+
+  // The whole table: the session decides first, then the holder's roles now. stampFresh never
+  // changes the method, only whether the stamp counts.
+  const TABLE: { issuedUnderPinRule: boolean; pinSet: boolean; holderNow: boolean; method: string }[] = [
+    { issuedUnderPinRule: true, pinSet: true, holderNow: true, method: 'pin' },
+    { issuedUnderPinRule: true, pinSet: true, holderNow: false, method: 'pin' },
+    { issuedUnderPinRule: true, pinSet: false, holderNow: true, method: 'sign_in' },
+    { issuedUnderPinRule: true, pinSet: false, holderNow: false, method: 'sign_in' },
+    { issuedUnderPinRule: false, pinSet: true, holderNow: true, method: 'sign_in' },
+    { issuedUnderPinRule: false, pinSet: false, holderNow: true, method: 'sign_in' },
+    { issuedUnderPinRule: false, pinSet: true, holderNow: false, method: 'code' },
+    { issuedUnderPinRule: false, pinSet: false, holderNow: false, method: 'code' },
+  ]
+  test.each(TABLE)(
+    'D46 AQ-01 AQ-02: issued under the PIN rule $issuedUnderPinRule, PIN set $pinSet, holder now $holderNow → $method',
+    ({ issuedUnderPinRule, pinSet, holderNow, method }) => {
+      // A holder now: each of the six. Not one: a Member, a Team Admin, and a former holder.
+      const people = holderNow ? SIX : [ONE.member, ONE.teamAdmin, P.formerAdmin]
+      for (const person of people) {
+        for (const stampFresh of [true, false]) {
+          const f = facts({ issuedUnderPinRule, pinSet, stampFresh })
+          expect(reauthMethodOf(W, person, f), person).toBe(method)
+          expect(reauthenticated(W, person, f), person).toBe(stampFresh && method !== 'sign_in')
+        }
+      }
+    },
+  )
+
+  test('D46: a session issued under the PIN rule keeps the PIN after its holder’s roles are removed', () => {
+    for (const person of SIX) {
+      expect(reauthMethodOf(revoked(person), person, facts({ issuedUnderPinRule: true })), person).toBe('pin')
+    }
+  })
+
+  test('D46 AQ-02: a remove, SMS re-auth, re-grant cycle can’t put an SMS stamp on a PIN-rule session', () => {
+    const session = facts({ issuedUnderPinRule: true })
+    // Removed: the session is still on the PIN rule, so the SMS code routes refuse it.
+    const removed = revoked(ONE.admin)
+    expect(holdsPinRole(removed, ONE.admin)).toBe(false)
+    expect(reauthMethodOf(removed, ONE.admin, session)).toBe('pin')
+    // Re-granted: still the PIN, and only a PIN stamp counts.
+    expect(reauthMethodOf(W, ONE.admin, session)).toBe('pin')
+    expect(reauthenticated(W, ONE.admin, session)).toBe(true)
+    expect(reauthenticated(W, ONE.admin, { ...session, stampFresh: false })).toBe(false)
+  })
+
+  test('D46: a role granted mid-session to a code-only session is mended only by a new sign-in', () => {
+    // Before the grant the Member re-authenticates by SMS code; after it, a stamp on that session
+    // never counts, however fresh.
+    const session = facts({ pinSet: false })
+    expect(reauthMethodOf(W, ONE.member, session)).toBe('code')
+    const granted = matrixWorld(f => ({ ...f, roles: [...f.roles, roleRow(ONE.member, 'admin')] }))
+    expect(reauthMethodOf(granted, ONE.member, session)).toBe('sign_in')
+    expect(reauthenticated(granted, ONE.member, session)).toBe(false)
+  })
+
+  test('D46 ADM-02 T14: can() follows reauthenticated() for admin requests and passkey changes', () => {
+    const team = { action: 'team.create' } as const
+    // An Owner on a PIN-rule session with a fresh PIN stamp may act; on a code-only session, or a
+    // stale stamp, or a PIN-rule session whose PIN was cleared, may not.
+    const ok = { reauthenticated: reauthenticated(W, ONE.owner, facts({ issuedUnderPinRule: true })) }
+    expect(can(W, human(ONE.owner), team, ok)).toBe(true)
+    for (const f of [
+      facts(),
+      facts({ issuedUnderPinRule: true, stampFresh: false }),
+      facts({ issuedUnderPinRule: true, pinSet: false }),
+    ]) {
+      expect(can(W, human(ONE.owner), team, { reauthenticated: reauthenticated(W, ONE.owner, f) })).toBe(false)
+    }
+    // A Member's fresh SMS stamp counts for their own passkeys (dormant in C0.8), a stale one doesn't.
+    const add = { action: 'passkeys.add_own' } as const
+    const member = (f: ReauthFacts) => ({ reauthenticated: reauthenticated(W, ONE.member, f) })
+    expect(can(W, human(ONE.member), add, member(facts()))).toBe(true)
+    expect(can(W, human(ONE.member), add, member(facts({ stampFresh: false })))).toBe(false)
+  })
+
+  test('D46 T21: reading your own session ignores the re-authentication method, so a session only a new sign-in mends still loads the shell', () => {
+    const read = { action: 'session.read_own' } as const
+    // An Owner on a code-only session, or on a PIN-rule session whose PIN was cleared, must sign in
+    // again before any admin action, and a Member's stamp may be stale: each still reads who they are
+    // and their client flags.
+    expect(reauthMethodOf(W, ONE.owner, facts())).toBe('sign_in')
+    for (const [id, f] of [
+      [ONE.owner, facts()],
+      [ONE.owner, facts({ issuedUnderPinRule: true, pinSet: false })],
+      [ONE.member, facts({ stampFresh: false })],
+    ] as const) {
+      expect(reauthenticated(W, id, f), id).toBe(false)
+      expect(can(W, human(id), read, { reauthenticated: reauthenticated(W, id, f) }), id).toBe(true)
+    }
   })
 })

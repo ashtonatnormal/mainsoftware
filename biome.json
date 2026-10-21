@@ -9,6 +9,7 @@
   "javascript": {
     "formatter": { "quoteStyle": "single", "semicolons": "asNeeded", "arrowParentheses": "asNeeded" }
   },
+  "css": { "parser": { "tailwindDirectives": true } },
   "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "linter": {
     "rules": {
@@ -33,5 +34,11 @@
         }
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["apps/web/src/**"],
+      "linter": { "rules": { "correctness": { "noNodejsModules": "error" } } }
+    }
+  ]
 }

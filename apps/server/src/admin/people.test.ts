@@ -2,9 +2,11 @@ import type { Redis } from 'ioredis'
 import { describe, expect, it, vi } from 'vitest'
 import { deactivate, listDevices, resetPin, signOutDevices } from '#src/admin/people.ts'
 import type { Api } from '#src/api.ts'
+import { Breaker } from '#src/auth/breaker.ts'
 import { deriveKeys } from '#src/auth/crypto.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { relyingParty } from '#src/auth/passkeys.ts'
+import { OTP } from '#src/auth/policy.ts'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { AfterResponse, type ReqInfo } from '#src/http.ts'
 import { staticFlags } from '#src/testing/flags.ts'
@@ -24,6 +26,8 @@ const session = { sessionId: SESSION, orgId: ORG, userId: ADMIN, deviceId: DEVIC
 // action's own statements.
 function org(options: {
   fresh?: boolean
+  // Whether the acting session was issued under the PIN rule (D46); the Admin holds a PIN.
+  issuedUnderPinRule?: boolean
   memberLeft?: boolean
   rows?: (statement: Statement) => unknown[] | undefined
 }) {
@@ -31,7 +35,11 @@ function org(options: {
     const answered = options.rows?.(statement)
     if (answered !== undefined) return answered
     const { text } = statement
-    if (text.includes('from people p')) return [{ fresh: options.fresh ?? true }]
+    if (text.includes('from people p')) {
+      return [
+        { fresh: options.fresh ?? true, pin_set: true, issued_under_pin_rule: options.issuedUnderPinRule ?? true },
+      ]
+    }
     if (text.startsWith('select "id", "deactivated_at" from "people"')) {
       return [
         { id: ADMIN, deactivated_at: null },
@@ -63,6 +71,8 @@ function context(pool: ReturnType<typeof scriptedPool>, options: { publishRevoke
     appOrigin: 'https://hearth.example.com',
     names: valkeyKeys('it:unit:'),
     rp: relyingParty('https://hearth.example.com'),
+    otp: { verifyFloorMs: 0, breaker: new Breaker(OTP.breaker) },
+    passkeys: false,
   }
   const info: ReqInfo = {
     ip: '198.51.100.7',
@@ -201,13 +211,27 @@ describe('C0.5 ACC-05 C0.6 T16 deactivating someone', () => {
       })
     }
   })
+
+  it('D46 AQ-02: an Admin on a session issued under the code-only rule must sign in again, even with a fresh stamp', async () => {
+    const c = context(org({ issuedUnderPinRule: false }))
+    const error = await refusal(deactivate(c.api, { person: MEMBER }, session, c.info))
+    expect(error).toMatchObject({ status: 403, code: 'reauth_required', extra: { method: 'sign_in' }, person: ADMIN })
+    const stale = context(org({ fresh: false }))
+    expect(await refusal(deactivate(stale.api, { person: MEMBER }, session, stale.info))).toMatchObject({
+      status: 403,
+      code: 'reauth_required',
+      extra: { method: 'pin' },
+    })
+  })
 })
 
 describe('C0.5 ACC-06 resetting a PIN', () => {
+  // The Admin resets a Member who holds no Owner-only role, so the PIN is a former holder's
+  // leftover one, which an Admin may still clear (D46, T14 item 12).
   it('locks the person, then the account, clears the PIN and lock, ends their sessions and publishes them', async () => {
     const pool = org({
       rows: ({ text }) => {
-        if (text.startsWith('select id from users')) return [{ id: MEMBER }]
+        if (text.startsWith('select pin_hash from users')) return [{ pin_hash: 'hashed' }]
         if (text.startsWith('update sessions')) return ENDED.map(id => ({ id }))
         return undefined
       },
@@ -221,10 +245,10 @@ describe('C0.5 ACC-06 resetting a PIN', () => {
         c.info,
       ),
     ).toEqual({ body: { status: 'pin_reset', sessionsEnded: 2 } })
-    const work = pool.texts().filter(text => /^(select 1 from people|select id from users|update)/.test(text))
+    const work = pool.texts().filter(text => /^(select 1 from people|select pin_hash from users|update)/.test(text))
     expect(work).toEqual([
       'select 1 from people where org_id = $1 and id = $2 for no key update',
-      'select id from users where org_id = $1 and id = $2 for update',
+      'select pin_hash from users where org_id = $1 and id = $2 for update',
       'update users set pin_hash = null, pin_key_id = null, pin_set_at = null, pin_failures = 0, pin_reset_at = now(), pin_reset_by = $1 where org_id = $2 and id = $3',
       "update sessions set revoked_at = now(), revoked_by = $1, revoke_reason = 'pin_reset' where org_id = $2 and user_id = $3 and revoked_at is null returning id",
     ])
@@ -247,7 +271,7 @@ describe('C0.5 ACC-06 resetting a PIN', () => {
   it('C0.7 T19 item 4: leaves the publish to the worker when told to, and still appends signin.ended', async () => {
     const pool = org({
       rows: ({ text }) => {
-        if (text.startsWith('select id from users')) return [{ id: MEMBER }]
+        if (text.startsWith('select pin_hash from users')) return [{ pin_hash: 'hashed' }]
         if (text.startsWith('update sessions')) return ENDED.map(id => ({ id }))
         return undefined
       },
@@ -258,14 +282,30 @@ describe('C0.5 ACC-06 resetting a PIN', () => {
     expect(appended(pool.statements).map(event => event.type)).toEqual(['account.pin_reset', 'signin.ended'])
   })
 
-  it('answers 409 no_account for someone who has never signed in', async () => {
+  it('ACC-06 D46 answers 409 no_pin for someone who has never signed in', async () => {
     const c = context(org({}))
     expect(
       await refusal(resetPin(c.api, { person: MEMBER, identityCheck: 'in_person' }, session, c.info)),
-    ).toMatchObject({
-      status: 409,
-      code: 'no_account',
+    ).toMatchObject({ status: 409, code: 'no_pin' })
+    expect(c.published).toEqual([])
+  })
+
+  it('ACC-06 D46 answers 409 no_pin for someone who signs in on the code alone, ending nothing', async () => {
+    const pool = org({
+      rows: ({ text }) => (text.startsWith('select pin_hash from users') ? [{ pin_hash: null }] : undefined),
     })
+    const c = context(pool)
+    expect(
+      await refusal(resetPin(c.api, { person: MEMBER, identityCheck: 'in_person' }, session, c.info)),
+    ).toMatchObject({ status: 409, code: 'no_pin' })
+    // It decided after locking the person and the account, and changed, appended and audited nothing.
+    expect(pool.texts().filter(text => /^(select 1 from people|select pin_hash from users)/.test(text))).toEqual([
+      'select 1 from people where org_id = $1 and id = $2 for no key update',
+      'select pin_hash from users where org_id = $1 and id = $2 for update',
+    ])
+    expect(pool.texts().some(text => text.startsWith('update'))).toBe(false)
+    expect(appended(pool.statements)).toEqual([])
+    expect(audits(pool)).toEqual([])
     expect(c.published).toEqual([])
   })
 })

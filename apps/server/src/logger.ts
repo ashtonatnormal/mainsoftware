@@ -33,6 +33,9 @@ const SENSITIVE_KEYS = [
   'challenge',
   'credentialId',
   'attemptId',
+  // Sign-in by code (C0.8): the Twilio Verify API key's secret, as config.auth.twilio and
+  // createTwilioVerify's options carry it.
+  'apiKeySecret',
   // Postgres errors carry the row's values in `detail` (a unique violation names the phone
   // number), and pino copies every property of an error.
   'detail',

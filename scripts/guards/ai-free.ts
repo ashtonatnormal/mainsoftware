@@ -174,6 +174,64 @@ export const BANNED_CONSTRAINT =
 export const CDN_URL =
   /(?:https?:)?\/\/(?:[\w-]+\.)*(?:esm\.sh|esm\.run|skypack\.dev|unpkg\.com|npmcdn\.com|jsdelivr\.net|jspm\.dev|jspm\.io|cdnjs\.cloudflare\.com|deno\.land)\b[^\s'"`)<>]*/gi
 
+// The hosts of model and speech-to-text APIs. Nothing calls one before A0, and from A0 only the
+// server does (packages/model, transcribe()): the browser never reaches a model host, so none may
+// appear in the web app's Content Security Policy (scripts/guards/csp.test.ts, T21 item 7) or, once
+// scripts/check-web-dist.ts scans it, in its built bundle. A denylist can't name every provider:
+// the policy's allow-list, which derives every source from the app's own origin, is the real check.
+// `*` stands for one or more DNS labels, so a regional endpoint matches too.
+export const MODEL_HOSTS = [
+  'api.openai.com',
+  '*.openai.azure.com',
+  '*.services.ai.azure.com',
+  '*.cognitiveservices.azure.com',
+  'api.anthropic.com',
+  'bedrock-runtime.*.amazonaws.com',
+  'bedrock-runtime-fips.*.amazonaws.com',
+  'bedrock-agent-runtime.*.amazonaws.com',
+  'generativelanguage.googleapis.com',
+  'aiplatform.googleapis.com',
+  '*-aiplatform.googleapis.com', // Vertex AI's regional endpoints, us-central1-aiplatform and the like
+  'api.mistral.ai',
+  'api.cohere.com',
+  'api.cohere.ai',
+  'api.groq.com',
+  'api-inference.huggingface.co',
+  'router.huggingface.co',
+  'api.together.xyz',
+  'api.replicate.com',
+  'api.voyageai.com',
+  'api.cerebras.ai',
+  'api.x.ai',
+  'api.deepseek.com',
+  'api.perplexity.ai',
+  'api.fireworks.ai',
+  'openrouter.ai',
+  // Speech-to-text and speech APIs.
+  'speech.googleapis.com',
+  'transcribe.*.amazonaws.com',
+  'transcribestreaming.*.amazonaws.com',
+  'api.deepgram.com',
+  'api.assemblyai.com',
+  'api.elevenlabs.io',
+  '*.speechmatics.com',
+  'api.gladia.io',
+  'api.rev.ai',
+  'api.soniox.com',
+]
+
+const hostSource = (glob: string) => glob.split('*').map(escapeRegExp).join('[a-z0-9-]+(?:\\.[a-z0-9-]+)*')
+const modelHostSource = `(?:${MODEL_HOSTS.map(hostSource).join('|')})`
+
+// Finds a model host in text: in a URL, a CSP source or on its own, a subdomain of one included,
+// but not a longer name that merely contains one (notapi.openai.com, api.openai.com.example).
+export const MODEL_HOST = new RegExp(`(?<![\\w-])${modelHostSource}(?![\\w-]|\\.[\\w-])`, 'gi')
+
+// True when a host (with or without a trailing dot) is a model host or a subdomain of one.
+export function isModelHost(host: string): boolean {
+  return new RegExp(`^(?:[a-z0-9-]+\\.)*${modelHostSource}\\.?$`, 'i').test(host)
+}
+
 const banned = Object.entries(BANNED_PACKAGES).flatMap(([why, globs]) =>
   globs.map(glob => ({ why, glob, re: new RegExp(`^${glob.split('*').map(escapeRegExp).join('.*')}$`) })),
 )

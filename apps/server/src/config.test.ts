@@ -17,6 +17,23 @@ const env = {
 
 const WORKER_URL = 'postgres://hearth_worker:a-worker-password@127.0.0.1:5432/hearth'
 
+// Localhost origins beyond localhost, 127.0.0.1 and [::1], each a valid APP_ORIGIN: names under
+// localhost, a trailing dot, the rest of 127.0.0.0/8, the unspecified addresses and IPv4-mapped
+// forms. Twilio must be refused at every one (T14 item 1, T20 item 10).
+const LOOPBACK = [
+  'http://hearth.localhost:5173',
+  'https://hearth.localhost',
+  'http://localhost.:5173',
+  'http://a.localhost.:5173',
+  'http://127.0.0.2:3000',
+  'http://127.255.255.254:3000',
+  'http://0.0.0.0:3000',
+  'http://[::]:3000',
+  'http://[::ffff:7f00:1]:3000',
+  'http://[::ffff:7fff:fffe]:3000',
+  'http://[::ffff:0:0]:3000',
+] as const
+
 function problems(load: () => unknown): string {
   try {
     load()
@@ -175,17 +192,102 @@ describe('C0.5 T14 sign-in settings', () => {
     expect(problems(() => loadConfig({ ...local, ROLE: 'realtime', DEPLOY_ENV: 'prod' }))).toMatch(/AUTH_SECRET:/)
   })
 
-  it('runs the log SMS provider only with DEPLOY_ENV local and a localhost origin', () => {
-    expect(loadConfig({ ...env, SMS_PROVIDER: 'log' }).auth).toEqual({ secret: SECRET, smsProvider: 'log' })
-    for (const deployEnv of ['test', 'nonprod', 'prod']) {
-      expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'log', DEPLOY_ENV: deployEnv }))).toMatch(
-        /SMS_PROVIDER: log prints sign-in codes/,
+  it('T20: runs the fake SMS provider only with DEPLOY_ENV local or test and a localhost origin', () => {
+    for (const deployEnv of ['local', 'test']) {
+      expect(loadConfig({ ...env, SMS_PROVIDER: 'fake', DEPLOY_ENV: deployEnv }).auth).toEqual({
+        secret: SECRET,
+        smsProvider: 'fake',
+      })
+    }
+    for (const deployEnv of ['nonprod', 'prod']) {
+      expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'fake', DEPLOY_ENV: deployEnv }))).toMatch(
+        /SMS_PROVIDER: fake prints codes/,
       )
     }
-    expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'log', APP_ORIGIN: 'https://hearth.example' }))).toMatch(
+    expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'fake', APP_ORIGIN: 'https://hearth.example' }))).toMatch(
       /SMS_PROVIDER:/,
     )
-    expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: 'aws' }))).toMatch(/SMS_PROVIDER:/)
+    // The C0.5 log provider is gone, and AWS isn't built yet.
+    for (const provider of ['log', 'aws']) {
+      expect(problems(() => loadConfig({ ...env, SMS_PROVIDER: provider }))).toMatch(/SMS_PROVIDER:/)
+    }
+  })
+
+  // Shapes built at run time, so no file holds a credential's shape; low-entropy values.
+  const twilioEnv = {
+    SMS_PROVIDER: 'twilio',
+    TWILIO_API_KEY_SID: `SK${'0'.repeat(32)}`,
+    TWILIO_API_KEY_SECRET: 'a'.repeat(32),
+    TWILIO_VERIFY_SERVICE_SID: `VA${'0'.repeat(32)}`,
+  }
+
+  it('T7 T20: runs Twilio Verify only off this machine (DEPLOY_ENV nonprod or prod, and an origin other than localhost)', () => {
+    const real = { ...env, ...twilioEnv, APP_ORIGIN: 'https://hearth.example' }
+    for (const deployEnv of ['nonprod', 'prod']) {
+      expect(loadConfig({ ...real, DEPLOY_ENV: deployEnv }).auth).toEqual({
+        secret: SECRET,
+        smsProvider: 'twilio',
+        twilio: {
+          apiKeySid: twilioEnv.TWILIO_API_KEY_SID,
+          apiKeySecret: twilioEnv.TWILIO_API_KEY_SECRET,
+          serviceSid: twilioEnv.TWILIO_VERIFY_SERVICE_SID,
+        },
+      })
+    }
+    for (const deployEnv of ['local', 'test']) {
+      expect(problems(() => loadConfig({ ...real, DEPLOY_ENV: deployEnv }))).toMatch(
+        /SMS_PROVIDER: twilio sends real texts/,
+      )
+    }
+    // Every localhost origin, however it is written, not just the three common spellings.
+    for (const appOrigin of [...LOOPBACK, 'http://localhost:5173', 'http://127.0.0.1:3000']) {
+      expect(problems(() => loadConfig({ ...real, DEPLOY_ENV: 'nonprod', APP_ORIGIN: appOrigin }))).toMatch(
+        /SMS_PROVIDER: twilio sends real texts/,
+      )
+    }
+  })
+
+  it('T20: needs every TWILIO_ variable with twilio, refuses them without it, checks their shapes and never echoes them', () => {
+    const real = { ...env, ...twilioEnv, APP_ORIGIN: 'https://hearth.example', DEPLOY_ENV: 'prod' }
+    for (const name of ['TWILIO_API_KEY_SID', 'TWILIO_API_KEY_SECRET', 'TWILIO_VERIFY_SERVICE_SID'] as const) {
+      expect(problems(() => loadConfig({ ...real, [name]: undefined }))).toContain(
+        `${name}: required with SMS_PROVIDER=twilio`,
+      )
+      expect(problems(() => loadConfig({ ...env, [name]: twilioEnv[name] }))).toContain(
+        `${name}: set only with SMS_PROVIDER=twilio`,
+      )
+    }
+    const bad = { TWILIO_API_KEY_SID: 'SKnot-hex', TWILIO_API_KEY_SECRET: 'short', TWILIO_VERIFY_SERVICE_SID: 'VAx' }
+    const message = problems(() => loadConfig({ ...real, ...bad }))
+    expect(message).toMatch(/TWILIO_API_KEY_SID: must be an API key SID/)
+    expect(message).toMatch(/TWILIO_API_KEY_SECRET: must be 32 letters and digits/)
+    expect(message).toMatch(/TWILIO_VERIFY_SERVICE_SID: must be a Verify Service SID/)
+    for (const value of Object.values(bad)) expect(message).not.toContain(value)
+    const secret = 'b'.repeat(32)
+    expect(problems(() => loadConfig({ ...env, TWILIO_API_KEY_SECRET: secret }))).not.toContain(secret)
+  })
+
+  it("T20: takes Twilio SIDs with upper-case hex digits, as Twilio's API spec allows, and still needs each one's prefix (Qodo)", () => {
+    const real = { ...env, ...twilioEnv, APP_ORIGIN: 'https://hearth.example', DEPLOY_ENV: 'prod' }
+    // Twilio's spec patterns are SK and VA, then [0-9a-fA-F]{32}.
+    const upper = { TWILIO_API_KEY_SID: `SK${'AB'.repeat(16)}`, TWILIO_VERIFY_SERVICE_SID: `VA${'0F'.repeat(16)}` }
+    expect(loadConfig({ ...real, ...upper }).auth).toMatchObject({
+      twilio: { apiKeySid: upper.TWILIO_API_KEY_SID, serviceSid: upper.TWILIO_VERIFY_SERVICE_SID },
+    })
+    const refused = [
+      ['TWILIO_API_KEY_SID', `sk${'ab'.repeat(16)}`, /TWILIO_API_KEY_SID: must be an API key SID/],
+      ['TWILIO_API_KEY_SID', `VA${'ab'.repeat(16)}`, /TWILIO_API_KEY_SID: must be an API key SID/],
+      ['TWILIO_API_KEY_SID', `SK${'G'.repeat(32)}`, /TWILIO_API_KEY_SID: must be an API key SID/],
+      ['TWILIO_VERIFY_SERVICE_SID', `va${'0f'.repeat(16)}`, /TWILIO_VERIFY_SERVICE_SID: must be a Verify Service SID/],
+      ['TWILIO_VERIFY_SERVICE_SID', `SK${'0f'.repeat(16)}`, /TWILIO_VERIFY_SERVICE_SID: must be a Verify Service SID/],
+      ['TWILIO_VERIFY_SERVICE_SID', `VA${'G'.repeat(32)}`, /TWILIO_VERIFY_SERVICE_SID: must be a Verify Service SID/],
+    ] as const
+    for (const [name, value, message] of refused) {
+      expect(
+        problems(() => loadConfig({ ...real, [name]: value })),
+        value,
+      ).toMatch(message)
+    }
   })
 
   it('reads TRUST_PROXY as a list of addresses and CIDR ranges, never a hop count', () => {
@@ -218,15 +320,31 @@ describe('C0.5 T14 sign-in settings', () => {
     expect(isLoopbackOrigin('https://localhost')).toBe(true)
     expect(isLoopbackOrigin('http://127.0.0.1:3000')).toBe(true)
     expect(isLoopbackOrigin('http://[::1]:5173')).toBe(true)
-    for (const origin of ['https://hearth.example', 'http://localhost.example', 'not a url']) {
-      expect(isLoopbackOrigin(origin)).toBe(false)
+    for (const origin of LOOPBACK) expect(isLoopbackOrigin(origin), origin).toBe(true)
+    // Written another way, as createTwilioVerify may be given it: the URL parser settles each.
+    for (const origin of ['http://LOCALHOST:5173', 'http://127.1:3000', 'http://[0:0:0:0:0:0:0:1]:5173']) {
+      expect(isLoopbackOrigin(origin), origin).toBe(true)
+    }
+    for (const origin of [
+      'https://hearth.example',
+      'http://localhost.example',
+      'http://localhost.example.',
+      'http://notlocalhost:5173',
+      'http://127.0.0.1.example',
+      'http://128.0.0.1:3000',
+      'http://10.0.0.1:3000',
+      'http://[::2]:3000',
+      'http://[::ffff:a00:1]:3000',
+      'not a url',
+    ]) {
+      expect(isLoopbackOrigin(origin), origin).toBe(false)
     }
   })
 
   it('loads .env.example for every role, and only the api role reads its secret (T14)', () => {
     const example = parseEnv(readFileSync(new URL('../../../.env.example', import.meta.url), 'utf8'))
     expect(example.AUTH_SECRET).toBe(LOCAL_AUTH_SECRET)
-    expect(loadConfig({ ...example, ROLE: 'api' }).auth).toEqual({ secret: LOCAL_AUTH_SECRET, smsProvider: 'log' })
+    expect(loadConfig({ ...example, ROLE: 'api' }).auth).toEqual({ secret: LOCAL_AUTH_SECRET, smsProvider: 'fake' })
     for (const role of ['realtime', 'worker']) {
       const config = loadConfig({ ...example, ROLE: role })
       expect(config.auth).toBeUndefined()

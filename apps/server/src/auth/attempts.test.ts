@@ -4,7 +4,7 @@ import { Attempt, consumeAttempt, createAttempt, dropAttempt, readAttempt, updat
 import { keyName } from '#src/auth/crypto.ts'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 
-// The code scripts (storeOtp, checkOtp) run against Valkey in the integration test.
+// The code challenge's scripts (codes.ts) run against Valkey in codes.integration.test.ts.
 
 const keys = valkeyKeys('it:unit:')
 const PERSON = 'b0000000-0000-4000-8000-000000000001'
@@ -78,5 +78,9 @@ describe('C0.5 T14 sign-in attempts', () => {
     const bad = { v: 1, numberTag: 'tag', step: 'code_sent', e164: '+6580000001' } as unknown as Attempt
     await expect(createAttempt(valkey, keys, bad)).rejects.toThrow()
     expect(Attempt.safeParse({ v: 1, numberTag: 'tag', step: 'step_up', orgId: PERSON }).success).toBe(true)
+  })
+
+  it('T20: knows the verified step, between an approved code and the finished sign-in', () => {
+    expect(Attempt.safeParse({ v: 1, numberTag: 'tag', step: 'verified', personId: PERSON }).success).toBe(true)
   })
 })

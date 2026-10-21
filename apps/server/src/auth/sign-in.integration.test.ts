@@ -11,28 +11,40 @@
 //
 // afterAll sweeps the whole run: no log line or audit row holds a number, code, PIN, session token
 // or attempt id; every /api reply was no-store and held no token or attempt id; no Node warning
-// fired; and every write a runtime role committed is exempt or had its outbox event naming it (C0.6,
-// T16 item 7; testing/writes.ts). When every test ran and passed, it also checks that every error
-// code (but try_again, internal and the flags route's, which flags.integration.test.ts sees) was
-// answered, every audit action written, and every event type this suite owns appended, at least once.
+// fired (testing/leaks.ts, which the dormant passkey suite runs too); and every write a runtime role
+// committed is exempt or had its outbox event naming it (C0.6, T16 item 7; testing/writes.ts). When
+// every test ran and passed, it also checks that every error code was answered, every audit action
+// written and every event type this suite owns appended, at least once; the exceptions are
+// try_again, internal, the flags route's codes (which flags.integration.test.ts sees), and the
+// dormant passkey codes and actions (testing/dormant.ts, D46; passkeys.integration.test.ts sees
+// them).
 import { type AddressInfo, connect } from 'node:net'
-import type {
-  PublicKeyCredentialCreationOptionsJSON,
-  PublicKeyCredentialRequestOptionsJSON,
-} from '@simplewebauthn/server'
 import { sql } from 'kysely'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuditAction } from '#src/auth/audit.ts'
 import { ATTEMPT_COOKIE, SESSION_COOKIE } from '#src/auth/cookies.ts'
 import { keyName, tag } from '#src/auth/crypto.ts'
 import { MESSAGES } from '#src/auth/errors.ts'
 import { limitSubject } from '#src/auth/limiter.ts'
-import { LIMITS } from '#src/auth/policy.ts'
+import { LIMITS, OTP } from '#src/auth/policy.ts'
+import { FakeVerify } from '#src/auth/sms/fake.ts'
 import { withOrg } from '#src/db/database.ts'
 import { FLAG_ERRORS } from '#src/flags/set.ts'
-import { createAuthenticator } from '#src/testing/authenticator.ts'
+import { DORMANT_ACTIONS, DORMANT_ERRORS } from '#src/testing/dormant.ts'
+import { expectNothingLeaked } from '#src/testing/leaks.ts'
 import { APP_ORIGIN, type Client, type Closed, type Person, type Stack, startStack } from '#src/testing/stack.ts'
 import { expectEveryWriteCovered, sweepWrites } from '#src/testing/writes.ts'
+
+// The dormant passkey routes (D46), unregistered while passkeys are off.
+const PASSKEY_ROUTES = [
+  '/api/auth/passkey/options',
+  '/api/auth/passkey/verify',
+  '/api/auth/reauth/passkey/options',
+  '/api/auth/reauth/passkey/verify',
+  '/api/auth/passkeys/register/options',
+  '/api/auth/passkeys/register/verify',
+  '/api/auth/passkeys/remove',
+]
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ISSUED_PIN_HASH = /^\$argon2id\$v=19\$m=19456,t=2,p=1\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$/
@@ -273,25 +285,24 @@ async function seedWindow(key: string, count: number, at: number): Promise<void>
   await s.valkey.pexpire(key, 86_400_000)
 }
 
-// The text with every uuid and timestamp taken out, so a 6-digit code or PIN can be looked for
-// as a whole number without matching inside an id or a time.
-function scrub(text: string): string {
-  return text
-    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, 'UUID')
-    .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}(:?\d{2})?)?/g, 'TIME')
-}
-
-// What a run must never write anywhere: the numbers it used, the codes sent, the PINs typed, and
-// the tokens and attempt ids issued. Returns what a text holds of them.
-function leaksIn(text: string): string[] {
-  const found: string[] = []
-  const clean = scrub(text)
-  const whole = (digits: string) => new RegExp(`(?<![0-9])${digits}(?![0-9])`).test(clean)
-  for (const e164 of s.numbers) if (text.includes(e164) || whole(e164.slice(3))) found.push(`number ${e164}`)
-  for (const { code } of s.sms.sent) if (whole(code)) found.push(`code ${code}`)
-  for (const pin of s.pins) if (/^[0-9]{6}$/.test(pin) && whole(pin)) found.push(`PIN ${pin}`)
-  for (const secret of s.issued) if (text.includes(secret)) found.push('a token or attempt id')
-  return found
+// The reauth_wrong_method warn lines logged for this person (D46, I2, T20 item 6), as
+// [level, route], after checking each holds the person's id and the route and no other personal
+// data: no method, number or code.
+function wrongMethodLines(personId: string): [unknown, unknown][] {
+  const lines = s.logs.filter(line => line.event === 'reauth_wrong_method' && line.personId === personId)
+  for (const line of lines) {
+    expect(line).toEqual({
+      level: 40,
+      time: expect.any(Number),
+      role: 'api',
+      reqId: expect.any(String),
+      msg: expect.any(String),
+      event: 'reauth_wrong_method',
+      personId,
+      route: expect.any(String),
+    })
+  }
+  return lines.map(line => [line.level, line.route])
 }
 
 describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-01..06, PRD-53, T5, T14)', () => {
@@ -299,31 +310,22 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     s = await startStack()
   })
 
+  // Each test starts with the global SMS cap (PRD-53: 100 texts an hour) empty. Every api in the
+  // suite shares the run's key prefix, so otherwise each text the whole file sends counts against
+  // one hour's cap, and a test that came after the 100th would find its sends skipped_cap and its
+  // nextCode waits timing out far from the cause. The cap's own test fills it and clears it.
+  beforeEach(async () => {
+    if (s !== undefined) await s.valkey.del(s.names.limit('sms-global', 'all'))
+  })
+
   // Vitest needs the first argument destructured; the second is this suite.
   // biome-ignore lint/correctness/noEmptyPattern: the hook takes no fixtures.
   afterAll(async ({}, suite) => {
     if (s === undefined) return
     try {
-      // No log line holds a number, code, PIN, token or attempt id (time, pid and the response
-      // time are left out: they're numbers that could look like a code).
-      for (const line of s.logs) {
-        const { time: _time, pid: _pid, responseTime: _responseTime, ...rest } = line
-        expect(leaksIn(JSON.stringify(rest)), JSON.stringify(rest)).toEqual([])
-      }
-      // Nor does any audit row, read whole.
-      const rows = await s.query<{ row: string }>('select to_jsonb(a)::text as row from audit_events a')
-      for (const { row } of rows) expect(leaksIn(row), row).toEqual([])
-      // Every /api reply was no-store, held no token or attempt id, and none was a 500.
-      for (const reply of s.replies) {
-        expect(reply.cacheControl, `${reply.method} ${reply.url}`).toBe('no-store')
-        expect(
-          [...s.issued].some(secret => reply.text.includes(secret)),
-          `${reply.method} ${reply.url}`,
-        ).toBe(false)
-        expect(reply.error, `${reply.method} ${reply.url}`).not.toBe('internal')
-      }
-      // No Node warning fired (the experimental Web Crypto ones included).
-      expect(s.warnings.map(warning => `${warning.name}: ${warning.message}`)).toEqual([])
+      // No log line or audit row holds a number, code, PIN, token or attempt id, every /api reply
+      // was no-store with no token or attempt id and none a 500, and no Node warning fired.
+      await expectNothingLeaked(s)
 
       // C0.6: every write a runtime role committed is covered by its outbox event, or exempt.
       const all = suite.tasks.every(task => task.type !== 'test' || task.result?.state === 'pass')
@@ -332,23 +334,61 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       // When every test ran and passed, every code and every audit action was seen.
       if (all && suite.tasks.length > 0) {
         const answered = new Set(s.replies.map(reply => reply.error))
-        const elsewhere = new Set<string>(['try_again', 'internal', ...FLAG_ERRORS])
+        // The dormant passkey codes and actions are the passkey suite's (D46, testing/dormant.ts).
+        const elsewhere = new Set<string>(['try_again', 'internal', ...FLAG_ERRORS, ...DORMANT_ERRORS])
         const missing = Object.keys(MESSAGES).filter(code => !elsewhere.has(code) && !answered.has(code))
         expect(missing).toEqual([])
         const written = new Set(
           (await s.query<{ action: string }>('select distinct action from audit_events')).map(r => r.action),
         )
-        expect(Object.keys(AUDIT_ACTIONS).filter(action => !written.has(action))).toEqual([])
+        expect(
+          (Object.keys(AUDIT_ACTIONS) as (keyof typeof AUDIT_ACTIONS)[]).filter(
+            action => !DORMANT_ACTIONS.has(action) && !written.has(action),
+          ),
+        ).toEqual([])
       }
     } finally {
       await s.stop()
     }
   })
 
-  it('C0.5 Done: a roster member signs in with an SMS code and a new PIN (ACC-01, ACC-02, ACC-03, T5)', async () => {
+  it('D46 AQ-02: a Member signs in on the SMS code alone, making their account with no PIN (ACC-01, ACC-03, T5)', async () => {
+    // Budgets: M 1 code request.
+    const m = await s.person()
+    const browser = s.client()
+    expect((await requestCode(browser, m.e164)).status).toBe(200)
+    const verified = await verifyCode(browser, await s.sms.nextCode(m.e164))
+    expect(verified.status).toBe(200)
+    const token = browser.cookie(SESSION_COOKIE) ?? ''
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(verified.setCookies).toEqual([
+      `${SESSION_COOKIE}=${token}; Path=/; Max-Age=7776000; HttpOnly; Secure; SameSite=Lax`,
+      `${ATTEMPT_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`,
+    ])
+    const { id: sessionId, deviceId } = await s.sessionOf(browser)
+    expect(verified.body).toEqual({ status: 'signed_in', device: { id: deviceId, label: 'iPhone · Safari' } })
+    const user = await userOf(m)
+    expect(user).toBeDefined()
+    expect(user?.pin_hash).toBeNull()
+    const [term] = await s.query<{ full_term: boolean; stamped: boolean }>(
+      `select expires_at - created_at = interval '2160 hours' as full_term, reauthenticated_at = created_at as stamped
+       from sessions where id = $1`,
+      [sessionId],
+    )
+    expect(term).toEqual({ full_term: true, stamped: true })
+    expect((await auditOf(m)).map(row => row.action)).toEqual(['auth.code_requested', 'auth.sign_in'])
+    expect((await auditOf(m))[1]).toMatchObject({ actor_id: m.id, details: { method: 'sms', pinRule: false } })
+    expect(await eventsOf(m)).toEqual([
+      about(m, 'signin.started', m, { device: deviceId, session: sessionId, method: 'sms', pin_rule: false }),
+    ])
+    // The spent attempt can't be used again, with the right code or any other.
+    expect((await verifyCode(browser, '000000')).error).toBe('attempt_expired')
+  })
+
+  it('C0.5 Done D46: a PIN-role holder signs in with an SMS code and a new PIN, on a 7-day PIN-rule session (ACC-01, ACC-02, ACC-03, T5, AQ-05)', async () => {
     // Budgets: P 1 code request, Q 2.
-    const p = await s.person()
-    const q = await s.person()
+    const p = await s.person({ roles: ['leadership'] })
+    const q = await s.person({ roles: ['dpo'] })
     const browser = s.client()
     const sentBefore = s.sms.sent.length
 
@@ -360,9 +400,15 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(requested.setCookies).toEqual([
       `${ATTEMPT_COOKIE}=${attemptId}; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Strict`,
     ])
-    const otpTtl = await s.valkey.pttl(s.names.otp(tag(s.keys, p.e164)))
-    expect(otpTtl).toBeGreaterThan(295_000)
-    expect(otpTtl).toBeLessThanOrEqual(300_000)
+    // T20: the challenge record is kept 10 minutes (checks are refused after 5, from its born time),
+    // and holds the owner, the provider's reference, the tries and born: never a code or number.
+    const otpKey = s.names.otp(tag(s.keys, p.e164))
+    const otpTtl = await s.valkey.pttl(otpKey)
+    expect(otpTtl).toBeGreaterThan(595_000)
+    expect(otpTtl).toBeLessThanOrEqual(600_000)
+    const record = await s.valkey.hgetall(otpKey)
+    expect(Object.keys(record).sort()).toEqual(['born', 'owner', 'ref', 'tries'])
+    expect(record).toMatchObject({ owner: keyName(attemptId), ref: s.sms.sent.at(-1)?.ref, tries: '0' })
     const attemptTtl = await s.valkey.pttl(s.names.attempt(keyName(attemptId)))
     expect(attemptTtl).toBeGreaterThan(0)
     expect(attemptTtl).toBeLessThanOrEqual(600_000)
@@ -384,7 +430,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const token = browser.cookie(SESSION_COOKIE) ?? ''
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(set.setCookies).toEqual([
-      `${SESSION_COOKIE}=${token}; Path=/; Max-Age=7776000; HttpOnly; Secure; SameSite=Lax`,
+      `${SESSION_COOKIE}=${token}; Path=/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax`,
       `${ATTEMPT_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`,
     ])
     expect(browser.cookie(ATTEMPT_COOKIE)).toBeUndefined()
@@ -405,7 +451,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const sessionTimes = () =>
       s.query<{ stamped: boolean; full_term: boolean; session_age: string; device_age: string }>(
         `select s.reauthenticated_at = s.created_at as stamped,
-           s.expires_at - s.created_at = interval '2160 hours' as full_term,
+           s.expires_at - s.created_at = interval '168 hours' as full_term,
            extract(epoch from now() - s.last_seen_at)::text as session_age,
            extract(epoch from now() - d.last_seen_at)::text as device_age
          from sessions s join devices d on d.id = s.device_id where s.id = $1`,
@@ -419,8 +465,9 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(devices.status).toBe(200)
     expect(devices.body).toMatchObject({
       devices: [{ id: deviceId, label: 'iPhone · Safari', current: true }],
-      passkeys: [],
     })
+    // Passkeys are switched off (D46), so none are listed.
+    expect(devices.body).not.toHaveProperty('passkeys')
     expect(devices.json<{ devices: unknown[] }>().devices).toHaveLength(1)
     const [after] = await sessionTimes()
     expect(after).toMatchObject({ stamped: true, full_term: true })
@@ -442,13 +489,13 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       actor_id: p.id,
       device_id: deviceId,
       ip: browser.ip,
-      details: { method: 'sms_new_pin' },
+      details: { method: 'sms_new_pin', pinRule: true },
     })
     expect(rows[2]).toMatchObject({ actor_id: p.id, device_id: deviceId })
     // C0.6 T16: the outbox events beside the writes. Before a session exists the transaction acts
     // as Hearth, so they name the person as their actor, as the audit rows do.
     expect(await eventsOf(p)).toEqual([
-      about(p, 'signin.started', p, { device: deviceId, session: sessionId, method: 'sms_new_pin' }),
+      about(p, 'signin.started', p, { device: deviceId, session: sessionId, method: 'sms_new_pin', pin_rule: true }),
       about(p, 'account.pin_set', p),
     ])
 
@@ -478,6 +525,324 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect([badCode.status, badCode.error]).toEqual([400, 'invalid_code'])
     const badPin = await browser.post('/api/auth/reauth/pin', { pin: '12' })
     expect([badPin.status, badPin.error]).toEqual([400, 'invalid_pin'])
+  })
+
+  it('D46 AQ-02 AQ-05: each of the six Owner-only roles sets or enters a PIN after the code and gets a 7-day PIN-rule session; a Member and a Team Admin sign in on the code alone', async () => {
+    // Budgets: one code request each.
+    // The session a PIN step issues: 7 days on its cookie and its row, and pin_rule (pinRule) on its
+    // signin.started event and its auth.sign_in row, with the method of that step.
+    const pinRuleSession = async (
+      person: Person,
+      client: Client,
+      finished: Awaited<ReturnType<Client['post']>>,
+      method: 'sms_new_pin' | 'sms_pin',
+      role: string,
+    ) => {
+      expect(finished.status, role).toBe(200)
+      const { id: sessionId, deviceId } = await s.sessionOf(client)
+      expect(finished.body, role).toEqual({ status: 'signed_in', device: { id: deviceId, label: 'iPhone · Safari' } })
+      expect(finished.setCookies, role).toEqual([
+        `${SESSION_COOKIE}=${client.cookie(SESSION_COOKIE)}; Path=/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax`,
+        `${ATTEMPT_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`,
+      ])
+      const [term] = await s.query<{ pin_rule: boolean }>(
+        "select expires_at - created_at = interval '168 hours' as pin_rule from sessions where id = $1",
+        [sessionId],
+      )
+      expect(term?.pin_rule, role).toBe(true)
+      expect(
+        (await eventsOf(person)).filter(event => event.type === 'signin.started'),
+        role,
+      ).toEqual([
+        about(person, 'signin.started', person, { device: deviceId, session: sessionId, method, pin_rule: true }),
+      ])
+      expect(
+        (await auditOf(person)).filter(row => row.action === 'auth.sign_in'),
+        role,
+      ).toEqual([
+        expect.objectContaining({ actor_id: person.id, device_id: deviceId, details: { method, pinRule: true } }),
+      ])
+    }
+    for (const role of ['owner', 'admin', 'ai_admin', 'leadership', 'dpo', 'compliance_officer'] as const) {
+      const first = await s.person({ roles: [role] })
+      const toSet = await atStepUp(first)
+      expect(toSet.reply.body, role).toEqual({ status: 'code_verified', next: 'set_pin' })
+      const pin = s.newPin()
+      await pinRuleSession(
+        first,
+        toSet.client,
+        await toSet.client.post('/api/auth/pin/set', { pin }),
+        'sms_new_pin',
+        role,
+      )
+      first.pin = pin
+      const again = await s.person({ roles: [role], pin: s.newPin() })
+      const toEnter = await atStepUp(again)
+      expect(toEnter.reply.body, role).toMatchObject({
+        status: 'code_verified',
+        next: 'step_up',
+        pin: { state: 'ok' },
+      })
+      await pinRuleSession(again, toEnter.client, await verifyPin(toEnter.client, pinOf(again)), 'sms_pin', role)
+    }
+    // A Member's leftover PIN is never asked for, and a Team Admin's role is not an Owner-only one.
+    for (const codeOnly of [await s.person({ pin: s.newPin() }), await s.person({ roles: ['team_admin'] })]) {
+      const { client, reply } = await atStepUp(codeOnly)
+      const { id: sessionId, deviceId } = await s.sessionOf(client)
+      expect(reply.body).toEqual({ status: 'signed_in', device: { id: deviceId, label: 'iPhone · Safari' } })
+      const [term] = await s.query<{ full_term: boolean }>(
+        "select expires_at - created_at = interval '2160 hours' as full_term from sessions where id = $1",
+        [sessionId],
+      )
+      expect(term?.full_term).toBe(true)
+      expect(await eventsOf(codeOnly)).toEqual([
+        about(codeOnly, 'signin.started', codeOnly, {
+          device: deviceId,
+          session: sessionId,
+          method: 'sms',
+          pin_rule: false,
+        }),
+      ])
+    }
+  })
+
+  it("D46 AQ-05/06: a PIN-rule session ends after 168 hours, while a Member's of the same age carries on", async () => {
+    // Budgets: P 1 code request, M 1.
+    const p = await s.person({ roles: ['admin'] })
+    const m = await s.person()
+    const pc = await s.signIn(p)
+    const mc = await s.signIn(m)
+    const [pTerm] = await s.query<{ pin_rule: boolean }>(
+      "select expires_at - created_at = interval '168 hours' as pin_rule from sessions where id = $1",
+      [(await s.sessionOf(pc)).id],
+    )
+    expect(pTerm?.pin_rule).toBe(true)
+    expect((await eventsOf(p)).find(event => event.type === 'signin.started')?.ids).toMatchObject({
+      method: 'sms_new_pin',
+      pin_rule: true,
+    })
+    await s.age((await s.sessionOf(pc)).id, '168 hours 1 minute')
+    await s.age((await s.sessionOf(mc)).id, '168 hours 1 minute')
+    const ended = await pc.get('/api/devices')
+    expect([ended.status, ended.error]).toEqual([401, 'signed_out'])
+    expect((await mc.get('/api/devices')).status).toBe(200)
+  })
+
+  it('T20 R1: a finish that waits past its lock timeout answers 409 try_again, and a retry with any 6 digits signs in with no second check', async () => {
+    // Budgets: V 1 code request.
+    const v = await s.person()
+    const browser = s.client()
+    expect((await requestCode(browser, v.e164)).status).toBe(200)
+    const code = await s.sms.nextCode(v.e164)
+    const checksBefore = s.sms.checks.length
+    await s.query('begin')
+    let blocked: Awaited<ReturnType<typeof verifyCode>>
+    try {
+      // The superuser holds the person's row, so the finish's FOR SHARE read waits out its 2 s.
+      await s.query('select id from people where id = $1 for no key update', [v.id])
+      blocked = await verifyCode(browser, code)
+    } finally {
+      await s.query('commit')
+    }
+    expect([blocked.status, blocked.error]).toEqual([409, 'try_again'])
+    expect(s.sms.checks.length).toBe(checksBefore + 1)
+    expect(await s.query('select 1 from sessions where user_id = $1', [v.id])).toEqual([])
+    const retried = await verifyCode(browser, '000000')
+    expect(retried.status).toBe(200)
+    expect(retried.body).toMatchObject({ status: 'signed_in' })
+    expect(s.sms.checks.length).toBe(checksBefore + 1)
+    expect(await s.query('select 1 from sessions where user_id = $1', [v.id])).toHaveLength(1)
+  })
+
+  it('T14 item 3 T20 AQ-04: on the real floor, refused checks for a roster number and one off it both take at least 2 s, and a slow cancel runs after the reply', async () => {
+    // Budgets: R 1 code request, N (not on the roster) 1.
+    const app = await s.startApi({ realTiming: true })
+    const r = await s.person()
+    const n = s.number()
+    const rc = s.client({ app })
+    const nc = s.client({ app })
+    expect((await requestCode(rc, r.e164)).status).toBe(200)
+    expect((await requestCode(nc, n)).status).toBe(200)
+    const wrong = another(await s.sms.nextCode(r.e164))
+    const timed = async (client: Client) => {
+      const started = Date.now()
+      const reply = await verifyCode(client, wrong)
+      return { reply, ms: Date.now() - started }
+    }
+    const first = [await timed(rc), await timed(nc)]
+    for (const { reply, ms } of first) {
+      expect(reply.body).toMatchObject({ error: 'code_wrong', triesLeft: 4 })
+      expect(ms).toBeGreaterThanOrEqual(2_000)
+    }
+    // Tries 2 to 4, then the 5th with a cancel that takes 6 s, longer than the bound on the reply:
+    // the reply doesn't wait for it, so a roster number's dead reply costs one provider round trip
+    // (the check), never two, and lands with one off the roster's, just after the floor. A cancel
+    // run before the reply would take it past 6 s and finish before it.
+    for (let tries = 2; tries <= 4; tries++) await Promise.all([verifyCode(rc, wrong), verifyCode(nc, wrong)])
+    const cancel = s.sms.cancel.bind(s.sms)
+    let cancelled = false
+    const slow = vi.spyOn(s.sms, 'cancel').mockImplementation(async ref => {
+      await new Promise(resolve => setTimeout(resolve, 6_000))
+      cancelled = true
+      return cancel(ref)
+    })
+    try {
+      // Straight through the app, so the time is the reply's alone (the harness's client also waits
+      // for the work after the reply).
+      for (const client of [rc, nc]) {
+        const started = Date.now()
+        const reply = await app.inject({
+          method: 'POST',
+          url: '/api/auth/otp/verify',
+          headers: { origin: APP_ORIGIN, cookie: client.cookieHeader(), 'content-type': 'application/json' },
+          payload: { code: wrong },
+        })
+        const ms = Date.now() - started
+        expect(reply.json()).toMatchObject({ error: 'code_dead' })
+        expect(ms).toBeGreaterThanOrEqual(2_000)
+        expect(ms).toBeLessThan(4_500)
+        expect(cancelled).toBe(false)
+      }
+      await s.settled()
+      expect(slow).toHaveBeenCalledTimes(1)
+      expect(cancelled).toBe(true)
+    } finally {
+      slow.mockRestore()
+    }
+  }, 60_000)
+
+  it('T20 AQ-20: three provider failures open the breaker, which refuses every check on that api without asking the provider', async () => {
+    // Budgets: B 1 code request, N (not on the roster) 1.
+    const app = await s.startApi({})
+    const b = await s.person()
+    const bc = s.client({ app })
+    const nc = s.client({ app })
+    expect((await requestCode(bc, b.e164)).status).toBe(200)
+    expect((await requestCode(nc, s.number())).status).toBe(200)
+    const code = await s.sms.nextCode(b.e164)
+    const down = vi.spyOn(s.sms, 'check').mockRejectedValue(new Error('the provider is down'))
+    try {
+      for (let failures = 1; failures <= 3; failures++) {
+        expect((await verifyCode(bc, code)).error).toBe('unavailable')
+      }
+      expect(down).toHaveBeenCalledTimes(3)
+      for (const client of [bc, nc]) {
+        const refused = await verifyCode(client, code)
+        expect([refused.status, refused.error]).toEqual([503, 'unavailable'])
+      }
+      expect(down).toHaveBeenCalledTimes(3)
+    } finally {
+      down.mockRestore()
+    }
+    // The suite's own api has a breaker of its own, still closed.
+    const other = await s.person()
+    expect((await s.signIn(other)).cookie(SESSION_COOKIE)).toBeDefined()
+  })
+
+  it('T14 item 5 T20 item 3: a check the provider never answered, failing or refused by the open breaker, spends none of the day’s checks', async () => {
+    // Budgets: P 1 code request, M 1 (re-authentication codes count against their own windows).
+    // Each on an api of its own, whose breaker the test opens; the suite's own api, its breaker
+    // closed, then takes the same cookies.
+    const p = await s.person()
+    const app = await s.startApi({})
+    const pc = s.client({ app })
+    expect((await requestCode(pc, p.e164)).status).toBe(200)
+    const code = await s.sms.nextCode(p.e164)
+    // 9 of the number's 10 checks today already spent.
+    const day = s.names.limit('otp-v24h', tag(s.keys, p.e164))
+    await seedWindow(day, 9, await valkeyNow())
+    const down = vi.spyOn(s.sms, 'check').mockRejectedValue(new Error('the provider is down'))
+    try {
+      // Three failures open the breaker, and seven more presses meet it: each a 503 the person may
+      // press again, and none spends the day's 10th check.
+      for (let press = 1; press <= 10; press++) {
+        const reply = await verifyCode(pc, code)
+        expect([press, reply.status, reply.error]).toEqual([press, 503, 'unavailable'])
+      }
+      expect(down).toHaveBeenCalledTimes(3)
+    } finally {
+      down.mockRestore()
+    }
+    expect(await s.valkey.zcard(day)).toBe(9)
+    // Once the provider answers, the same code signs in: the day's 10th check.
+    const back = s.client()
+    back.setCookie(ATTEMPT_COOKIE, pc.cookie(ATTEMPT_COOKIE) ?? '')
+    const signedIn = await verifyCode(back, code)
+    expect([signedIn.status, signedIn.body]).toMatchObject([200, { status: 'signed_in' }])
+    expect(await s.valkey.zcard(day)).toBe(10)
+
+    // Re-authentication by SMS gives the person's day of checks back the same way.
+    const m = await s.person()
+    const mc = await s.signIn(m)
+    const reauthApp = await s.startApi({})
+    const rc = s.client({ app: reauthApp })
+    rc.setCookie(SESSION_COOKIE, mc.cookie(SESSION_COOKIE) ?? '')
+    expect((await rc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+    const reauthCode = await s.sms.nextCode(m.e164)
+    const checks = s.names.limit('reauth-check-p24h', m.id)
+    await seedWindow(checks, 19, await valkeyNow())
+    const failing = vi.spyOn(s.sms, 'check').mockRejectedValue(new Error('the provider is down'))
+    try {
+      for (let press = 1; press <= 5; press++) {
+        const reply = await rc.post('/api/auth/reauth/code/verify', { code: reauthCode })
+        expect([press, reply.status, reply.error]).toEqual([press, 503, 'unavailable'])
+      }
+      expect(failing).toHaveBeenCalledTimes(3)
+    } finally {
+      failing.mockRestore()
+    }
+    expect(await s.valkey.zcard(checks)).toBe(19)
+    const stamped = await mc.post('/api/auth/reauth/code/verify', { code: reauthCode })
+    expect([stamped.status, stamped.body]).toEqual([200, { status: 'reauthenticated', validForSeconds: 300 }])
+  })
+
+  it('T14 item 5 T20 item 3: a provider failure during which a newer request replaced the code still answers 503 and spends none of the day’s checks', async () => {
+    // Budgets: P 2 code requests, M 2 (a sign-in, and the sign-in request that lands during M's
+    // re-authentication check). On an api of its own, so its two failures reach no other breaker.
+    const app = await s.startApi({})
+    const p = await s.person()
+    const pc = s.client({ app })
+    expect((await requestCode(pc, p.e164)).status).toBe(200)
+    const code = await s.sms.nextCode(p.e164)
+    const day = s.names.limit('otp-v24h', tag(s.keys, p.e164))
+    // The provider fails P's check, and a newer request for P's number lands before it settles.
+    const failing = vi.spyOn(s.sms, 'check').mockImplementationOnce(async () => {
+      expect((await requestCode(s.client(), p.e164)).status).toBe(200)
+      throw new Error('the provider is down')
+    })
+    let reply: Awaited<ReturnType<typeof verifyCode>>
+    try {
+      reply = await verifyCode(pc, code)
+    } finally {
+      failing.mockRestore()
+    }
+    expect([reply.status, reply.error]).toEqual([503, 'unavailable'])
+    expect(await s.valkey.zcard(day)).toBe(0)
+    // The newer owner's record is untouched: no try counted, its code live.
+    expect(await s.valkey.hget(s.names.otp(tag(s.keys, p.e164)), 'tries')).toBe('0')
+
+    // Re-authentication by SMS: a sign-in request for M's number replaces the code during the
+    // failing check, and the person's day of checks is given back the same way.
+    const m = await s.person()
+    const mc = await s.signIn(m)
+    const rc = s.client({ app })
+    rc.setCookie(SESSION_COOKIE, mc.cookie(SESSION_COOKIE) ?? '')
+    expect((await rc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+    const reauthCode = await s.sms.nextCode(m.e164)
+    const checks = s.names.limit('reauth-check-p24h', m.id)
+    const down = vi.spyOn(s.sms, 'check').mockImplementationOnce(async () => {
+      expect((await requestCode(s.client(), m.e164)).status).toBe(200)
+      throw new Error('the provider is down')
+    })
+    let reauthReply: Awaited<ReturnType<Client['post']>>
+    try {
+      reauthReply = await rc.post('/api/auth/reauth/code/verify', { code: reauthCode })
+    } finally {
+      down.mockRestore()
+    }
+    expect([reauthReply.status, reauthReply.error]).toEqual([503, 'unavailable'])
+    expect(await s.valkey.zcard(checks)).toBe(0)
+    await s.settled()
   })
 
   it('C0.5 Done: a number not on the roster gets the identical reply and no SMS (ACC-03, PRD-53)', async () => {
@@ -567,8 +932,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('PRD-53: codes expire, die after 5 tries, and are replaced', async () => {
-    // Budgets: A 2 code requests, B 2, C 1, D 2.
-    const a = await s.person({ pin: s.newPin() })
+    // Budgets: A 2 code requests, B 2, C 1, D 2. A holds a PIN role, for the step-up's body (D46).
+    const a = await s.person({ roles: ['ai_admin'], pin: s.newPin() })
     const b = await s.person({ pin: s.newPin() })
     const c = await s.person({ pin: s.newPin() })
 
@@ -582,6 +947,10 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     }
     const dead = await verifyCode(ac, code)
     expect([dead.status, dead.error]).toEqual([401, 'code_expired'])
+    // T20: the 5th wrong try's dead code is cancelled at the provider, after the reply.
+    await s.settled()
+    const aRef = s.sms.sent.filter(sent => sent.to === a.e164).at(-1)?.ref
+    expect(s.sms.cancels.map(entry => entry.ref)).toContain(aRef)
     expect((await requestCode(ac, a.e164)).status).toBe(200)
     const fresh = await verifyCode(ac, await s.sms.nextCode(a.e164))
     expect(fresh.status).toBe(200)
@@ -589,7 +958,6 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       status: 'code_verified',
       next: 'step_up',
       pin: { state: 'ok', triesBeforeLock: 5, triesBeforeAdminLock: 10 },
-      passkey: false,
     })
 
     // A second request replaces the first code.
@@ -612,19 +980,93 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     await s.sms.nextCode(d.e164)
     expect((await requestCode(newer, d.e164)).status).toBe(200)
     const newest = await s.sms.nextCode(d.e164)
+    // T20: the newer request cancelled the older code first, so the provider made a new one.
+    const [olderText, newerText] = s.sms.sent.filter(sent => sent.to === d.e164).slice(-2)
+    expect(newerText?.ref).not.toBe(olderText?.ref)
+    expect(s.sms.cancels.map(entry => entry.ref)).toContain(olderText?.ref)
+    const checksBefore = s.sms.checks.length
     for (let tries = 1; tries <= 5; tries++) {
       const reply = await verifyCode(older, tries < 5 ? another(newest) : newest)
       expect([reply.status, reply.error]).toEqual([401, 'code_expired'])
     }
+    await s.settled()
+    // The stale attempt asked the provider nothing and cancelled nothing of the newest code.
+    expect(s.sms.checks.length).toBe(checksBefore)
+    expect(s.sms.cancels.map(entry => entry.ref)).not.toContain(newerText?.ref)
     expect((await verifyCode(newer, newest)).status).toBe(200)
 
-    // A code past its 5 minutes (its record gone from Valkey, as expiry leaves it).
+    // T20 PRD-53: a code past its 5 minutes, on Valkey's clock from the request, is refused, and
+    // its provider code is cancelled after the reply; the record goes, as its 10-minute expiry
+    // would leave it, and the next check finds nothing.
     const cc = s.client()
     expect((await requestCode(cc, c.e164)).status).toBe(200)
     const late = await s.sms.nextCode(c.e164)
-    await s.valkey.del(s.names.otp(tag(s.keys, c.e164)))
+    const cKey = s.names.otp(tag(s.keys, c.e164))
+    const [seconds] = await s.valkey.time()
+    await s.valkey.hset(cKey, 'born', Number(seconds) * 1000 - OTP.ttlMs - 1)
     const expired = await verifyCode(cc, late)
     expect([expired.status, expired.error]).toEqual([401, 'code_expired'])
+    await s.settled()
+    const cRef = s.sms.sent.filter(sent => sent.to === c.e164).at(-1)?.ref
+    expect(s.sms.cancels.map(entry => entry.ref)).toContain(cRef)
+    expect(await s.valkey.exists(cKey)).toBe(0)
+    const gone = await verifyCode(cc, late)
+    expect([gone.status, gone.error]).toEqual([401, 'code_expired'])
+  })
+
+  it('T14 item 3 T20: a code request that lands during a check answers a roster number exactly as one off the roster', async () => {
+    // Budgets: R 2 code requests, N (not on the roster) 2.
+    const r = await s.person({ pin: s.newPin() })
+    const n = s.number()
+    const [rOlder, rNewer, nOlder, nNewer] = [s.client(), s.client(), s.client(), s.client()]
+    expect((await requestCode(rOlder, r.e164)).status).toBe(200)
+    expect((await requestCode(nOlder, n)).status).toBe(200)
+    const wrong = another(await s.sms.nextCode(r.e164))
+
+    // R's check waits on the provider: a newer request for R's number lands during that round
+    // trip, before the check settles.
+    const check = s.sms.check.bind(s.sms)
+    let landed = false
+    const during = vi.spyOn(s.sms, 'check').mockImplementationOnce(async (ref, code) => {
+      landed = (await requestCode(rNewer, r.e164)).status === 200
+      return check(ref, code)
+    })
+    let replyR: Awaited<ReturnType<typeof verifyCode>>
+    try {
+      replyR = await verifyCode(rOlder, wrong)
+    } finally {
+      during.mockRestore()
+    }
+    expect(landed).toBe(true)
+    // N's check asks no provider, so its reply is fixed before anything can land; its newer request
+    // comes straight after.
+    const replyN = await verifyCode(nOlder, wrong)
+    expect((await requestCode(nNewer, n)).status).toBe(200)
+    expect(replyR.status).toBe(401)
+    expect(replyR.body).toMatchObject({ error: 'code_wrong', triesLeft: 4 })
+    expect(replyN.status).toBe(replyR.status)
+    expect(replyN.text).toBe(replyR.text)
+    await s.settled()
+
+    // Each older browser's next check finds another owner's record: code_expired for both.
+    const againR = await verifyCode(rOlder, wrong)
+    const againN = await verifyCode(nOlder, wrong)
+    expect([againR.status, againR.error]).toEqual([401, 'code_expired'])
+    expect(againN.status).toBe(againR.status)
+    expect(againN.text).toBe(againR.text)
+    await s.settled()
+
+    // The newest request still wins: the overtaken check touched nothing of the newer code, which
+    // signs R in from the newer browser (R is a Member: the code alone, D46).
+    const newest = await s.sms.nextCode(r.e164)
+    const ahead = await verifyCode(rNewer, newest)
+    expect(ahead.status).toBe(200)
+    expect(ahead.body).toMatchObject({ status: 'signed_in' })
+    const newerRef = s.sms.sent.filter(sent => sent.to === r.e164).at(-1)?.ref
+    expect(s.sms.cancels.map(entry => entry.ref)).not.toContain(newerRef)
+    // Audited as the replies went.
+    const failed = (await auditOf(r)).filter(row => row.action === 'auth.code_failed').map(row => row.details)
+    expect(failed).toEqual([{ result: 'wrong' }, { result: 'expired' }])
   })
 
   it('BUILD-PLAN C0.5 ADM-06: a wrong code whose sender hangs up before the reply is counted once and still audited', async () => {
@@ -657,13 +1099,111 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(rows.map(row => [row.action, row.details])).toEqual([['auth.code_requested', { send: 'attempted' }]])
   })
 
+  it('PDPA-10 T20: a provider not cleared in the transfer register is sent nothing, audited skipped_not_cleared, and answers as any request', async () => {
+    // Budgets: N 1 code request, on its own api; an off-roster number 1, for the reply to compare.
+    const n = await s.person()
+    const twilioLike = new FakeVerify({ transfer: 'twilio' })
+    const app = await s.startApi({ sms: twilioLike })
+    const reply = await requestCode(s.client({ app }), n.e164)
+    const offRoster = await requestCode(s.client({ app }), '+6580009999')
+    const rows = await eventually(
+      () => auditOf(n),
+      found => found.length > 0,
+    )
+    await s.settled()
+    expect(reply.status).toBe(200)
+    expect([reply.status, reply.body]).toEqual([offRoster.status, offRoster.body])
+    expect(rows.map(row => [row.action, row.details])).toEqual([
+      ['auth.code_requested', { send: 'skipped_not_cleared' }],
+    ])
+    expect(twilioLike.sent).toEqual([])
+    expect(s.logs.some(line => line.event === 'sms_provider_not_cleared' && line.personId === n.id)).toBe(true)
+  })
+
+  it('T20 item 2: a foreign verification whose cancel fails gets no second start and nothing attached: sign-in answers as for any number, re-authentication 503, and a later request works (Qodo)', async () => {
+    // Budgets: F 2 code requests and an off-roster number 1; G 1 (the sign-in), and 2
+    // re-authentication requests, which count against their own windows.
+    const f = await s.person()
+    const g = await s.person()
+    const gc = await s.signIn(g)
+    // A pending verification for each number that Hearth didn't start, as a stray or planted one is:
+    // the provider hands it back as foreign, and texts its code again.
+    const strays = [(await s.sms.start(f.e164)).ref, (await s.sms.start(g.e164)).ref]
+    const cancel = s.sms.cancel.bind(s.sms)
+    const refused = new Set<string>()
+    // The provider fails the first cancel of each stray: the one the foreign check asks for.
+    const failing = vi.spyOn(s.sms, 'cancel').mockImplementation(async ref => {
+      if (strays.includes(ref) && !refused.has(ref)) {
+        refused.add(ref)
+        s.sms.failNext('cancel')
+      }
+      return cancel(ref)
+    })
+    const lastTo = (to: string) => s.sms.sent.filter(sent => sent.to === to).at(-1)
+    const failedSends = (person: Person) =>
+      s.logs
+        .filter(line => line.event === 'sms_send_failed' && line.personId === person.id)
+        .map(line => [line.level, line.kind])
+    try {
+      // Sign-in: the reply is the same as for any number, and the after-reply delivery starts once.
+      const fb = s.client()
+      const fSent = s.sms.countTo(f.e164)
+      const reply = await requestCode(fb, f.e164)
+      const offRoster = await requestCode(s.client(), s.number())
+      await s.settled()
+      expect([reply.status, reply.body]).toEqual([offRoster.status, offRoster.body])
+      expect(s.sms.countTo(f.e164)).toBe(fSent + 1)
+      expect(lastTo(f.e164)?.ref).toBe(strays[0])
+      expect(failedSends(f)).toEqual([[50, 'unavailable']])
+      // Nothing attached: a check of the stray's code asks the provider nothing and answers wrong.
+      expect(await s.valkey.hget(s.names.otp(tag(s.keys, f.e164)), 'ref')).toBeNull()
+      const checksBefore = s.sms.checks.length
+      const guess = await verifyCode(fb, lastTo(f.e164)?.code ?? '')
+      expect([guess.status, guess.error]).toEqual([401, 'code_wrong'])
+      expect(s.sms.checks.length).toBe(checksBefore)
+      // A later request cancels the stray, still pending, this time, and attaches a fresh code.
+      expect((await requestCode(fb, f.e164)).status).toBe(200)
+      await s.settled()
+      const fresh = lastTo(f.e164)
+      expect(fresh?.ref).not.toBe(strays[0])
+      const signedIn = await verifyCode(fb, fresh?.code ?? '')
+      expect([signedIn.status, signedIn.body]).toMatchObject([200, { status: 'signed_in' }])
+
+      // Re-authentication: one start, nothing attached, 503.
+      const gSent = s.sms.countTo(g.e164)
+      const asked = await gc.post('/api/auth/reauth/code/request', {})
+      expect([asked.status, asked.error]).toEqual([503, 'unavailable'])
+      expect(s.sms.countTo(g.e164)).toBe(gSent + 1)
+      expect(lastTo(g.e164)?.ref).toBe(strays[1])
+      expect(await s.valkey.hget(s.names.otp(tag(s.keys, g.e164)), 'ref')).toBeNull()
+      expect(failedSends(g)).toEqual([[50, 'unavailable']])
+      // A later request works.
+      expect((await gc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+      const code = lastTo(g.e164)
+      expect(code?.ref).not.toBe(strays[1])
+      const stamped = await gc.post('/api/auth/reauth/code/verify', { code: code?.code ?? '' })
+      expect([stamped.status, stamped.body]).toEqual([200, { status: 'reauthenticated', validForSeconds: 300 }])
+      // Each stray was asked to cancel twice: the failed cancel, then the later request's.
+      expect(s.sms.cancels.map(entry => entry.ref).filter(ref => strays.includes(ref))).toEqual([
+        strays[0],
+        strays[0],
+        strays[1],
+        strays[1],
+      ])
+    } finally {
+      failing.mockRestore()
+    }
+  })
+
   it('C0.5 Done: the PIN locks after 5 wrong tries for 15 minutes and after 10 until an admin resets it (PRD-53, ACC-02, ACC-06)', async () => {
-    // Budgets: M 3 code requests, E 1, K 1, U 0, the Admin 1.
-    const m = await s.person({ pin: s.newPin() })
-    const e = await s.person({ pin: s.newPin() })
-    const k = await s.person({ pin: s.newPin() })
+    // Budgets: M 3 code requests, E 1, K 1, U 0, C 1, the Owner 1. M, E and K hold PIN roles, so
+    // they have PINs (D46), and only an Owner resets a PIN-role holder's PIN.
+    const m = await s.person({ roles: ['leadership'], pin: s.newPin() })
+    const e = await s.person({ roles: ['compliance_officer'], pin: s.newPin() })
+    const k = await s.person({ roles: ['ai_admin'], pin: s.newPin() })
     const u = await s.person()
-    const admin = await s.person({ roles: ['admin'], pin: s.newPin() })
+    const c = await s.person()
+    const admin = await s.person({ roles: ['owner'], pin: s.newPin() })
 
     const mFirst = await s.signIn(m)
     const { client: mc, reply: stepUp } = await atStepUp(m)
@@ -728,8 +1268,18 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
 
     // ACC-06: an admin resets the PIN after checking who it is.
     const adminC = await s.signIn(admin)
-    const noAccount = await adminC.post('/api/admin/people/reset-pin', { person: u.id, identityCheck: 'in_person' })
-    expect([noAccount.status, noAccount.error]).toEqual([409, 'no_account'])
+    const noPin = await adminC.post('/api/admin/people/reset-pin', { person: u.id, identityCheck: 'in_person' })
+    expect([noPin.status, noPin.error]).toEqual([409, 'no_pin'])
+    // D46 AQ-02: C, a Member, signs in on the code alone, so has an account but no PIN: there's
+    // nothing to reset either, and the refused reset ends none of C's sessions and writes nothing.
+    const cc = await s.signIn(c)
+    expect(await userOf(c)).toMatchObject({ pin_hash: null, pin_reset_at: null })
+    const codeOnly = await adminC.post('/api/admin/people/reset-pin', { person: c.id, identityCheck: 'in_person' })
+    expect([codeOnly.status, codeOnly.error]).toEqual([409, 'no_pin'])
+    expect((await cc.get('/api/devices')).status).toBe(200)
+    expect(await userOf(c)).toMatchObject({ pin_hash: null, pin_reset_at: null, pin_reset_by: null })
+    expect((await auditOf(c)).filter(row => row.actor_id === admin.id)).toEqual([])
+    expect((await eventsOf(c)).filter(event => event.actor_id === admin.id)).toEqual([])
     const note = 'Checked against the roster at the front desk'
     const reset = await adminC.post('/api/admin/people/reset-pin', {
       person: m.id,
@@ -778,8 +1328,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('PRD-53 ACC-02: parallel PIN guesses and parallel finishes stay correct', async () => {
-    // Budgets: G 2 code requests.
-    const g = await s.person({ pin: s.newPin() })
+    // Budgets: G 2 code requests. G holds a PIN role, so steps up with the PIN (D46).
+    const g = await s.person({ roles: ['dpo'], pin: s.newPin() })
     const { client: gc } = await atStepUp(g)
     const wrongPin = another(pinOf(g))
     const guesses = await Promise.all(Array.from({ length: 8 }, () => verifyPin(gc, wrongPin)))
@@ -812,130 +1362,391 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(await sessions()).toBe(before + 1)
   })
 
-  it('ACC-02: a passkey is added, used at step-up while the PIN is locked, used to re-authenticate, and removed', async () => {
-    // Budgets: P 3 code requests, W 1.
-    const p = await s.person()
-    const w = await s.person({ pin: s.newPin() })
-    const authenticator = createAuthenticator(APP_ORIGIN)
-    type CreationOptions = { options: PublicKeyCredentialCreationOptionsJSON }
-    type RequestOptions = { options: PublicKeyCredentialRequestOptionsJSON }
+  it('D46: passkeys are switched off: every passkey route answers 404 no-store, and no reply names passkeys', async () => {
+    // Budgets: P 1 code request (a sign-in), Q 1.
+    const p = await s.person({ roles: ['leadership'], pin: s.newPin() })
+    const signedIn = await s.signIn(p)
+    const q = await s.person({ roles: ['leadership'], pin: s.newPin() })
+    const { client: atPin, reply: stepUp } = await atStepUp(q)
+    expect(stepUp.body).not.toHaveProperty('passkey')
+    for (const client of [signedIn, atPin, s.client()]) {
+      for (const path of PASSKEY_ROUTES) {
+        // The afterAll sweep checks each reply was no-store (the /api scope's own 404).
+        const reply = await client.post(path, {})
+        expect([reply.status, reply.body], path).toEqual([404, { error: 'Not Found' }])
+      }
+    }
+    const devices = await signedIn.get('/api/devices')
+    expect(devices.status).toBe(200)
+    expect(devices.body).not.toHaveProperty('passkeys')
+    // Nothing was written for any of them.
+    expect((await auditOf(p)).map(row => row.action)).toEqual(['auth.code_requested', 'auth.sign_in'])
+  })
 
-    // Signing in counts as a re-authentication, so a passkey can be added at once.
-    const first = await s.signIn(p)
-    const options = await first.post('/api/auth/passkeys/register/options', {})
-    expect(options.status).toBe(200)
-    const created = options.json<CreationOptions>().options
-    expect(created.rp).toEqual({ name: 'Hearth', id: 'hearth.test' })
-    const registered = await first.post('/api/auth/passkeys/register/verify', {
-      response: authenticator.register(created),
-    })
-    expect(registered.status).toBe(201)
-    const passkeyId = registered.json<{ passkey: { id: string; backedUp: boolean } }>().passkey.id
-    expect(registered.body).toMatchObject({ passkey: { id: passkeyId, backedUp: true } })
-    expect((await auditOf(p)).map(row => row.action)).toContain('auth.passkey_added')
-    const again = await first.post('/api/auth/passkeys/register/options', {})
-    const duplicate = await first.post('/api/auth/passkeys/register/verify', {
-      response: authenticator.register(again.json<CreationOptions>().options, { reuseCredential: true }),
-    })
-    expect([duplicate.status, duplicate.error]).toEqual([409, 'passkey_exists'])
+  it('D46 AQ-01: a Member re-authenticates with an SMS code to their own number, never the PIN', async () => {
+    // Budgets: M 2 code requests (a sign-in, then one the re-authentication code replaces), N 1.
+    // Re-authentication codes count against their own windows, not the number's sign-in ones.
+    const m = await s.person()
+    const mc = await s.signIn(m)
+    const { id: sessionId } = await s.sessionOf(mc)
+    await s.age(sessionId, '6 minutes')
+    const signOutMine = () => mc.post('/api/admin/people/sign-out-devices', { person: m.id })
 
-    // On a new device, with the PIN locked, the passkey stands in for it.
-    const { client: second, reply: stepUp } = await atStepUp(p)
-    expect(stepUp.body).toMatchObject({ next: 'step_up', passkey: true })
-    const wrongPin = another(pinOf(p))
-    for (let failures = 1; failures <= 5; failures++) await verifyPin(second, wrongPin)
-    const allow = await second.post('/api/auth/passkey/options', {})
-    expect(allow.status).toBe(200)
-    const request = allow.json<RequestOptions>().options
-    const [credential] = await s.query<{ credential_id: Buffer }>('select credential_id from passkeys where id = $1', [
-      passkeyId,
-    ])
-    expect(request.allowCredentials?.map(c => c.id)).toEqual([credential?.credential_id.toString('base64url')])
-    const viaPasskey = await second.post('/api/auth/passkey/verify', { response: authenticator.assert(request) })
-    expect(viaPasskey.status).toBe(200)
-    expect(viaPasskey.body).toMatchObject({ status: 'signed_in' })
-    expect((await userOf(p))?.pin_failures).toBe(5)
-    const [stored] = await s.query<{ counter: string; last_used_at: Date | null }>(
-      'select counter::text, last_used_at from passkeys where id = $1',
-      [passkeyId],
-    )
-    expect(stored?.counter).toBe('1')
-    expect(stored?.last_used_at).toBeInstanceOf(Date)
-    expect((await auditOf(p)).filter(row => row.action === 'auth.sign_in').map(row => row.details.method)).toContain(
-      'sms_passkey',
-    )
-
-    // Re-authenticating with the passkey leaves the PIN count alone; its challenge is single-use.
-    const reauthOptions = await second.post('/api/auth/reauth/passkey/options', {})
-    expect(reauthOptions.status).toBe(200)
-    const assertion = authenticator.assert(reauthOptions.json<RequestOptions>().options)
-    const reauth = await second.post('/api/auth/reauth/passkey/verify', { response: assertion })
-    expect(reauth.status).toBe(200)
-    expect(reauth.body).toEqual({ status: 'reauthenticated', validForSeconds: 300 })
-    expect((await auditOf(p)).filter(row => row.action === 'auth.reauth').map(row => row.details.method)).toContain(
-      'passkey',
-    )
-    expect((await userOf(p))?.pin_failures).toBe(5)
-    const replayed = await second.post('/api/auth/reauth/passkey/verify', { response: assertion })
-    expect([replayed.status, replayed.error]).toEqual([401, 'passkey_expired'])
-
-    // A tampered assertion (another origin) fails, and its audit row commits.
-    const { client: third } = await atStepUp(p)
-    const tamperedOptions = await third.post('/api/auth/passkey/options', {})
-    const tampered = await third.post('/api/auth/passkey/verify', {
-      response: authenticator.assert(tamperedOptions.json<RequestOptions>().options, { origin: 'https://evil.test' }),
-    })
-    expect([tampered.status, tampered.error]).toEqual([401, 'passkey_failed'])
-    expect((await auditOf(p)).filter(row => row.action === 'auth.passkey_failed')).toHaveLength(1)
-
-    // T14: an assertion without user verification fails, and so does one whose signature counter
-    // is the stored one (a replayed assertion, or a cloned authenticator).
-    const thirdOptions = async () => (await third.post('/api/auth/passkey/options', {})).json<RequestOptions>().options
-    const noUv = await third.post('/api/auth/passkey/verify', {
-      response: authenticator.assert(await thirdOptions(), { uv: false }),
-    })
-    expect([noUv.status, noUv.error]).toEqual([401, 'passkey_failed'])
-    const [now] = await s.query<{ counter: string }>('select counter::text from passkeys where id = $1', [passkeyId])
-    expect(Number(now?.counter)).toBeGreaterThan(0)
-    const cloned = await third.post('/api/auth/passkey/verify', {
-      response: authenticator.assert(await thirdOptions(), { counter: Number(now?.counter) }),
-    })
-    expect([cloned.status, cloned.error]).toEqual([401, 'passkey_failed'])
-    expect((await auditOf(p)).filter(row => row.action === 'auth.passkey_failed')).toHaveLength(3)
-
-    // §9.4: adding or removing a passkey needs a re-authentication from the last 5 minutes.
-    const { id: sessionId } = await s.sessionOf(second)
-    await s.age(sessionId, '4 minutes')
-    expect((await second.post('/api/auth/passkeys/register/options', {})).status).toBe(200)
-    await s.age(sessionId, '2 minutes')
-    const stale = await second.post('/api/auth/passkeys/remove', { passkey: passkeyId })
-    expect([stale.status, stale.error]).toEqual([403, 'reauth_required'])
-    const staleAdd = await second.post('/api/auth/passkeys/register/options', {})
-    expect([staleAdd.status, staleAdd.error]).toEqual([403, 'reauth_required'])
-    const fresh = await second.post('/api/auth/reauth/passkey/options', {})
-    const refreshed = await second.post('/api/auth/reauth/passkey/verify', {
-      response: authenticator.assert(fresh.json<RequestOptions>().options),
-    })
-    expect(refreshed.status).toBe(200)
-    const removed = await second.post('/api/auth/passkeys/remove', { passkey: passkeyId })
-    expect(removed.status).toBe(200)
-    expect(removed.body).toEqual({ status: 'removed' })
-    expect((await auditOf(p)).map(row => row.action)).toContain('auth.passkey_removed')
-    // C0.6 T16: the passkey's events, the session's person acting; the passkey's sign-in.
-    const events = await eventsOf(p)
-    expect(events.filter(event => event.type.startsWith('account.passkey'))).toEqual([
-      about(p, 'account.passkey_added', p, { passkey: passkeyId }),
-      about(p, 'account.passkey_removed', p, { passkey: passkeyId }),
-    ])
-    expect(events.filter(event => event.type === 'signin.started').map(event => event.ids.method)).toEqual([
-      'sms_new_pin',
-      'sms_passkey',
+    // A stale session's refusal names its method: a code we text them.
+    const stale = await signOutMine()
+    expect([stale.status, stale.body]).toEqual([
+      403,
+      { error: 'reauth_required', message: "Confirm it's you with a code we text you first.", method: 'code' },
     ])
 
-    // Someone with no passkey is told so at step-up.
-    const { client: wc } = await atStepUp(w)
-    const none = await wc.post('/api/auth/passkey/options', {})
-    expect([none.status, none.error]).toEqual([409, 'no_passkey'])
+    // The PIN route is refused before any PIN is checked or counted.
+    const byPin = await mc.post('/api/auth/reauth/pin', { pin: s.newPin() })
+    expect([byPin.status, byPin.body]).toEqual([
+      409,
+      { error: 'reauth_method', message: "Confirm it's you with a code we text you.", method: 'code' },
+    ])
+    expect((await userOf(m))?.pin_failures).toBe(0)
+    // Logged at warn with the person and the route, and written to no audit row (Q5).
+    expect(wrongMethodLines(m.id)).toEqual([[40, '/api/auth/reauth/pin']])
+
+    const sentBefore = s.sms.sent.length
+    const asked = await mc.post('/api/auth/reauth/code/request', {})
+    expect([asked.status, asked.body]).toEqual([200, { status: 'code_sent', expiresInSeconds: 300, codeLength: 6 }])
+    expect(s.sms.sent.length).toBe(sentBefore + 1)
+    const code = await s.sms.nextCode(m.e164)
+    const wrong = await mc.post('/api/auth/reauth/code/verify', { code: another(code) })
+    expect([wrong.status, wrong.body]).toMatchObject([401, { error: 'code_wrong', triesLeft: 4 }])
+    const right = await mc.post('/api/auth/reauth/code/verify', { code })
+    expect([right.status, right.body]).toEqual([200, { status: 'reauthenticated', validForSeconds: 300 }])
+    const [stamp] = await s.query<{ fresh: boolean }>(
+      "select reauthenticated_at > now() - interval '1 minute' as fresh from sessions where id = $1",
+      [sessionId],
+    )
+    expect(stamp?.fresh).toBe(true)
+    // The SMS stamp counts for an action that needs one.
+    expect((await mc.get(`/api/admin/people/${m.id}/devices`)).status).toBe(200)
+    // The code is used up.
+    expect((await mc.post('/api/auth/reauth/code/verify', { code })).error).toBe('code_expired')
+    const reauth = (await auditOf(m)).filter(row => row.details.during === 'reauth' || row.action === 'auth.reauth')
+    expect(reauth.map(row => [row.action, row.actor_id, row.details])).toEqual([
+      ['auth.code_requested', m.id, { during: 'reauth', send: 'attempted' }],
+      ['auth.code_failed', m.id, { during: 'reauth', result: 'wrong' }],
+      ['auth.reauth', m.id, { method: 'sms' }],
+      ['auth.code_failed', m.id, { during: 'reauth', result: 'expired' }],
+    ])
+
+    // A re-authentication code replaces a pending sign-in code for the number, cancelling it. The
+    // replaced sign-in attempt's check then asks the provider nothing and cancels nothing of the
+    // session's code, which still works (T14 item 3, T20). The session's window (10
+    // re-authentications per 10 minutes) starts afresh.
+    await s.valkey.del(s.names.limit('reauth', sessionId))
+    const latestRef = () => s.sms.sent.filter(sent => sent.to === m.e164).at(-1)?.ref
+    const other = s.client()
+    expect((await requestCode(other, m.e164)).status).toBe(200)
+    const signInCode = await s.sms.nextCode(m.e164)
+    const signInRef = latestRef()
+    expect((await mc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+    const replacing = await s.sms.nextCode(m.e164)
+    const replacingRef = latestRef()
+    expect(replacingRef).not.toBe(signInRef)
+    expect(s.sms.cancels.map(entry => entry.ref)).toContain(signInRef)
+    const checksBefore = s.sms.checks.length
+    expect((await verifyCode(other, signInCode)).error).toBe('code_expired')
+    await s.settled()
+    expect(s.sms.checks.length).toBe(checksBefore)
+    expect(s.sms.cancels.map(entry => entry.ref)).not.toContain(replacingRef)
+    expect((await mc.post('/api/auth/reauth/code/verify', { code: replacing })).status).toBe(200)
+
+    // A code dies at the 5th wrong try, and its provider code is cancelled after the reply.
+    await s.valkey.del(s.names.limit('reauth', sessionId))
+    expect((await mc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+    const doomed = await s.sms.nextCode(m.e164)
+    const doomedRef = latestRef()
+    for (let i = 1; i <= 4; i++) {
+      const guess = await mc.post('/api/auth/reauth/code/verify', { code: another(doomed) })
+      expect(guess.body).toMatchObject({ error: 'code_wrong', triesLeft: 5 - i })
+    }
+    const fifth = await mc.post('/api/auth/reauth/code/verify', { code: another(doomed) })
+    expect(fifth.error).toBe('code_dead')
+    await s.settled()
+    expect(s.sms.cancels.map(entry => entry.ref)).toContain(doomedRef)
+    expect((await mc.post('/api/auth/reauth/code/verify', { code: doomed })).error).toBe('code_expired')
+
+    // A fresh SMS stamp lets them sign out their own devices, this session included.
+    await s.reauth(mc, m)
+    expect((await signOutMine()).status).toBe(200)
+    expect((await mc.get('/api/devices')).status).toBe(401)
+
+    // AQ-23: no current number, no code.
+    const n = await s.person()
+    const nc = await s.signIn(n)
+    await s.query('update phone_numbers set removed_at = now(), removed_by = $2 where id = $1', [
+      n.phoneNumberId,
+      s.org.system,
+    ])
+    const none = await nc.post('/api/auth/reauth/code/request', {})
+    expect([none.status, none.error]).toEqual([409, 'no_number'])
+    const noneCheck = await nc.post('/api/auth/reauth/code/verify', { code: '000000' })
+    expect([noneCheck.status, noneCheck.error]).toEqual([409, 'no_number'])
+  })
+
+  it('D46 AQ-01: on the real floor, refused SMS re-authentication checks still answer at once (signed-in traffic, nothing to hide)', async () => {
+    // Budgets: F 1 code request.
+    const app = await s.startApi({ realTiming: true })
+    const f = await s.person()
+    const signedIn = await s.signIn(f)
+    const fc = s.client({ app })
+    fc.setCookie(SESSION_COOKIE, signedIn.cookie(SESSION_COOKIE) ?? '')
+    expect((await fc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+    const wrong = another(await s.sms.nextCode(f.e164))
+    const replies: { error: string | undefined; ms: number }[] = []
+    for (let tries = 1; tries <= 6; tries++) {
+      const started = Date.now()
+      const reply = await fc.post('/api/auth/reauth/code/verify', { code: wrong })
+      replies.push({ error: reply.error, ms: Date.now() - started })
+    }
+    // Wrong four times, dead at the 5th, then expired: each well inside sign-in's 2 s floor.
+    expect(replies.map(reply => reply.error)).toEqual([
+      'code_wrong',
+      'code_wrong',
+      'code_wrong',
+      'code_wrong',
+      'code_dead',
+      'code_expired',
+    ])
+    for (const { ms } of replies) expect(ms).toBeLessThan(1_500)
+  })
+
+  it('T20 item 6: a session sends one re-authentication code at a time: an overlapping request answers 409 try_again and sends nothing, and a later one works', async () => {
+    // Budgets: D 1 code request (a sign-in); re-authentication codes count against their own windows.
+    const d = await s.person()
+    const dc = await s.signIn(d)
+    const { id: sessionId } = await s.sessionOf(dc)
+    // The first request waits inside the provider's start until the second has answered: a double
+    // tap, whose two requests own the record as one session.
+    let release = () => {}
+    const held = new Promise<void>(resolve => {
+      release = resolve
+    })
+    let entered = () => {}
+    const inStart = new Promise<void>(resolve => {
+      entered = resolve
+    })
+    const start = s.sms.start.bind(s.sms)
+    const slow = vi.spyOn(s.sms, 'start').mockImplementationOnce(async to => {
+      entered()
+      await held
+      return start(to)
+    })
+    const sentBefore = s.sms.countTo(d.e164)
+    try {
+      const first = dc.post('/api/auth/reauth/code/request', {})
+      await inStart
+      const second = await dc.post('/api/auth/reauth/code/request', {})
+      expect([second.status, second.error]).toEqual([409, 'try_again'])
+      expect(s.sms.countTo(d.e164)).toBe(sentBefore)
+      release()
+      expect((await first).status).toBe(200)
+    } finally {
+      release()
+      slow.mockRestore()
+    }
+    expect(s.sms.countTo(d.e164)).toBe(sentBefore + 1)
+    expect(await s.valkey.exists(s.names.reauthSending(sessionId))).toBe(0)
+    // Logged as its own line, never as a database conflict, and audited nowhere: nothing was opened.
+    const busy = s.logs.filter(line => line.event === 'reauth_code_busy' && line.personId === d.id)
+    expect(busy.map(line => line.level)).toEqual([30])
+    expect(s.logs.filter(line => line.event === 'db_conflict' && line.reqId === busy[0]?.reqId)).toEqual([])
+    const requested = (await auditOf(d)).filter(
+      row => row.action === 'auth.code_requested' && row.details.during === 'reauth',
+    )
+    expect(requested).toHaveLength(1)
+
+    // Freed: a later request replaces the first code with a new one, which stamps the session.
+    const again = await dc.post('/api/auth/reauth/code/request', {})
+    expect(again.status).toBe(200)
+    expect(s.sms.countTo(d.e164)).toBe(sentBefore + 2)
+    await s.sms.nextCode(d.e164)
+    const code = await s.sms.nextCode(d.e164)
+    const stamped = await dc.post('/api/auth/reauth/code/verify', { code })
+    expect([stamped.status, stamped.body]).toEqual([200, { status: 'reauthenticated', validForSeconds: 300 }])
+  })
+
+  it('T20 item 6: an approved re-authentication code whose stamp waits past its lock timeout answers 409 try_again, and a retry with any 6 digits stamps it with no second check', async () => {
+    // Budgets: R 1 code request (the sign-in; re-authentication codes count against their own windows).
+    const r = await s.person()
+    const rc = await s.signIn(r)
+    const { id: sessionId } = await s.sessionOf(rc)
+    await s.age(sessionId, '6 minutes')
+    const fresh = async () =>
+      (
+        await s.query<{ fresh: boolean }>(
+          "select reauthenticated_at > now() - interval '5 minutes' as fresh from sessions where id = $1",
+          [sessionId],
+        )
+      )[0]?.fresh
+    expect((await rc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+    const code = await s.sms.nextCode(r.e164)
+    const checksBefore = s.sms.checks.length
+    await s.query('begin')
+    let blocked: Awaited<ReturnType<Client['post']>>
+    try {
+      // The superuser holds the session's row FOR SHARE, which the acting session's reads share, so
+      // only the stamp's UPDATE waits out its 2 s.
+      await s.query('select id from sessions where id = $1 for share', [sessionId])
+      blocked = await rc.post('/api/auth/reauth/code/verify', { code })
+    } finally {
+      await s.query('commit')
+    }
+    expect([blocked.status, blocked.error]).toEqual([409, 'try_again'])
+    expect(s.sms.checks.length).toBe(checksBefore + 1)
+    expect(await fresh()).toBe(false)
+    // The retry the client makes after try_again stamps it without asking the provider again.
+    const retried = await rc.post('/api/auth/reauth/code/verify', { code: '000000' })
+    expect([retried.status, retried.body]).toEqual([200, { status: 'reauthenticated', validForSeconds: 300 }])
+    expect(s.sms.checks.length).toBe(checksBefore + 1)
+    expect(await fresh()).toBe(true)
+    // The approval is used up with the stamp: the code is spent, and nothing is left to retry.
+    expect(await s.valkey.exists(s.names.reauthApproved(sessionId))).toBe(0)
+    expect((await rc.post('/api/auth/reauth/code/verify', { code })).error).toBe('code_expired')
+    const rows = (await auditOf(r)).filter(row => row.details.during === 'reauth' || row.action === 'auth.reauth')
+    expect(rows.map(row => [row.action, row.details])).toEqual([
+      ['auth.code_requested', { during: 'reauth', send: 'attempted' }],
+      ['auth.reauth', { method: 'sms' }],
+      ['auth.code_failed', { during: 'reauth', result: 'expired' }],
+    ])
+  })
+
+  it('T20 item 6: a new re-authentication code request ends an approval whose stamp failed, so wrong digits stamp nothing and only the new code does (Qodo)', async () => {
+    // Budgets: Q 1 code request (the sign-in; re-authentication codes count against their own windows).
+    const q = await s.person()
+    const qc = await s.signIn(q)
+    const { id: sessionId } = await s.sessionOf(qc)
+    await s.age(sessionId, '6 minutes')
+    const fresh = async () =>
+      (
+        await s.query<{ fresh: boolean }>(
+          "select reauthenticated_at > now() - interval '5 minutes' as fresh from sessions where id = $1",
+          [sessionId],
+        )
+      )[0]?.fresh
+    expect((await qc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+    const first = await s.sms.nextCode(q.e164)
+    await s.query('begin')
+    let blocked: Awaited<ReturnType<Client['post']>>
+    try {
+      // As above: only the stamp's UPDATE waits out its 2 s, so the approval is kept.
+      await s.query('select id from sessions where id = $1 for share', [sessionId])
+      blocked = await qc.post('/api/auth/reauth/code/verify', { code: first })
+    } finally {
+      await s.query('commit')
+    }
+    expect([blocked.status, blocked.error]).toEqual([409, 'try_again'])
+    expect(await s.valkey.exists(s.names.reauthApproved(sessionId))).toBe(1)
+
+    // A new code request opens a new challenge and ends the approval with it.
+    expect((await qc.post('/api/auth/reauth/code/request', {})).status).toBe(200)
+    const second = await s.sms.nextCode(q.e164)
+    // Wrong digits are checked against the new code, and stamp nothing.
+    const checksBefore = s.sms.checks.length
+    const wrong = await qc.post('/api/auth/reauth/code/verify', { code: another(second) })
+    expect([wrong.status, wrong.body]).toMatchObject([401, { error: 'code_wrong', triesLeft: 4 }])
+    expect(s.sms.checks.length).toBe(checksBefore + 1)
+    expect(await fresh()).toBe(false)
+    expect(await s.valkey.exists(s.names.reauthApproved(sessionId))).toBe(0)
+    // The new code stamps it.
+    const right = await qc.post('/api/auth/reauth/code/verify', { code: second })
+    expect([right.status, right.body]).toEqual([200, { status: 'reauthenticated', validForSeconds: 300 }])
+    expect(await fresh()).toBe(true)
+  })
+
+  it('D46 AQ-02 I2: a session issued under the PIN rule never re-authenticates by SMS, even after its role is removed and given again', async () => {
+    // Budgets: A 1 code request, T 0.
+    const a = await s.person({ roles: ['admin'], pin: s.newPin() })
+    const t = await s.person()
+    const ac = await s.signIn(a)
+    const { id: sessionId } = await s.sessionOf(ac)
+    const signOutT = () => ac.post('/api/admin/people/sign-out-devices', { person: t.id })
+    const sentBefore = s.sms.sent.length
+    const bySms = await ac.post('/api/auth/reauth/code/request', {})
+    expect([bySms.status, bySms.body]).toEqual([
+      409,
+      { error: 'reauth_method', message: "Confirm it's you with your PIN.", method: 'pin' },
+    ])
+    const bySmsCheck = await ac.post('/api/auth/reauth/code/verify', { code: '000000' })
+    expect([bySmsCheck.status, bySmsCheck.error]).toEqual([409, 'reauth_method'])
+    await s.age(sessionId, '6 minutes')
+    const stale = await signOutT()
+    expect([stale.status, stale.body]).toEqual([
+      403,
+      { error: 'reauth_required', message: "Confirm it's you with your PIN first.", method: 'pin' },
+    ])
+
+    // The role removed: the session still re-authenticates only with the PIN, keeping its 7 days.
+    const former = await s.revokeRole(a, 'admin')
+    expect(former.holdsPinRole).toBe(false)
+    expect((await ac.post('/api/auth/reauth/code/request', {})).body).toMatchObject({ method: 'pin' })
+    expect((await ac.post('/api/auth/reauth/pin', { pin: pinOf(a) })).status).toBe(200)
+    const [term] = await s.query<{ pin_rule: boolean }>(
+      "select expires_at - created_at = interval '168 hours' as pin_rule from sessions where id = $1",
+      [sessionId],
+    )
+    expect(term?.pin_rule).toBe(true)
+    // Given again: no SMS stamp ever landed on the session, and the PIN's stamp counts.
+    await s.grantRole(former, 'admin')
+    expect((await signOutT()).status).toBe(200)
+    expect(s.sms.sent.length).toBe(sentBefore)
+    expect((await auditOf(a)).filter(row => row.action === 'auth.reauth').map(row => row.details)).toEqual([
+      { method: 'pin' },
+    ])
+    // Each 409 reauth_method left a warn line naming the person and the route, and nothing else of
+    // theirs; none reached the audit log (T20 item 6, Q5).
+    expect(wrongMethodLines(a.id)).toEqual([
+      [40, '/api/auth/reauth/code/request'],
+      [40, '/api/auth/reauth/code/verify'],
+      [40, '/api/auth/reauth/code/request'],
+    ])
+    expect((await auditOf(a)).filter(row => row.details.during === 'reauth').map(row => row.action)).toEqual([])
+  })
+
+  it('D46 AQ-02: a role granted on a code-only session needs a new sign-in through the PIN step, even inside 5 minutes', async () => {
+    // Budgets: M 2 code requests, T 0.
+    const m = await s.person()
+    const t = await s.person()
+    const mc = await s.signIn(m)
+    const admin = await s.grantRole(m, 'admin')
+    const signOutT = (client: Client) => client.post('/api/admin/people/sign-out-devices', { person: t.id })
+    const refused = await signOutT(mc)
+    expect([refused.status, refused.body]).toEqual([
+      403,
+      {
+        error: 'reauth_required',
+        message: 'Your account has changed. Sign out and sign in again to carry on.',
+        method: 'sign_in',
+      },
+    ])
+    const mismatch = s.logs.filter(line => line.event === 'pin_rule_session_mismatch')
+    expect(mismatch.some(line => line.personId === m.id)).toBe(true)
+    for (const line of mismatch) expect(Object.keys(line)).not.toContain('method')
+    for (const [path, body] of [
+      ['/api/auth/reauth/pin', { pin: s.newPin() }],
+      ['/api/auth/reauth/code/request', {}],
+      ['/api/auth/reauth/code/verify', { code: '000000' }],
+    ] as const) {
+      const reply = await mc.post(path, body)
+      expect([reply.status, reply.error, reply.body], path).toMatchObject([409, 'reauth_method', { method: 'sign_in' }])
+    }
+    // Each is a wrong-method refusal too, logged with its route.
+    expect(wrongMethodLines(m.id)).toEqual([
+      [40, '/api/auth/reauth/pin'],
+      [40, '/api/auth/reauth/code/request'],
+      [40, '/api/auth/reauth/code/verify'],
+    ])
+    // Healed by signing out and in again, through the PIN step, onto a 7-day session.
+    expect((await mc.post('/api/auth/sign-out', {})).status).toBe(200)
+    const again = await s.signIn(admin)
+    expect(admin.pin).toBeDefined()
+    expect((await signOutT(again)).status).toBe(200)
   })
 
   it("§9.4 T13: admin actions need a re-authentication within the last 5 minutes, and an Admin can't act on the Owner", async () => {
@@ -952,7 +1763,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect((await signOutT(ac)).status).toBe(200)
     await s.age(sessionId, '2 minutes')
     const stale = await signOutT(ac)
-    expect([stale.status, stale.error]).toEqual([403, 'reauth_required'])
+    expect([stale.status, stale.body]).toMatchObject([403, { error: 'reauth_required', method: 'pin' }])
 
     // A wrong PIN at re-authentication counts; the right one clears the count and stamps it.
     const wrong = await ac.post('/api/auth/reauth/pin', { pin: another(pinOf(a)) })
@@ -1072,9 +1883,10 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
 
   it('C0.5 Done: deactivating a member signs them out everywhere and closes their socket within 2 s through the push (ACC-05, T5)', async () => {
     // Budgets: the Admin 1 code request, D 3, L 1.
-    const admin = await s.person({ roles: ['admin'], pin: s.newPin() })
+    // L holds a PIN role, to reach the step-up (D46), so an Owner deactivates them.
+    const admin = await s.person({ roles: ['owner'], pin: s.newPin() })
     const d = await s.person({ pin: s.newPin() })
-    const l = await s.person({ pin: s.newPin() })
+    const l = await s.person({ roles: ['leadership'], pin: s.newPin() })
 
     const d1 = await s.signIn(d)
     const d2 = await s.signIn(d)
@@ -1328,9 +2140,12 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('T14: with Valkey down, sign-in fails closed and signed-in requests carry on', async () => {
-    // Budgets: V 1 code request.
-    const v = await s.person({ pin: s.newPin() })
+    // Budgets: V 1 code request, W 1.
+    // V holds a PIN role, so re-authenticates with the PIN (D46); W, a Member, by SMS code.
+    const v = await s.person({ roles: ['admin'], pin: s.newPin() })
+    const w = await s.person()
     const signedIn = await s.signIn(v)
+    const member = await s.signIn(w)
     // Nothing listens on port 1, so every Valkey command fails at once.
     const down = await s.startApi({ valkeyUrl: 'redis://127.0.0.1:1' })
 
@@ -1346,10 +2161,15 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect((await same.get('/api/devices')).status).toBe(200)
     expect((await same.post('/api/auth/reauth/pin', { pin: pinOf(v) })).status).toBe(200)
     expect(s.logs.some(line => line.event === 'reauth_limit_unavailable')).toBe(true)
+    // AQ-10: SMS re-authentication fails closed.
+    const sameMember = s.client({ app: down })
+    sameMember.setCookie(SESSION_COOKIE, member.cookie(SESSION_COOKIE) ?? '')
+    const byCode = await sameMember.post('/api/auth/reauth/code/request', {})
+    expect([byCode.status, byCode.error]).toEqual([503, 'unavailable'])
   })
 
   it('ACC-03 T14: a number in two orgs, and a number removed before its code is checked, at the step-up, and before the finish', async () => {
-    // Budgets: T 1 code request (the second org's person holds the same number), Z 1, W 1, Y 1.
+    // Budgets: T 1 code request (the second org's person holds the same number), Z 1, O 1, W 1, Y 1.
     const t = await s.person({ pin: s.newPin() })
     const twin = await s.person({ org: 'second', e164: t.e164 })
     const sentBefore = s.sms.sent.length
@@ -1381,9 +2201,35 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       ['auth.code_failed', { result: 'wrong', numberRemoved: true }],
     ])
 
+    // The same for a PIN-role holder with a PIN (D46), whose finish alone reads the account: the
+    // reply shows neither their PIN's state nor whether they have a passkey, and the attempt stays
+    // at the code.
+    const o = await s.person({ roles: ['owner'], pin: s.newPin() })
+    const oc = s.client()
+    expect((await requestCode(oc, o.e164)).status).toBe(200)
+    const oCode = await s.sms.nextCode(o.e164)
+    await s.query('update phone_numbers set removed_at = now(), removed_by = $2 where id = $1', [
+      o.phoneNumberId,
+      s.org.system,
+    ])
+    const oChecked = await verifyCode(oc, oCode)
+    expect(oChecked.status).toBe(401)
+    expect(oChecked.body).toMatchObject({ error: 'code_wrong', triesLeft: 4 })
+    expect(oChecked.body).not.toHaveProperty('pin')
+    expect(oChecked.body).not.toHaveProperty('passkey')
+    const oPin = await verifyPin(oc, pinOf(o))
+    expect([oPin.status, oPin.error]).toEqual([409, 'wrong_step'])
+    expect(await s.query('select id from sessions where user_id = $1', [o.id])).toEqual([])
+    await s.settled()
+    expect((await auditOf(o)).map(row => [row.action, row.details])).toEqual([
+      ['auth.code_requested', { send: 'attempted' }],
+      ['auth.code_failed', { result: 'wrong', numberRemoved: true }],
+    ])
+
     // At the step-up, a PIN for a number removed since is refused right or wrong, uncounted, and
     // the attempt goes.
-    const w = await s.person({ pin: s.newPin() })
+    // W and Y hold PIN roles, to reach the PIN steps (D46).
+    const w = await s.person({ roles: ['admin'], pin: s.newPin() })
     const { client: wc, reply: wStep } = await atStepUp(w)
     expect(wStep.body).toMatchObject({ next: 'step_up' })
     await s.query('update phone_numbers set removed_at = now(), removed_by = $2 where id = $1', [
@@ -1392,12 +2238,11 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     ])
     const guessed = await wc.post('/api/auth/pin/verify', { pin: s.newPin() })
     expect([guessed.status, guessed.error]).toEqual([401, 'attempt_expired'])
-    expect((await wc.post('/api/auth/passkey/options', {})).error).toBe('attempt_expired')
     expect((await userOf(w))?.pin_failures).toBe(0)
     await s.settled()
     expect((await auditOf(w)).map(row => row.action)).toEqual(['auth.code_requested'])
 
-    const y = await s.person()
+    const y = await s.person({ roles: ['admin'] })
     const { client: yc, reply: step } = await atStepUp(y)
     expect(step.body).toMatchObject({ next: 'set_pin' })
     await s.query('update phone_numbers set removed_at = now(), removed_by = $2 where id = $1', [
@@ -1444,8 +2289,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
   })
 
   it('PRD-53 T14: every limit is wired to the live Valkey', async () => {
-    // Budgets: P1 3 code requests, P2 1, P5 1, P6 1, P7 1, P8 1, P9 1; the other requests are
-    // refused before any.
+    // Budgets: P1 3 code requests, P2 1, P5 1, P6 1, P7 1, P8 1, P9 1, P10 1, P11 2; the other
+    // requests are refused before any.
     // Each window is filled to the number PRD-53 or T14 sets (never policy.ts's own max, which a
     // change there would follow), and a request it covers is then refused.
     const filled = new Set<string>()
@@ -1494,11 +2339,13 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect((await requestCode(s.client({ ip: '2001:db8:7:7::1234' }), s.number())).status).toBe(429)
 
     // Every sign-in request per IP, 100 per 10 minutes: from the address, each step is refused (a
-    // code request, a code check, setting a PIN, a PIN check, and a passkey's options and check).
+    // code request, a code check, setting a PIN and a PIN check; the dormant passkey suite checks
+    // its own routes, D46).
     const authIp = '192.0.2.78'
-    const p7 = await s.person({ pin: s.newPin() })
+    // P7 and P9 hold PIN roles, to reach the PIN steps (D46).
+    const p7 = await s.person({ roles: ['leadership'], pin: s.newPin() })
     const p8 = await s.person()
-    const p9 = await s.person()
+    const p9 = await s.person({ roles: ['leadership'] })
     const atPin = s.client({ ip: authIp })
     expect((await requestCode(atPin, p7.e164)).status).toBe(200)
     expect((await verifyCode(atPin, await s.sms.nextCode(p7.e164))).status).toBe(200)
@@ -1509,24 +2356,10 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const toSetPin = await verifyCode(atSetPin, await s.sms.nextCode(p9.e164))
     expect(toSetPin.body).toMatchObject({ next: 'set_pin' })
     await fill('auth-ip', tag(s.keys, `ip:${limitSubject(authIp)}`), 100)
-    // The limit is checked before the challenge is read, so a well-formed assertion is enough.
-    const assertion = {
-      id: Buffer.alloc(16, 1).toString('base64url'),
-      rawId: Buffer.alloc(16, 1).toString('base64url'),
-      type: 'public-key',
-      response: {
-        clientDataJSON: Buffer.from('{}').toString('base64url'),
-        authenticatorData: Buffer.alloc(37).toString('base64url'),
-        signature: Buffer.alloc(70, 3).toString('base64url'),
-      },
-      clientExtensionResults: {},
-    }
     const fromAuthIp = {
       codeCheck: await verifyCode(atCode, await s.sms.nextCode(p8.e164)),
       setPin: await atSetPin.post('/api/auth/pin/set', { pin: s.newPin() }),
       pinCheck: await verifyPin(atPin, pinOf(p7)),
-      passkeyOptions: await atPin.post('/api/auth/passkey/options', {}),
-      passkeyCheck: await atPin.post('/api/auth/passkey/verify', { response: assertion }),
       codeRequest: await requestCode(s.client({ ip: authIp }), s.number()),
     }
     for (const [step, reply] of Object.entries(fromAuthIp)) {
@@ -1549,12 +2382,30 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     await fill('otp-v24h', tag(s.keys, p5.e164), 10)
     expect((await verifyCode(c5, await s.sms.nextCode(p5.e164))).status).toBe(429)
 
-    // Re-authentications per session.
-    const p6 = await s.person({ pin: s.newPin() })
+    // Re-authentications per session (P6 holds a PIN role, so by the PIN, D46).
+    const p6 = await s.person({ roles: ['admin'], pin: s.newPin() })
     const c6 = await s.signIn(p6)
     await fill('reauth', (await s.sessionOf(c6)).id, 10)
     const reauth = await c6.post('/api/auth/reauth/pin', { pin: pinOf(p6) })
     expect([reauth.status, reauth.error]).toEqual([429, 'too_many_requests'])
+
+    // SMS re-authentication code requests and checks per person per rolling day (D46, AQ-09), each
+    // window on its own person, so a refusal shows which window refused: a full code window refuses
+    // a code request and no check, and a full check window a check and no code request.
+    const p10 = await s.person()
+    const c10 = await s.signIn(p10)
+    await fill('reauth-code-p24h', p10.id, 20)
+    const codes = await c10.post('/api/auth/reauth/code/request', {})
+    expect([codes.status, codes.error]).toEqual([429, 'too_many_requests'])
+    // Past every limit, the check finds no code.
+    const unlimited = await c10.post('/api/auth/reauth/code/verify', { code: '000000' })
+    expect([unlimited.status, unlimited.error]).toEqual([401, 'code_expired'])
+    const p11 = await s.person()
+    const c11 = await s.signIn(p11)
+    await fill('reauth-check-p24h', p11.id, 20)
+    const checks = await c11.post('/api/auth/reauth/code/verify', { code: '000000' })
+    expect([checks.status, checks.error]).toEqual([429, 'too_many_requests'])
+    expect((await c11.post('/api/auth/reauth/code/request', {})).status).toBe(200)
 
     // Every limit policy.ts names was filled and refused above.
     expect([...filled].sort()).toEqual(

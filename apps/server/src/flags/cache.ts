@@ -1,7 +1,7 @@
 // The flags a process keeps (TECH-SPEC T17 items 6 and 7). Postgres holds every org's flags
 // (feature_flags, migration 0007); each process holds a copy of the orgs it serves, so it can
 // decide whether a feature is on for someone without a query. A change reaches every process within
-// 10 s (PRD-65, BUILD-PLAN 150) two ways:
+// 10 s (PRD-65, BUILD-PLAN C0's done-when list) two ways:
 //   - the api publishes on the flags channel after the change commits (channel.ts), and each
 //     process reloads that org at once;
 //   - each process polls every org it keeps every 2 s (±10%, so processes drift apart), so a lost
@@ -17,8 +17,9 @@
 // says (fence.ts; feature_fence, job_fence and job_finish compare revisions).
 //
 // The api keeps the org of every signed-in request, realtime the org of every socket, the worker
-// every org it lists (as hearth_queue, T18), forgetting one that leaves the list (untrack()). A caller that serves values to someone (C0.8's GET /api/flags)
-// waits for the org's first load (track()).
+// every org it lists (as hearth_queue, T18), forgetting one that leaves the list (untrack()). A
+// caller that serves values to someone (C0.8's GET /api/flags, web/flags.ts) waits for the org's
+// first load (track()), for at most FLAG_READ_WAIT_MS.
 import { performance } from 'node:perf_hooks'
 import { FLAGS, type FlagSpec, flagLineage } from '@hearth/shared'
 import { sql } from 'kysely'

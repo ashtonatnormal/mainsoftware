@@ -37,7 +37,8 @@
 import { randomBytes, randomInt, randomUUID } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import { Writable } from 'node:stream'
-import { FLAGS, type FlagSpec } from '@hearth/shared'
+import { PIN_ROLES } from '@hearth/access'
+import { FLAGS, type FlagSpec, pinProblem } from '@hearth/shared'
 import type { FastifyInstance } from 'fastify'
 import type { Redis } from 'ioredis'
 import { Client as PgClient } from 'pg'
@@ -45,8 +46,8 @@ import type { Logger } from 'pino'
 import { WebSocket } from 'ws'
 import { buildApp } from '#src/app.ts'
 import { type AuthKeys, deriveKeys, hashPin, newSecret, sha256 } from '#src/auth/crypto.ts'
-import { pinProblem } from '#src/auth/pin-policy.ts'
 import { SOCKET_RECHECK_MS } from '#src/auth/policy.ts'
+import { FakeVerify } from '#src/auth/sms/fake.ts'
 import { type ValkeyKeys, valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { createDatabase, type Database } from '#src/db/database.ts'
 import { migrate } from '#src/db/migrations.ts'
@@ -64,7 +65,6 @@ import { type Gateway, registerRealtime } from '#src/realtime/index.ts'
 import { GATEWAY_POLICY, type GatewayPolicy } from '#src/realtime/policy.ts'
 import { TestClient } from '#src/testing/gateway.ts'
 import { startProxy, type TcpProxy } from '#src/testing/proxy.ts'
-import { MemorySms } from '#src/testing/sms.ts'
 import { installWriteTracking } from '#src/testing/writes.ts'
 import { closeValkey, createBlockingReader, createSubscriber, createValkey, valkeyCheck } from '#src/valkey.ts'
 import { CONTROL_POOL_SIZE, productionRegistries, startWorker, type Worker, workPoolSize } from '#src/worker/index.ts'
@@ -171,8 +171,8 @@ export interface WorkerInstance {
   pauseHeartbeats(paused?: boolean): void
 }
 
-// The roles a test person may hold (a Team Admin would need a team, which no test here makes).
-export type PersonRole = 'owner' | 'admin' | 'ai_admin' | 'leadership' | 'dpo' | 'compliance_officer'
+// The roles a test person may hold. person() makes a team for a Team Admin, with them in it.
+export type PersonRole = 'owner' | 'admin' | 'ai_admin' | 'leadership' | 'dpo' | 'compliance_officer' | 'team_admin'
 
 export interface Person {
   id: string
@@ -181,8 +181,12 @@ export interface Person {
   // The digits after the country code, which the sweeps look for in logs and audit rows.
   local: string
   phoneNumberId: string
-  // The PIN they sign in with, once they have one; signIn() sets it when it sets a new PIN.
+  // The PIN they sign in with, once they have one; signIn() sets it when it sets a new PIN. Only a
+  // PIN-role holder is asked for it (D46).
   pin: string | undefined
+  // Whether they were made holding a PIN role (PIN_ROLES: the roles only an Owner grants), so
+  // signIn() expects the PIN step, and anyone else a sign-in on the code alone (D46).
+  holdsPinRole: boolean
 }
 
 export interface Reply {
@@ -264,7 +268,9 @@ export interface RealtimeOptions {
 // coming ten minutes after the app starts, past the integration mode's 120 s test timeout. The
 // stack's own app ticks every SOCKET_RECHECK_MS from the suite's start, at a phase the earlier tests
 // set, and a tick whose read lands between the revoking commit and that path's message closes the
-// socket, or drops the topic, as its own (recheck) first. The deadline is lengthened with it, since
+// socket, or drops the topic, as its own (recheck) first. A test that proves a sub's own refusal
+// (GW-04, GW-09) needs it too: a tick that reads the refusal while the sub is still deciding drops
+// the topic, and the ack names it in no list. The deadline is lengthened with the interval, since
 // the start-up guard holds the interval plus its timeout under it (socket.ts timings); with no
 // periodic check to fail, nothing else reads it. The same tick's pruning and refusal summary wait
 // too, which no such test reads. The targeted re-checks a message queues still run, counted under
@@ -349,7 +355,7 @@ export interface Stack {
   prefix: string
   names: ValkeyKeys
   keys: AuthKeys
-  sms: MemorySms
+  sms: FakeVerify
   org: { id: string; system: string }
   logs: Record<string, unknown>[]
   warnings: Error[]
@@ -377,12 +383,21 @@ export interface Stack {
   }): Promise<Person>
   // Another org with its system principal and the test flags, and nobody in it.
   newOrg(): Promise<Org>
+  // A role row inserted (or revoked) as the superuser and nothing else: no session is ended, so it
+  // models a grant that skipped C0.16's rule of ending the grantee's sessions first (D46 I3).
+  // Answers the person as signIn() should now treat them.
+  grantRole(person: Person, role: Exclude<PersonRole, 'team_admin'>): Promise<Person>
+  revokeRole(person: Person, role: Exclude<PersonRole, 'team_admin'>): Promise<Person>
   // A Singapore mobile number nobody in this run holds.
   number(): string
   // A PIN the policy accepts, recorded as typed.
   newPin(): string
   client(options?: { ip?: string; userAgent?: string; origin?: string; app?: FastifyInstance }): Client
   signIn(person: Person, options?: { ip?: string; userAgent?: string }): Promise<Client>
+  // Re-authenticates a signed-in client by the method its session was issued under (D46, AQ-01):
+  // the PIN for a PIN-role holder, a fresh SMS code to their own number for anyone else. Follows
+  // person.holdsPinRole, so a role granted or removed since the sign-in needs the routes themselves.
+  reauth(client: Client, person: Person): Promise<void>
   // The client's live session and device, by its cookie's token.
   sessionOf(client: Client): Promise<{ id: string; deviceId: string }>
   // Moves a session's times (and its device's) back together, as though it were that old.
@@ -418,8 +433,15 @@ export interface Stack {
   proxy(to: 'postgres' | 'valkey'): Promise<{ proxy: TcpProxy; url: string }>
   // Another api app on the same database, with its own Valkey URL (an unreachable one, say), and
   // optionally without its after-commit publish of the sessions a commit ended (A6), so only the
-  // worker's revocation consumer (C0.7) or the re-check closes their sockets.
-  startApi(options: { valkeyUrl?: string; publishRevoked?: boolean }): Promise<FastifyInstance>
+  // worker's revocation consumer (C0.7) or the re-check closes their sockets; or with its own SMS
+  // provider (one that needs a transfer-register entry, say).
+  // realTiming: production's 2 s floor on refused code checks (the harness's apps answer at once).
+  startApi(options: {
+    valkeyUrl?: string
+    publishRevoked?: boolean
+    sms?: FakeVerify
+    realTiming?: boolean
+  }): Promise<FastifyInstance>
   // Another realtime app: a shorter re-check, and optionally no revocation subscriber, its own
   // connections, shorter timings or a wrapped check.
   startRealtime(options: RealtimeOptions): Promise<RealtimeApp>
@@ -474,7 +496,9 @@ function setCookiesOf(header: unknown): string[] {
   return Array.isArray(header) ? header.map(String) : [String(header)]
 }
 
-export async function startStack(options: { recheckMs?: number } = {}): Promise<Stack> {
+// passkeysForTests switches the dormant passkeys on for the stack's main api (D46; the dormant
+// suite only, scripts/guards/api-test-overrides.test.ts).
+export async function startStack(options: { recheckMs?: number; passkeysForTests?: boolean } = {}): Promise<Stack> {
   const c = connection()
   if (!LOCAL_HOSTS.has(c.host)) {
     throw new Error(`Refusing to use Postgres on ${c.host}: the integration tests run on the local stack only.`)
@@ -617,7 +641,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     }
     const names = valkeyKeys(prefix)
     const keys = deriveKeys(newSecret())
-    const sms = new MemorySms()
+    const sms = new FakeVerify()
 
     // Each api app's after-response queue, so a client can wait for its work.
     const queues = new Map<FastifyInstance, AfterResponse>()
@@ -646,7 +670,7 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
     async function startApiOn(
       apiValkey: Redis,
       apiLogger: Logger,
-      o: { publishRevoked?: boolean } = {},
+      o: { publishRevoked?: boolean; sms?: FakeVerify; realTiming?: boolean; passkeysForTests?: boolean } = {},
     ): Promise<{ app: FastifyInstance; flags: FlagCache }> {
       const afterResponse = new AfterResponse()
       const flags = flagCache({ logger: apiLogger })
@@ -660,11 +684,15 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
           db,
           valkey: apiValkey,
           keys,
-          sms,
+          sms: o.sms ?? sms,
           keyPrefix: prefix,
           flags,
           afterResponse,
           ...(o.publishRevoked === undefined ? {} : { publishRevoked: o.publishRevoked }),
+          // No floor on refused code checks (the suites make dozens), unless a test asks for the
+          // real one; production's breaker either way, each app its own (T20).
+          ...(o.realTiming ? {} : { otpForTests: { verifyFloorMs: 0 } }),
+          ...(o.passkeysForTests ? { passkeysForTests: true } : {}),
         },
       })
       closers.push(() => app.close())
@@ -835,7 +863,9 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       return instance
     }
 
-    const { app: api, flags: apiFlags } = await startApiOn(valkey, logger)
+    const { app: api, flags: apiFlags } = await startApiOn(valkey, logger, {
+      ...(options.passkeysForTests ? { passkeysForTests: true } : {}),
+    })
     const realtime = await startRealtimeApp({ recheckMs: options.recheckMs ?? SOCKET_RECHECK_MS, subscribe: true })
     // The realtime app subscribes to both revocation channels in the background; a revocation
     // published before it has would be caught only by the re-check. Its full readiness says when it
@@ -989,8 +1019,14 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       const code = await sms.nextCode(person.e164)
       const verified = await browser.post('/api/auth/otp/verify', { code })
       if (verified.status !== 200) fail('otp/verify', verified)
-      const { next } = verified.json<{ next: 'set_pin' | 'step_up' }>()
-      if (next === 'set_pin') {
+      // Someone with no PIN role is signed in on the code alone, and a PIN-role holder goes on to the
+      // PIN step (D46).
+      const answer = verified.json<{ status: 'signed_in' } | { status: 'code_verified'; next: 'set_pin' | 'step_up' }>()
+      if ((answer.status === 'signed_in') === person.holdsPinRole) {
+        throw new Error(`signIn: a ${person.holdsPinRole ? 'PIN-role' : 'code-only'} person got ${answer.status}`)
+      }
+      if (answer.status === 'signed_in') return browser
+      if (answer.next === 'set_pin') {
         const pin = newPin()
         const set = await browser.post('/api/auth/pin/set', { pin })
         if (set.status !== 200) fail('pin/set', set)
@@ -1001,6 +1037,20 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
         if (checked.status !== 200) fail('pin/verify', checked)
       }
       return browser
+    }
+
+    async function reauth(browser: Client, person: Person): Promise<void> {
+      if (person.holdsPinRole) {
+        if (person.pin === undefined) throw new Error('reauth: the person has a PIN the test never gave')
+        const checked = await browser.post('/api/auth/reauth/pin', { pin: person.pin })
+        if (checked.status !== 200) fail('reauth/pin', checked)
+        return
+      }
+      const requested = await browser.post('/api/auth/reauth/code/request', {})
+      if (requested.status !== 200) fail('reauth/code/request', requested)
+      const code = await sms.nextCode(person.e164)
+      const verified = await browser.post('/api/auth/reauth/code/verify', { code })
+      if (verified.status !== 200) fail('reauth/code/verify', verified)
     }
 
     async function person(
@@ -1029,12 +1079,21 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       )
       if (phone === undefined) throw new Error('the phone number was not returned')
       for (const role of o.roles ?? []) {
-        await query('insert into role_assignments (org_id, person_id, role, created_by) values ($1, $2, $3, $4)', [
-          inOrg.id,
-          id,
-          role,
-          inOrg.system,
-        ])
+        // A Team Admin needs a team: a new one, with them in it.
+        let teamId: string | null = null
+        if (role === 'team_admin') {
+          teamId = await team({ org: inOrg })
+          await query('insert into team_memberships (org_id, team_id, person_id, created_by) values ($1, $2, $3, $4)', [
+            inOrg.id,
+            teamId,
+            id,
+            inOrg.system,
+          ])
+        }
+        await query(
+          'insert into role_assignments (org_id, person_id, role, team_id, created_by) values ($1, $2, $3, $4, $5)',
+          [inOrg.id, id, role, teamId, inOrg.system],
+        )
       }
       if (o.pin !== undefined) {
         pins.add(o.pin)
@@ -1048,7 +1107,42 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       if (o.left) {
         await query('update people set deactivated_at = now(), deactivated_by = $2 where id = $1', [id, inOrg.system])
       }
-      return { id, orgId: inOrg.id, e164, local: e164.slice(3), phoneNumberId: phone.id, pin: o.pin }
+      const holdsPinRole = (o.roles ?? []).some(role => PIN_ROLES.includes(role))
+      return { id, orgId: inOrg.id, e164, local: e164.slice(3), phoneNumberId: phone.id, pin: o.pin, holdsPinRole }
+    }
+
+    // Whether the person holds a PIN role now, read from their unrevoked role rows.
+    async function holdsPinRoleNow(person: Person): Promise<boolean> {
+      const rows = await query<{ role: PersonRole }>(
+        'select role from role_assignments where person_id = $1 and revoked_at is null',
+        [person.id],
+      )
+      return rows.some(row => PIN_ROLES.includes(row.role))
+    }
+
+    async function grantRole(person: Person, role: Exclude<PersonRole, 'team_admin'>): Promise<Person> {
+      const [org] = await query<{ system: string }>(
+        "select id as system from principals where org_id = $1 and kind = 'system'",
+        [person.orgId],
+      )
+      await query(
+        'insert into role_assignments (org_id, person_id, role, team_id, created_by) values ($1, $2, $3, null, $4)',
+        [person.orgId, person.id, role, org?.system],
+      )
+      return { ...person, holdsPinRole: await holdsPinRoleNow(person) }
+    }
+
+    async function revokeRole(person: Person, role: Exclude<PersonRole, 'team_admin'>): Promise<Person> {
+      const [org] = await query<{ system: string }>(
+        "select id as system from principals where org_id = $1 and kind = 'system'",
+        [person.orgId],
+      )
+      await query(
+        `update role_assignments set revoked_at = now(), revoked_by = $3
+         where person_id = $1 and role = $2 and revoked_at is null`,
+        [person.id, role, org?.system],
+      )
+      return { ...person, holdsPinRole: await holdsPinRoleNow(person) }
     }
 
     async function sessionOf(browser: Client): Promise<{ id: string; deviceId: string }> {
@@ -1238,11 +1332,14 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
         return cache
       },
       person,
+      grantRole,
+      revokeRole,
       newOrg: () => newOrg(),
       number,
       newPin,
       client,
       signIn,
+      reauth,
       sessionOf,
       age,
       query,
@@ -1255,14 +1352,18 @@ export async function startStack(options: { recheckMs?: number } = {}): Promise<
       removeMember,
       appendEvent,
       proxy,
-      startApi: async ({ valkeyUrl, publishRevoked }) => {
+      startApi: async ({ valkeyUrl, publishRevoked, sms: otherSms, realTiming }) => {
         let apiValkey = valkey
         if (valkeyUrl !== undefined) {
           const other = createValkey(valkeyUrl, logger)
           closers.push(() => closeValkey(other))
           apiValkey = other
         }
-        const o = publishRevoked === undefined ? {} : { publishRevoked }
+        const o = {
+          ...(publishRevoked === undefined ? {} : { publishRevoked }),
+          ...(otherSms === undefined ? {} : { sms: otherSms }),
+          ...(realTiming === undefined ? {} : { realTiming }),
+        }
         return (await startApiOn(apiValkey, logger, o)).app
       },
       startRealtime: startRealtimeApp,

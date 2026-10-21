@@ -450,7 +450,9 @@ export const RULE_6: readonly RuleCase[] = [
     ]
     for (const request of powers)
       expect(beforeAfter(world, gone, P.arjun, request), request.action).toEqual([true, false])
-    // Their self-service ends too: listing and signing out devices, and adding a passkey (ACC-02, ACC-04).
+    // Their self-service ends too: reading their own session and client flags (T17 item 11, T21),
+    // listing and signing out devices, and adding a passkey (ACC-02, ACC-04).
+    expect(beforeAfter(world, gone, P.arjun, { action: 'session.read_own' }, {})).toEqual([true, false])
     expect(beforeAfter(world, gone, P.arjun, { action: 'devices.sign_out_own' }, {})).toEqual([true, false])
     expect(beforeAfter(world, gone, P.arjun, { action: 'devices.list_own' }, {})).toEqual([true, false])
     expect(beforeAfter(world, gone, P.arjun, { action: 'passkeys.add_own' })).toEqual([true, false])

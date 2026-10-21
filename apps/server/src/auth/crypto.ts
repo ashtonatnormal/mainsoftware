@@ -54,12 +54,6 @@ export function tag(keys: AuthKeys, value: string): string {
   return crypto.createHmac('sha256', keys.tag).update(value).digest('base64url').slice(0, 22)
 }
 
-// What Valkey stores for a sign-in code: a MAC over the attempt, the number and the code, so the
-// code itself is never stored and is bound to the attempt that asked for it.
-export function otpMac(keys: AuthKeys, attemptKey: string, numberTag: string, code: string): string {
-  return crypto.createHmac('sha256', keys.otp).update(`${attemptKey}|${numberTag}|${code}`).digest('hex')
-}
-
 // A new sign-in code: 6 uniformly random ASCII digits.
 export function newOtp(): string {
   return crypto

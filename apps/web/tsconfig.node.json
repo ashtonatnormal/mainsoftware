@@ -1,0 +1,15 @@
+{
+  // The web app's Node side (T21): vite.config.ts, and the Playwright config and e2e/ suite. Some of
+  // it runs under plain Node, so tsc resolves imports as Node does and relative imports name the .ts
+  // file. DOM and DOM.Iterable are in lib because Playwright's page.evaluate callbacks run in the
+  // browser and name DOM types (and loop over NodeLists). The browser code in src/ is checked by
+  // tsconfig.json.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  },
+  "include": ["e2e", "vite.config.ts", "playwright.config.ts"]
+}

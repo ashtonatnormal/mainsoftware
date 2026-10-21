@@ -122,8 +122,10 @@ const ADMIN_REQUESTS: readonly AdminRequest[] = [
   { action: 'privileged_console.open', console: 'dpo' },
   { action: 'privileged_console.open', console: 'compliance' },
 ]
-// One of every request about your own devices and passkeys, naming Marcus's, which Marcus may make.
+// One of every request about your own session, devices and passkeys, each of which Marcus may make;
+// those that name a device or passkey name Marcus's.
 const SELF_REQUESTS: readonly SelfRequest[] = [
+  { action: 'session.read_own' },
   { action: 'devices.sign_out_own' },
   { action: 'devices.sign_out_own', device: DEV.marcusPhone },
   { action: 'devices.list_own' },
@@ -270,7 +272,7 @@ export const RULE_9: readonly RuleCase[] = [
   ),
   c0(
     'R9-03',
-    'Rule 9 D16 PA-03 ACC-10 ACC-04 T19: only people hold roles; the Owner’s assistant, agents and system jobs are refused every admin request, every request about a person’s own devices and passkeys, and every live topic',
+    'Rule 9 D16 PA-03 ACC-10 ACC-04 T19 T21: only people hold roles; the Owner’s assistant, agents and system jobs are refused every admin request, every request about a person’s own session, devices and passkeys, and every live topic',
     () => {
       // Ashton, Owner and DPO, may make most of these themselves, so their assistant's refusals matter.
       const ashtons = ADMIN_REQUESTS.filter(r => can(world, human(P.ashton), r, reauthenticated))
@@ -278,8 +280,10 @@ export const RULE_9: readonly RuleCase[] = [
       const nonHumans: Subject[] = [...Object.values(AS).map(assistant), ...Object.values(AG).map(agent), system]
       for (const s of nonHumans) {
         for (const r of ADMIN_REQUESTS) expect(can(world, s, r, reauthenticated), `${s.id} ${r.action}`).toBe(false)
-        // Nor any request about a person's own devices and passkeys (ACC-02, ACC-04).
+        // Nor any request about a person's own session, devices and passkeys (ACC-02, ACC-04, T21).
         for (const r of SELF_REQUESTS) expect(can(world, s, r, reauthenticated), `${s.id} ${r.action}`).toBe(false)
+        // Reading your own session needs no re-authentication, so it is refused without one too (T21).
+        expect(can(world, s, { action: 'session.read_own' }), `${s.id} session.read_own`).toBe(false)
         // Nor any live topic (T19 item 7).
         for (const r of TOPIC_REQUESTS) expect(can(world, s, r), `${s.id} ${r.topic.kind}`).toBe(false)
       }

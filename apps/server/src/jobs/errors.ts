@@ -29,8 +29,9 @@ export class JobAborted extends Error {
   }
 }
 
-// The gate refused the job (BUILD-PLAN 842): its purpose, a provider it names (PDPA-10), its
-// person's processing switch (PDPA-04), or its optional feature's spend cap (ADM-05).
+// The gate refused the job (BUILD-PLAN 1D, open items: the C0.6 queue-jobs row): its purpose, a
+// provider it names (PDPA-10), its person's processing switch (PDPA-04), or its optional feature's
+// spend cap (ADM-05).
 export type RefusalReason = 'purpose_refused' | 'provider_not_cleared' | 'processing_not_allowed' | 'over_cap'
 
 export class JobRefused extends Error {

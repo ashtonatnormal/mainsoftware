@@ -46,7 +46,9 @@ const connection = {
 // For C0.5's cases, people bb-bf, b0 and c2-c5 have accounts, and devices:
 //   bb e3    bc e4    bd e6 with session f5    be e5    bf e8    b0 e9 with session f6
 //   c2 ef with session f8    c3 (a PIN and passkey 9b)    c4 ea and number 9c    c5 an Admin, eb with session f7
-// e7, ec, ed and ee, and sessions f3, f4, f9, fa and fb, are left for the cases to add. A session's
+// e7, ec, ed and ee, and sessions f3, f4, f9, fa and fb, are left for the cases to add.
+// For C0.8's case (D46), person c9 holds no role and has no account; device d9 and session f0 are
+// left for it. A session's
 // token is its id's suffix, so its token_hash is sha256('<suffix>'). Every suffix must be two hex
 // digits, since it ends a uuid: one that isn't breaks the whole fixture, every case with it.
 const id = (suffix: string) => `c0000000-0000-4000-8000-0000000000${suffix}`
@@ -113,7 +115,7 @@ const FIXTURE = `
   insert into public.orgs (id, name) values ('${ORG}', 'Concurrency check');
   insert into public.principals (id, org_id, kind, system_key) values ('${id('a0')}', '${ORG}', 'system', 'hearth');
   insert into public.principals (id, org_id, kind)
-  select s.id, '${ORG}', 'human' from unnest(array['${id('a1')}', ${ids(['b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9', 'ba', ...SIGN_IN_PEOPLE])}]::uuid[]) as s (id);
+  select s.id, '${ORG}', 'human' from unnest(array['${id('a1')}', ${ids(['b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9', 'ba', 'c9', ...SIGN_IN_PEOPLE])}]::uuid[]) as s (id);
   insert into public.people (id, org_id, full_name, created_by)
   select p.id, '${ORG}', 'Person ' || p.id, '${id('a0')}' from public.principals p where p.kind = 'human';
   insert into public.users (id, org_id)
@@ -371,6 +373,33 @@ const issueThrough = (person: string, number: string, device: string, session: s
           values ('${id(session)}', '${ORG}', '${id(person)}', '${id(device)}', sha256('${session}'::bytea), now() + interval '1 day');
         end $$`,
 })
+// C0.8 (D46). A role grant as C0.16 will make one for someone with no live session: their person row
+// FOR NO KEY UPDATE first, then the role row (the owner plays it; no session is ended, since
+// role_changed arrives only with C0.16's migration).
+const grantPinRole = (person: string, role: string): Step => ({
+  as: 'owner',
+  sql: `select 1 from public.people where org_id = '${ORG}' and id = '${id(person)}' for no key update;
+        insert into public.role_assignments (org_id, person_id, role, created_by)
+        values ('${ORG}', '${id(person)}', '${role}', '${ADMIN}')`,
+})
+// A code-only sign-in's finish as the server runs it (sign-in.ts finish()): the person FOR SHARE,
+// then their roles read as their own statement with no lock, and only for someone with no PIN
+// role the account, device and session.
+const codeOnlyFinish = (person: string, device: string, session: string): Step => ({
+  as: 'app',
+  user: SYSTEM,
+  sql: `do $$ begin
+          perform 1 from public.people where org_id = '${ORG}' and id = '${id(person)}' and deactivated_at is null for share;
+          if exists (select 1 from public.role_assignments where org_id = '${ORG}' and person_id = '${id(person)}'
+                     and revoked_at is null and role in ('owner', 'admin', 'ai_admin', 'leadership', 'dpo', 'compliance_officer'))
+          then raise exception 'pin role: the PIN step, no session'; end if;
+          insert into public.users (id, org_id) values ('${id(person)}', '${ORG}') on conflict (id) do nothing;
+          insert into public.devices (id, org_id, user_id, label) values ('${id(device)}', '${ORG}', '${id(person)}', 'New phone');
+          insert into public.sessions (id, org_id, user_id, device_id, token_hash, expires_at)
+          values ('${id(session)}', '${ORG}', '${id(person)}', '${id(device)}', sha256('${session}'::bytea), now() + interval '1 day');
+        end $$`,
+})
+
 // The acting session, re-read FOR SHARE at the start of every POST before can() decides (person,
 // device, session, in that order).
 const actAs = (person: string, device: string, session: string): Step => ({
@@ -830,6 +859,16 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
         [id('c3')],
       )
       expect(pin.rows[0]?.cleared === true, 'the PIN is still set')
+    },
+  ],
+  [
+    "D46 AQ-02: a code-only sign-in finish waits for a role grant holding the person's row, then reads the role and issues nothing",
+    async watcher => {
+      const { waited, error } = await race(watcher, grantPinRole('c9', 'admin'), codeOnlyFinish('c9', 'd9', 'f0'))
+      expect(waited, 'the finish did not wait for the grant, so it could not see it')
+      expect(error?.includes('pin role') === true, `expected the PIN step, got ${error ?? 'a session'}`)
+      const made = await watcher.query('select 1 from public.sessions where user_id = $1', [id('c9')])
+      expect(made.rowCount === 0, 'a session was issued to a PIN-role holder on the code alone')
     },
   ],
   [

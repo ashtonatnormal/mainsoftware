@@ -11,7 +11,7 @@ import { writeAudit } from '#src/auth/audit.ts'
 import { readCookie, SESSION_COOKIE } from '#src/auth/cookies.ts'
 import { newSecret, sha256 } from '#src/auth/crypto.ts'
 import { ApiError } from '#src/auth/errors.ts'
-import { SESSION } from '#src/auth/policy.ts'
+import { PIN_RULE_SESSION, SESSION } from '#src/auth/policy.ts'
 import { type Database, type InOrg, withOrg } from '#src/db/database.ts'
 import { type SessionIds, sessionByToken } from '#src/db/pre-org.ts'
 import type { ReqInfo } from '#src/http.ts'
@@ -44,19 +44,38 @@ export function signedOut(): ApiError {
   return new ApiError(401, 'signed_out', {}, ['session'])
 }
 
+export interface InSessionOptions {
+  // Whether the request counts as use of the session, so its last-use time is written after the
+  // response (touch; true unless set false). GET /api/flags sets it false (OD-14, T21 item 10): the
+  // shell polls it every 60 s while a tab is visible and on every gateway nudge, whether or not
+  // anyone is using it, so a poll that touched would keep an idle session alive past SESSION.idle
+  // for as long as a tab stayed open (OD-14).
+  touch?: boolean
+  // `start transaction … read only` (withOrg's TransactionOptions): the web shell's GETs, which
+  // write nothing in their own transaction. A read-only transaction can't take row locks, so its
+  // work reads the acting session with `lock: false` (access/world.ts ActingOptions).
+  readOnly?: boolean
+}
+
 // Work for a signed-in request: withOrg() acting as the session's person. The process keeps the
 // org's flags from its first signed-in request on (C0.6, flags/cache.ts). The session's last-use
-// time is written after the response (touch).
+// time is written after the response (touch), unless the options say the request isn't use.
 export async function inSession<T>(
   api: Api,
   info: ReqInfo,
   session: SessionIds,
   work: (trx: InOrg) => Promise<T>,
+  options: InSessionOptions = {},
 ): Promise<T> {
   // It never rejects: the cache keeps trying by itself.
   void api.flags.track(session.orgId)
-  const result = await withOrg(api.db, { orgId: session.orgId, userId: session.userId }, work)
-  info.after(() => touch(api.db, session, info))
+  const result = await withOrg(
+    api.db,
+    { orgId: session.orgId, userId: session.userId },
+    work,
+    options.readOnly === true ? { readOnly: true } : {},
+  )
+  if (options.touch !== false) info.after(() => touch(api.db, session, info))
   return result
 }
 
@@ -135,9 +154,12 @@ export interface IssuedSession {
 // already read the person FOR SHARE (sign-in.ts), appends signin.started to the outbox (C0.6, T16)
 // and audits auth.sign_in. The number the code went to is read again FOR SHARE, so a number removed
 // since the code was sent can't finish a sign-in (ACC-03, T14). The session starts re-authenticated:
-// the sign-in just proved the PIN or a passkey (0006's default stamps it at the start). The caller
-// acts as the org's system principal (no session exists yet), so the event names the person as its
-// actor, as the audit row does.
+// the sign-in just proved the code, and for a PIN-role holder the PIN (0006's default stamps it at
+// the start). `pinRule` is what the caller read of the person's roles in this same transaction
+// (access/world.ts holdsPinRoleNow, D46): it issues the session under the PIN rule, with the shorter
+// PIN_RULE_SESSION lifetime, and is carried on signin.started (pin_rule) and auth.sign_in (pinRule),
+// where C0.14's DPO alert reads it. The caller acts as the org's system principal (no session
+// exists yet), so the event names the person as its actor, as the audit row does.
 export async function issueSession(
   trx: InOrg,
   input: {
@@ -145,12 +167,14 @@ export async function issueSession(
     personId: string
     phoneNumberId: string
     label: string
-    method: 'sms_new_pin' | 'sms_pin' | 'sms_passkey'
+    method: 'sms' | 'sms_new_pin' | 'sms_pin' | 'sms_passkey'
+    pinRule: boolean
     ip: string | null
     requestId: string
   },
 ): Promise<IssuedSession> {
-  const { orgId, personId } = input
+  const { orgId, personId, pinRule } = input
+  const lifetime = pinRule ? PIN_RULE_SESSION : SESSION
   if (!(await numberStillTheirs(trx, orgId, personId, input.phoneNumberId))) throw new AttemptStale()
   const token = newSecret()
   let deviceId: string
@@ -163,7 +187,7 @@ export async function issueSession(
       .executeTakeFirstOrThrow()
     deviceId = device.id
     const session = await sql<{ id: string }>`insert into sessions (org_id, user_id, device_id, token_hash, expires_at)
-      values (${orgId}, ${personId}, ${deviceId}, ${sha256(token)}, now() + ${SESSION.lifetime}::interval)
+      values (${orgId}, ${personId}, ${deviceId}, ${sha256(token)}, now() + ${lifetime.lifetime}::interval)
       returning id`.execute(trx)
     const row = session.rows[0]
     if (row === undefined) throw new Error('the new session was not returned')
@@ -181,7 +205,7 @@ export async function issueSession(
     actor: { id: personId, kind: 'human' },
     subjects: [personId],
     purpose: 'accounts',
-    ids: { device: deviceId, session: sessionId, method: input.method },
+    ids: { device: deviceId, session: sessionId, method: input.method, pin_rule: pinRule },
   })
   await writeAudit(trx, {
     orgId,
@@ -192,9 +216,9 @@ export async function issueSession(
     deviceId,
     ip: input.ip,
     requestId: input.requestId,
-    details: { method: input.method },
+    details: { method: input.method, pinRule },
   })
-  return { token, sessionId, deviceId, label: input.label, maxAgeSeconds: SESSION.lifetimeSeconds }
+  return { token, sessionId, deviceId, label: input.label, maxAgeSeconds: lifetime.lifetimeSeconds }
 }
 
 function isTriggerRefusal(error: unknown): boolean {

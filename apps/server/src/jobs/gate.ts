@@ -1,8 +1,8 @@
-// The gate work passes before it touches anyone's personal data (BUILD-PLAN 842; TECH-SPEC T15 item
-// 10): a job before it runs, at every step and before every commit, and an outbox consumer before
-// each round and for each event's subjects. Each check takes the work's registry entry (its
-// purpose, the providers it names), never what a producer wrote into a row. The flags route asks
-// it too before turning a feature on (T17 item 9).
+// The gate work passes before it touches anyone's personal data (BUILD-PLAN 1D, open items: the
+// C0.6 queue-jobs row; TECH-SPEC T15 item 10): a job before it runs, at every step and before every
+// commit, and an outbox consumer before each round and for each event's subjects. Each check takes
+// the work's registry entry (its purpose, the providers it names), never what a producer wrote into
+// a row. The flags route asks it too before turning a feature on (T17 item 9).
 //
 // C0.6 has no processing register, transfer register or spend caps yet, so its stand-ins fail
 // closed: C0.9 replaces the first three with the registers and isProcessingAllowed, and A0 the

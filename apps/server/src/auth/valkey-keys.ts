@@ -14,12 +14,20 @@ export function valkeyPrefix(deployEnv: string): string {
 
 export function valkeyKeys(prefix: string) {
   return {
-    // A sign-in code's challenge for one number (a hash: the attempt, the code's MAC, the tries).
+    // A code challenge for one number (codes.ts: a hash of the owner, the provider's reference, the
+    // tries and when it was asked for; never a code or a number).
     otp: (numberTag: string) => `${prefix}otp:{${numberTag}}`,
     // A sign-in attempt, by the hash of its id (a JSON string; attempts.ts).
     attempt: (attemptKey: string) => `${prefix}att:${attemptKey}`,
     // A passkey challenge: for a sign-in by attempt key, for re-auth or registration by session id.
     challenge: (kind: 'signin' | 'reauth' | 'register', id: string) => `${prefix}pk:${kind}:${id}`,
+    // A session's approved SMS re-authentication code whose stamp hasn't committed yet, by session
+    // id: the id of the number it was sent to. The session's next code request deletes it
+    // (account.ts, T20 item 6).
+    reauthApproved: (sessionId: string) => `${prefix}reauth-ok:${sessionId}`,
+    // A session's SMS re-authentication code request in progress, by session id: a random uuid,
+    // its holder's, so only it frees the lock (account.ts, T20 item 6).
+    reauthSending: (sessionId: string) => `${prefix}reauth-send:${sessionId}`,
     // A sliding window (limiter.ts).
     limit: (name: string, subject: string) => `${prefix}rl:{auth}:${name}:${subject}`,
     // The pub/sub channel on which the api tells the realtime role which sessions ended (v1, C0.5;

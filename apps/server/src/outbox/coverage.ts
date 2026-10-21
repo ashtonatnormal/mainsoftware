@@ -106,8 +106,9 @@ export const WRITES: Readonly<Record<string, Coverage>> = {
   'hearth_app notice_versions:INSERT': { events: ['notice.published'] },
   'hearth_app notice_acknowledgments:INSERT': { events: ['notice.acknowledged'] },
 
-  // Accounts and PINs. W3 and W4: setting a PIN at the first sign-in; W16: an admin's reset.
-  'hearth_app users:INSERT': { events: ['account.pin_set'] },
+  // Accounts and PINs. W3 and W4: setting a PIN at a PIN-role holder's first sign-in, or a code-only
+  // sign-in making the account beside its signin.started (D46); W16: an admin's reset.
+  'hearth_app users:INSERT': { events: ['account.pin_set', 'signin.started'] },
   'hearth_app users.pin_hash:UPDATE': pinSetOrReset,
   'hearth_app users.pin_key_id:UPDATE': pinSetOrReset,
   'hearth_app users.pin_set_at:UPDATE': pinSetOrReset,
@@ -315,14 +316,15 @@ export const MATCH: Readonly<Record<string, string>> = {
 
 // The integration suite that must append each emitted type at least once (testing/writes.ts): each
 // suite has its own database and module state, so a union across files can't be taken, and each
-// checks its own share instead.
-export const EMITTED_BY: Readonly<Record<EmittedEventType, 'sign-in' | 'flags' | 'outbox' | 'jobs'>> = {
+// checks its own share instead. The passkey events belong to the dormant passkey suite, the only one
+// that switches passkeys on (D46).
+export const EMITTED_BY: Readonly<Record<EmittedEventType, 'sign-in' | 'passkeys' | 'flags' | 'outbox' | 'jobs'>> = {
   'signin.started': 'sign-in',
   'signin.ended': 'sign-in',
   'account.pin_set': 'sign-in',
   'account.pin_reset': 'sign-in',
-  'account.passkey_added': 'sign-in',
-  'account.passkey_removed': 'sign-in',
+  'account.passkey_added': 'passkeys',
+  'account.passkey_removed': 'passkeys',
   'person.deactivated': 'sign-in',
   'acl.changed': 'sign-in',
   'flag.changed': 'flags',

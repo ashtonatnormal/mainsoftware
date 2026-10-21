@@ -6,7 +6,10 @@ import {
   BROWSER_AI,
   bannedReason,
   CDN_URL,
+  isModelHost,
   lockfilePackages,
+  MODEL_HOST,
+  MODEL_HOSTS,
 } from './ai-free'
 import { codeOf, importsOf, packageOf, scriptsOf } from './imports'
 import { isScript, readRepoFile, repoFiles } from './repo-files'
@@ -14,6 +17,7 @@ import { isScript, readRepoFile, repoFiles } from './repo-files'
 const files = repoFiles()
 const parse = (path: string) => JSON.parse(readRepoFile(path))
 const cdnUrls = (text: string) => [...text.matchAll(CDN_URL)].map(match => match[0])
+const modelHosts = (text: string) => [...text.matchAll(MODEL_HOST)].map(match => match[0])
 // Scripts and HTML pages, the files that can load or call code in the browser. The guard's own
 // files hold the planted examples below, so the text checks skip them.
 const codeFiles = files.filter(path => isScript(path) || /\.html?$/.test(path))
@@ -226,6 +230,59 @@ describe('D41 AI-free guard: the matcher', () => {
     expect(cdnUrls(`import 'https://UNPKG.COM/tesseract.js'`)).toEqual(['https://UNPKG.COM/tesseract.js'])
     expect(cdnUrls(`import 'https://testingcf.jsdelivr.net/npm/@ricky0123/vad-web'`)).toHaveLength(1)
     expect(cdnUrls(`<link href="https://fonts.googleapis.com/css2?family=Inter" rel="stylesheet">`)).toEqual([])
+  })
+
+  it('T21 item 7: names model and speech API hosts, regional endpoints included, for the CSP guard and the dist scan', () => {
+    for (const host of [
+      'api.openai.com',
+      'API.OpenAI.com',
+      'api.openai.com.',
+      'hearth-sg.openai.azure.com',
+      'api.anthropic.com',
+      'bedrock-runtime.ap-southeast-1.amazonaws.com',
+      'bedrock-runtime-fips.us-east-1.amazonaws.com',
+      'generativelanguage.googleapis.com',
+      'asia-southeast1-aiplatform.googleapis.com',
+      'api.mistral.ai',
+      'api.cohere.com',
+      'api.groq.com',
+      'api-inference.huggingface.co',
+      'transcribestreaming.ap-southeast-1.amazonaws.com',
+      'eu.rt.speechmatics.com',
+      'v2.api.openai.com',
+    ]) {
+      expect(isModelHost(host), host).toBe(true)
+    }
+    for (const host of [
+      'openai.com',
+      'notapi.openai.com',
+      'api.openai.com.example',
+      'hearth.example.com',
+      'localhost',
+      's3.ap-southeast-1.amazonaws.com',
+      'bedrock.ap-southeast-1.amazonaws.com',
+      'fonts.googleapis.com',
+      'livekit.cloud',
+      'huggingface.co',
+    ]) {
+      expect(isModelHost(host), host).toBe(false)
+    }
+    // Each entry is a host or a glob of one, lower case, listed once.
+    expect(new Set(MODEL_HOSTS).size).toBe(MODEL_HOSTS.length)
+    for (const glob of MODEL_HOSTS) expect(glob, glob).toMatch(/^[a-z0-9*][a-z0-9*.-]*\.[a-z]+$/)
+  })
+
+  it('T21 item 7: finds a model host in a URL, a CSP source or plain text, and nothing else', () => {
+    expect(modelHosts(`fetch('https://api.openai.com/v1/x')`)).toEqual(['api.openai.com'])
+    expect(modelHosts(`connect-src 'self' wss://api.anthropic.com https://x.openai.azure.com:443`)).toEqual([
+      'api.anthropic.com',
+      'x.openai.azure.com',
+    ])
+    expect(modelHosts('"bedrock-runtime.ap-southeast-1.amazonaws.com"')).toEqual([
+      'bedrock-runtime.ap-southeast-1.amazonaws.com',
+    ])
+    expect(modelHosts('see notapi.openai.com, api.openai.com.example and openai.com')).toEqual([])
+    expect(modelHosts(`connect-src 'self' wss://hearth.example.com`)).toEqual([])
   })
 })
 
