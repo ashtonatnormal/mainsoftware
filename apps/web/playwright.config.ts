@@ -97,21 +97,27 @@ export default defineConfig({
   globalTimeout: CI ? 15 * 60_000 : undefined,
   reporter: CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   globalSetup: './e2e/global-setup.ts',
+  // VS-01 lets through only rounding noise, so changing the colour of a design token a shot paints
+  // fails it, not only moved text or shapes (T21 item 11). No shot paints --wall, --agent or --ok
+  // (no screen uses them yet), --warn (only the connection banner) or --selection (selected text):
+  // the shot that first shows one covers it. pixelmatch counts a pixel as changed when its colour
+  // difference (YIQ) passes 35215 × threshold². Playwright's default of 0.2 passes a grey shift of
+  // up to 52 levels in 255, and the re-theme (#23) passed four old-look baselines with it. Even 0.01
+  // passes 2 levels: on the runner, --bg moved by 2 failed every light shot at 0.005 and none at
+  // 0.01. At 0.005, a colour moved by 2 levels in every channel fails (or by 2 to 4 in one channel
+  // alone), and ±1 in any channel passes. A probe of the pinned runner, on three CPU models, found
+  // two kinds of drift from run to run: a few edge pixels drawn differently (up to 17 in a shot),
+  // which pixelmatch takes for anti-aliasing and skips at any threshold, and 1 to 3 other pixels
+  // off by one level, at times on every capture of a run, which would fail at threshold 0. ES-18
+  // holds the threshold to both bounds on a patch of each token's colour, with Playwright's own
+  // comparator. No pixel allowance and no ratio: 0.5% of a 1440 × 900 shot is 6,480 pixels, more
+  // than a button, a hairline or a line of error text. A Playwright upgrade that changes how
+  // Chromium draws fails VS-01, and its baselines are adopted again, as for a new runner image
+  // (D-07).
   expect: {
-    // VS-01's tolerance (T21 item 11, ES-17). A pixel counts once its colour moves a grey step of
-    // 3 levels of 255 or more (threshold 0.01), so swapping any two of tokens.css's neutrals counts
-    // (the closest pair, dark --bg and --wall, counts at any threshold under 0.0113), while ±2 on
-    // every channel doesn't. One budget of 25 pixels at every size, not a ratio: 0.005 of
-    // 1440 × 900 at threshold 0.2 let the whole re-theme of Chats through at 4,589 pixels (#23).
-    // A CI run at threshold 0 with a budget of 0 pixels matched all 34 baselines, which two earlier
-    // runs had made (#26). Pixels pixelmatch takes for anti-aliasing (a shade between its
-    // neighbours, next to flat ground) never count: that absorbs the glyph and shape edges that
-    // move between CI hosts, and can also hide a change to a 1 px line between two grounds. The
-    // same values decide when two captures in a row are stable. Loosening either is a reviewed
-    // change that says why.
     toHaveScreenshot: {
-      threshold: 0.01,
-      maxDiffPixels: 25,
+      maxDiffPixels: 0,
+      threshold: 0.005,
       animations: 'disabled',
       caret: 'hide',
       scale: 'css',
