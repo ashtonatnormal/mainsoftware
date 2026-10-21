@@ -22,8 +22,9 @@ import { Dialog } from './Dialog.tsx'
 import { EmptyState } from './EmptyState.tsx'
 import { CONTROL_CLASS, DIGITS_CONTROL_CLASS, Field } from './Field.tsx'
 import { Menu } from './Menu.tsx'
+import { Page } from './Page.tsx'
 import { PinField, PinUsername, ShowPin } from './PinField.tsx'
-import { ScreenHeader } from './ScreenHeader.tsx'
+import { RAIL_TITLE_ROW, ScreenHeader } from './ScreenHeader.tsx'
 import { Segmented } from './Segmented.tsx'
 import { Select } from './Select.tsx'
 import { SkipLink } from './SkipLink.tsx'
@@ -128,17 +129,28 @@ describe('T21: the kit’s markup', () => {
     expect([initialsOf('marcus'), initialsOf('  Priya  Raman Nair '), initialsOf('')]).toEqual(['M', 'PR', ''])
   })
 
-  it('KM-05 X16 SHL-43: ScreenHeader renders exactly one h1 with tabindex -1, sr-only on request', () => {
-    const shown = one(
-      html(<ScreenHeader title="Chats" actions={<IconButton label="Account" icon={<Bell />} />} />),
-      'h1',
-    )
+  it('KM-05 X16 SHL-43 T21 item 6: ScreenHeader renders exactly one h1 with tabindex -1, sr-only on request; from the rail breakpoint a shown title sits in Page’s wide column, 40 px under the top edge', () => {
+    const header = html(<ScreenHeader title="Chats" actions={<IconButton label="Account" icon={<Bell />} />} />)
+    const shown = one(header, 'h1')
     expect(shown.get('tabindex')).toBe('-1')
     expect(shown.has('data-screen-title')).toBe(true)
     expect(classesOf(shown)).not.toContain('sr-only')
+    expect(classesOf(shown)).toEqual(expect.arrayContaining(['font-display', 'text-2xl', 'rail:text-4xl']))
     const hidden = one(html(<ScreenHeader title="Conversation" srOnlyTitle />), 'h1')
     expect(classesOf(hidden)).toContain('sr-only')
     expect(hidden.get('tabindex')).toBe('-1')
+
+    // The title's row (the h1's parent) takes Page's wide column on the rail, so the title starts
+    // where the content does: Page's centred max-w-3xl, and its sm:px-6, which applies on the rail
+    // (48rem is wider than sm's 40rem). Its 40 px top and 4 px bottom are finance's sm:pt-10 and,
+    // with Page's 20 px, its mb-6. A row with no shown title (srOnlyTitle with Back) keeps the
+    // phone's row.
+    const row = (markup: string) => classesOf(tags(markup, 'div')[1] ?? new Map())
+    const page = classesOf(one(html(<Page>Content</Page>), 'div'))
+    expect(page).toEqual(expect.arrayContaining(['mx-auto', 'w-full', 'max-w-3xl', 'sm:px-6', 'py-5']))
+    const rail = ['mx-auto', 'w-full', 'max-w-3xl', 'px-6', 'pt-10', 'pb-1'].map(name => `rail:${name}`)
+    expect(RAIL_TITLE_ROW.split(' ').sort()).toEqual([...rail].sort())
+    expect(row(header)).toEqual(expect.arrayContaining(rail))
 
     // Back needs the router; it is a 44 px IconButton named by its label.
     const router = createRouter({
@@ -154,6 +166,12 @@ describe('T21: the kit’s markup', () => {
     const back = one(withBack, 'button')
     expect(back.get('aria-label')).toBe('Back to More')
     expect(classesOf(back)).toContain('size-11')
+    const hiddenWithBack = html(
+      <RouterContextProvider router={router}>
+        <ScreenHeader title="Conversation" srOnlyTitle back={{ label: 'Back to Chats', fallback: '/chats' }} />
+      </RouterContextProvider>,
+    )
+    expect(row(hiddenWithBack).filter(name => name.startsWith('rail:'))).toEqual([])
   })
 
   it('KM-06 X7 SHL-28 WCAG 3.3.1: Field wires label, hint and error (aria-describedby, aria-invalid)', () => {

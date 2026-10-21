@@ -10,6 +10,12 @@
 // finance's is, and 24 px on a phone, where finance's is 30 (T21 item 6): this bar never scrolls
 // away (D-08) and shares its row with Back and the avatar menu, so at 320 px with 200 % text the
 // h1 has 152 px, where Today and Rooms at 30 px (157 and 176 px) would break mid-word.
+//
+// From the rail breakpoint a shown title sits where finance's does (RAIL_TITLE_ROW): 40 px under
+// the window's top edge (finance's sm:pt-10; there is no top bar on the rail), 24 px above the
+// screen's content (finance's mb-6: this row's 4 px and Page's 20), and in Page's wide column
+// (max-w-3xl, px-6 from sm), so the title starts where the content does. KM-05 holds the two
+// columns equal.
 import { useCanGoBack, useRouter } from '@tanstack/react-router'
 import { ArrowLeft } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -23,6 +29,8 @@ export interface ScreenHeaderProps {
   back?: { label: string; fallback: AppPath }
   actions?: ReactNode
 }
+
+export const RAIL_TITLE_ROW = 'rail:mx-auto rail:w-full rail:max-w-3xl rail:px-6 rail:pt-10 rail:pb-1'
 
 export function ScreenHeader({ title, srOnlyTitle = false, back, actions }: ScreenHeaderProps) {
   const heading = (
@@ -41,7 +49,7 @@ export function ScreenHeader({ title, srOnlyTitle = false, back, actions }: Scre
   if (srOnlyTitle && !back && !actions) return heading
   return (
     <div className="shrink-0 pt-safe px-safe">
-      <div className="flex min-h-14 items-center gap-2 px-4 py-1.5">
+      <div className={cx('flex min-h-14 items-center gap-2 px-4 py-1.5', !srOnlyTitle && RAIL_TITLE_ROW)}>
         {back && <BackButton {...back} />}
         {heading}
         {srOnlyTitle && <span className="flex-1" />}
