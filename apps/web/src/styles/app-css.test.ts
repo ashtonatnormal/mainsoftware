@@ -1,19 +1,29 @@
 // The theme stylesheet's rules (SHL-46, SHL-69, X9, T21 items 5 and 6): only the tokens compile as
 // colours, reduced motion stops everything, the rail needs room both ways, forced colours keep the
-// Switch's state visible, and no stylesheet fetches from another host. app.css and tokens.css come
+// Switch's state visible, the wash stays inside what the contrast pairs cover, and no stylesheet
+// fetches from another host. app.css and tokens.css come
 // in with ?raw, as in contrast.test.ts, so TK-10 fails on an empty or unparsed sheet instead of
 // every other case passing on nothing.
 import { describe, expect, it } from 'vitest'
 import appCss from './app.css?raw'
-import { blocksOf, declarationsOf, onlyBlock, readTokenSheet, statementsOf, withoutComments } from './token-sheet.ts'
+import { GROUNDS } from './contrast-pairs.ts'
+import {
+  blocksOf,
+  declarationsOf,
+  onlyBlock,
+  parseHex,
+  readTokenSheet,
+  statementsOf,
+  tokenValue,
+  withoutComments,
+} from './token-sheet.ts'
 import tokensCss from './tokens.css?raw'
 
 const blocks = blocksOf(appCss)
 const theme = declarationsOf(onlyBlock(blocks, '@theme').body)
 const themeInline = declarationsOf(onlyBlock(blocks, '@theme inline').body)
-const colourTokens = [...readTokenSheet(tokensCss).light.keys()].filter(
-  name => name.startsWith('--') && name !== '--shadow',
-)
+const sheet = readTokenSheet(tokensCss)
+const colourTokens = [...sheet.light.keys()].filter(name => name.startsWith('--') && name !== '--shadow')
 // The two keywords the palette reset removes, declared again on their own.
 const KEYWORDS = new Map([
   ['--color-transparent', 'transparent'],
@@ -22,10 +32,10 @@ const KEYWORDS = new Map([
 const mappedColours = [...themeInline].filter(([name]) => name.startsWith('--color-') && !KEYWORDS.has(name))
 
 describe('T21: app.css', () => {
-  it('TK-10 sanity: the @theme inline block maps all 36 colour tokens', () => {
+  it('TK-10 sanity: the @theme inline block maps all 39 colour tokens', () => {
     expect(appCss.length).toBeGreaterThan(0)
-    expect(colourTokens).toHaveLength(36)
-    expect(mappedColours).toHaveLength(36)
+    expect(colourTokens).toHaveLength(39)
+    expect(mappedColours).toHaveLength(39)
   })
 
   it('TK-05 X9 T21 item 6: the palette is reset, every @theme inline colour names a declared token, and transparent and current are explicit', () => {
@@ -69,7 +79,9 @@ describe('T21: app.css', () => {
       '.switch-knob',
       '.switch-track.switch-on',
       '.switch-on .switch-knob',
+      '.wash',
     ])
+    expect(rule('.wash').get('background-image')).toBe('none')
     expect(rule('[aria-current]:not([aria-current="false"])').get('outline')).toBe('2px solid CanvasText')
     // Without forced-color-adjust: none the browser repaints both backgrounds Canvas.
     const track = rule('.switch-track')
@@ -86,6 +98,53 @@ describe('T21: app.css', () => {
     expect(on).toEqual({ track: 'Highlight', knob: 'HighlightText' })
     expect(track.get('border')).toBe('1px solid CanvasText')
     expect(rule('.switch-track.switch-on').get('border-color')).toBe('Highlight')
+  })
+
+  it('TK-13 T21 item 6 WCAG 1.4.3: the wash is opaque and drawn only from --bg and the two wash tokens, in finance’s geometry, and each wash token moves every channel of --bg one way, so every pixel lies on a line the contrast pairs bound', () => {
+    const wash = declarationsOf(onlyBlock(blocks, '@utility wash').body)
+    // Nothing else: no filter, opacity, mask or blend mode that would move a pixel off those lines.
+    expect([...wash.keys()]).toEqual([
+      'background-color',
+      'background-image',
+      'background-size',
+      'background-position',
+      'background-repeat',
+    ])
+    expect(wash.get('background-color')).toBe('var(--bg)')
+    // Each layer runs from its token through 40 % of it mixed into --bg to --bg itself. No stop is
+    // see-through, so the top layer hides only what it draws, and no colour stop is anything else.
+    // Biome lays a long value out over lines, so the comparison drops the spaces inside brackets.
+    const tight = (value: string | undefined) => value?.replace(/\(\s+/g, '(').replace(/\s+\)/g, ')')
+    const layer = (token: string, circle: string) =>
+      `radial-gradient(${circle}, var(--${token}), color-mix(in srgb, var(--${token}) 40%, var(--bg)) 64%, var(--bg))`
+    expect(tight(wash.get('background-image'))).toBe(
+      `${layer('wash-b', 'circle 32.5vmax at 32.5vmax 32.5vmax')}, ${layer('wash-a', 'circle 35vmax at 15vmax 10vmax')}`,
+    )
+    // The lavender layer is a 45 × 35 vmax tile in the bottom-right corner, its circle touching the
+    // tile's top and left edges. The teal circle (centre 15, 10 vmax, radius 35) reaches 50 vmax
+    // across and 45 down, so it can meet that tile only in a frame under 95 vmax wide and 80 vmax
+    // tall; even then a pixel is --bg or one layer's, never a mix of the two.
+    expect(wash.get('background-size')).toBe('45vmax 35vmax, 100% 100%')
+    expect(wash.get('background-position')).toBe('100% 100%, 0 0')
+    expect(wash.get('background-repeat')).toBe('no-repeat')
+    // Every channel of each wash token lies one way from --bg (darker in light, lighter in dark),
+    // so luminance, and with it each pair's ratio, moves one way from --bg to the token, and the
+    // pairs on bg and on the token (GROUNDS) bound every pixel between.
+    for (const theme of ['light', 'dark'] as const) {
+      const bg = parseHex(tokenValue(sheet, theme, 'bg'))
+      for (const token of ['wash-a', 'wash-b']) {
+        const deltas = parseHex(tokenValue(sheet, theme, token)).map((channel, i) => channel - (bg[i] ?? 0))
+        expect(
+          deltas.every(delta => (theme === 'light' ? delta <= 0 : delta >= 0)),
+          `${token} in ${theme}`,
+        ).toBe(true)
+        expect(
+          deltas.some(delta => delta !== 0),
+          `${token} in ${theme}`,
+        ).toBe(true)
+      }
+    }
+    expect(GROUNDS).toEqual(expect.arrayContaining(['bg', 'wash-a', 'wash-b']))
   })
 
   it('TK-08 SHL-69: no url() or @import names another host', () => {

@@ -50,6 +50,9 @@
   --color-warn: var(--warn);
   --color-warn-soft: var(--warn-soft);
   --color-wall: var(--wall);
+  --color-wash-a: var(--wash-a);
+  --color-wash-b: var(--wash-b);
+  --color-selection: var(--selection);
   --color-avatar-0: var(--avatar-0);
   --color-avatar-1: var(--avatar-1);
   --color-avatar-2: var(--avatar-2);
@@ -86,6 +89,39 @@
 @utility px-safe {
   padding-left: env(safe-area-inset-left, 0px);
   padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* The wash (T21 item 6): finance's BrandField, teal from the top left and lavender from the bottom
+   right, on the shell's frame and the sign-in screen. Two opaque radial gradients on the element's
+   own ground, with finance's geometry in vmax and its fall-off (the colour, 40 % of it at 64 % of
+   the radius, then the ground). The lavender layer is drawn on top in its own 45 × 35 vmax tile in
+   the bottom-right corner, so no stop is see-through: every pixel is --bg, or --bg mixed with one
+   wash token, and the contrast pairs on --wash-a and --wash-b (the brightest points) bound every
+   pixel between. The tile can't reach the teal circle unless the frame is under 95 vmax wide and
+   80 vmax tall, which a full-width frame at least the small viewport tall never is. It is still,
+   so it never repaints on scroll. styles/app-css.test.ts (TK-13) holds it to this. */
+@utility wash {
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(
+      circle 32.5vmax at 32.5vmax 32.5vmax,
+      var(--wash-b),
+      color-mix(in srgb, var(--wash-b) 40%, var(--bg)) 64%,
+      var(--bg)
+    ),
+    radial-gradient(
+      circle 35vmax at 15vmax 10vmax,
+      var(--wash-a),
+      color-mix(in srgb, var(--wash-a) 40%, var(--bg)) 64%,
+      var(--bg)
+    );
+  background-size:
+    45vmax 35vmax,
+    100% 100%;
+  background-position:
+    100% 100%,
+    0 0;
+  background-repeat: no-repeat;
 }
 
 @layer base {
@@ -145,8 +181,11 @@ html.scroll-locked #screen {
   overflow: hidden;
 }
 
+/* Finance's lavender, with the ink set too, so selected muted or error text keeps 4.5:1 (fg on
+   selection, TEXT_PAIRS). */
 ::selection {
-  background: var(--accent-soft);
+  background: var(--selection);
+  color: var(--fg);
 }
 
 .tabular {
@@ -209,5 +248,9 @@ html.scroll-locked #screen {
   }
   .switch-on .switch-knob {
     background-color: HighlightText;
+  }
+  /* The wash is decoration; forced colours draw the plain Canvas ground. */
+  .wash {
+    background-image: none;
   }
 }

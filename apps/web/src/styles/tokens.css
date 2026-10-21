@@ -1,13 +1,22 @@
 /* The design tokens (T21 item 6, X8, QA-01, SHL-23, OD-08). Every colour the app draws is one of
    these, through the Tailwind names app.css maps them to (bg-surface, text-muted …); no other file
    in src/ holds a colour literal. Outside src/, index.html's two theme-color metas copy --bg (TK-09
-   holds them to it), and public/favicon.svg draws the light accent. Ported from the demo
-   (demo/src/index.css), with --chat-wall renamed --wall and the dark-mode contrast fixes (X8,
-   SHL-35 to SHL-37, RMS-36, QA-01):
-   - --rec-fg, --agent-fg: ink on a red or teal fill. White fails on dark mode's lighter fills.
+   holds them to it), and public/favicon.svg draws the light accent.
+
+   The look follows the-newnormal/finance's visual guidelines (owner, 21 Oct 2026; T21 item 6):
+   its canvas, surface, ink, brand-deep, brand, danger and lavender, and its email palette's tones
+   where its own colour fails a Hearth rule (muted, line, agent, ok, warn). demo/ stays the
+   reference for behaviour only. Finance has no dark theme, so the dark values are Hearth's own,
+   drawn from finance's blue-tinted ink and its pastels (a Default the owner confirms, T21 item 6).
+   - --rec-fg, --agent-fg, --accent-fg: ink on a filled colour. White fails on dark mode's lighter
+     fills, so dark mode puts dark ink on them.
    - --accent-inverse: accent text and the focus ring on an inverse (bg-fg) ground, such as a toast.
    - --line-strong: the border that identifies a control (an input, the Switch's off track), at 3:1
      on every ground. --line stays for hairlines and dividers, which identify nothing.
+   - --wash-a, --wash-b: the brightest points of the wash (app.css's wash utility), finance's teal
+     and lavender over --bg at 25 % in light and 13 % in dark, the strongest at which every pair
+     still passes on them. Each moves every channel the same way from --bg (TK-13).
+   - --selection: selected text's ground, finance's lavender; app.css paints selected text --fg.
    - --avatar-0 to --avatar-11: avatar fills at oklch(0.52 0.12 h), h = 15° + 30°n, each at least
      4.5:1 under --avatar-fg. They are the same in both themes.
    styles/contrast-pairs.ts lists every ink and ground the kit pairs, and styles/contrast.test.ts
@@ -18,29 +27,32 @@
    and no toggle, so the first paint has the right theme with no script (SHL-11, under the CSP). */
 
 :root {
-  --bg: #f4f5f7; /* the app ground */
+  --bg: #f7f5f1; /* the app ground: finance's canvas */
   --surface: #ffffff; /* cards, panels, others' bubbles */
-  --surface-2: #eceef2; /* inputs, hover, chips */
-  --fg: #1b2130; /* ink */
-  --muted: #5e6778; /* secondary text */
-  --line: #dde1e8; /* hairlines and dividers */
-  --line-strong: #767f8f; /* the border of a control */
-  --accent: #c84d0a; /* ember */
+  --surface-2: #efece6; /* inert controls, disabled fields, hover */
+  --fg: #34363e; /* ink */
+  --muted: #67696f; /* secondary text */
+  --line: #e6e5e2; /* hairlines and dividers */
+  --line-strong: #82838a; /* the border of a control */
+  --accent: #2f7f9b; /* finance's brand-deep: primary fill, focus ring */
   --accent-fg: #ffffff; /* ink on accent */
-  --accent-soft: #ffe8d6; /* my bubbles, highlights */
-  --accent-ink: #b8460a; /* accent as text on light grounds */
-  --accent-inverse: #ff9a5c; /* accent as text or ring on fg */
-  --agent: #0b7375;
-  --agent-soft: #dcf2f1;
+  --accent-soft: #e3f1f6; /* the info tint */
+  --accent-ink: #276d85; /* accent as text on light grounds */
+  --accent-inverse: #60aecb; /* finance's brand: accent as text or ring on fg */
+  --agent: #4f4f9a;
+  --agent-soft: #ecebf8;
   --agent-fg: #ffffff; /* ink on agent */
-  --rec: #c22d33; /* recording, live, danger */
-  --rec-soft: #fde4e4;
+  --rec: #b4443a; /* recording, live, danger: finance's danger */
+  --rec-soft: #fbf6f5; /* the error tint: 5 % danger on white */
   --rec-fg: #ffffff; /* ink on rec */
-  --ok: #257a36;
-  --ok-soft: #dff3e3;
-  --warn: #94600f;
-  --warn-soft: #fbf0d9;
-  --wall: #eef0f3; /* the conversation ground */
+  --ok: #2d6b52;
+  --ok-soft: #e2f2eb;
+  --warn: #9a4a17;
+  --warn-soft: #fdeee3;
+  --wall: #f2f0eb; /* the conversation ground */
+  --wash-a: #e3edec; /* the wash's teal corner */
+  --wash-b: #ece8ef; /* the wash's lavender corner */
+  --selection: #c9c0ea; /* selected text's ground: finance's lavender */
   --avatar-0: #a24852;
   --avatar-1: #a04f27;
   --avatar-2: #905d00;
@@ -54,34 +66,37 @@
   --avatar-10: #835198;
   --avatar-11: #984979;
   --avatar-fg: #ffffff; /* initials on an avatar fill */
-  --shadow: 0 1px 2px rgb(16 22 35 / 0.06), 0 4px 16px rgb(16 22 35 / 0.06);
+  --shadow: 0 1px 2px rgb(52 54 62 / 0.04), 0 8px 40px rgb(52 54 62 / 0.08);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0f1218;
-    --surface: #171b23;
-    --surface-2: #20252f;
-    --fg: #e8ebf1;
-    --muted: #9aa3b3;
-    --line: #2a303b;
-    --line-strong: #717a8d;
-    --accent: #ff7a33;
-    --accent-fg: #1a0e06;
-    --accent-soft: #3a2416;
-    --accent-ink: #ff9a5c;
-    --accent-inverse: #a13d08;
-    --agent: #38c3c4;
-    --agent-soft: #12302f;
-    --agent-fg: #04201f;
-    --rec: #ff5c62;
-    --rec-soft: #3a1a1c;
-    --rec-fg: #1f0a0b;
-    --ok: #5fcf75;
-    --ok-soft: #173020;
-    --warn: #e7b04a;
-    --warn-soft: #33270f;
-    --wall: #12161d;
+    --bg: #1a1b20;
+    --surface: #222329;
+    --surface-2: #2b2c33;
+    --fg: #f2efe9;
+    --muted: #a3a3a9;
+    --line: #33343b;
+    --line-strong: #7b7c84;
+    --accent: #60aecb;
+    --accent-fg: #0b2530;
+    --accent-soft: #1c3640;
+    --accent-ink: #8ccbe2;
+    --accent-inverse: #276d85;
+    --agent: #c9c0ea;
+    --agent-soft: #2e2a45;
+    --agent-fg: #1d1a33;
+    --rec: #ea7a6e;
+    --rec-soft: #2c272c;
+    --rec-fg: #2a0e0b;
+    --ok: #7cc6a4;
+    --ok-soft: #183129;
+    --warn: #f5a470;
+    --warn-soft: #3a2617;
+    --wall: #1d1e23;
+    --wash-a: #2c3339;
+    --wash-b: #31303a;
+    --selection: #464453;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 6px 20px rgb(0 0 0 / 0.35);
     color-scheme: dark;
   }

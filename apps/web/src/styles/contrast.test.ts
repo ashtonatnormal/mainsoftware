@@ -84,11 +84,11 @@ describe('T21: the tokens and their contrast', () => {
     expect(() => parseHex('#12')).toThrow(/#rrggbb/)
   })
 
-  it('TK-00 sanity: the light block holds exactly its 37 custom properties (36 colours and --shadow) and the dark block 24 (the 13 avatar tokens don’t change), so an empty ?raw fails instead of passing', () => {
+  it('TK-00 sanity: the light block holds exactly its 40 custom properties (39 colours and --shadow) and the dark block 27 (the 13 avatar tokens don’t change), so an empty ?raw fails instead of passing', () => {
     expect(tokensCss.length).toBeGreaterThan(0)
-    expect(customProperties(sheet.light)).toHaveLength(37)
-    expect(customProperties(sheet.dark)).toHaveLength(24)
-    expect(colourTokens).toHaveLength(36)
+    expect(customProperties(sheet.light)).toHaveLength(40)
+    expect(customProperties(sheet.dark)).toHaveLength(27)
+    expect(colourTokens).toHaveLength(39)
     // The light block holds tokens only; the dark block adds the canvas's scheme.
     expect([...sheet.light.keys()].filter(name => !name.startsWith('--'))).toEqual([])
     expect([...sheet.dark.keys()].filter(name => !name.startsWith('--'))).toEqual(['color-scheme'])
@@ -194,7 +194,7 @@ describe('T21: the tokens and their contrast', () => {
     expect(paintOf(BUTTON_VARIANTS.primary, STATE_PREFIXES['under the pointer']).fill).toBe('accent-ink')
     expect(paintOf(BUTTON_VARIANTS.danger, STATE_PREFIXES['under the pointer']).brightness).toBe(1.05)
     expect(paintOf(BUTTON_VARIANTS.danger, STATE_PREFIXES['pressed with a pointer']).brightness).toBe(0.95)
-    // The demo's primary hover, brightness-105 on ember, is what this case refuses.
+    // A brightness-105 hover on the primary, white on brand-deep, is what this case refuses.
     const demo = contrastRatio(
       brightened(parseHex(tokenValue(sheet, 'light', 'accent-fg')), 1.05),
       brightened(parseHex(tokenValue(sheet, 'light', 'accent')), 1.05),

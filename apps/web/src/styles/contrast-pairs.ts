@@ -5,7 +5,12 @@
 //
 // Text (and initials) needs 4.5:1 (WCAG 1.4.3); a control's boundary, a focus ring or a state
 // shown by colour alone needs 3:1 against what is next to it (WCAG 1.4.11). The --line hairline
-// identifies nothing, so it is in neither list.
+// identifies nothing, so it is in neither list, and nor are the alerts' tinted edges (border-rec/30
+// and the like), which sit on their own tint and add nothing the text and icon don't say.
+//
+// The wash (app.css) is a ground too: every pixel of it is --bg mixed with --wash-a or --wash-b,
+// each channel moving one way (TK-13), so a pair that holds on bg and on both wash tokens holds
+// on every pixel between.
 
 export type TokenName =
   | 'bg'
@@ -30,26 +35,29 @@ export type TokenName =
   | 'warn'
   | 'warn-soft'
   | 'wall'
+  | 'wash-a'
+  | 'wash-b'
+  | 'selection'
   | `avatar-${0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11}`
   | 'avatar-fg'
 
 export type Pair = readonly [fg: TokenName, bg: TokenName, min: 4.5 | 3, why: string]
 
-// The page grounds a control can sit on.
-export const GROUNDS = ['bg', 'surface', 'surface-2', 'wall'] as const
+// The page grounds a control can sit on: the wash's two brightest points among them.
+export const GROUNDS = ['bg', 'surface', 'surface-2', 'wall', 'wash-a', 'wash-b'] as const
 const AVATARS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] as const
 
 export const TEXT_PAIRS: readonly Pair[] = [
   ...GROUNDS.map(ground => ['fg', ground, 4.5, 'body text'] as const),
   ...GROUNDS.map(ground => ['muted', ground, 4.5, 'secondary text'] as const),
-  ...(['bg', 'surface', 'surface-2', 'accent-soft'] as const).map(
+  ...(['bg', 'surface', 'surface-2', 'accent-soft', 'wash-a', 'wash-b'] as const).map(
     ground => ['accent-ink', ground, 4.5, 'accent text, links, the current tab'] as const,
   ),
   ['accent-fg', 'accent', 4.5, 'a primary Button'],
   ['accent-fg', 'accent-ink', 4.5, 'a primary Button under the pointer or pressed'],
   ['rec-fg', 'rec', 4.5, 'a danger Button; C2’s Leave (SHL-36)'],
   ['agent-fg', 'agent', 4.5, 'ink on an agent fill (RMS-36), kept so A5 can’t regress'],
-  ...(['bg', 'surface', 'rec-soft'] as const).map(
+  ...(['bg', 'surface', 'rec-soft', 'wash-a', 'wash-b'] as const).map(
     ground => ['rec', ground, 4.5, 'error text, the recording label'] as const,
   ),
   ['agent', 'agent-soft', 4.5, 'an agent chip'],
@@ -57,6 +65,15 @@ export const TEXT_PAIRS: readonly Pair[] = [
   ['warn', 'warn-soft', 4.5, 'a warning note'],
   ['bg', 'fg', 4.5, 'an inverse toast'],
   ['accent-inverse', 'fg', 4.5, 'a toast’s action (SHL-35)'],
+  ['fg', 'accent-soft', 4.5, 'an info note (CodeStep), the Updated banner'],
+  ['fg', 'warn-soft', 4.5, 'the Reconnecting banner'],
+  [
+    'surface',
+    'fg',
+    4.5,
+    'an ink-filled selected state: the current tab’s icon, a chosen segment, a pressed IconButton',
+  ],
+  ['fg', 'selection', 4.5, 'selected text (app.css ::selection)'],
   ...AVATARS.map(n => ['avatar-fg', `avatar-${n}`, 4.5, 'avatar initials (QA-01)'] as const),
 ]
 
@@ -66,4 +83,5 @@ export const UI_PAIRS: readonly Pair[] = [
   ...GROUNDS.map(ground => ['line-strong', ground, 3, 'a control’s border, the Switch’s off track (SHL-37)'] as const),
   ['muted', 'surface-2', 3, 'the Switch’s knob when off'],
   ['accent-fg', 'accent', 3, 'the Switch’s knob when on'],
+  ['accent', 'accent-soft', 3, 'the focus ring on the info banner (its Reload button)'],
 ]
