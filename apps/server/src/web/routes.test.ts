@@ -489,12 +489,90 @@ describe('C0.8 OD-12 POST /api/csp-report', () => {
     expect(reportLines(logs)).toEqual([])
   })
 
-  it('CR-02 OD-12 CL Security: a report with another Origin, or none, is refused 403 by the root hook', async () => {
+  it('CR-02 OD-12 CL Security: a report from another origin is refused 403 by the root hook, the user-content origin and near misses included, whatever Sec-Fetch-Site says', async () => {
     const { post, logs } = setup()
-    for (const origin of ['https://evil.example', 'https://usercontent.hearth.example.com', 'null', undefined]) {
-      const response = await post(CSP_REPORT_PATH, REPORT, { origin })
-      expect([origin, response.statusCode, response.json()]).toEqual([origin, 403, { error: 'Forbidden' }])
+    const origins = [
+      'https://evil.example',
+      'https://usercontent.hearth.example.com',
+      `${APP_ORIGIN}/`,
+      'http://hearth.example.com',
+      'https://HEARTH.example.com',
+    ]
+    for (const origin of origins) {
+      for (const fetchSite of [undefined, 'same-origin', 'same-site', 'cross-site']) {
+        const response = await post(CSP_REPORT_PATH, REPORT, { origin, 'sec-fetch-site': fetchSite })
+        expect([origin, fetchSite, response.statusCode, response.json()]).toEqual([
+          origin,
+          fetchSite,
+          403,
+          { error: 'Forbidden' },
+        ])
+      }
     }
+    expect(reportLines(logs)).toEqual([])
+    // Each refusal names the kind of Origin, never its value.
+    const refusals = logs.filter(line => line.event === 'origin_refused')
+    expect(refusals).toHaveLength(origins.length * 4)
+    for (const line of refusals) expect(line).toMatchObject({ url: CSP_REPORT_PATH, originKind: 'other' })
+    expect(JSON.stringify(refusals)).not.toContain('evil.example')
+  })
+
+  it('CR-07 OD-12 T21 item 9: WebKit’s own report (Origin "null", Sec-Fetch-Site same-origin) answers 204 with no-store and logs only the reduced line', async () => {
+    const { db, touched } = unreachableDb()
+    const { post, logs } = setup({ db })
+    // WebKit sends the page's cookies with a same-origin report; the route reads none.
+    const response = await post(CSP_REPORT_PATH, REPORT, {
+      origin: 'null',
+      'sec-fetch-site': 'same-origin',
+      cookie: COOKIE,
+    })
+    expect([response.statusCode, response.body, response.headers['cache-control']]).toEqual([204, '', 'no-store'])
+    expect(response.headers['set-cookie']).toBeUndefined()
+    expect(touched()).toBe(0)
+    expect(logs).toHaveLength(1)
+    const [line] = logs
+    expect(line).toMatchObject({ level: 40, event: 'csp_report', ...REDUCED })
+    expect(Object.keys(line ?? {}).sort()).toEqual(
+      ['blocked', 'directive', 'disposition', 'event', 'level', 'msg', 'path', 'reqId', 'role', 'time'].sort(),
+    )
+    expect(JSON.stringify(logs)).not.toContain(MARKER)
+  })
+
+  it('CR-08 OD-12 T21 item 9: Origin "null" or none is refused 403 unless Sec-Fetch-Site is exactly same-origin, and none is refused even then', async () => {
+    const { post, logs } = setup()
+    const cases: [string | undefined, string | undefined, string, string][] = [
+      ['null', undefined, 'null', 'absent'],
+      ['null', 'same-site', 'null', 'same-site'],
+      ['null', 'cross-site', 'null', 'cross-site'],
+      ['null', 'none', 'null', 'none'],
+      ['null', 'Same-Origin', 'null', 'other'],
+      ['null', 'same-origin, same-origin', 'null', 'other'],
+      ['NULL', 'same-origin', 'other', 'same-origin'],
+      [undefined, 'same-origin', 'absent', 'same-origin'],
+      [undefined, undefined, 'absent', 'absent'],
+    ]
+    for (const [origin, fetchSite] of cases) {
+      const response = await post(CSP_REPORT_PATH, REPORT, { origin, 'sec-fetch-site': fetchSite })
+      expect([origin, fetchSite, response.statusCode]).toEqual([origin, fetchSite, 403])
+    }
+    expect(reportLines(logs)).toEqual([])
+    expect(
+      logs.filter(line => line.event === 'origin_refused').map(line => [line.url, line.originKind, line.fetchSite]),
+    ).toEqual(cases.map(([, , originKind, fetchSite]) => [CSP_REPORT_PATH, originKind, fetchSite]))
+  })
+
+  it('CR-09 OD-12 T21 items 7 and 9: behind the exception the route’s parser still decides: any other type, malformed JSON or an oversized body is 400 with no line', async () => {
+    const { post, logs } = setup()
+    const webkit = { origin: 'null', 'sec-fetch-site': 'same-origin' }
+    const refused = [
+      await post(CSP_REPORT_PATH, REPORT, { ...webkit, 'content-type': 'application/json' }),
+      await post(CSP_REPORT_PATH, REPORT, { ...webkit, 'content-type': 'text/plain' }),
+      await post(CSP_REPORT_PATH, REPORT, { ...webkit, 'content-type': 'application/reports+json' }),
+      await post(CSP_REPORT_PATH, REPORT, { ...webkit, 'content-type': undefined }),
+      await post(CSP_REPORT_PATH, '{"csp-report": {', webkit),
+      await post(CSP_REPORT_PATH, `{"csp-report": {"script-sample": "${'x'.repeat(CSP_REPORT_LIMIT)}"}}`, webkit),
+    ]
+    for (const response of refused) expect([response.statusCode, response.json()]).toEqual([400, REFUSED])
     expect(reportLines(logs)).toEqual([])
   })
 

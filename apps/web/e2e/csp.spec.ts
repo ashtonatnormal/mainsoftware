@@ -51,42 +51,65 @@ test('CS-02 SHL-69: a tour of every route makes only same-origin requests, both 
   expect(guard.violations).toEqual([])
 })
 
-test('CS-03 BP C0.8 Done OD-12: a blocked image raises a violation that reaches /api/csp-report, is answered 204 and is logged reduced', async ({
-  page,
-  guard,
-  browserName,
-}) => {
-  test.skip(browserName !== 'chromium', 'the report path was verified on Chromium (T21 item 11)')
+// The api's log lines since an offset, as JSON; the fake provider's stderr lines aren't JSON.
+function logLinesSince(from: number): Record<string, unknown>[] {
+  return logSince(from)
+    .split('\n')
+    .flatMap(entry => {
+      try {
+        const line: unknown = JSON.parse(entry)
+        return typeof line === 'object' && line !== null ? [line as Record<string, unknown>] : []
+      } catch {
+        return []
+      }
+    })
+}
+
+test('CS-03 BP C0.8 Done OD-12 T21 item 9: in every engine a blocked image raises a violation whose report reaches /api/csp-report, is answered 204 and is logged reduced', {
+  tag: '@smoke',
+}, async ({ page, guard, browserName }) => {
   guard.allowViolation('img-src')
+  // Every report Playwright shows the page sending is answered; WebKit's carries Origin "null" and
+  // Sec-Fetch-Site same-origin, which the root hook takes on this route alone (T21 item 9).
+  const answered: number[] = []
+  page.on('response', response => {
+    if (new URL(response.url()).pathname === '/api/csp-report') answered.push(response.status())
+  })
   await page.goto('/chats')
   await expect(h1(page)).toHaveText('Chats')
   const from = logOffset()
-  const report = page.waitForRequest(request => new URL(request.url()).pathname === '/api/csp-report', {
-    timeout: 10_000,
-  })
   // An image from another origin, which img-src 'self' blocks before any request leaves the page.
-  await page.evaluate(() => {
+  // The host names the engine, so the line found is this test's own: the projects run at once, and
+  // WebKit's harness reports (an inline style, after a context closes) reach the same log.
+  const blocked = `https://cs-03-${browserName}.example.invalid`
+  await page.evaluate(src => {
     const image = document.createElement('img')
     image.alt = ''
-    image.src = 'https://example.invalid/x.png?secret=1'
+    image.src = src
     document.body.append(image)
-  })
-  const sent = await report
-  expect((await sent.response())?.status()).toBe(204)
+  }, `${blocked}/x.png?secret=1`)
   await expect.poll(() => guard.violations.map(violation => violation.directive)).toContain('img-src')
-  // The api logged it reduced: the directive and the blocked origin, never the query.
-  let line = ''
+  // The api logs a report only once it has answered it 204, so the line is the proof in every
+  // engine, whether or not Playwright shows the request. A refusal's line names the kind of Origin
+  // and Sec-Fetch-Site the report carried.
+  let line: Record<string, unknown> | undefined
   await expect
-    .poll(() => {
-      line =
-        logSince(from)
-          .split('\n')
-          .find(entry => entry.includes('"event":"csp_report"')) ?? ''
-      return line
-    })
-    .not.toBe('')
-  expect(line).toContain('img-src')
-  expect(line).toContain('https://example.invalid')
-  expect(line).not.toContain('secret')
-  expect(line).not.toContain('x.png')
+    .poll(
+      () => {
+        const lines = logLinesSince(from)
+        line = lines.find(entry => entry.event === 'csp_report' && entry.blocked === blocked)
+        const refused = lines.filter(entry => entry.event === 'origin_refused' && entry.url === '/api/csp-report')
+        return line === undefined ? `no report yet; refused: ${JSON.stringify(refused)}` : 'logged'
+      },
+      { timeout: 10_000 },
+    )
+    .toBe('logged')
+  // Reduced: the directive, the blocked origin and the page's path, never the query or the file.
+  expect(line).toMatchObject({ directive: 'img-src', blocked, path: '/chats' })
+  expect(JSON.stringify(line)).not.toContain('secret')
+  expect(JSON.stringify(line)).not.toContain('x.png')
+  expect(
+    answered.every(status => status === 204),
+    JSON.stringify(answered),
+  ).toBe(true)
 })

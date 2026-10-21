@@ -84,8 +84,8 @@ describe('T21 item 7: the document headers', () => {
     expect(headers).toEqual({
       'Content-Security-Policy': contentSecurityPolicy('https://hearth.example.com'),
       'Cross-Origin-Opener-Policy': 'same-origin',
-      // same-origin, not no-referrer: a CSP report then keeps its Origin, which the server's root
-      // hook needs (OD-12).
+      // same-origin, not no-referrer: under no-referrer every browser's CSP report would carry
+      // Origin "null", and pass the server's root hook only on Sec-Fetch-Site (T21 item 9, OD-12).
       'Referrer-Policy': 'same-origin',
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',

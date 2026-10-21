@@ -128,8 +128,9 @@ export function cspDirectives(
     ['form-action', ["'none'"]],
     ['frame-ancestors', ["'none'"]],
     ['object-src', ["'none'"]],
-    // Same-origin, so the report carries the page's Origin and passes the server's root Origin
-    // hook with no exemption (OD-12). No 'report-sample': a sample would copy page text into logs.
+    // Same-origin. Chromium and Firefox send the report with the page's Origin, and WebKit with
+    // Origin "null" and Sec-Fetch-Site same-origin, which the server's root hook takes on this route
+    // alone (T21 item 9, OD-12). No 'report-sample': a sample would copy page text into logs.
     ['report-uri', [CSP_REPORT_PATH]],
   ]
 }
@@ -141,10 +142,12 @@ export function contentSecurityPolicy(appOrigin: string, options: { dev?: boolea
 }
 
 // Every header the app's document (index.html) is served with, beside its Cache-Control
-// (DOCUMENT_CACHE_CONTROL). Referrer-Policy is same-origin, not no-referrer, because no-referrer
-// makes a CSP report's Origin null, and the server refuses a POST with a null Origin. HSTS is sent
-// only for an https host that isn't this machine, so the HTTPS e2e run can't pin a developer's
-// localhost to https (T21 item 7). C1.6 and C2 relax the microphone in Permissions-Policy.
+// (DOCUMENT_CACHE_CONTROL). Referrer-Policy is same-origin, not no-referrer: no other origin gets a
+// Referer either way, and under no-referrer the Fetch standard would send every browser's CSP
+// report with Origin "null", which the server takes only with Sec-Fetch-Site same-origin (T21
+// item 9). HSTS is sent only for an https host that isn't this machine, so the HTTPS e2e run can't
+// pin a developer's localhost to https (T21 item 7). C1.6 and C2 relax the microphone in
+// Permissions-Policy.
 export function documentHeaders(appOrigin: string, options: { dev?: boolean } = {}): Readonly<Record<string, string>> {
   const origin = parseAppOrigin(appOrigin)
   return Object.freeze({

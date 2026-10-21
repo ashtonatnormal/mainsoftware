@@ -523,7 +523,8 @@ export function attachSocketServer(app: FastifyInstance, options: SocketServerOp
     if (stopping) return refuse(socket, 'error')
     if (pathOf(request.url) !== SOCKET_PATH) return refuse(socket, 'path')
     // A missing Origin, "null", the user-content origin and any other origin are all refused,
-    // before anything is looked up.
+    // before anything is looked up, whatever Sec-Fetch-Site says: the CSP report's exception is the
+    // root hook's alone (origin.ts).
     if (!isAppOrigin(request.headers.origin, appOrigin)) return refuse(socket, 'origin')
     const token = readCookie(request.headers.cookie, SESSION_COOKIE)
     if (token === undefined) return refuse(socket, 'session')
