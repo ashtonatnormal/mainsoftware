@@ -5,6 +5,8 @@
 // waits for the self-hosted fonts and runs with reduced motion, and the caret is hidden. Every shot
 // is a soft expect: a missing or changed one fails the test but doesn't stop it, so one failing CI
 // run writes the actual of every shot that needs adopting (playwright.config.ts, D-07).
+import { existsSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import type { Page } from '@playwright/test'
 import { SIGN_IN } from '../src/strings/sign-in.ts'
 import { fontsReady } from './support/checks.ts'
@@ -12,6 +14,34 @@ import { expect, test } from './support/fixtures.ts'
 import { PERSONAS, typed } from './support/personas.ts'
 import { SCHEMES } from './support/viewports.ts'
 import { MORE_WIDTHS, shotName, VISUAL_WIDTHS } from './support/visual-matrix.ts'
+
+// THROWAWAY PROBE (VS-01 determinism), never merged: after each shot, compare a fresh
+// screenshot with the committed baseline at several pixelmatch thresholds and print the counts,
+// so CI's log shows how far renders drift from run to run.
+type Comparator = (actual: Buffer, expected: Buffer, options: object) => { errorMessage?: string } | null
+const comparator = (
+  createRequire(import.meta.url)('playwright-core/lib/coreBundle') as {
+    utils: { getComparator: (mime: string) => Comparator }
+  }
+).utils.getComparator('image/png')
+const PROBE_THRESHOLDS = [0, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2]
+
+async function probe(page: Page, name: string) {
+  const path = test.info().snapshotPath(name, { kind: 'screenshot' })
+  if (!existsSync(path)) {
+    console.log(`VS-PROBE ${name} no-baseline`)
+    return
+  }
+  const expected = readFileSync(path)
+  const actual = await page.screenshot({ fullPage: true, animations: 'disabled', caret: 'hide', scale: 'css' })
+  const counts = PROBE_THRESHOLDS.map(threshold => {
+    const result = comparator(actual, expected, { threshold, maxDiffPixels: 0 })
+    if (result === null) return '0'
+    return /^(\d+) pixels/.exec(result.errorMessage ?? '')?.[1] ?? `?${result.errorMessage ?? ''}`
+  })
+  const bytes = actual.equals(expected) ? 'bytes-equal' : 'bytes-differ'
+  console.log(`VS-PROBE ${name} ${bytes} ${PROBE_THRESHOLDS.map((t, i) => `t${t}=${counts[i]}`).join(' ')}`)
+}
 
 const h1 = (page: Page) => page.getByRole('heading', { level: 1 })
 
@@ -27,6 +57,7 @@ async function shoot(page: Page, screen: string, widths: readonly number[], prep
       await page.emulateMedia({ colorScheme: scheme })
       await fontsReady(page)
       await expect.soft(page).toHaveScreenshot(shotName(screen, width, scheme), { fullPage: true })
+      await probe(page, shotName(screen, width, scheme))
     }
   }
 }

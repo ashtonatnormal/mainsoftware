@@ -100,8 +100,10 @@ export default defineConfig({
   globalSetup: './e2e/global-setup.ts',
   expect: {
     toHaveScreenshot: {
-      maxDiffPixelRatio: 0.005,
-      threshold: 0.2,
+      // THROWAWAY PROBE (VS-01 determinism): no tolerance at all, so any pixel that differs from
+      // the baseline across runs fails. Never merge.
+      maxDiffPixels: 0,
+      threshold: 0,
       animations: 'disabled',
       caret: 'hide',
       scale: 'css',
