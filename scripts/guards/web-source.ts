@@ -448,13 +448,16 @@ export function textOpacity(colours: readonly string[]): RegExp {
 
 // WS-14: Newsreader ships at weight 600 upright only (T21 items 1 and 6), so a class list that
 // sets font-display (at any variant) sets font-semibold for every width and state, and no other
-// weight, bare, behind a variant (rail:font-normal) or arbitrary (font-[650]), and no italic: each
-// would be a face the browser fakes. not-italic is fine.
+// weight, bare, behind a variant (rail:font-normal) or arbitrary, and no italic: each would be a
+// face the browser fakes. not-italic is fine. Arbitrary covers Tailwind's three forms: a value in
+// brackets (font-[650]), a custom property in parentheses (font-(weight:--x), or font-(--x), which
+// Tailwind also reads as a weight), and an arbitrary property ([font-weight:700], [font-style:
+// italic], the [font:…] shorthand). Each is refused whole, family hints too, as brackets always were.
 export const DISPLAY_FAMILY = /(?<![\w-])font-display(?![\w-])/
 // font-semibold with no variant in front, so it holds at every width and state.
 export const DISPLAY_WEIGHT = /(?<![\w:-])font-semibold(?![\w-])/
 export const OTHER_DISPLAY_FACE =
-  /(?<![\w-])(?:font-(?:thin|extralight|light|normal|medium|bold|extrabold|black)|font-\[[^\]]*\]|italic)(?![\w-])/
+  /(?<![\w-])(?:font-(?:thin|extralight|light|normal|medium|bold|extrabold|black)|font-\[[^\]]*\]|font-\([^)]*\)|\[font(?:-weight|-style)?:[^\]]*\]|italic)(?![\w-])/
 export const displayOffFace = (texts: readonly string[]): string[] =>
   texts.filter(text => DISPLAY_FAMILY.test(text) && (!DISPLAY_WEIGHT.test(text) || OTHER_DISPLAY_FACE.test(text)))
 
