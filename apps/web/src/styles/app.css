@@ -1,6 +1,7 @@
 /* The app's one stylesheet (T21): Tailwind v4, the tokens, and the base rules every screen gets.
-   main.ts imports it with the two self-hosted font faces (SHL-69), so Vite links all three in
-   index.html's head before any script runs.
+   main.ts imports it with the two self-hosted font faces, Inter and Newsreader (SHL-69), so Vite
+   links all three in index.html's head before any script runs. The look is the-newnormal/finance's
+   (T21 item 6): its canvas and ink, Inter for text, Newsreader 600 for headings, and its wash.
 
    Colours compile only from the tokens (X9, T21 item 6): the @theme reset below removes Tailwind's
    default palette, so bg-red-500 or text-white compile to nothing, and @theme inline maps each
@@ -69,9 +70,10 @@
   /* The reset removed these two keywords too; border-transparent and text-current need them. */
   --color-transparent: transparent;
   --color-current: currentColor;
-  /* The families Fontsource's variable packages register (main.ts imports their CSS). */
-  --font-sans: "Figtree Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-display: "Bricolage Grotesque Variable", "Figtree Variable", ui-sans-serif, system-ui, sans-serif;
+  /* The families Fontsource registers (main.ts imports their CSS), then finance's fallbacks.
+     Newsreader ships at weight 600 only, so every font-display element is font-semibold (WS-14). */
+  --font-sans: "Inter Variable", -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", Arial, sans-serif;
+  --font-display: "Newsreader", Georgia, "Times New Roman", serif;
   --shadow-card: var(--shadow);
 }
 
@@ -136,6 +138,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-body);
     line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
     -webkit-tap-highlight-color: transparent;
   }
   h1,

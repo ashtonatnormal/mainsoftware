@@ -45,8 +45,8 @@ test('CS-02 SHL-69: a tour of every route makes only same-origin requests, both 
   }
   expect(fonts.length).toBeGreaterThanOrEqual(2)
   for (const font of fonts) expect(new URL(font).origin).toBe(E2E_ORIGIN)
-  expect(fonts.some(font => /figtree/i.test(font))).toBe(true)
-  expect(fonts.some(font => /bricolage/i.test(font))).toBe(true)
+  expect(fonts.some(font => /inter/i.test(font))).toBe(true)
+  expect(fonts.some(font => /newsreader/i.test(font))).toBe(true)
   // The guard checks each request's origin and every violation; this says it saw none.
   expect(guard.violations).toEqual([])
 })

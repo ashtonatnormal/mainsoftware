@@ -446,6 +446,13 @@ export function textOpacity(colours: readonly string[]): RegExp {
   return new RegExp(`(?<![\\w-])text-(?:${colours.map(c => c.replace(/[-]/g, '\\-')).join('|')})\\/`, 'g')
 }
 
+// WS-14: Newsreader ships at weight 600 only (T21 items 1 and 6), so a class list that sets
+// font-display sets font-semibold too; any other weight would be one the browser fakes.
+export const DISPLAY_FAMILY = /(?<![\w-])font-display(?![\w-])/
+export const DISPLAY_WEIGHT = /(?<![\w-])font-semibold(?![\w-])/
+export const displayWithoutWeight = (texts: readonly string[]): string[] =>
+  texts.filter(text => DISPLAY_FAMILY.test(text) && !DISPLAY_WEIGHT.test(text))
+
 // WS-06: a focus ring is never taken away.
 export const NO_OUTLINE_CLASS = /(?<![\w-])outline-(?:none|0|hidden)(?![\w-])/g
 export const NO_OUTLINE_CSS = /\boutline(?:-width)?\s*:\s*(?:none|0)(?:px)?\s*[;}!]/gi

@@ -17,7 +17,10 @@ import {
   clipboardHandlers,
   codeOf,
   DEFAULT_PALETTE,
+  DISPLAY_FAMILY,
+  DISPLAY_WEIGHT,
   DUNDER_WRITES_ALLOWED,
+  displayWithoutWeight,
   dunderWrites,
   ENTRY_APP,
   entryGraph,
@@ -329,7 +332,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
   it("WS-10 D-02 T21 item 2: src/main.ts's static import graph, followed through relative imports, holds only .css files and modules with no package import (import type aside), nothing in it uses import.meta.glob, and main.ts loads ./app/boot.tsx by one dynamic import after preBoot()", () => {
     const graph = (planted: Record<string, string>) => entryGraph(path => planted[path])
     const entry = (before = '', after = '') =>
-      `import '@fontsource-variable/figtree/index.css'\nimport './styles/app.css'\nimport { preBoot } from './boot/pre-boot.ts'\nimport { reloadForUpdate } from './session/document.ts'\n${before}preBoot(window, () => reloadForUpdate())\n${after}import('${ENTRY_APP}').then(app => app.boot())\n`
+      `import '@fontsource-variable/inter/index.css'\nimport './styles/app.css'\nimport { preBoot } from './boot/pre-boot.ts'\nimport { reloadForUpdate } from './session/document.ts'\n${before}preBoot(window, () => reloadForUpdate())\n${after}import('${ENTRY_APP}').then(app => app.boot())\n`
     const good = {
       'main.ts': entry(),
       'styles/app.css': "@import 'tailwindcss';",
@@ -594,5 +597,21 @@ describe('T21: the web source guard (apps/web/src)', () => {
     expect(
       guarded.flatMap(path => clipboardHandlers(path, sources.get(path) ?? '').map(handler => `${path}: ${handler}`)),
     ).toEqual([])
+  })
+
+  it('WS-14 T21 items 1 and 6: every class list that sets font-display also sets font-semibold, the one weight Newsreader ships', () => {
+    expect(
+      displayWithoutWeight(['font-display text-xl font-semibold', 'font-display text-xl', 'text-small font-medium']),
+    ).toEqual(['font-display text-xl'])
+    const lists = scripts.flatMap(path =>
+      stringsOf(path, sources.get(path) ?? '')
+        .filter(text => DISPLAY_FAMILY.test(text))
+        .map(text => ({ path, text })),
+    )
+    // ScreenHeader, Dialog, EmptyState, StepFrame, PlainScreen and ErrorScreen set it today.
+    expect(lists.length).toBeGreaterThanOrEqual(6)
+    expect(lists.filter(({ text }) => !DISPLAY_WEIGHT.test(text)).map(({ path, text }) => `${path}: ${text}`)).toEqual(
+      [],
+    )
   })
 })
