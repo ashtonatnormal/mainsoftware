@@ -17,9 +17,9 @@ export function MoreScreen() {
             <li key={entry.id}>
               <Link
                 to={entry.to}
-                className="flex min-h-14 items-center gap-3 px-4 py-2 hover:bg-surface-2 focus-visible:-outline-offset-2"
+                className="flex min-h-14 items-center gap-3 px-4 py-2 hover:bg-bg focus-visible:-outline-offset-2"
               >
-                <Icon aria-hidden size={22} className="shrink-0 text-accent-ink" />
+                <Icon aria-hidden size={22} className="shrink-0 text-accent" />
                 <span className="min-w-0 flex-1 break-words font-medium">{entry.label}</span>
                 <ChevronRight aria-hidden size={18} className="shrink-0 text-muted" />
               </Link>

@@ -544,7 +544,8 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
   })
 
   // The comparator's side only: whether a token's change reaches VS-01 also depends on a shot
-  // painting it, and no shot paints a token no screen uses yet (--wall, --agent, --ok, --warn).
+  // painting it, and no shot paints --wall, --agent or --ok (no screen uses them yet), --warn (only
+  // the connection banner does) or --selection (selected text).
   it("ES-18 VS-01 T21 item 11: on a patch of each token's colour, Playwright's own comparator under the config's tolerance passes every ±1 rounding and fails a 2-level move", () => {
     const { PNG, compare } = playwrightImages()
     const options = config.expect?.toHaveScreenshot ?? {}
@@ -557,8 +558,8 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
     const fails = (from: readonly number[], to: readonly number[]) => compare(patch(to), patch(from), options) !== null
     const css = readRepoFile(`${WEB}src/styles/tokens.css`).replace(/\/\*[\s\S]*?\*\//g, '')
     const tokens = [...css.matchAll(/(--[a-z0-9-]+):\s*#([0-9a-f]{6});/gi)]
-    // Both themes' colours: light's 36 and dark's 23.
-    expect(tokens).toHaveLength(59)
+    // Both themes' colours: light's 39 and dark's 26.
+    expect(tokens).toHaveLength(65)
     const wrong: string[] = []
     for (const [, name, hex = ''] of tokens) {
       const rgb = [0, 2, 4].map(at => Number.parseInt(hex.slice(at, at + 2), 16))

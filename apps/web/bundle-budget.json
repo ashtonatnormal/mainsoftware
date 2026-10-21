@@ -1,6 +1,6 @@
 {
-  "initialJsGzip": 178000,
-  "initialCssGzip": 8100,
-  "largestLazyJsGzip": 8700,
-  "fontsLatinBytes": 73800
+  "initialJsGzip": 177800,
+  "initialCssGzip": 9100,
+  "largestLazyJsGzip": 9100,
+  "fontsLatinBytes": 86600
 }

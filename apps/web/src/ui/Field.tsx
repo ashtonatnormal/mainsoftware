@@ -27,9 +27,10 @@ export interface FieldProps {
 }
 
 // A control's box: the 44 px height, the 3:1 border, the error's border, and a disabled control
-// on the control ground in muted ink (a TEXT_PAIRS pair, never opacity, X9).
+// on the control ground in muted ink (a TEXT_PAIRS pair, never opacity, X9). Finance's field
+// padding, and its focus ring flush with the box (the base accent ring with no offset).
 const CONTROL_BOX =
-  'min-h-11 w-full rounded-xl border border-line-strong bg-surface px-3 text-fg aria-invalid:border-rec disabled:bg-surface-2 disabled:text-muted'
+  'min-h-11 w-full rounded-xl border border-line-strong bg-surface px-3.5 text-fg focus-visible:outline-offset-0 aria-invalid:border-rec disabled:bg-surface-2 disabled:text-muted'
 
 export const CONTROL_CLASS = `${CONTROL_BOX} text-base`
 
@@ -49,7 +50,7 @@ export function Field({ label, hint, error, children }: FieldProps) {
   if (error !== undefined) control['aria-invalid'] = true
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="font-semibold">
+      <label htmlFor={id} className="font-medium">
         {label}
       </label>
       {hint !== undefined && (

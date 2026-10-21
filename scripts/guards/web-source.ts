@@ -93,12 +93,17 @@ export function globalReads(path: string, source: string, names: ReadonlySet<str
   return found
 }
 
+// A node that holds string text: a literal, or a template's text around its substitutions.
+const isStringText = (
+  node: ts.Node,
+): node is ts.StringLiteralLike | ts.TemplateHead | ts.TemplateMiddle | ts.TemplateTail =>
+  ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)
+
 // The text of every string a file holds: literals, template text and JSX attribute values.
 export function stringsOf(path: string, source: string): string[] {
   const found: string[] = []
   const visit = (node: ts.Node): void => {
-    if (ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node))
-      found.push(node.text)
+    if (isStringText(node)) found.push(node.text)
     ts.forEachChild(node, visit)
   }
   visit(parse(path, source))
@@ -445,6 +450,83 @@ export const ARBITRARY_TEXT = /(?<![\w-])text-(?:\[|\()/g
 export function textOpacity(colours: readonly string[]): RegExp {
   return new RegExp(`(?<![\\w-])text-(?:${colours.map(c => c.replace(/[-]/g, '\\-')).join('|')})\\/`, 'g')
 }
+
+// WS-14: Newsreader ships at weight 600 upright only (T21 items 1 and 6), so a class list that
+// sets font-display (at any variant) sets font-semibold for every width and state, and no other
+// weight, bare, behind a variant (rail:font-normal) or arbitrary, and no italic: each would be a
+// face the browser fakes. not-italic is fine. Arbitrary covers Tailwind's three forms: a value in
+// brackets (font-[650]), a custom property in parentheses (font-(weight:--x), or font-(--x), which
+// Tailwind also reads as a weight), and an arbitrary property ([font-weight:700], [font-style:
+// italic], the [font:…] shorthand). Each is refused whole, family hints too, as brackets always were.
+// The rule reads each string alone and each class expression whole (displayListsOf below).
+export const DISPLAY_FAMILY = /(?<![\w-])font-display(?![\w-])/
+// font-semibold with no variant in front, so it holds at every width and state.
+export const DISPLAY_WEIGHT = /(?<![\w:-])font-semibold(?![\w-])/
+export const OTHER_DISPLAY_FACE =
+  /(?<![\w-])(?:font-(?:thin|extralight|light|normal|medium|bold|extrabold|black)|font-\[[^\]]*\]|font-\([^)]*\)|\[font(?:-weight|-style)?:[^\]]*\]|italic)(?![\w-])/
+export const displayOffFace = (texts: readonly string[]): string[] =>
+  texts.filter(text => DISPLAY_FAMILY.test(text) && (!DISPLAY_WEIGHT.test(text) || OTHER_DISPLAY_FACE.test(text)))
+
+// The class lists a file writes: one per class expression, the value of a className attribute or
+// an outermost cx() call elsewhere, with every string in it joined into one list. A same-file const
+// or function it names is read in too, whatever it holds (a string, a variant map such as
+// SIZES[size], a helper), so a weight or italic that a condition, a map or a constant adds sits in
+// the same list as font-display. Both branches of a condition count, so an expression that can set
+// font-display holds no other weight anywhere in it, whichever branch applies. It reads one file:
+// a class from another file (an imported constant, a className prop) isn't followed, so a
+// component that sets font-display builds its classes in its own file.
+export function classListsOf(path: string, source: string): string[] {
+  const file = parse(path, source)
+  // Every same-file const and function by name; a name declared twice keeps both.
+  const named = new Map<string, ts.Node[]>()
+  const findNamed = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      ts.isVariableDeclarationList(node.parent) &&
+      (node.parent.flags & ts.NodeFlags.Const) !== 0
+    )
+      named.set(node.name.text, [...(named.get(node.name.text) ?? []), node.initializer])
+    if (ts.isFunctionDeclaration(node) && node.name && node.body)
+      named.set(node.name.text, [...(named.get(node.name.text) ?? []), node.body])
+    ts.forEachChild(node, findNamed)
+  }
+  findNamed(file)
+  // Each name is read once per list, so names that refer to each other end.
+  const collect = (node: ts.Node, into: string[], seen: Set<string>): void => {
+    if (isStringText(node)) into.push(node.text)
+    else if (ts.isIdentifier(node) && readsValue(node) && !seen.has(node.text)) {
+      seen.add(node.text)
+      for (const value of named.get(node.text) ?? []) collect(value, into, seen)
+    }
+    ts.forEachChild(node, child => collect(child, into, seen))
+  }
+  const found: string[] = []
+  const visit = (node: ts.Node): void => {
+    const parts: string[] = []
+    const seen = new Set<string>()
+    if (ts.isJsxAttribute(node) && ts.isIdentifier(node.name) && node.name.text === 'className') {
+      if (node.initializer) collect(node.initializer, parts, seen)
+    } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'cx') {
+      for (const argument of node.arguments) collect(argument, parts, seen)
+    } else {
+      ts.forEachChild(node, visit)
+      return
+    }
+    found.push(parts.join(' ').replace(/\s+/g, ' ').trim())
+  }
+  visit(file)
+  return found
+}
+
+// What WS-14 reads in a file: every string alone, so a string that names font-display carries
+// font-semibold itself (one branch can't lend it to another), and every class list, so a weight or
+// italic that another string of the same expression adds counts against it.
+export const displayListsOf = (path: string, source: string): string[] => [
+  ...stringsOf(path, source),
+  ...classListsOf(path, source),
+]
 
 // WS-06: a focus ring is never taken away.
 export const NO_OUTLINE_CLASS = /(?<![\w-])outline-(?:none|0|hidden)(?![\w-])/g

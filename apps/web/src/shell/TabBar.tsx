@@ -11,7 +11,7 @@ import { currentOf, TABS } from './nav.ts'
 export function TabBar() {
   const pathname = useLocation({ select: location => location.pathname })
   return (
-    <nav aria-label={SHELL.mainNav} className="border-t border-line bg-surface pb-safe px-safe rail:hidden">
+    <nav aria-label={SHELL.mainNav} className="border-t border-line bg-bg pb-safe px-safe rail:hidden">
       <ul className="grid grid-cols-5">
         {TABS.map(entry => (
           <li key={entry.id} className="flex min-w-0">

@@ -89,31 +89,31 @@ export default defineConfig({
   // In CI the whole run (web servers and global setup included) stops and fails at 15 minutes, well
   // inside the check job's timeout-minutes in ci.yml, which also holds every step before the suite
   // and the report upload after it. Actions have no timeout of their own, so a build that never
-  // shows what the specs wait for would hold each of the 76 tests its full 60 s on 2 workers,
-  // about 38 minutes, which with the steps before it comes within minutes of the job's limit, or
-  // past it on a slow runner, where GitHub would cancel the job instead, stopping the run before it
-  // writes its report: the upload runs on a cancelled job too, but with only what the run had
-  // written by then (ES-13).
+  // shows what the specs wait for would hold each of the 85 tests its full 60 s on 2 workers,
+  // about 43 minutes, which with the steps before it is past the job's 45-minute limit, where
+  // GitHub would cancel the job instead, stopping the run before it writes its report: the upload
+  // runs on a cancelled job too, but with only what the run had written by then (ES-13).
   // Not maxFailures: a first run fails every visual test by design and must write all their actuals.
   globalTimeout: CI ? 15 * 60_000 : undefined,
   reporter: CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   globalSetup: './e2e/global-setup.ts',
   // VS-01 lets through only rounding noise, so changing the colour of a design token a shot paints
-  // fails it, not only moved text or shapes (T21 item 11). A token no screen uses yet (--wall,
-  // --agent, --ok, --warn) is in no shot, so its shots come with its screen. pixelmatch counts a
-  // pixel as changed when its colour difference (YIQ) passes 35215 × threshold². Playwright's
-  // default of 0.2 passes a grey shift of up to 52 levels in 255, and the re-theme (#23) passed four
-  // old-look baselines with it. Even 0.01 passes 2 levels: on the runner, --bg moved by 2 failed
-  // every light shot at 0.005 and none at 0.01. At 0.005, a colour moved by 2 levels in every
-  // channel fails (or by 2 to 4 in one channel alone), and ±1 in any channel passes. A probe of the
-  // pinned runner, on three CPU models, found two kinds of drift from run to run: a few edge pixels
-  // drawn differently (up to 17 in a shot), which pixelmatch takes for anti-aliasing and skips at
-  // any threshold, and 1 to 3 other pixels off by one level, at times on every capture of a run,
-  // which would fail at threshold 0. ES-18 holds the threshold to both bounds on a patch of each
-  // token's colour, with Playwright's own comparator. No pixel allowance and no ratio: 0.5% of a
-  // 1440 × 900 shot is 6,480 pixels, more than a button, a hairline or a line of error text. A
-  // Playwright upgrade that changes how Chromium draws fails VS-01, and its baselines are adopted
-  // again, as for a new runner image (D-07).
+  // fails it, not only moved text or shapes (T21 item 11). No shot paints --wall, --agent or --ok
+  // (no screen uses them yet), --warn (only the connection banner) or --selection (selected text):
+  // the shot that first shows one covers it. pixelmatch counts a pixel as changed when its colour
+  // difference (YIQ) passes 35215 × threshold². Playwright's default of 0.2 passes a grey shift of
+  // up to 52 levels in 255, and the re-theme (#23) passed four old-look baselines with it. Even 0.01
+  // passes 2 levels: on the runner, --bg moved by 2 failed every light shot at 0.005 and none at
+  // 0.01. At 0.005, a colour moved by 2 levels in every channel fails (or by 2 to 4 in one channel
+  // alone), and ±1 in any channel passes. A probe of the pinned runner, on three CPU models, found
+  // two kinds of drift from run to run: a few edge pixels drawn differently (up to 17 in a shot),
+  // which pixelmatch takes for anti-aliasing and skips at any threshold, and 1 to 3 other pixels
+  // off by one level, at times on every capture of a run, which would fail at threshold 0. ES-18
+  // holds the threshold to both bounds on a patch of each token's colour, with Playwright's own
+  // comparator. No pixel allowance and no ratio: 0.5% of a 1440 × 900 shot is 6,480 pixels, more
+  // than a button, a hairline or a line of error text. A Playwright upgrade that changes how
+  // Chromium draws fails VS-01, and its baselines are adopted again, as for a new runner image
+  // (D-07).
   expect: {
     toHaveScreenshot: {
       maxDiffPixels: 0,

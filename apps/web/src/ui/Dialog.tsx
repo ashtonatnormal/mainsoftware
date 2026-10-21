@@ -97,7 +97,7 @@ export function Dialog({ open, onClose, title, presentation = 'sheet', footer, i
       )}
     >
       <div className="flex items-center gap-2 border-b border-line py-2 pl-5 pr-2">
-        <h2 id={titleId} className="min-w-0 flex-1 font-display text-lg font-semibold">
+        <h2 id={titleId} className="min-w-0 flex-1 break-words font-display text-xl leading-tight font-semibold">
           {title}
         </h2>
         <IconButton label={UI.close} icon={<X size={20} />} onClick={() => latest.current.onClose()} />

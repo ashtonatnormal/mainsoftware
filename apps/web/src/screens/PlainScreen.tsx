@@ -27,7 +27,7 @@ export function PlainScreen({ title, children }: PlainScreenProps) {
         <span aria-hidden className="grid size-12 place-items-center rounded-2xl bg-accent text-accent-fg">
           <Flame size={26} />
         </span>
-        <h1 tabIndex={-1} data-screen-title className="break-words font-display text-xl font-semibold">
+        <h1 tabIndex={-1} data-screen-title className="break-words font-display text-3xl font-semibold">
           {title}
         </h1>
         {children}

@@ -63,7 +63,7 @@
     },
     {
       "description": "The self-hosted fonts in apps/web. A font change moves text in every screenshot, so the visual baselines are re-adopted from this PR's check artifact (T21).",
-      "matchPackageNames": ["@fontsource-variable/*"],
+      "matchPackageNames": ["@fontsource-variable/*", "@fontsource/*"],
       "groupName": "fontsource"
     },
     {

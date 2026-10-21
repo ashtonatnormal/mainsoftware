@@ -106,7 +106,7 @@ export function SignInScreen() {
     <main
       id="main"
       tabIndex={-1}
-      className="flex min-h-dvh flex-col pt-safe pb-safe px-safe rail:items-center rail:justify-center"
+      className="wash flex min-h-dvh flex-col pt-safe pb-safe px-safe rail:items-center rail:justify-center"
     >
       <SignInStep key={kind} state={state} controller={controller} refs={refs} />
     </main>
