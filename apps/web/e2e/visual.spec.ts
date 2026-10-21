@@ -16,17 +16,23 @@ import { PERSONAS, typed } from './support/personas.ts'
 import { SCHEMES } from './support/viewports.ts'
 import { MORE_WIDTHS, shotName, VISUAL_WIDTHS } from './support/visual-matrix.ts'
 
-// THROWAWAY PROBE (VS-01 determinism), never merged: after each shot, compare a fresh
-// screenshot with the committed baseline at several pixelmatch thresholds and print the counts,
-// so CI's log shows how far renders drift from run to run.
+// THROWAWAY PROBE (VS-01 determinism), never merged: after each shot, take 4 more screenshots,
+// each after two animation frames as toHaveScreenshot waits, compare each with the committed
+// baseline at several pixelmatch thresholds, and print the counts and every differing pixel, so
+// CI's log shows how renders drift within a run and from run to run.
 type Comparator = (actual: Buffer, expected: Buffer, options: object) => { errorMessage?: string } | null
+type Decoded = { width: number; height: number; data: Buffer }
+const probeRequire = createRequire(import.meta.url)
 const comparator = (
-  createRequire(import.meta.url)('playwright-core/lib/coreBundle') as {
-    utils: { getComparator: (mime: string) => Comparator }
-  }
+  probeRequire('playwright-core/lib/coreBundle') as { utils: { getComparator: (mime: string) => Comparator } }
 ).utils.getComparator('image/png')
-const PROBE_THRESHOLDS = [0, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2]
+const { PNG } = probeRequire('playwright-core/lib/utilsBundle') as { PNG: { sync: { read: (b: Buffer) => Decoded } } }
+const PROBE_THRESHOLDS = [0, 0.002, 0.005, 0.01, 0.02]
+const PROBE_CAPTURES = 4
+test.describe.configure({ timeout: 300_000 })
 console.log(`VS-PROBE cpu ${cpus()[0]?.model ?? 'unknown'} x${cpus().length}`)
+
+const rgba = (data: Buffer, at: number) => `${data[at]},${data[at + 1]},${data[at + 2]},${data[at + 3]}`
 
 async function probe(page: Page, name: string) {
   const path = test.info().snapshotPath(name, { kind: 'screenshot' })
@@ -35,14 +41,40 @@ async function probe(page: Page, name: string) {
     return
   }
   const expected = readFileSync(path)
-  const actual = await page.screenshot({ fullPage: true, animations: 'disabled', caret: 'hide', scale: 'css' })
-  const counts = PROBE_THRESHOLDS.map(threshold => {
-    const result = comparator(actual, expected, { threshold, maxDiffPixels: 0 })
-    if (result === null) return '0'
-    return /^(\d+) pixels/.exec(result.errorMessage ?? '')?.[1] ?? `?${result.errorMessage ?? ''}`
-  })
-  const bytes = actual.equals(expected) ? 'bytes-equal' : 'bytes-differ'
-  console.log(`VS-PROBE ${name} ${bytes} ${PROBE_THRESHOLDS.map((t, i) => `t${t}=${counts[i]}`).join(' ')}`)
+  const want = PNG.sync.read(expected)
+  let equal = 0
+  for (let capture = 1; capture <= PROBE_CAPTURES; capture++) {
+    await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))))
+    const actual = await page.screenshot({ fullPage: true, animations: 'disabled', caret: 'hide', scale: 'css' })
+    const got = PNG.sync.read(actual)
+    if (got.width !== want.width || got.height !== want.height) {
+      console.log(`VS-PROBE ${name} #${capture} size ${got.width}x${got.height} vs ${want.width}x${want.height}`)
+      continue
+    }
+    const pixels: string[] = []
+    for (let at = 0; at < want.data.length; at += 4) {
+      if (want.data.readUInt32BE(at) !== got.data.readUInt32BE(at)) {
+        const index = at / 4
+        pixels.push(
+          `(${index % want.width},${Math.floor(index / want.width)} ${rgba(want.data, at)}>${rgba(got.data, at)})`,
+        )
+      }
+    }
+    if (pixels.length === 0) {
+      equal++
+      continue
+    }
+    const counts = PROBE_THRESHOLDS.map(threshold => {
+      const result = comparator(actual, expected, { threshold, maxDiffPixels: 0 })
+      if (result === null) return '0'
+      return /^(\d+) pixels/.exec(result.errorMessage ?? '')?.[1] ?? '?'
+    })
+    const shown = pixels.slice(0, 12).join(' ') + (pixels.length > 12 ? ` +${pixels.length - 12} more` : '')
+    console.log(
+      `VS-PROBE ${name} #${capture} raw=${pixels.length} ${PROBE_THRESHOLDS.map((t, i) => `t${t}=${counts[i]}`).join(' ')} ${shown}`,
+    )
+  }
+  console.log(`VS-PROBE ${name} equal ${equal}/${PROBE_CAPTURES}`)
 }
 
 const h1 = (page: Page) => page.getByRole('heading', { level: 1 })

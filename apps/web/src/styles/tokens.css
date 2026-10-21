@@ -18,7 +18,7 @@
    and no toggle, so the first paint has the right theme with no script (SHL-11, under the CSP). */
 
 :root {
-  --bg: #f1f2f4; /* the app ground */
+  --bg: #f4f5f7; /* the app ground */
   --surface: #ffffff; /* cards, panels, others' bubbles */
   --surface-2: #eceef2; /* inputs, hover, chips */
   --fg: #1b2130; /* ink */
