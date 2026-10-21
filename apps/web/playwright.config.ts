@@ -89,8 +89,8 @@ export default defineConfig({
   // In CI the whole run (web servers and global setup included) stops and fails at 15 minutes, well
   // inside the check job's timeout-minutes in ci.yml, which also holds every step before the suite
   // and the report upload after it. Actions have no timeout of their own, so a build that never
-  // shows what the specs wait for would hold each of the 85 tests its full 60 s on 2 workers,
-  // about 43 minutes, which with the steps before it is past the job's 45-minute limit, where
+  // shows what the specs wait for would hold each of the 87 tests its full 60 s on 2 workers,
+  // about 44 minutes, which with the steps before it is past the job's 45-minute limit, where
   // GitHub would cancel the job instead, stopping the run before it writes its report: the upload
   // runs on a cancelled job too, but with only what the run had written by then (ES-13).
   // Not maxFailures: a first run fails every visual test by design and must write all their actuals.

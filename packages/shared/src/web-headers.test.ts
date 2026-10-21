@@ -84,8 +84,8 @@ describe('T21 item 7: the document headers', () => {
     expect(headers).toEqual({
       'Content-Security-Policy': contentSecurityPolicy('https://hearth.example.com'),
       'Cross-Origin-Opener-Policy': 'same-origin',
-      // same-origin, not no-referrer: a CSP report then keeps its Origin, which the server's root
-      // hook needs (OD-12).
+      // same-origin, not no-referrer: Chromium's and Firefox's CSP reports then keep the page's
+      // Origin, which no-referrer would make null (OD-12, T21 item 9).
       'Referrer-Policy': 'same-origin',
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',
