@@ -19,6 +19,7 @@ import {
   DEFAULT_PALETTE,
   DISPLAY_FAMILY,
   DUNDER_WRITES_ALLOWED,
+  displayListsOf,
   displayOffFace,
   dunderWrites,
   ENTRY_APP,
@@ -636,8 +637,46 @@ describe('T21: the web source guard (apps/web/src)', () => {
       'font-display font-semibold italic',
       'rail:font-display font-semibold md:italic',
     ])
+    // Each string is read alone and each class expression whole: a string that names font-display
+    // carries font-semibold itself, and a weight or italic a condition, a template, a same-file const,
+    // a variant map or a helper adds to a font-display list counts; another element's weight in the
+    // same file doesn't, and names that refer to each other end.
+    const offFace = (source: string) => displayOffFace(displayListsOf('fixture.tsx', source))
+    expect(offFace(`<h2 className={cx('font-display font-semibold', open && 'font-bold')} />;`)).toEqual([
+      'font-display font-semibold font-bold',
+    ])
+    expect(offFace(`<h2 className={cx(quoted ? 'font-display font-semibold' : 'font-bold')} />;`)).toEqual([
+      'font-display font-semibold font-bold',
+    ])
+    expect(offFace(`<h2 className={cx('font-display', large ? 'font-semibold text-4xl' : 'text-xl')} />;`)).toEqual([
+      'font-display',
+    ])
+    expect(
+      offFace(`const BOLD = 'font-bold';\n<h2 className={cx('font-display font-semibold', open && BOLD)} />;`),
+    ).toEqual(['font-display font-semibold font-bold'])
+    expect(
+      offFace(`const HEADING = 'font-display font-semibold' as const;\nconst h = cx(HEADING, open && 'italic');`),
+    ).toEqual(['font-display font-semibold italic'])
+    expect(
+      offFace(
+        `const SIZES = { page: 'text-2xl', section: 'text-xl font-bold' } as const;\n<h2 className={cx('font-display font-semibold', SIZES[size])} />;`,
+      ),
+    ).toEqual(['font-display font-semibold text-2xl text-xl font-bold'])
+    expect(
+      offFace(
+        `function toneOf(quoted: boolean) { return quoted ? 'italic' : '' }\n<h2 className={cx('font-display font-semibold', toneOf(q))} />;`,
+      ),
+    ).toEqual(['font-display font-semibold italic'])
+    expect(offFace(`<h2 className={\`font-display font-semibold \${open ? 'font-bold' : ''}\`} />;`)).toEqual([
+      'font-display font-semibold font-bold',
+    ])
+    expect(
+      offFace(
+        `const A = B;\nconst B = A;\n<h2 className={cx(hidden ? 'sr-only' : 'font-display font-semibold', 'text-xl', A)} />;\n<p className="font-medium" />;`,
+      ),
+    ).toEqual([])
     const lists = scripts.flatMap(path =>
-      stringsOf(path, sources.get(path) ?? '')
+      displayListsOf(path, sources.get(path) ?? '')
         .filter(text => DISPLAY_FAMILY.test(text))
         .map(text => ({ path, text })),
     )
