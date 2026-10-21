@@ -42,7 +42,7 @@ export function Shell() {
   return (
     <>
       <SkipLink />
-      <div className="grid h-dvh grid-rows-[minmax(0,1fr)_auto] rail:grid-cols-[auto_minmax(0,1fr)] rail:grid-rows-[minmax(0,1fr)]">
+      <div className="wash grid h-dvh grid-rows-[minmax(0,1fr)_auto] rail:grid-cols-[auto_minmax(0,1fr)] rail:grid-rows-[minmax(0,1fr)]">
         <Rail />
         <main id="main" tabIndex={-1} className="relative flex min-h-0 min-w-0 flex-col">
           <ScreenHeader

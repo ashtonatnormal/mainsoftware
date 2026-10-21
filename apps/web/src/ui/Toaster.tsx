@@ -89,7 +89,7 @@ function ToastRow({ toast }: { toast: Toast }) {
         <button
           type="button"
           onClick={() => toastStore.runAction(toast.id)}
-          className="min-h-11 min-w-11 shrink-0 rounded-full px-3 font-semibold text-accent-inverse"
+          className="min-h-11 min-w-11 shrink-0 rounded-full px-3 font-medium text-accent-inverse"
         >
           {toast.action.label}
         </button>

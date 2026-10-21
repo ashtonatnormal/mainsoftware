@@ -130,10 +130,10 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     const current = tags(chats, 'a').filter(link => link.get('aria-current') === 'page')
     expect(current).toHaveLength(2)
     for (const link of current) {
-      expect(classesOf(link)).toEqual(expect.arrayContaining(['font-semibold', 'text-accent-ink']))
+      expect(classesOf(link)).toEqual(expect.arrayContaining(['font-semibold', 'text-fg']))
       expect(classesOf(link)).toContain('focus-visible:-outline-offset-2')
     }
-    expect(chats).toMatch(/<span aria-hidden="true" class="[^"]*bg-accent-soft/)
+    expect(chats).toMatch(/<span aria-hidden="true" class="[^"]*bg-fg text-surface/)
 
     // Calendar on a phone marks More as the section that holds it ("true", never "page": More's
     // link goes to /more), with the same pill and label; on the rail, Calendar itself is the page.
@@ -142,7 +142,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     expect(navLinks(calendar, 'overflow-y-auto').filter(([, on]) => on)).toEqual([['Calendar', 'page']])
     const more = tags(calendar, 'a').filter(link => link.get('aria-current') === 'true')
     expect(more.map(link => link.get('href'))).toEqual(['/more'])
-    expect(classesOf(more[0])).toEqual(expect.arrayContaining(['font-semibold', 'text-accent-ink']))
+    expect(classesOf(more[0])).toEqual(expect.arrayContaining(['font-semibold', 'text-fg']))
     // /more itself is More's own page.
     expect(navLinks(await appAt('/more'), 'rail:hidden').filter(([, on]) => on)).toEqual([['More', 'page']])
   })

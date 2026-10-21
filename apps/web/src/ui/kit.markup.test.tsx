@@ -22,8 +22,9 @@ import { Dialog } from './Dialog.tsx'
 import { EmptyState } from './EmptyState.tsx'
 import { CONTROL_CLASS, DIGITS_CONTROL_CLASS, Field } from './Field.tsx'
 import { Menu } from './Menu.tsx'
+import { Page } from './Page.tsx'
 import { PinField, PinUsername, ShowPin } from './PinField.tsx'
-import { ScreenHeader } from './ScreenHeader.tsx'
+import { RAIL_TITLE_ROW, ScreenHeader } from './ScreenHeader.tsx'
 import { Segmented } from './Segmented.tsx'
 import { Select } from './Select.tsx'
 import { SkipLink } from './SkipLink.tsx'
@@ -64,11 +65,11 @@ describe('T21: the kit’s markup', () => {
     expect(one(html(<IconButton label="Close" icon={<Bell />} />), 'button').get('type')).toBe('button')
   })
 
-  it('KM-02 X7: Button, IconButton, Field controls, Switch rows and Segmented labels carry the 44 px minimum classes', () => {
-    for (const size of ['md', 'lg'] as const) {
-      const button = one(html(<Button size={size}>Go</Button>), 'button')
-      for (const name of MIN_44) expect(classesOf(button), size).toContain(name)
-    }
+  it('KM-02 X7: Button, IconButton, Field controls, Switch rows and Segmented labels carry the 44 px minimum classes (a large Button is finance’s 48 px)', () => {
+    for (const name of MIN_44) expect(classesOf(one(html(<Button>Go</Button>), 'button'))).toContain(name)
+    const large = classesOf(one(html(<Button size="lg">Go</Button>), 'button'))
+    expect(large).toEqual(expect.arrayContaining(['min-h-12', 'min-w-11']))
+    expect(large).not.toContain('min-h-11')
     expect(classesOf(one(html(<IconButton label="Close" icon={<Bell />} />), 'button'))).toContain('size-11')
     expect(CONTROL_CLASS.split(' ')).toEqual(expect.arrayContaining(['min-h-11', 'text-base', 'border-line-strong']))
     const select = one(
@@ -101,7 +102,7 @@ describe('T21: the kit’s markup', () => {
     expect(skip.filter(name => /outline/.test(name))).toEqual([])
   })
 
-  it('KM-03 SHL-47: IconButton is named by label, icon hidden, aria-pressed only when given', () => {
+  it('KM-03 SHL-47 T21 item 6: IconButton is named by label, icon hidden, aria-pressed only when given; pressed is finance’s ink fill with no edge', () => {
     const plain = html(<IconButton label="Notifications" icon={<Bell />} />)
     const button = one(plain, 'button')
     expect(button.get('aria-label')).toBe('Notifications')
@@ -112,6 +113,20 @@ describe('T21: the kit’s markup', () => {
     expect(one(html(<IconButton label="Mute" icon={<Bell />} pressed={false} />), 'button').get('aria-pressed')).toBe(
       'false',
     )
+    // Pressed is surface ink on an ink fill (surface on fg, TEXT_PAIRS), and its edge is
+    // transparent even on a variant that has one, so the fill reads as one shape.
+    for (const variant of ['ghost', 'secondary'] as const) {
+      const pressed = classesOf(
+        one(html(<IconButton label="Mute" icon={<Bell />} variant={variant} pressed />), 'button'),
+      )
+      expect(pressed, variant).toEqual(expect.arrayContaining(['bg-fg', 'text-surface', 'border-transparent']))
+      expect(pressed.filter(name => /^(?:bg|text|border)-/.test(name)).sort(), variant).toEqual(
+        ['bg-fg', 'border-transparent', 'text-surface'].sort(),
+      )
+    }
+    const outline = classesOf(one(html(<IconButton label="Mute" icon={<Bell />} variant="secondary" />), 'button'))
+    expect(outline).toEqual(expect.arrayContaining(['bg-surface', 'text-fg', 'border-line']))
+    expect(outline).not.toContain('bg-fg')
   })
 
   it('KM-04 SHL-41 QA-01: Avatar is role=img named, or aria-hidden when decorative, with the AVATAR_BG class for its id and text-avatar-fg', () => {
@@ -128,17 +143,28 @@ describe('T21: the kit’s markup', () => {
     expect([initialsOf('marcus'), initialsOf('  Priya  Raman Nair '), initialsOf('')]).toEqual(['M', 'PR', ''])
   })
 
-  it('KM-05 X16 SHL-43: ScreenHeader renders exactly one h1 with tabindex -1, sr-only on request', () => {
-    const shown = one(
-      html(<ScreenHeader title="Chats" actions={<IconButton label="Account" icon={<Bell />} />} />),
-      'h1',
-    )
+  it('KM-05 X16 SHL-43 T21 item 6: ScreenHeader renders exactly one h1 with tabindex -1, sr-only on request; from the rail breakpoint a shown title sits in Page’s wide column, 40 px under the top edge', () => {
+    const header = html(<ScreenHeader title="Chats" actions={<IconButton label="Account" icon={<Bell />} />} />)
+    const shown = one(header, 'h1')
     expect(shown.get('tabindex')).toBe('-1')
     expect(shown.has('data-screen-title')).toBe(true)
     expect(classesOf(shown)).not.toContain('sr-only')
+    expect(classesOf(shown)).toEqual(expect.arrayContaining(['font-display', 'text-2xl', 'rail:text-4xl']))
     const hidden = one(html(<ScreenHeader title="Conversation" srOnlyTitle />), 'h1')
     expect(classesOf(hidden)).toContain('sr-only')
     expect(hidden.get('tabindex')).toBe('-1')
+
+    // The title's row (the h1's parent) takes Page's wide column on the rail, so the title starts
+    // where the content does: Page's centred max-w-3xl, and its sm:px-6, which applies on the rail
+    // (48rem is wider than sm's 40rem). Its 40 px top and 4 px bottom are finance's sm:pt-10 and,
+    // with Page's 20 px, its mb-6. A row with no shown title (srOnlyTitle with Back) keeps the
+    // phone's row.
+    const row = (markup: string) => classesOf(tags(markup, 'div')[1] ?? new Map())
+    const page = classesOf(one(html(<Page>Content</Page>), 'div'))
+    expect(page).toEqual(expect.arrayContaining(['mx-auto', 'w-full', 'max-w-3xl', 'sm:px-6', 'py-5']))
+    const rail = ['mx-auto', 'w-full', 'max-w-3xl', 'px-6', 'pt-10', 'pb-1'].map(name => `rail:${name}`)
+    expect(RAIL_TITLE_ROW.split(' ').sort()).toEqual([...rail].sort())
+    expect(row(header)).toEqual(expect.arrayContaining(rail))
 
     // Back needs the router; it is a 44 px IconButton named by its label.
     const router = createRouter({
@@ -154,6 +180,12 @@ describe('T21: the kit’s markup', () => {
     const back = one(withBack, 'button')
     expect(back.get('aria-label')).toBe('Back to More')
     expect(classesOf(back)).toContain('size-11')
+    const hiddenWithBack = html(
+      <RouterContextProvider router={router}>
+        <ScreenHeader title="Conversation" srOnlyTitle back={{ label: 'Back to Chats', fallback: '/chats' }} />
+      </RouterContextProvider>,
+    )
+    expect(row(hiddenWithBack).filter(name => name.startsWith('rail:'))).toEqual([])
   })
 
   it('KM-06 X7 SHL-28 WCAG 3.3.1: Field wires label, hint and error (aria-describedby, aria-invalid)', () => {
@@ -203,6 +235,13 @@ describe('T21: the kit’s markup', () => {
     // Each radio sits in its label, so the label names it; the chosen one also carries a check.
     expect(markup).toMatch(/<label[^>]*><input[^>]*value="all"[^>]*\/><span>All<\/span><\/label>/)
     expect(markup).toMatch(/<label[^>]*><input[^>]*value="mine"[^>]*\/><svg[^>]*aria-hidden="true"/)
+    // The chosen segment is finance's ink fill with surface text (surface on fg, TEXT_PAIRS); the
+    // others are ink on the track, with the canvas under the pointer.
+    const [all, mine] = tags(markup, 'label').map(classesOf)
+    expect(mine).toEqual(expect.arrayContaining(['bg-fg', 'text-surface']))
+    expect(all).toEqual(expect.arrayContaining(['text-fg', 'hover:bg-bg']))
+    expect(all).not.toContain('bg-fg')
+    expect(mine).not.toContain('text-fg')
   })
 
   it('KM-08 SHL-37: Switch is a checkbox with role switch, aria-checked matching checked, and a line-strong track; the on track and the knob carry the classes forced colours draw (TK-12)', () => {
@@ -333,6 +372,15 @@ describe('T21: the kit’s markup', () => {
     }
     const live = classesOf(one(html(<Button variant="primary">Send</Button>), 'button'))
     expect(live).toEqual(expect.arrayContaining(['bg-accent', 'hover:bg-accent-ink']))
+    // Every button has a 1 px border; only a live secondary paints it (finance's outline edge), so a
+    // held button that can act again keeps its size. A held secondary's edge is transparent.
+    expect(live).toEqual(expect.arrayContaining(['border', 'border-transparent']))
+    const outline = classesOf(one(html(<Button>Send a new code</Button>), 'button'))
+    expect(outline).toEqual(expect.arrayContaining(['border', 'border-line', 'bg-surface']))
+    expect(outline).not.toContain('border-transparent')
+    const heldOutline = classesOf(one(html(<Button disabledReason="Wait.">Send a new code</Button>), 'button'))
+    expect(heldOutline).toEqual(expect.arrayContaining(['border', 'border-transparent']))
+    expect(heldOutline).not.toContain('border-line')
 
     const free = one(html(<Button aria-describedby="other">Send</Button>), 'button')
     expect(free.get('aria-describedby')).toBe('other')

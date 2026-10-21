@@ -80,7 +80,7 @@ const CLEAN_DIST: DistFile[] = [
   { path: 'index.html', text: CLEAN_PAGE },
   {
     path: 'assets/index-a.css',
-    text: `@font-face{font-family:Figtree;src:url(/assets/figtree-latin-wght-normal-a.woff2)}${avatarCss()}`,
+    text: `@font-face{font-family:Inter;src:url(/assets/inter-latin-wght-normal-a.woff2)}${avatarCss()}`,
   },
   { path: 'assets/boot-a.js', text: 'const e="https://react.dev/errors/";fetch("/api/session")' },
   { path: '.vite/manifest.json', text: JSON.stringify(MANIFEST) },
@@ -135,16 +135,16 @@ describe('T21: the web bundle check (scripts/check-web-dist.ts)', () => {
     // The latin font files a stylesheet names, not latin-ext or another subset, as paths in dist/.
     expect(
       latinFonts(
-        '@font-face{src:url(/assets/figtree-latin-wght-normal-a.woff2)}' +
-          '@font-face{src:url("/assets/figtree-latin-ext-wght-normal-b.woff2")}' +
-          "@font-face{src:url('./bricolage-grotesque-latin-wght-normal-c.woff2')}" +
-          '@font-face{src:url(/assets/bricolage-grotesque-vietnamese-wght-normal-d.woff2)}' +
+        '@font-face{src:url(/assets/inter-latin-wght-normal-a.woff2)}' +
+          '@font-face{src:url("/assets/inter-latin-ext-wght-normal-b.woff2")}' +
+          "@font-face{src:url('./newsreader-latin-600-normal-c.woff2')}" +
+          '@font-face{src:url(/assets/newsreader-vietnamese-600-normal-d.woff2)}' +
           '@font-face{src:url(../fonts/serif-latin-wght-normal-e.woff2)}',
         'assets/index-a.css',
       ),
     ).toEqual([
-      'assets/figtree-latin-wght-normal-a.woff2',
-      'assets/bricolage-grotesque-latin-wght-normal-c.woff2',
+      'assets/inter-latin-wght-normal-a.woff2',
+      'assets/newsreader-latin-600-normal-c.woff2',
       'fonts/serif-latin-wght-normal-e.woff2',
     ])
   })

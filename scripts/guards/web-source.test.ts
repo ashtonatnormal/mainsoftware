@@ -17,7 +17,10 @@ import {
   clipboardHandlers,
   codeOf,
   DEFAULT_PALETTE,
+  DISPLAY_FAMILY,
   DUNDER_WRITES_ALLOWED,
+  displayListsOf,
+  displayOffFace,
   dunderWrites,
   ENTRY_APP,
   entryGraph,
@@ -329,7 +332,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
   it("WS-10 D-02 T21 item 2: src/main.ts's static import graph, followed through relative imports, holds only .css files and modules with no package import (import type aside), nothing in it uses import.meta.glob, and main.ts loads ./app/boot.tsx by one dynamic import after preBoot()", () => {
     const graph = (planted: Record<string, string>) => entryGraph(path => planted[path])
     const entry = (before = '', after = '') =>
-      `import '@fontsource-variable/figtree/index.css'\nimport './styles/app.css'\nimport { preBoot } from './boot/pre-boot.ts'\nimport { reloadForUpdate } from './session/document.ts'\n${before}preBoot(window, () => reloadForUpdate())\n${after}import('${ENTRY_APP}').then(app => app.boot())\n`
+      `import '@fontsource-variable/inter/index.css'\nimport './styles/app.css'\nimport { preBoot } from './boot/pre-boot.ts'\nimport { reloadForUpdate } from './session/document.ts'\n${before}preBoot(window, () => reloadForUpdate())\n${after}import('${ENTRY_APP}').then(app => app.boot())\n`
     const good = {
       'main.ts': entry(),
       'styles/app.css': "@import 'tailwindcss';",
@@ -594,5 +597,91 @@ describe('T21: the web source guard (apps/web/src)', () => {
     expect(
       guarded.flatMap(path => clipboardHandlers(path, sources.get(path) ?? '').map(handler => `${path}: ${handler}`)),
     ).toEqual([])
+  })
+
+  it('WS-14 T21 items 1 and 6: every class list that sets font-display sets font-semibold with no variant, and no other weight or italic: the one face Newsreader ships', () => {
+    expect(
+      displayOffFace([
+        'font-display text-xl font-semibold',
+        'font-display text-xl not-italic font-semibold',
+        'text-small font-medium italic',
+        'font-display text-xl',
+        'font-display rail:font-semibold',
+        'font-display font-semibold font-bold',
+        'font-display font-semibold rail:font-normal',
+        'font-display font-semibold hover:font-medium',
+        'font-display font-semibold font-[650]',
+        'font-display font-semibold hover:font-(weight:--heading-weight)',
+        'font-display font-semibold font-(--heading-weight)',
+        'font-display font-semibold rail:[font-weight:700]',
+        'font-display font-semibold [font-style:italic]',
+        'font-display font-semibold [font:700_1rem_serif]',
+        'font-display font-semibold font-bold!',
+        'font-display font-semibold italic',
+        'rail:font-display font-semibold md:italic',
+        'font-display font-semibold [letter-spacing:-0.01em]',
+      ]),
+    ).toEqual([
+      'font-display text-xl',
+      'font-display rail:font-semibold',
+      'font-display font-semibold font-bold',
+      'font-display font-semibold rail:font-normal',
+      'font-display font-semibold hover:font-medium',
+      'font-display font-semibold font-[650]',
+      'font-display font-semibold hover:font-(weight:--heading-weight)',
+      'font-display font-semibold font-(--heading-weight)',
+      'font-display font-semibold rail:[font-weight:700]',
+      'font-display font-semibold [font-style:italic]',
+      'font-display font-semibold [font:700_1rem_serif]',
+      'font-display font-semibold font-bold!',
+      'font-display font-semibold italic',
+      'rail:font-display font-semibold md:italic',
+    ])
+    // Each string is read alone and each class expression whole: a string that names font-display
+    // carries font-semibold itself, and a weight or italic a condition, a template, a same-file const,
+    // a variant map or a helper adds to a font-display list counts; another element's weight in the
+    // same file doesn't, and names that refer to each other end.
+    const offFace = (source: string) => displayOffFace(displayListsOf('fixture.tsx', source))
+    expect(offFace(`<h2 className={cx('font-display font-semibold', open && 'font-bold')} />;`)).toEqual([
+      'font-display font-semibold font-bold',
+    ])
+    expect(offFace(`<h2 className={cx(quoted ? 'font-display font-semibold' : 'font-bold')} />;`)).toEqual([
+      'font-display font-semibold font-bold',
+    ])
+    expect(offFace(`<h2 className={cx('font-display', large ? 'font-semibold text-4xl' : 'text-xl')} />;`)).toEqual([
+      'font-display',
+    ])
+    expect(
+      offFace(`const BOLD = 'font-bold';\n<h2 className={cx('font-display font-semibold', open && BOLD)} />;`),
+    ).toEqual(['font-display font-semibold font-bold'])
+    expect(
+      offFace(`const HEADING = 'font-display font-semibold' as const;\nconst h = cx(HEADING, open && 'italic');`),
+    ).toEqual(['font-display font-semibold italic'])
+    expect(
+      offFace(
+        `const SIZES = { page: 'text-2xl', section: 'text-xl font-bold' } as const;\n<h2 className={cx('font-display font-semibold', SIZES[size])} />;`,
+      ),
+    ).toEqual(['font-display font-semibold text-2xl text-xl font-bold'])
+    expect(
+      offFace(
+        `function toneOf(quoted: boolean) { return quoted ? 'italic' : '' }\n<h2 className={cx('font-display font-semibold', toneOf(q))} />;`,
+      ),
+    ).toEqual(['font-display font-semibold italic'])
+    expect(offFace(`<h2 className={\`font-display font-semibold \${open ? 'font-bold' : ''}\`} />;`)).toEqual([
+      'font-display font-semibold font-bold',
+    ])
+    expect(
+      offFace(
+        `const A = B;\nconst B = A;\n<h2 className={cx(hidden ? 'sr-only' : 'font-display font-semibold', 'text-xl', A)} />;\n<p className="font-medium" />;`,
+      ),
+    ).toEqual([])
+    const lists = scripts.flatMap(path =>
+      displayListsOf(path, sources.get(path) ?? '')
+        .filter(text => DISPLAY_FAMILY.test(text))
+        .map(text => ({ path, text })),
+    )
+    // ScreenHeader, Dialog, EmptyState, StepFrame, PlainScreen and ErrorScreen set it today.
+    expect(lists.length).toBeGreaterThanOrEqual(6)
+    expect(displayOffFace(lists.map(({ path, text }) => `${path}: ${text}`))).toEqual([])
   })
 })
