@@ -89,9 +89,9 @@ test('CS-03 BP C0.8 Done OD-12 T21 item 9: in every engine a blocked image raise
     document.body.append(image)
   }, `${blocked}/x.png?secret=1`)
   await expect.poll(() => guard.violations.map(violation => violation.directive)).toContain('img-src')
-  // The api logs a report only once it has answered it 204, so the line is the proof in every
-  // engine, whether or not Playwright shows the request. A refusal's line names the kind of Origin
-  // and Sec-Fetch-Site the report carried.
+  // The api logs a report only on the path that answers it 204 (CR-07 pins that status through the
+  // same hooks), so the line proves delivery in every engine, whether or not Playwright shows the
+  // request. A refusal's line names the kind of Origin and Sec-Fetch-Site the report carried.
   let line: Record<string, unknown> | undefined
   await expect
     .poll(
