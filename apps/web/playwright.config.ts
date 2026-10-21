@@ -98,12 +98,22 @@ export default defineConfig({
   globalTimeout: CI ? 15 * 60_000 : undefined,
   reporter: CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   globalSetup: './e2e/global-setup.ts',
+  // VS-01 lets through only off-by-one rounding, so a design token's colour change fails it, not
+  // only moved text or shapes (T21 item 11). pixelmatch counts a pixel as changed when its colour
+  // difference (YIQ) passes 35215 × threshold². Playwright's default of 0.2 passes a grey shift of
+  // up to 52 levels in 255, and the re-theme (#23) passed four old-look baselines with it. Even 0.02
+  // passes 5 levels: on the runner, --bg moved by 3 failed every light shot at 0.01 and none at
+  // 0.02. At 0.005, a colour moved by 2 levels in every channel fails (or by 2 to 4 in one channel
+  // alone), and ±1 in any channel passes. That is the one jitter the pinned runner shows: now and
+  // then a few pixels off by one from capture to capture, on more than one CPU. ES-18 holds both
+  // against every token with Playwright's own comparator. No pixel allowance and no ratio: 0.5% of
+  // a 1440 × 900 shot is 6,480 pixels, more than a button, a hairline or a line of error text. A
+  // Playwright upgrade that changes how Chromium draws fails VS-01, and its baselines are adopted
+  // again, as for a new runner image (D-07).
   expect: {
     toHaveScreenshot: {
-      // THROWAWAY PROBE (VS-01 determinism): no tolerance at all, so any pixel that differs from
-      // the baseline across runs fails. Never merge.
       maxDiffPixels: 0,
-      threshold: 0,
+      threshold: 0.005,
       animations: 'disabled',
       caret: 'hide',
       scale: 'css',
