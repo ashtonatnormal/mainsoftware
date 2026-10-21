@@ -9,10 +9,15 @@
 //   - a read of the api's dependencies other than appOrigin.
 // It also holds origin.ts to one exception: CSP_REPORT_PATH named once in its code, inside
 // isSameOriginCspReport, which the hook calls once, and every way out of the hook either a pass on
-// one of its three conditions (GET or HEAD, the app's Origin, the exception) or the 403. The fixture
-// cases prove each check bites.
+// one of its three conditions (GET or HEAD, the app's Origin, the exception) or reply.code(403).send
+// (CG-04). CG-05 then runs the real hook in Fastify, so what each pass decides is held too: every
+// method but GET and HEAD refused 403, only the exact app Origin passing, and the exception only on
+// its whole conjunction. The fixture cases prove each check bites.
+import { CSP_REPORT_PATH } from '@hearth/shared'
+import { fastify } from 'fastify'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
+import { refuseCrossSiteWrites } from '../../apps/server/src/origin.ts'
 import { moduleImports } from './imports'
 import { readRepoFile } from './repo-files'
 
@@ -97,8 +102,9 @@ function originUses(path: string, source: string): { path: string[]; calls: numb
 
 // Every way out of the Origin hook (the function refuseCrossSiteWrites hands to addHook), in order: a
 // pass is named by the condition that guards it (a call by its callee, anything else by its text,
-// and 'unconditional' when nothing does), the refusal by 'refuse' (a return of reply.…). Nested
-// functions are their own, so their returns don't count.
+// and 'unconditional' when nothing does), the refusal by 'refuse 403' when it returns exactly
+// reply.code(403).send(…), and any other reply by its text. Nested functions are their own, so their
+// returns don't count.
 function hookExits(path: string, source: string): string[] {
   const file = parse(path, source)
   const register = file.statements.find(
@@ -129,8 +135,10 @@ function hookExits(path: string, source: string): string[] {
   const visit = (node: ts.Node): void => {
     if (node !== hook && ts.isFunctionLike(node)) return
     if (ts.isReturnStatement(node)) {
-      const refusal = node.expression !== undefined && /^reply\./.test(node.expression.getText(file))
-      exits.push(refusal ? 'refuse' : guardOf(node))
+      const text = node.expression?.getText(file) ?? ''
+      if (/^reply\.code\(403\)\.send\(/.test(text)) exits.push('refuse 403')
+      else if (/^reply\b/.test(text)) exits.push(`reply ${text}`)
+      else exits.push(guardOf(node))
     }
     ts.forEachChild(node, visit)
   }
@@ -174,7 +182,7 @@ describe('T21 item 9: the CSP report route the Origin hook lets through stays st
   })
 
   it('CG-04 OD-12 T21 item 9: the Origin hook passes a request only on GET or HEAD, the app’s Origin or the exception, and otherwise refuses it', () => {
-    const expected = ['SAFE_METHODS.has', 'isAppOrigin', 'isSameOriginCspReport', 'refuse']
+    const expected = ['SAFE_METHODS.has', 'isAppOrigin', 'isSameOriginCspReport', 'refuse 403']
     expect(hookExits(ORIGIN, readRepoFile(ORIGIN))).toEqual(expected)
     // The fixtures: the hook as it is, then each way a second pass could slip in.
     const hook = (body: string) =>
@@ -187,7 +195,14 @@ describe('T21 item 9: the CSP report route the Origin hook lets through stays st
     ]
     expect(hookExits('a.ts', hook(today.join('\n')))).toEqual(expected)
     const extra = [...today.slice(0, 3), "if (origin === 'null') return", ...today.slice(3)]
-    expect(hookExits('a.ts', hook(extra.join('\n')))).toEqual([...expected.slice(0, 3), "origin === 'null'", 'refuse'])
+    expect(hookExits('a.ts', hook(extra.join('\n')))).toEqual([
+      ...expected.slice(0, 3),
+      "origin === 'null'",
+      'refuse 403',
+    ])
+    // A refusal that isn't 403 is named by its text.
+    const softer = [...today.slice(0, 3), "return reply.code(401).send({ error: 'Forbidden' })"]
+    expect(hookExits('a.ts', hook(softer.join('\n'))).at(-1)).toBe("reply reply.code(401).send({ error: 'Forbidden' })")
     const braced = [...today.slice(0, 3), "if (request.url === '/x') { return }", ...today.slice(3)]
     expect(hookExits('a.ts', hook(braced.join('\n')))).toContain("request.url === '/x'")
     expect(hookExits('a.ts', hook(['return', ...today].join('\n')))[0]).toBe('unconditional')
@@ -196,5 +211,55 @@ describe('T21 item 9: the CSP report route the Origin hook lets through stays st
     // A callback inside the hook has returns of its own, which aren't the hook's.
     const nested = ['const keep = [1].filter(n => { return n > 0 })', ...today]
     expect(hookExits('a.ts', hook(nested.join('\n')))).toEqual(expected)
+  })
+  it('CG-05 OD-12 T21 item 9 CL Security: the real hook in Fastify refuses every method but GET and HEAD 403, passes only the exact app Origin, and the exception only on its whole conjunction', async () => {
+    const APP = 'https://hearth.example.com'
+    const app = fastify({ logger: false })
+    refuseCrossSiteWrites(app, APP)
+    app.all('/echo', async () => ({ ok: true }))
+    app.post(CSP_REPORT_PATH, async () => ({ ok: true }))
+    await app.ready()
+    const send = (method: string, url: string, headers: Record<string, string>) =>
+      app.inject({ method: method as 'POST', url, headers })
+    // Every method Fastify serves: GET and HEAD pass from anywhere, every other is refused exactly so.
+    expect(app.supportedMethods.length).toBeGreaterThan(5)
+    for (const method of app.supportedMethods) {
+      const response = await send(method, '/echo', { origin: 'https://evil.example' })
+      if (method === 'GET' || method === 'HEAD') expect(response.statusCode, method).toBe(200)
+      else expect([method, response.statusCode, response.json()]).toEqual([method, 403, { error: 'Forbidden' }])
+    }
+    // Only the app's Origin, exactly, passes a write.
+    expect((await send('POST', '/echo', { origin: APP })).statusCode).toBe(200)
+    for (const origin of [
+      `${APP}/`,
+      'https://HEARTH.example.com',
+      'http://hearth.example.com',
+      'https://evil.hearth.example.com',
+      `${APP}.evil.example`,
+      'null',
+      '',
+    ]) {
+      expect((await send('POST', '/echo', { origin })).statusCode, origin).toBe(403)
+    }
+    expect((await send('POST', '/echo', {})).statusCode).toBe(403)
+    // The exception: POST, the report route, Origin "null" and Sec-Fetch-Site same-origin, all four.
+    const webkit = { origin: 'null', 'sec-fetch-site': 'same-origin' }
+    expect((await send('POST', CSP_REPORT_PATH, webkit)).statusCode).toBe(200)
+    const lessThanAll: [string, string, Record<string, string>][] = [
+      ['PUT', CSP_REPORT_PATH, webkit],
+      ['POST', '/echo', webkit],
+      ['POST', `${CSP_REPORT_PATH}/`, webkit],
+      ['POST', CSP_REPORT_PATH, { 'sec-fetch-site': 'same-origin' }],
+      ['POST', CSP_REPORT_PATH, { origin: 'NULL', 'sec-fetch-site': 'same-origin' }],
+      ['POST', CSP_REPORT_PATH, { origin: 'null' }],
+      ['POST', CSP_REPORT_PATH, { origin: 'null', 'sec-fetch-site': 'same-site' }],
+      ['POST', CSP_REPORT_PATH, { origin: 'null', 'sec-fetch-site': 'cross-site' }],
+      ['POST', CSP_REPORT_PATH, { origin: 'https://evil.example', 'sec-fetch-site': 'same-origin' }],
+    ]
+    for (const [method, url, headers] of lessThanAll) {
+      const response = await send(method, url, headers)
+      expect([method, url, headers, response.statusCode]).toEqual([method, url, headers, 403])
+    }
+    await app.close()
   })
 })
