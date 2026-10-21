@@ -7,6 +7,7 @@
 // run writes the actual of every shot that needs adopting (playwright.config.ts, D-07).
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { cpus } from 'node:os'
 import type { Page } from '@playwright/test'
 import { SIGN_IN } from '../src/strings/sign-in.ts'
 import { fontsReady } from './support/checks.ts'
@@ -25,6 +26,7 @@ const comparator = (
   }
 ).utils.getComparator('image/png')
 const PROBE_THRESHOLDS = [0, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2]
+console.log(`VS-PROBE cpu ${cpus()[0]?.model ?? 'unknown'} x${cpus().length}`)
 
 async function probe(page: Page, name: string) {
   const path = test.info().snapshotPath(name, { kind: 'screenshot' })
