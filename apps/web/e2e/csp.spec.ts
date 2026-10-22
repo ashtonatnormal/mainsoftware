@@ -51,7 +51,9 @@ test('CS-02 SHL-69: a tour of every route makes only same-origin requests, both 
   expect(guard.violations).toEqual([])
 })
 
-test('CS-03 BP C0.8 Done OD-12 T21 item 9: a blocked image raises a violation that reaches /api/csp-report, is answered 204 and is logged reduced, in every engine (WebKit sends Origin null)', {
+// In every engine (T21 item 9): Safari sends its reports with a "null" Origin, which the root hook
+// lets through on this path alone (apps/server/src/origin.ts).
+test('CS-03 BP C0.8 Done OD-12 T21 item 9: a blocked image raises a violation that reaches /api/csp-report, is answered 204 and is logged reduced', {
   tag: '@smoke',
 }, async ({ page, guard }) => {
   guard.allowViolation('img-src')
@@ -62,7 +64,8 @@ test('CS-03 BP C0.8 Done OD-12 T21 item 9: a blocked image raises a violation th
     timeout: 10_000,
   })
   // An image from another origin, which img-src 'self' blocks before any request leaves the page.
-  // Its host names the project, so each engine's run finds its own report's line in the shared log.
+  // Its host names the project, so each engine's run finds its own report's line in the shared log,
+  // never another test's or engine's.
   const blocked = `https://cs03-${test.info().project.name}.example.invalid`
   await page.evaluate(src => {
     const image = document.createElement('img')
@@ -71,9 +74,9 @@ test('CS-03 BP C0.8 Done OD-12 T21 item 9: a blocked image raises a violation th
     document.body.append(image)
   }, `${blocked}/x.png?secret=1`)
   const sent = await report
-  // WebKit sends every report with Origin null; the root hook lets it through on its same-origin
-  // fetch metadata alone (apps/server/src/origin.ts). Chromium and Firefox send the page's origin.
-  expect((await sent.response())?.status()).toBe(204)
+  // The Origin it carried, should the root hook refuse it (allHeaders: headers() leaves it out).
+  const origin = (await sent.allHeaders()).origin ?? 'none'
+  expect((await sent.response())?.status(), `the report's Origin: ${origin}`).toBe(204)
   await expect.poll(() => guard.violations.map(violation => violation.directive)).toContain('img-src')
   // The api logged it reduced: the directive and the blocked origin, never the query.
   let line = ''

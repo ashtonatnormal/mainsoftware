@@ -78,9 +78,9 @@ export interface Guard {
   // far. Closing a context, Playwright screenshots every page still open in it (screenshot:
   // 'only-on-failure' keeps the shot only for a failed test), and in WebKit its screenshot code
   // toggles a <style>body {}</style> in the head to sync animations, from a world the page's CSP
-  // binds: style-src blocks it, and WebKit raises a violation and sends a report (T21 item 9).
-  // With the pages closed first there is no shot to take. Once something has failed, the pages
-  // stay open for the shot Playwright keeps.
+  // binds: style-src blocks it, and WebKit raises a violation and sends a report, which the api
+  // logs (T21 item 9) and so spends the log's allowance. With the pages closed first there is no
+  // shot to take. Once something has failed, the pages stay open for the shot Playwright keeps.
   closePages(context: BrowserContext, testInfo: TestInfo): Promise<void>
 }
 

@@ -1,4 +1,5 @@
 import { Writable } from 'node:stream'
+import { CSP_REPORT_PATH } from '@hearth/shared'
 import type { Redis } from 'ioredis'
 import { pino } from 'pino'
 import { describe, expect, it } from 'vitest'
@@ -140,14 +141,6 @@ describe('Origin check on state changes (CLAUDE.md, Security and privacy)', () =
     expect((await post({ origin: 'null' })).statusCode).toBe(403)
   })
 
-  it('refuses a "null" Origin with Sec-Fetch-Site same-origin too, anywhere but the CSP report path (T21 item 9: WebKit\'s report alone)', async () => {
-    const webkit = { origin: 'null', 'sec-fetch-site': 'same-origin', 'content-type': 'application/csp-report' }
-    expect((await post(webkit)).statusCode).toBe(403)
-    // The exemption is the api's report route; a role without it answers that path 404.
-    const report = await app().inject({ method: 'POST', url: '/api/csp-report', headers: webkit, payload: '{}' })
-    expect(report.statusCode).toBe(404)
-  })
-
   it('refuses a POST from the user-content origin', async () => {
     expect((await post({ origin: USER_CONTENT_ORIGIN })).statusCode).toBe(403)
   })
@@ -194,6 +187,25 @@ describe('Origin check on state changes (CLAUDE.md, Security and privacy)', () =
     }
   })
 
+  it('T21 item 9: lets a CSP report whose Origin is "null" through, as Safari sends every one, and nothing else with a "null" Origin', async () => {
+    const instance = app()
+    instance.post(CSP_REPORT_PATH, async () => ({ reported: true }))
+    instance.put(CSP_REPORT_PATH, async () => ({ put: true }))
+    const send = (method: 'POST' | 'PUT', url: string, headers: Record<string, string> = {}) =>
+      instance.inject({ method, url, headers })
+    expect((await send('POST', CSP_REPORT_PATH, { origin: 'null' })).statusCode).toBe(200)
+    // A report with no Origin, or another one, is refused as any other POST is.
+    expect((await send('POST', CSP_REPORT_PATH)).statusCode).toBe(403)
+    for (const origin of ['https://evil.example', USER_CONTENT_ORIGIN]) {
+      expect((await send('POST', CSP_REPORT_PATH, { origin })).statusCode, origin).toBe(403)
+    }
+    // Any other method, path or spelling of the path with a "null" Origin is refused as before.
+    expect((await send('PUT', CSP_REPORT_PATH, { origin: 'null' })).statusCode).toBe(403)
+    for (const url of [`${CSP_REPORT_PATH}/`, CSP_REPORT_PATH.toUpperCase(), '/echo', '/nowhere']) {
+      expect((await send('POST', url, { origin: 'null' })).statusCode, url).toBe(403)
+    }
+  })
+
   it('allows a POST from the app origin, and GETs from anywhere', async () => {
     expect((await post({ origin: APP_ORIGIN })).statusCode).toBe(200)
     const get = await app().inject({ method: 'GET', url: '/health', headers: { origin: 'https://evil.example' } })
@@ -237,14 +249,6 @@ describe('C0.5 the api role through buildApp (CLAUDE.md, Security and privacy)',
       })
       expect(res.statusCode, origin).toBe(403)
     }
-    // Same-origin fetch metadata with a "null" Origin passes only a CSP report (T21 item 9).
-    const webkit = await app.inject({
-      method: 'POST',
-      url: '/api/auth/otp/request',
-      headers: { origin: 'null', 'sec-fetch-site': 'same-origin' },
-      payload: { phone: '+6581234567' },
-    })
-    expect(webkit.statusCode).toBe(403)
     expect(touched).toEqual([])
   })
 

@@ -2,8 +2,7 @@
 // answer, that they run read only, which one counts as use of the session, and that no refusal of
 // theirs clears the cookie (T21 item 10). The integration suite (routes.integration.test.ts) runs
 // them on the Compose stack. Then POST /api/csp-report (web/csp-report.ts, OD-12): its scoped
-// parser, the Origin hook and its one exception for WebKit's report (origin.ts, T21 item 9), what
-// it logs and the cap on that log; csp-report.test.ts tests the
+// parser, the Origin hook, what it logs and the cap on that log; csp-report.test.ts tests the
 // reduction and the cap alone.
 import { Writable } from 'node:stream'
 import { CSP_REPORT_PATH, FLAGS, type FlagSpec, FlagsResponse, MESSAGES, SessionResponse } from '@hearth/shared'
@@ -21,7 +20,7 @@ import { AfterResponse, type ReqInfo } from '#src/http.ts'
 import { createLogger } from '#src/logger.ts'
 import { staticFlags } from '#src/testing/flags.ts'
 import { type Statement, scriptedPool } from '#src/testing/pool.ts'
-import { CSP_REPORT_LIMIT } from '#src/web/csp-report.ts'
+import { CSP_LOG_PER_MINUTE, CSP_REPORT_LIMIT } from '#src/web/csp-report.ts'
 import { readFlags } from '#src/web/flags.ts'
 import { keepCookie } from '#src/web/routes.ts'
 
@@ -442,15 +441,6 @@ const REPORT = {
   },
 }
 const REDUCED = { directive: 'img-src', blocked: 'https://example.invalid', path: '/chats/:id', disposition: 'enforce' }
-// The headers of WebKit's report (T21 item 9): Origin "null", which its PingLoader stamps on every
-// report-uri POST, and the fetch metadata of a no-cors request from the page's own origin.
-const WEBKIT_REPORT: Readonly<Record<string, string>> = {
-  origin: 'null',
-  'content-type': 'application/csp-report',
-  'sec-fetch-site': 'same-origin',
-  'sec-fetch-mode': 'no-cors',
-  'sec-fetch-dest': 'empty',
-}
 const REFUSED = { error: 'invalid_request', message: MESSAGES.invalid_request }
 
 const reportLines = (logs: Record<string, unknown>[]) => logs.filter(line => line.event === 'csp_report')
@@ -499,93 +489,27 @@ describe('C0.8 OD-12 POST /api/csp-report', () => {
     expect(reportLines(logs)).toEqual([])
   })
 
-  it('CR-02 OD-12 CL Security: a report with another Origin, or none, or "null" without Sec-Fetch-Site same-origin, is refused 403 by the root hook', async () => {
+  it('CR-02 OD-12 CL Security T21 item 9: a report from another Origin, or none, is refused 403 by the root hook; Safari\'s, whose Origin is "null", is taken, and logged only when its page is on the app origin', async () => {
     const { post, logs } = setup()
-    for (const origin of ['https://evil.example', 'https://usercontent.hearth.example.com', 'null', undefined]) {
+    for (const origin of ['https://evil.example', 'https://usercontent.hearth.example.com', undefined]) {
       const response = await post(CSP_REPORT_PATH, REPORT, { origin })
       expect([origin, response.statusCode, response.json()]).toEqual([origin, 403, { error: 'Forbidden' }])
     }
     expect(reportLines(logs)).toEqual([])
-  })
-
-  it("CR-07 T21 item 9 CL Security: WebKit's report, Origin null with Sec-Fetch-Site same-origin, answers 204 and is logged reduced like any other", async () => {
-    const { db, touched } = unreachableDb()
-    const { post, logs } = setup({ db })
-    // As WebKit sends one (PingLoader::sendViolationReport): the fetch metadata of a no-cors
-    // request from the page's own origin, and the type and url keys it adds around the report.
-    const webkit = { type: 'csp-violation', url: REPORT['csp-report']['document-uri'], ...REPORT }
-    const response = await post(CSP_REPORT_PATH, webkit, { ...WEBKIT_REPORT, cookie: COOKIE })
-    expect([response.statusCode, response.body, response.headers['cache-control']]).toEqual([204, '', 'no-store'])
-    expect(response.headers['set-cookie']).toBeUndefined()
-    expect(touched()).toBe(0)
-    expect(logs).toHaveLength(1)
-    expect(logs[0]).toMatchObject({ level: 40, event: 'csp_report', ...REDUCED })
-    expect(JSON.stringify(logs)).not.toContain(MARKER)
-    // A content type with parameters is the same type, here too.
-    const charset = await post(CSP_REPORT_PATH, REPORT, {
-      ...WEBKIT_REPORT,
-      'content-type': 'Application/CSP-Report; charset=utf-8',
-    })
-    expect(charset.statusCode).toBe(204)
-    expect(reportLines(logs)).toHaveLength(2)
-  })
-
-  it('CR-08 T21 item 9 CL Security: the exemption is that request alone; every near miss of it is refused 403 before any route runs', async () => {
-    const { db, touched } = unreachableDb()
-    const { app, post, logs } = setup({ db })
-    const refused: [string, string, Record<string, string | undefined>][] = [
-      // Another Sec-Fetch-Site, or none: the browser's own word that the page is the app's.
-      ...[undefined, 'same-site', 'cross-site', 'none', 'Same-Origin', 'same-origin, same-origin'].map(
-        (site): [string, string, Record<string, string | undefined>] => [
-          `Sec-Fetch-Site ${site}`,
-          CSP_REPORT_PATH,
-          { ...WEBKIT_REPORT, 'sec-fetch-site': site },
-        ],
-      ),
-      // Same-origin fetch metadata never stands in for an Origin other than "null".
-      ...[undefined, 'Null', 'null, null', 'https://evil.example', 'https://usercontent.hearth.example.com'].map(
-        (origin): [string, string, Record<string, string | undefined>] => [
-          `Origin ${origin}`,
-          CSP_REPORT_PATH,
-          { ...WEBKIT_REPORT, origin },
-        ],
-      ),
-      // Another type: the route's own parser would refuse it 400, but the hook refuses it first.
-      ...['application/json', 'application/reports+json', 'text/plain', undefined].map(
-        (type): [string, string, Record<string, string | undefined>] => [
-          `Content-Type ${type}`,
-          CSP_REPORT_PATH,
-          { ...WEBKIT_REPORT, 'content-type': type },
-        ],
-      ),
-      // Any other spelling of the path, and any other route, even one that would answer 200.
-      ...[
-        `${CSP_REPORT_PATH}/`,
-        `${CSP_REPORT_PATH}?from=webkit`,
-        '/API/csp-report',
-        '/api//csp-report',
-        '/api/csp-report%2F',
-        '/api/auth/otp/request',
-        '/api/auth/sign-out',
-      ].map((url): [string, string, Record<string, string | undefined>] => [url, url, WEBKIT_REPORT]),
-      ['sign-out as JSON', '/api/auth/sign-out', { ...WEBKIT_REPORT, 'content-type': 'application/json' }],
-    ]
-    for (const [name, url, headers] of refused) {
-      const response = await post(url, url === '/api/auth/sign-out' ? {} : REPORT, headers)
-      expect([name, response.statusCode, response.json()]).toEqual([name, 403, { error: 'Forbidden' }])
+    // Another site that named this path as its report-uri: Safari sends its visitors' reports with
+    // a "null" Origin too. They are answered and never logged, so however many arrive, they spend
+    // none of the log's allowance.
+    const elsewhere = { 'csp-report': { ...REPORT['csp-report'], 'document-uri': 'https://evil.example/page' } }
+    for (let sent = 0; sent < CSP_LOG_PER_MINUTE + 5; sent++) {
+      const response = await post(CSP_REPORT_PATH, elsewhere, { origin: 'null' })
+      expect([response.statusCode, response.body]).toEqual([204, ''])
     }
-    // Other methods, on the path itself.
-    for (const method of ['PUT', 'PATCH', 'DELETE'] as const) {
-      const response = await app.inject({
-        method,
-        url: CSP_REPORT_PATH,
-        headers: { ...WEBKIT_REPORT },
-        payload: JSON.stringify(REPORT),
-      })
-      expect([method, response.statusCode]).toEqual([method, 403])
-    }
-    expect(touched()).toBe(0)
     expect(reportLines(logs)).toEqual([])
+    const safari = await post(CSP_REPORT_PATH, REPORT, { origin: 'null' })
+    expect([safari.statusCode, safari.body]).toEqual([204, ''])
+    expect(reportLines(logs)).toHaveLength(1)
+    expect(reportLines(logs)[0]).toMatchObject(REDUCED)
+    expect(logs.filter(line => line.event === 'csp_reports_dropped')).toEqual([])
   })
 
   it('CR-03 OD-12: malformed JSON or a body over 8 KiB is 400 invalid_request, never 500', async () => {
