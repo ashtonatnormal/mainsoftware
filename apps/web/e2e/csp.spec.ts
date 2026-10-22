@@ -64,12 +64,15 @@ test('CS-03 BP C0.8 Done OD-12 T21 item 9: a blocked image raises a violation th
     timeout: 10_000,
   })
   // An image from another origin, which img-src 'self' blocks before any request leaves the page.
-  await page.evaluate(() => {
+  // Its host names the project, so each engine's run finds its own report's line in the shared log,
+  // never another test's or engine's.
+  const blocked = `https://cs03-${test.info().project.name}.example.invalid`
+  await page.evaluate(src => {
     const image = document.createElement('img')
     image.alt = ''
-    image.src = 'https://example.invalid/x.png?secret=1'
+    image.src = src
     document.body.append(image)
-  })
+  }, `${blocked}/x.png?secret=1`)
   const sent = await report
   // The Origin it carried, should the root hook refuse it (allHeaders: headers() leaves it out).
   const origin = (await sent.allHeaders()).origin ?? 'none'
@@ -82,12 +85,11 @@ test('CS-03 BP C0.8 Done OD-12 T21 item 9: a blocked image raises a violation th
       line =
         logSince(from)
           .split('\n')
-          .find(entry => entry.includes('"event":"csp_report"')) ?? ''
+          .find(entry => entry.includes('"event":"csp_report"') && entry.includes(blocked)) ?? ''
       return line
     })
     .not.toBe('')
   expect(line).toContain('img-src')
-  expect(line).toContain('https://example.invalid')
   expect(line).not.toContain('secret')
   expect(line).not.toContain('x.png')
 })
