@@ -1,4 +1,5 @@
 import { Writable } from 'node:stream'
+import { CSP_REPORT_PATH } from '@hearth/shared'
 import type { Redis } from 'ioredis'
 import { pino } from 'pino'
 import { describe, expect, it } from 'vitest'
@@ -183,6 +184,34 @@ describe('Origin check on state changes (CLAUDE.md, Security and privacy)', () =
     for (const method of ['GET', 'HEAD'] as const) {
       const res = await instance.inject({ method, url: '/health', headers: { origin: 'https://evil.example' } })
       expect(res.statusCode, method).toBe(200)
+    }
+  })
+
+  it('T21 item 9: lets a CSP report through with Origin "null" and Sec-Fetch-Site same-origin, as WebKit sends its own, and nothing else with a "null" Origin', async () => {
+    const instance = app()
+    instance.post(CSP_REPORT_PATH, async () => ({ reported: true }))
+    instance.put(CSP_REPORT_PATH, async () => ({ put: true }))
+    const send = (method: 'POST' | 'PUT', url: string, headers: Record<string, string> = {}) =>
+      instance.inject({ method, url, headers })
+    const webkit = { origin: 'null', 'sec-fetch-site': 'same-origin' }
+    expect((await send('POST', CSP_REPORT_PATH, webkit)).statusCode).toBe(200)
+    // A "null" report without Sec-Fetch-Site same-origin (another site's page, or Safari before
+    // 16.4, below the pilot's floor) is refused.
+    for (const fetchSite of [undefined, 'cross-site', 'same-site', 'none']) {
+      const headers: Record<string, string> =
+        fetchSite === undefined ? { origin: 'null' } : { origin: 'null', 'sec-fetch-site': fetchSite }
+      expect((await send('POST', CSP_REPORT_PATH, headers)).statusCode, String(fetchSite)).toBe(403)
+    }
+    // A report with no Origin, or another one, is refused as any other POST is.
+    expect((await send('POST', CSP_REPORT_PATH, { 'sec-fetch-site': 'same-origin' })).statusCode).toBe(403)
+    for (const origin of ['https://evil.example', USER_CONTENT_ORIGIN]) {
+      const headers = { origin, 'sec-fetch-site': 'same-origin' }
+      expect((await send('POST', CSP_REPORT_PATH, headers)).statusCode, origin).toBe(403)
+    }
+    // Any other method, path or spelling of the path is refused as before.
+    expect((await send('PUT', CSP_REPORT_PATH, webkit)).statusCode).toBe(403)
+    for (const url of [`${CSP_REPORT_PATH}/`, CSP_REPORT_PATH.toUpperCase(), '/echo', '/nowhere']) {
+      expect((await send('POST', url, webkit)).statusCode, url).toBe(403)
     }
   })
 

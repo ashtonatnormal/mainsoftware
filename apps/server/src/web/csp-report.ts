@@ -19,6 +19,8 @@
 // as Chromium and Firefox send it, or with Origin "null" and Sec-Fetch-Site same-origin, as WebKit
 // (Safari, and every browser on iPhone) sends it whatever the page's referrer policy: the hook's one
 // exception (origin.ts isSameOriginCspReport, T21 item 9). Any other report is refused 403 and lost.
+// A "null" report is logged only when its page is on the app origin, so one about another site's
+// page, which only a client that isn't a browser can still send, can't spend the log's allowance.
 // The exception is safe only because this route takes no session, reads no cookie, stores nothing
 // and writes at most the capped, reduced line; scripts/guards/csp-report.test.ts keeps it so.
 //
@@ -188,9 +190,12 @@ export function cspReportRoute(api: Api): (scope: FastifyInstance) => Promise<vo
         if (dropped !== undefined) {
           request.log.warn({ event: 'csp_reports_dropped', count: dropped }, 'CSP reports went unlogged past the cap')
         }
-        const body = parse(CspReportBody, request.body)
-        if (cap.take()) {
-          request.log.warn({ event: 'csp_report', ...reduceReport(body, api.appOrigin) }, 'a page broke the CSP')
+        const report = reduceReport(parse(CspReportBody, request.body), api.appOrigin)
+        // A "null" report about another site's page (WebKit's own are refused at the hook; only a
+        // client that isn't a browser can still send one): answered, never logged.
+        const elsewhere = request.headers.origin === 'null' && report.path === 'other-origin'
+        if (!elsewhere && cap.take()) {
+          request.log.warn({ event: 'csp_report', ...report }, 'a page broke the CSP')
         }
         return reply.code(204).send()
       },
