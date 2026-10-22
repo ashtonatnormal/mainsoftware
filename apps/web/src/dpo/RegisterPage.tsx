@@ -129,19 +129,25 @@ export function useRegisterWrite(done: () => void, savedText: string = DPO.saved
   const queryClient = useQueryClient()
   const last = useRef<RegisterWrite | undefined>(undefined)
   const [refusal, setRefusal] = useState<Refusal | undefined>()
-  const mutation = useMutation({ mutationFn: sendWrite })
   const reread = () => queryClient.invalidateQueries({ queryKey: registersQuery.queryKey })
+  // The write's own effects live on the mutation, not on mutate(): a dialog closed while its write
+  // is in flight unmounts this hook, and per-call callbacks then never run, but the registers must
+  // still be read again (else the page keeps a stale version and the next save is refused as
+  // changed) and the toast still shown. The mutation awaits these before mutate()'s onSuccess.
+  const mutation = useMutation({
+    mutationFn: sendWrite,
+    onSuccess: async result => {
+      await reread()
+      toast({ text: landedText(result, savedText) })
+    },
+  })
 
   const run = (write: RegisterWrite) => {
     if (mutation.isPending) return
     last.current = write
     setRefusal(undefined)
     mutation.mutate(write, {
-      onSuccess: async result => {
-        await reread()
-        toast({ text: landedText(result, savedText) })
-        done()
-      },
+      onSuccess: () => done(),
       onError: error => setRefusal(refusalOfError(error)),
     })
   }
