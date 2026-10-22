@@ -51,45 +51,69 @@ test('CS-02 SHL-69: a tour of every route makes only same-origin requests, both 
   expect(guard.violations).toEqual([])
 })
 
-// In every engine (T21 item 9): Safari sends its reports with a "null" Origin, which the root hook
-// lets through on this path alone (apps/server/src/origin.ts).
-test('CS-03 BP C0.8 Done OD-12 T21 item 9: a blocked image raises a violation that reaches /api/csp-report, is answered 204 and is logged reduced', {
+// The api's log lines since an offset, as JSON; the fake provider's stderr lines aren't JSON.
+function logLinesSince(from: number): Record<string, unknown>[] {
+  return logSince(from)
+    .split('\n')
+    .flatMap(entry => {
+      try {
+        const line: unknown = JSON.parse(entry)
+        return typeof line === 'object' && line !== null ? [line as Record<string, unknown>] : []
+      } catch {
+        return []
+      }
+    })
+}
+
+test('CS-03 BP C0.8 Done OD-12 T21 item 9: in every engine a blocked image raises a violation whose report reaches /api/csp-report, is answered 204 and is logged reduced', {
   tag: '@smoke',
-}, async ({ page, guard }) => {
+}, async ({ page, guard, browserName }) => {
   guard.allowViolation('img-src')
+  // The status of every answer to a report; WebKit's report carries Origin "null" and Sec-Fetch-Site
+  // same-origin, which the root hook takes on this route alone (T21 item 9).
+  const answered: number[] = []
+  page.on('response', response => {
+    if (new URL(response.url()).pathname === '/api/csp-report') answered.push(response.status())
+  })
   await page.goto('/chats')
   await expect(h1(page)).toHaveText('Chats')
   const from = logOffset()
-  const report = page.waitForRequest(request => new URL(request.url()).pathname === '/api/csp-report', {
-    timeout: 10_000,
-  })
   // An image from another origin, which img-src 'self' blocks before any request leaves the page.
-  // Its host names the project, so each engine's run finds its own report's line in the shared log,
-  // never another test's or engine's.
-  const blocked = `https://cs03-${test.info().project.name}.example.invalid`
+  // The host names the engine, so the line found is this test's own: the projects run at once, and
+  // WebKit's harness reports (an inline style, when a failed test's context closes) reach the same
+  // log.
+  const blocked = `https://cs-03-${browserName}.example.invalid`
   await page.evaluate(src => {
     const image = document.createElement('img')
     image.alt = ''
     image.src = src
     document.body.append(image)
   }, `${blocked}/x.png?secret=1`)
-  const sent = await report
-  // The Origin it carried, should the root hook refuse it (allHeaders: headers() leaves it out).
-  const origin = (await sent.allHeaders()).origin ?? 'none'
-  expect((await sent.response())?.status(), `the report's Origin: ${origin}`).toBe(204)
   await expect.poll(() => guard.violations.map(violation => violation.directive)).toContain('img-src')
-  // The api logged it reduced: the directive and the blocked origin, never the query.
-  let line = ''
+  // The api logs a report only on the path that answers it 204 (CR-07 pins that status through the
+  // same hooks), so the line proves delivery. A refusal's line names the kind of Origin and
+  // Sec-Fetch-Site the report carried.
+  let line: Record<string, unknown> | undefined
   await expect
-    .poll(() => {
-      line =
-        logSince(from)
-          .split('\n')
-          .find(entry => entry.includes('"event":"csp_report"') && entry.includes(blocked)) ?? ''
-      return line
-    })
-    .not.toBe('')
-  expect(line).toContain('img-src')
-  expect(line).not.toContain('secret')
-  expect(line).not.toContain('x.png')
+    .poll(
+      () => {
+        const lines = logLinesSince(from)
+        line = lines.find(entry => entry.event === 'csp_report' && entry.blocked === blocked)
+        const refused = lines.filter(entry => entry.event === 'origin_refused' && entry.url === '/api/csp-report')
+        return line === undefined ? `no report yet; refused: ${JSON.stringify(refused)}` : 'logged'
+      },
+      { timeout: 10_000 },
+    )
+    .toBe('logged')
+  // Reduced: the directive, the blocked origin and the page's path, never the query or the file.
+  expect(line).toMatchObject({ directive: 'img-src', blocked, path: '/chats' })
+  expect(JSON.stringify(line)).not.toContain('secret')
+  expect(JSON.stringify(line)).not.toContain('x.png')
+  // The route logs before it answers, so the answer is waited for: Playwright shows it in all three
+  // engines, and at least one must come, each one 204.
+  await expect.poll(() => answered.length, { timeout: 10_000 }).toBeGreaterThan(0)
+  expect(
+    answered.every(status => status === 204),
+    JSON.stringify(answered),
+  ).toBe(true)
 })

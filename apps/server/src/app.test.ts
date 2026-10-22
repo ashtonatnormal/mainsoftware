@@ -187,22 +187,31 @@ describe('Origin check on state changes (CLAUDE.md, Security and privacy)', () =
     }
   })
 
-  it('T21 item 9: lets a CSP report whose Origin is "null" through, as Safari sends every one, and nothing else with a "null" Origin', async () => {
+  it('T21 item 9: lets a CSP report through with Origin "null" and Sec-Fetch-Site same-origin, as WebKit sends its own, and nothing else with a "null" Origin', async () => {
     const instance = app()
     instance.post(CSP_REPORT_PATH, async () => ({ reported: true }))
     instance.put(CSP_REPORT_PATH, async () => ({ put: true }))
     const send = (method: 'POST' | 'PUT', url: string, headers: Record<string, string> = {}) =>
       instance.inject({ method, url, headers })
-    expect((await send('POST', CSP_REPORT_PATH, { origin: 'null' })).statusCode).toBe(200)
-    // A report with no Origin, or another one, is refused as any other POST is.
-    expect((await send('POST', CSP_REPORT_PATH)).statusCode).toBe(403)
-    for (const origin of ['https://evil.example', USER_CONTENT_ORIGIN]) {
-      expect((await send('POST', CSP_REPORT_PATH, { origin })).statusCode, origin).toBe(403)
+    const webkit = { origin: 'null', 'sec-fetch-site': 'same-origin' }
+    expect((await send('POST', CSP_REPORT_PATH, webkit)).statusCode).toBe(200)
+    // A "null" report without Sec-Fetch-Site same-origin (another site's page, or Safari before
+    // 16.4, below the pilot's floor) is refused.
+    for (const fetchSite of [undefined, 'cross-site', 'same-site', 'none']) {
+      const headers: Record<string, string> =
+        fetchSite === undefined ? { origin: 'null' } : { origin: 'null', 'sec-fetch-site': fetchSite }
+      expect((await send('POST', CSP_REPORT_PATH, headers)).statusCode, String(fetchSite)).toBe(403)
     }
-    // Any other method, path or spelling of the path with a "null" Origin is refused as before.
-    expect((await send('PUT', CSP_REPORT_PATH, { origin: 'null' })).statusCode).toBe(403)
+    // A report with no Origin, or another one, is refused as any other POST is.
+    expect((await send('POST', CSP_REPORT_PATH, { 'sec-fetch-site': 'same-origin' })).statusCode).toBe(403)
+    for (const origin of ['https://evil.example', USER_CONTENT_ORIGIN]) {
+      const headers = { origin, 'sec-fetch-site': 'same-origin' }
+      expect((await send('POST', CSP_REPORT_PATH, headers)).statusCode, origin).toBe(403)
+    }
+    // Any other method, path or spelling of the path is refused as before.
+    expect((await send('PUT', CSP_REPORT_PATH, webkit)).statusCode).toBe(403)
     for (const url of [`${CSP_REPORT_PATH}/`, CSP_REPORT_PATH.toUpperCase(), '/echo', '/nowhere']) {
-      expect((await send('POST', url, { origin: 'null' })).statusCode, url).toBe(403)
+      expect((await send('POST', url, webkit)).statusCode, url).toBe(403)
     }
   })
 
@@ -308,5 +317,120 @@ describe('C0.5 T14 request ids and the client address', () => {
       const res = await withEcho(trustProxy).inject({ url: '/whoami', headers: forwarded, remoteAddress: '127.0.0.1' })
       expect(res.json().ip, String(trustProxy)).toBe('127.0.0.1')
     }
+  })
+})
+
+// WebKit's own CSP report as the hook sees it (TECH-SPEC T21 item 9): Origin "null", Sec-Fetch-Site
+// same-origin.
+const WEBKIT_REPORT = { origin: 'null', 'sec-fetch-site': 'same-origin' }
+const REPORT_BODY = JSON.stringify({
+  'csp-report': { 'effective-directive': 'img-src', 'blocked-uri': 'https://evil.example/x.png' },
+})
+
+describe('T21 item 9: the Origin hook’s one exception, WebKit’s CSP report', () => {
+  it('OE-03 OD-12 T21 item 9: without the api role (realtime, worker) Origin "null" with Sec-Fetch-Site same-origin is refused 403, at /echo and at /api/csp-report alike', async () => {
+    const instance = app()
+    for (const url of ['/echo', '/api/csp-report']) {
+      const res = await instance.inject({
+        method: 'POST',
+        url,
+        headers: { ...WEBKIT_REPORT, 'content-type': 'application/csp-report' },
+        payload: REPORT_BODY,
+      })
+      expect(res.statusCode, url).toBe(403)
+    }
+  })
+
+  it('OE-04 OD-12 T21 item 9: the exception takes exactly one route: with Origin "null" and Sec-Fetch-Site same-origin every write route the api serves answers 403 but POST /api/csp-report, which answers 204, and neither Postgres nor Valkey is touched', async () => {
+    const touched: string[] = []
+    const instance = apiApp(touched)
+    // Every route but GET and HEAD, collected as the api's plugins register them at ready().
+    const writes: { method: string; url: string }[] = []
+    instance.addHook('onRoute', route => {
+      for (const method of [route.method].flat()) {
+        if (method !== 'GET' && method !== 'HEAD') writes.push({ method, url: route.url })
+      }
+    })
+    await instance.ready()
+    expect(writes.some(route => route.method === 'POST' && route.url === '/api/csp-report')).toBe(true)
+    expect(writes.length).toBeGreaterThan(10)
+    for (const route of writes) {
+      const res = await instance.inject({
+        method: route.method as 'POST',
+        // A route's parameters take a placeholder value.
+        url: route.url.replace(/:[^/]+/g, 'x'),
+        headers: { ...WEBKIT_REPORT, 'content-type': 'application/csp-report' },
+        payload: REPORT_BODY,
+      })
+      const report = route.method === 'POST' && route.url === '/api/csp-report'
+      expect(res.statusCode, `${route.method} ${route.url}`).toBe(report ? 204 : 403)
+    }
+    expect(touched).toEqual([])
+  })
+
+  it('OE-05 OD-12 T21 item 9: the exception is POST on the matched route alone: other methods, near-miss paths and any real Origin stay refused, and a query changes nothing', async () => {
+    const touched: string[] = []
+    const instance = apiApp(touched)
+    const send = (method: 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS', url: string, headers = WEBKIT_REPORT) =>
+      instance.inject({
+        method,
+        url,
+        headers: { ...headers, 'content-type': 'application/csp-report' },
+        payload: REPORT_BODY,
+      })
+    // The api serves only POST here, so each other method gets a route of its own: refused for its
+    // method, not for a route it never matched.
+    const others = ['PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const
+    for (const method of others)
+      instance.route({ method, url: '/api/csp-report', handler: async () => ({ other: true }) })
+    for (const method of others) {
+      expect((await send(method, '/api/csp-report')).statusCode, method).toBe(403)
+    }
+    for (const url of [
+      '/api/csp-report/',
+      '/api//csp-report',
+      '/API/csp-report',
+      '/api/csp-report%2F',
+      '/api/csp-reports',
+    ]) {
+      expect((await send('POST', url)).statusCode, url).toBe(403)
+    }
+    expect((await send('POST', '/api/csp-report?x=1')).statusCode).toBe(204)
+    for (const origin of ['https://evil.example', USER_CONTENT_ORIGIN, `${APP_ORIGIN}/`]) {
+      const res = await send('POST', '/api/csp-report', { origin, 'sec-fetch-site': 'same-origin' })
+      expect(res.statusCode, origin).toBe(403)
+    }
+    expect(touched).toEqual([])
+  })
+
+  it('OE-06 OD-12 CL Security: a refusal logs event origin_refused with the kind of Origin and Sec-Fetch-Site, never the Origin’s value', async () => {
+    const lines: string[] = []
+    const stream = new Writable({
+      write(chunk, _encoding, done) {
+        lines.push(String(chunk))
+        done()
+      },
+    })
+    const instance = buildApp({
+      appOrigin: APP_ORIGIN,
+      logger: createLogger({ logLevel: 'info', role: 'api' }, stream),
+      checks: {},
+    })
+    instance.post('/echo', async () => ({ echoed: true }))
+    const cases: [Record<string, string>, string, string][] = [
+      [{ origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' }, 'other', 'cross-site'],
+      [{ origin: 'moz-extension://0d1b2c3d-fictional' }, 'other', 'absent'],
+      [{ origin: 'null', 'sec-fetch-site': 'same-origin' }, 'null', 'same-origin'],
+      [{ 'sec-fetch-site': 'Weird' }, 'absent', 'other'],
+    ]
+    for (const [headers] of cases) {
+      expect((await instance.inject({ method: 'POST', url: '/echo', headers })).statusCode).toBe(403)
+    }
+    const refusals = lines.map(line => JSON.parse(line)).filter(line => line.event === 'origin_refused')
+    expect(refusals.map(({ method, url, originKind, fetchSite }) => ({ method, url, originKind, fetchSite }))).toEqual(
+      cases.map(([, originKind, fetchSite]) => ({ method: 'POST', url: '/echo', originKind, fetchSite })),
+    )
+    const logs = lines.join('')
+    for (const value of ['evil.example', '0d1b2c3d', 'moz-extension', 'Weird']) expect(logs).not.toContain(value)
   })
 })

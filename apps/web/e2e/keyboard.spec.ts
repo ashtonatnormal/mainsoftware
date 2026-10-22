@@ -137,7 +137,12 @@ test('KB-05 QA-05: a tab focus ring lies inside its cell', async ({ open }) => {
   await page.getByRole('button', { name: 'Account, Marcus' }).focus()
   await page.keyboard.press('Tab')
   await expect(today).toBeFocused()
-  const ring = await today.evaluate(element => {
+  const ring = await today.evaluate(async element => {
+    // Under reduced motion (open()'s default) app.css gives every element a 0.01 ms transition of
+    // every property, so the ring eases in from the link's unfocused outline until the frame after
+    // next, and a read before then sees the start: 3px wide at offset 0 from Chromium 148. It is read
+    // once its transitions have ended, as axe.ts waits for colours.
+    await Promise.all(element.getAnimations().map(animation => animation.finished.catch(() => undefined)))
     const style = getComputedStyle(element)
     return {
       style: style.outlineStyle,
@@ -149,7 +154,7 @@ test('KB-05 QA-05: a tab focus ring lies inside its cell', async ({ open }) => {
   expect(ring.width).toBeGreaterThan(0)
   // The ring is drawn from `offset` outside the box outward by its width: inside the box when the
   // two add up to no more than 0.
-  expect(ring.offset + ring.width).toBeLessThanOrEqual(0)
+  expect(ring.offset + ring.width, JSON.stringify(ring)).toBeLessThanOrEqual(0)
 })
 
 test('KB-06 X6 X12: after a tab press leaves focus on the h1 (Chats → Rooms), Back focuses a new h1 reading Chats, and Forward one reading Rooms', async ({
