@@ -190,10 +190,13 @@ test('NF-11 WCAG 1.4.11 forced colours: the current tab has an outline and the f
   await page.emulateMedia({ forcedColors: 'active' })
   await page.goto('/chats')
   await expect(h1(page)).toHaveText('Chats')
+  // Read once the link's transitions have ended: under reduced motion a focused link's ring eases in
+  // from its unfocused outline for a frame or two (KB-05).
   const outline = (name: string) =>
     mainNav(page)
       .getByRole('link', { name })
-      .evaluate(element => {
+      .evaluate(async element => {
+        await Promise.all(element.getAnimations().map(animation => animation.finished.catch(() => undefined)))
         const style = getComputedStyle(element)
         return { style: style.outlineStyle, width: Number.parseFloat(style.outlineWidth) }
       })
