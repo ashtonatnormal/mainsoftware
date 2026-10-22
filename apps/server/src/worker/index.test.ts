@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { FLAG_READS_IN_FLIGHT } from '#src/flags/cache.ts'
-import { C06_GATE } from '#src/jobs/gate.ts'
 import { defineJob } from '#src/jobs/kinds.ts'
 import { WORKER_POLICY } from '#src/jobs/policy.ts'
 import { captureLogger } from '#src/testing/logs.ts'
 import { type Statement, scriptedPool } from '#src/testing/pool.ts'
-import { CONTROL_POOL_SIZE, productionRegistries, startWorker, WORKER_GATE, workPoolSize } from '#src/worker/index.ts'
+import { CONTROL_POOL_SIZE, productionRegistries, startWorker, workPoolSize } from '#src/worker/index.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const OTHER_ORG = 'a0000000-0000-4000-8000-000000000002'
@@ -22,6 +21,10 @@ interface DatabaseState {
   behindIn?: string
   // The consumers' rounds fail in this org.
   failIn?: string
+  // The registers' rows (C0.9): each purpose's current entry, and each provider's entry with its
+  // open clearance's id, if any. None unless given.
+  purposes?: { purpose: string; version: number; status: string; basis: string | null; providers: string[] }[]
+  providers?: { provider: string; revision: string; review_on: string | null; clearance: string | null }[]
 }
 function database(options: { orgsFail?: boolean } = {}, state: DatabaseState = defaultState()) {
   return scriptedPool((statement: Statement) => {
@@ -44,6 +47,8 @@ function database(options: { orgsFail?: boolean } = {}, state: DatabaseState = d
         },
       ]
     }
+    if (text.startsWith('select distinct on (purpose)')) return state.purposes ?? []
+    if (text.startsWith('select r.provider')) return state.providers ?? []
     if (text === 'select now() as now') return [{ now: new Date() }]
     if (text.startsWith('with held as')) return []
     if (text.startsWith('select count(*) filter'))
@@ -106,7 +111,7 @@ describe('C0.6 T18 the worker role', () => {
     expect(workPoolSize(4, registries())).toBe(6)
   })
 
-  it('C0.7 T19 item 4: runs the revocation consumer and its handler jobs beside offboarding, with C0.6’s gate by default', () => {
+  it('C0.7 T19 item 4: runs the revocation consumer and its handler jobs beside offboarding', () => {
     const r = registries()
     expect(r.kinds.map(kind => kind.kind)).toContain('revocation.handler')
     expect(r.consumers.map(consumer => consumer.name)).toEqual(['offboarding', 'revocation'])
@@ -114,7 +119,43 @@ describe('C0.6 T18 the worker role', () => {
       role: 'hearth_job_revocation',
       protective: true,
     })
-    expect(WORKER_GATE).toBe(C06_GATE)
+  })
+
+  it('PGT-09 C0.9 PD-07 PD-16 T22 item 9: its default gate reads the registers its flag cache keeps, and allows accounts before any read', async () => {
+    const state = defaultState()
+    state.purposes = [
+      { purpose: 'accounts', version: 1, status: 'active', basis: null, providers: [] },
+      { purpose: 'security_audit', version: 2, status: 'active', basis: 'legitimate_interests', providers: [] },
+    ]
+    state.providers = [
+      { provider: 'aws', revision: '2', review_on: '2099-01-01', clearance: 'e0000000-0000-4000-8000-000000000001' },
+      { provider: 'twilio', revision: '1', review_on: null, clearance: null },
+    ]
+    const { worker, control } = start({}, state)
+    // Before the registers are read: the pinned purposes only, and no provider.
+    expect(worker.flags.register(ORG)).toBeUndefined()
+    expect(worker.gate.purposeAllowed(ORG, 'accounts')).toBe(true)
+    expect(worker.gate.purposeAllowed(ORG, 'service_operation')).toBe(true)
+    expect(worker.gate.processingAllowed(ORG, SYSTEM, 'accounts')).toBe(true)
+    expect(worker.gate.purposeAllowed(ORG, 'security_audit')).toBe(false)
+    expect(worker.gate.providerCleared(ORG, 'aws')).toBe(false)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(worker.flags.register(ORG)).toBeDefined()
+    // Read: aws's open clearance counts, twilio has none; security_audit is active but no notice
+    // lists it until C0.9 PR 2, so it is still refused (PGT-04); an AI purpose never passes.
+    expect(worker.gate.providerCleared(ORG, 'aws')).toBe(true)
+    expect(worker.gate.providerCleared(ORG, 'twilio')).toBe(false)
+    expect(worker.gate.purposeAllowed(ORG, 'security_audit')).toBe(false)
+    expect(worker.gate.purposeAllowed(ORG, 'org_brain')).toBe(false)
+    expect(worker.gate.overCap(ORG, 'ai.ask')).toBe(false)
+    // Read with the flags, restrictions included (their transaction is flags/cache.test.ts's PGT-07).
+    for (const start of ['select distinct on (purpose)', 'select r.provider', 'select id, person_id, purpose']) {
+      expect(
+        control.texts().some(text => text.startsWith(start)),
+        start,
+      ).toBe(true)
+    }
+    worker.halt()
   })
 
   it('refuses to start with registries that break the rules', () => {

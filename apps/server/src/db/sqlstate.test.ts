@@ -52,7 +52,19 @@ describe('C0.6 T15 which failures are worth trying again', () => {
   })
 
   it('does not retry a constraint failure, a refusal, Hearth’s own codes or a plain bug', () => {
-    for (const code of ['23505', '23514', '23503', '42501', '22023', 'HF001', 'HF002', 'HF003', 'HF004']) {
+    for (const code of [
+      '23505',
+      '23514',
+      '23503',
+      '42501',
+      '22023',
+      'HF001',
+      'HF002',
+      'HF003',
+      'HF004',
+      'HF005',
+      'HF006',
+    ]) {
       expect(retryable(pgError(code)), code).toBe(false)
     }
     expect(retryable(new TypeError('x is not a function'))).toBe(false)

@@ -13,6 +13,7 @@ import { SetFlagBody, setFlag } from '#src/flags/set.ts'
 import { AfterResponse, parse, type ReqInfo } from '#src/http.ts'
 import { staticFlags } from '#src/testing/flags.ts'
 import { appended, pgError, type Statement, scriptedPool } from '#src/testing/pool.ts'
+import { NOTHING_CLEARED } from '#src/testing/transfers.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const ADMIN = 'b0000000-0000-4000-8000-000000000001'
@@ -26,7 +27,9 @@ const session = (userId = ADMIN) => ({
   deviceId: DEVICE,
 })
 
-// The test registry the route accepts keys from (A5): production's flags and two test ones.
+// The test registry the route accepts keys from (A5): production's flags and three test ones.
+// it.unnotified names security_audit, which isn't pinned, so the purpose gate refuses it until a
+// published notice lists it (C0.9 PR 2).
 const REGISTRY = {
   ...FLAGS,
   'it.optional': {
@@ -37,14 +40,36 @@ const REGISTRY = {
     purposes: ['service_operation'],
   },
   'it.ai': { ...FLAGS['core.system'], class: 'optional', default: false, locked: false, purposes: ['org_brain'] },
+  'it.unnotified': {
+    ...FLAGS['core.system'],
+    class: 'optional',
+    default: false,
+    locked: false,
+    purposes: ['security_audit'],
+  },
 } as const
 
+// The flag's row as the route reads it: off for the whole org, revision 1, unless a test says.
+interface FlagRow {
+  enabled: boolean
+  audience: 'org' | 'cohort'
+  cohort_people: string[]
+  cohort_roles: string[]
+}
+
 // The org: an Admin and a Member. `revision` is what set_feature_flag() returns (1 is the row's
-// own: a change that changed nothing); `fails` makes it raise.
+// own: a change that changed nothing); `fails` makes it raise. `before` is the flag's row.
 // issuedUnderPinRule: whether the acting session was issued under the PIN rule (D46); the Admin holds
-// a PIN.
+// a PIN. The registers hold security_audit active on legitimate interests, which no notice lists.
 function org(
-  options: { fresh?: boolean; issuedUnderPinRule?: boolean; row?: boolean; revision?: string; fails?: Error } = {},
+  options: {
+    fresh?: boolean
+    issuedUnderPinRule?: boolean
+    row?: boolean
+    revision?: string
+    fails?: Error
+    before?: Partial<FlagRow>
+  } = {},
 ) {
   return scriptedPool((statement: Statement) => {
     const { text } = statement
@@ -62,8 +87,29 @@ function org(
     if (text.startsWith('select "person_id", "role"')) {
       return [{ person_id: ADMIN, role: 'admin', team_id: null, revoked_at: null }]
     }
-    if (text.startsWith('select "id", "revision" from "feature_flags"')) {
-      return options.row === false ? [] : [{ id: FLAG_ID, revision: '1' }]
+    if (
+      text.startsWith(
+        'select "id", "revision", "enabled", "audience", "cohort_people", "cohort_roles" from "feature_flags"',
+      )
+    ) {
+      if (options.row === false) return []
+      return [
+        {
+          id: FLAG_ID,
+          revision: '1',
+          enabled: false,
+          audience: 'org',
+          cohort_people: [],
+          cohort_roles: [],
+          ...options.before,
+        },
+      ]
+    }
+    if (text.startsWith('select distinct on (purpose)')) {
+      return [
+        { purpose: 'accounts', version: 1, status: 'active', basis: null, providers: [] },
+        { purpose: 'security_audit', version: 2, status: 'active', basis: 'legitimate_interests', providers: [] },
+      ]
     }
     if (text.startsWith('select public.set_feature_flag(')) {
       return options.fails ?? [{ revision: options.revision ?? '2' }]
@@ -91,6 +137,7 @@ function context(pool: ReturnType<typeof scriptedPool>) {
     rp: relyingParty('https://hearth.example.com'),
     otp: { verifyFloorMs: 0, breaker: new Breaker(OTP.breaker) },
     passkeys: false,
+    transfers: NOTHING_CLEARED,
   }
   const info: ReqInfo = {
     ip: '198.51.100.7',
@@ -232,6 +279,109 @@ describe('C0.6 T17 item 9 POST /api/admin/flags/set', () => {
     const off = context(org())
     expect(await setFlag(off.api, body({ key: 'it.ai', enabled: false }), session(), off.info)).toMatchObject({
       body: { key: 'it.ai', enabled: false },
+    })
+  })
+
+  // The statements of the register read (compliance/registers.ts), in the order made.
+  const registerReads = (pool: ReturnType<typeof scriptedPool>) =>
+    pool.texts().filter(text => /\bfrom (processing_register|transfer_register|processing_restrictions)\b/.test(text))
+
+  it('PGT-11 C0.9 PD-19 T22 item 11: turning on reads the registers in the route’s transaction, after can() and the row, and refuses a purpose that isn’t allowed', async () => {
+    const pool = org()
+    const c = context(pool)
+    // security_audit is active, but no published notice lists it until C0.9 PR 2 (PGT-04).
+    expect(
+      await refusal(setFlag(c.api, body({ key: 'it.unnotified', enabled: true }), session(), c.info)),
+    ).toMatchObject({ status: 409, code: 'purpose_refused' })
+    const texts = pool.texts()
+    const row = texts.findIndex(text => text.startsWith('select "id", "revision", "enabled"'))
+    const read = texts.findIndex(text => text.startsWith('select distinct on (purpose)'))
+    expect(texts.findIndex(text => text.startsWith('select "person_id", "role"'))).toBeLessThan(row)
+    expect(row).toBeLessThan(read)
+    expect(texts.lastIndexOf('start transaction isolation level read committed')).toBeLessThan(row)
+    expect(texts.at(-1)).toBe('rollback')
+    // A plain read for the org, with no restrictions (hearth_app has no grant on them).
+    expect(registerReads(pool)).toHaveLength(2)
+    expect(registerReads(pool).join(' ')).not.toMatch(/processing_restrictions|\bfor (share|update)\b/)
+    expect(texts.some(text => text.startsWith('select public.set_feature_flag('))).toBe(false)
+    expect(appended(pool.statements)).toEqual([])
+    expect(c.published).toEqual([])
+    // A pinned purpose is allowed in every state of the registers.
+    const pinned = org()
+    const d = context(pinned)
+    expect(await setFlag(d.api, body({ key: 'it.optional', enabled: true }), session(), d.info)).toMatchObject({
+      body: { key: 'it.optional', enabled: true, revision: 2 },
+    })
+    expect(registerReads(pinned)).toHaveLength(2)
+  })
+
+  it('PGT-11 C0.9 PD-19: refuses a change that widens an enabled flag whose purpose is refused: a cohort to the whole org, or a person or role the cohort didn’t name', async () => {
+    const cohort = { enabled: true, audience: 'cohort' as const, cohort_people: [MEMBER], cohort_roles: ['dpo'] }
+    for (const input of [
+      { key: 'it.unnotified', enabled: true },
+      { key: 'it.unnotified', enabled: true, audience: 'cohort', people: [MEMBER, ADMIN], roles: ['dpo'] },
+      { key: 'it.unnotified', enabled: true, audience: 'cohort', people: [MEMBER], roles: ['dpo', 'admin'] },
+      { key: 'it.unnotified', enabled: true, audience: 'cohort', people: [ADMIN] },
+    ]) {
+      const pool = org({ before: cohort })
+      const c = context(pool)
+      expect(await refusal(setFlag(c.api, body(input), session(), c.info)), JSON.stringify(input)).toMatchObject({
+        status: 409,
+        code: 'purpose_refused',
+      })
+      expect(pool.texts().some(text => text.startsWith('select public.set_feature_flag('))).toBe(false)
+    }
+  })
+
+  it('PGT-11 C0.9 PD-19: never refuses turning off, narrowing an enabled flag whose purpose is refused, or keeping its audience, and reads no register then', async () => {
+    for (const [before, input] of [
+      // Turning off, from the whole org or from a cohort.
+      [{ enabled: true }, { key: 'it.unnotified', enabled: false }],
+      [
+        { enabled: true, audience: 'cohort', cohort_people: [MEMBER] },
+        { key: 'it.unnotified', enabled: false },
+      ],
+      // An off flag's audience changed while it stays off.
+      [{}, { key: 'it.unnotified', enabled: false, audience: 'cohort', roles: ['dpo'] }],
+      // Narrowing: the whole org to a cohort, and a cohort to part of it.
+      [{ enabled: true }, { key: 'it.unnotified', enabled: true, audience: 'cohort', people: [MEMBER] }],
+      [
+        { enabled: true, audience: 'cohort', cohort_people: [MEMBER, ADMIN], cohort_roles: ['dpo', 'admin'] },
+        { key: 'it.unnotified', enabled: true, audience: 'cohort', people: [ADMIN.toUpperCase()], roles: ['dpo'] },
+      ],
+      // The same audience again.
+      [{ enabled: true }, { key: 'it.unnotified', enabled: true }],
+      [
+        { enabled: true, audience: 'cohort', cohort_people: [MEMBER], cohort_roles: ['dpo'] },
+        { key: 'it.unnotified', enabled: true, audience: 'cohort', people: [MEMBER], roles: ['dpo'] },
+      ],
+    ] as const) {
+      const pool = org({ before: before as Partial<FlagRow> })
+      const c = context(pool)
+      expect(await setFlag(c.api, body(input), session(), c.info), JSON.stringify([before, input])).toMatchObject({
+        body: { key: 'it.unnotified', revision: 2 },
+      })
+      expect(registerReads(pool), JSON.stringify([before, input])).toEqual([])
+    }
+  })
+
+  it('C0.9 PD-19: a change judged to reach nobody new rolls back with 409 try_again when another change committed between the row’s read and set_feature_flag()', async () => {
+    // The row read says on for the whole org; meanwhile another admin turned it off (revision 2),
+    // so this "same audience again" would turn it back on unchecked: set_feature_flag() returns 3.
+    const pool = org({ before: { enabled: true }, revision: '3' })
+    const c = context(pool)
+    const thrown = await setFlag(c.api, body({ key: 'it.unnotified', enabled: true }), session(), c.info).catch(
+      (e: unknown) => e,
+    )
+    expect(thrown).toMatchObject({ status: 409, code: 'try_again' })
+    expect(pool.texts().at(-1)).toBe('rollback')
+    expect(appended(pool.statements)).toEqual([])
+    expect(c.published).toEqual([])
+    // One that changed nothing, or only its own change: no conflict.
+    const quiet = org({ before: { enabled: true }, revision: '2' })
+    const d = context(quiet)
+    expect(await setFlag(d.api, body({ key: 'it.unnotified', enabled: true }), session(), d.info)).toMatchObject({
+      body: { revision: 2 },
     })
   })
 

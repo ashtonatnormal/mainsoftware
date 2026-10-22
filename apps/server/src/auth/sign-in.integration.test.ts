@@ -15,10 +15,12 @@
 // committed is exempt or had its outbox event naming it (C0.6, T16 item 7; testing/writes.ts). When
 // every test ran and passed, it also checks that every error code was answered, every audit action
 // written and every event type this suite owns appended, at least once; the exceptions are
-// try_again, internal, the flags route's codes (which flags.integration.test.ts sees), and the
-// dormant passkey codes and actions (testing/dormant.ts, D46; passkeys.integration.test.ts sees
+// try_again, internal, the flags route's codes (which flags.integration.test.ts sees), the
+// registers' (compliance/registers.integration.test.ts), and the dormant passkey codes and actions (testing/dormant.ts, D46; passkeys.integration.test.ts sees
 // them).
 import { type AddressInfo, connect } from 'node:net'
+import { RegistersResponse } from '@hearth/shared'
+import type { FastifyInstance } from 'fastify'
 import { sql } from 'kysely'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuditAction } from '#src/auth/audit.ts'
@@ -28,11 +30,21 @@ import { MESSAGES } from '#src/auth/errors.ts'
 import { limitSubject } from '#src/auth/limiter.ts'
 import { LIMITS, OTP } from '#src/auth/policy.ts'
 import { FakeVerify } from '#src/auth/sms/fake.ts'
+import { REGISTER_ERRORS } from '#src/compliance/routes.ts'
 import { withOrg } from '#src/db/database.ts'
 import { FLAG_ERRORS } from '#src/flags/set.ts'
 import { DORMANT_ACTIONS, DORMANT_ERRORS } from '#src/testing/dormant.ts'
 import { expectNothingLeaked } from '#src/testing/leaks.ts'
-import { APP_ORIGIN, type Client, type Closed, type Person, type Stack, startStack } from '#src/testing/stack.ts'
+import {
+  APP_ORIGIN,
+  CLEARING_FACTS,
+  type Client,
+  type Closed,
+  type Org,
+  type Person,
+  type Stack,
+  startStack,
+} from '#src/testing/stack.ts'
 import { expectEveryWriteCovered, sweepWrites } from '#src/testing/writes.ts'
 
 // The dormant passkey routes (D46), unregistered while passkeys are off.
@@ -335,7 +347,13 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       if (all && suite.tasks.length > 0) {
         const answered = new Set(s.replies.map(reply => reply.error))
         // The dormant passkey codes and actions are the passkey suite's (D46, testing/dormant.ts).
-        const elsewhere = new Set<string>(['try_again', 'internal', ...FLAG_ERRORS, ...DORMANT_ERRORS])
+        const elsewhere = new Set<string>([
+          'try_again',
+          'internal',
+          ...FLAG_ERRORS,
+          ...REGISTER_ERRORS,
+          ...DORMANT_ERRORS,
+        ])
         const missing = Object.keys(MESSAGES).filter(code => !elsewhere.has(code) && !answered.has(code))
         expect(missing).toEqual([])
         const written = new Set(
@@ -1118,6 +1136,123 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     ])
     expect(twilioLike.sent).toEqual([])
     expect(s.logs.some(line => line.event === 'sms_provider_not_cleared' && line.personId === n.id)).toBe(true)
+  })
+
+  // The real transfer gate (C0.9 PD-15, TECH-SPEC T22 item 8): each case clears Twilio in an org of
+  // its own, since a clearance stays for the run and the bootstrap clears a provider only once, on a
+  // FakeVerify that names Twilio's entry, never real Twilio.
+  async function twilioOrg(): Promise<{ org: Org; dpo: Person; twilioLike: FakeVerify; app: FastifyInstance }> {
+    const org = await s.newOrg()
+    const dpo = await s.person({ org, roles: ['dpo'] })
+    const twilioLike = new FakeVerify({ transfer: 'twilio' })
+    return { org, dpo, twilioLike, app: await s.startApi({ sms: twilioLike }) }
+  }
+
+  // A code request on the api given, the send it made (if any) and its audit row's details.
+  async function codeOn(app: FastifyInstance, twilioLike: FakeVerify, person: Person) {
+    const before = twilioLike.countTo(person.e164)
+    const reply = await requestCode(s.client({ app }), person.e164)
+    await s.settled()
+    const rows = await eventually(
+      () => auditOf(person),
+      found => found.some(row => row.action === 'auth.code_requested'),
+    )
+    return {
+      status: reply.status,
+      sent: twilioLike.countTo(person.e164) - before,
+      send: rows.filter(row => row.action === 'auth.code_requested').at(-1)?.details,
+    }
+  }
+
+  it('XFR-I1 PDPA-10 C0.9 PD-15 OD-01: once the bootstrap clears Twilio, a newly started api sends the org’s first code at once', async () => {
+    // Budgets: N 1 code request.
+    const { org, dpo, twilioLike, app } = await twilioOrg()
+    const n = await s.person({ org })
+    await s.bootstrapClearance({ org, provider: 'twilio', dpo })
+    // The api has never served the org (it tracks an org only on signed-in requests): it asks
+    // transfer_cleared() in the send's own transaction, so nothing waits for a cache.
+    expect(await codeOn(app, twilioLike, n)).toEqual({ status: 200, sent: 1, send: { send: 'attempted' } })
+    // The clearance is the bootstrap's, in the DPO's name, written by Hearth (PD-23).
+    const [clearance] = await s.query<{ cleared_by: string; cleared_via: string; withdrawn_at: Date | null }>(
+      `select cleared_by, cleared_via, withdrawn_at from transfer_clearances where org_id = $1 and provider = 'twilio'`,
+      [org.id],
+    )
+    expect(clearance).toEqual({ cleared_by: dpo.id, cleared_via: 'bootstrap', withdrawn_at: null })
+  })
+
+  it('XFR-I2 PDPA-10 C0.9 PD-15 PD-20: once the DPO withdraws Twilio, the next code is skipped_not_cleared and a code-method re-authentication answers 503', async () => {
+    // Budgets: M 1 code request (its sign-in) and 1 re-authentication request; P 1; the DPO 1, on
+    // the stack's own api, whose fake names no entry.
+    const { org, dpo, twilioLike, app } = await twilioOrg()
+    const m = await s.person({ org })
+    const p = await s.person({ org })
+    await s.bootstrapClearance({ org, provider: 'twilio', dpo })
+    // M signs in through the api that checks Twilio's clearance, before the withdrawal.
+    const mc = s.client({ app })
+    expect((await requestCode(mc, m.e164)).status).toBe(200)
+    const signedIn = await verifyCode(mc, await twilioLike.nextCode(m.e164))
+    expect([signedIn.status, signedIn.body]).toMatchObject([200, { status: 'signed_in' }])
+
+    const dpoClient = await s.signIn(dpo)
+    const withdrawn = await dpoClient.post('/api/admin/registers/transfers/withdraw', { provider: 'twilio' })
+    expect([withdrawn.status, withdrawn.body]).toMatchObject([200, { cleared: false, changed: true }])
+
+    // The next code is decided against the withdrawal: nothing sent, the reply as for any number.
+    const skipped = await codeOn(app, twilioLike, p)
+    expect(skipped).toEqual({ status: 200, sent: 0, send: { send: 'skipped_not_cleared' } })
+    expect(s.logs.some(line => line.event === 'sms_provider_not_cleared' && line.personId === p.id)).toBe(true)
+    // A code-method re-authentication can't be sent either: 503, and nothing reaches the provider.
+    const sentBefore = twilioLike.countTo(m.e164)
+    const asked = await mc.post('/api/auth/reauth/code/request', {})
+    expect([asked.status, asked.error]).toEqual([503, 'unavailable'])
+    expect(twilioLike.countTo(m.e164)).toBe(sentBefore)
+    // The DPO's own session carries on (their PIN re-authenticates them, never a code).
+    expect((await dpoClient.get('/api/admin/registers')).status).toBe(200)
+  })
+
+  it('XFR-I3 PDPA-10 C0.9 PD-05 PD-12: the DPO records and clears Twilio in the app, and right after "save and keep cleared" a code is still sent', async () => {
+    // Budgets: Q 2 code requests; the DPO 1, on the stack's own api.
+    const { org, dpo, twilioLike, app } = await twilioOrg()
+    const q = await s.person({ org })
+    const dpoClient = await s.signIn(dpo)
+    const revisionOf = async () => {
+      const read = await dpoClient.get('/api/admin/registers')
+      const row = RegistersResponse.parse(read.body).transfers.find(entry => entry.provider === 'twilio')
+      if (row === undefined) throw new Error('no twilio entry')
+      return row
+    }
+    const recorded = await dpoClient.post('/api/admin/registers/transfers/record', {
+      provider: 'twilio',
+      seen: (await revisionOf()).revision,
+      ...CLEARING_FACTS,
+      keepCleared: false,
+    })
+    expect([recorded.status, recorded.body]).toMatchObject([200, { revision: 2, cleared: false, changed: true }])
+    const cleared = await dpoClient.post('/api/admin/registers/transfers/clear', { provider: 'twilio', seen: 2 })
+    expect([cleared.status, cleared.body]).toMatchObject([200, { revision: 2, cleared: true, changed: true }])
+    expect(await codeOn(app, twilioLike, q)).toEqual({ status: 200, sent: 1, send: { send: 'attempted' } })
+
+    // New facts, kept cleared: the old clearance ends (facts_changed) and the new one starts in the
+    // same commit, so a send never reads "not cleared" in between (T22 item 8).
+    const kept = await dpoClient.post('/api/admin/registers/transfers/record', {
+      provider: 'twilio',
+      seen: 2,
+      ...CLEARING_FACTS,
+      providerRetention: '60 days',
+      keepCleared: true,
+    })
+    expect([kept.status, kept.body]).toMatchObject([200, { revision: 3, cleared: true, changed: true }])
+    expect((await revisionOf()).clearance).toMatchObject({ clearedVia: 'app', revision: 3, withdrawnOn: null })
+    expect(await codeOn(app, twilioLike, q)).toEqual({ status: 200, sent: 1, send: { send: 'attempted' } })
+    const episodes = await s.query<{ register_revision: string; withdraw_reason: string | null }>(
+      `select register_revision::text, withdraw_reason from transfer_clearances
+       where org_id = $1 and provider = 'twilio' order by cleared_at, id`,
+      [org.id],
+    )
+    expect(episodes).toEqual([
+      { register_revision: '2', withdraw_reason: 'facts_changed' },
+      { register_revision: '3', withdraw_reason: null },
+    ])
   })
 
   it('T20 item 2: a foreign verification whose cancel fails gets no second start and nothing attached: sign-in answers as for any number, re-authentication 503, and a later request works (Qodo)', async () => {

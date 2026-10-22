@@ -4,7 +4,8 @@
 // From C0.6: the purpose keys (PDPA-01), the feature flag registry (T17), the outbox event
 // catalogue (T16) and the ids-only rule their schemas follow. From C0.7: the realtime gateway's
 // protocol (T19 item 10). From C0.8: the sign-in and re-authentication contract (T20), and the web
-// shell's answers and document headers, its Content Security Policy included (T21).
+// shell's answers and document headers, its Content Security Policy included (T21). From C0.9: the
+// processing and transfer registers' vocabulary, shared rules, bodies and answers (T22).
 
 export * from './api-errors.ts'
 export * from './auth.ts'
@@ -15,5 +16,6 @@ export * from './ids.ts'
 export * from './phone.ts'
 export * from './pin-policy.ts'
 export * from './purposes.ts'
+export * from './registers.ts'
 export * from './web.ts'
 export * from './web-headers.ts'

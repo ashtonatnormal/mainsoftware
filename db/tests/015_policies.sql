@@ -40,6 +40,12 @@ begin
     where p.schemaname not like 'pg\_%' and p.schemaname <> 'information_schema'
   ) y;
 
+  -- The registers (0009) are among them, by name, so they can't drop out of the list unseen.
+  perform pg_temp.check(expected @> (select array_agg(format('%s|org_isolation|PERMISSIVE|ALL|{public}|%s|%s', t, scoped, scoped))
+                                     from unnest(array['processing_register', 'transfer_register', 'transfer_clearances',
+                                                       'processing_restrictions']) t),
+                        'a register table is missing from the expected policies');
+
   select coalesce(array_agg(e order by e), '{}') into missing from unnest(expected) e where e <> all (actual);
   select coalesce(array_agg(a order by a), '{}') into extra from unnest(actual) a where a <> all (expected);
   perform pg_temp.check(cardinality(missing) = 0, format('these policies are missing or changed: %s', missing));

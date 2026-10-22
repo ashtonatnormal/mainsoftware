@@ -6,8 +6,8 @@
 // writes out exactly who it allows: every other actor must be refused. After the matrix come the
 // dimensions one row can't show: re-authentication, the two-person rule, changing your own roles,
 // ended roles, roles with no admin power yet, a run of every admin action an Admin may take, which
-// never opens #leadership, and (from C0.8) the PIN roles and the re-authentication method each
-// session uses (D46).
+// never opens #leadership, (from C0.8) the PIN roles and the re-authentication method each
+// session uses (D46), and (from C0.9) the registers, which are the DPO's alone (PDPA-13).
 //
 // The actors are the fixture org (src/testing) plus one persona per role holding exactly that role,
 // so each role's powers show on their own, and the seed's combined holders, which show that roles
@@ -1124,6 +1124,73 @@ const SECTIONS: readonly Section[] = [
     ],
   },
   {
+    ids: 'RGS-16 PDPA-01 PDPA-10 PDPA-13 C0.9 PD-20',
+    title:
+      'register.read, register.purpose.set and register.transfer.set (the DPO alone; no AI purpose or provider before A0)',
+    rows: [
+      {
+        name: 'PDPA-13: only a DPO reads the registers, never an Owner, Admin or Compliance Officer as such, nor a DPO who has left',
+        request: { action: 'register.read' },
+        allowed: DPOS,
+      },
+      {
+        name: 'PDPA-01: only a DPO records a purpose’s entry',
+        request: { action: 'register.purpose.set', purpose: 'security_audit' },
+        allowed: DPOS,
+      },
+      {
+        name: 'C0.9 PD-07: a pinned purpose’s too, which the database keeps active and off consent',
+        request: { action: 'register.purpose.set', purpose: 'accounts' },
+        allowed: DPOS,
+      },
+      {
+        name: 'D41: nobody records an AI purpose’s entry before A0, the DPO included',
+        request: { action: 'register.purpose.set', purpose: 'org_brain' },
+        allowed: NOBODY,
+      },
+      {
+        name: 'D41: nor the transcription test set’s, though it needs no switch',
+        request: { action: 'register.purpose.set', purpose: 'transcription_test_set' },
+        allowed: NOBODY,
+      },
+      {
+        name: 'nor a key that isn’t a purpose',
+        request: { action: 'register.purpose.set', purpose: 'acounts' },
+        allowed: NOBODY,
+      },
+      {
+        name: 'PDPA-10: only a DPO records a provider’s facts',
+        request: { action: 'register.transfer.set', provider: 'twilio', op: 'record' },
+        allowed: DPOS,
+      },
+      {
+        name: 'PDPA-10 D46: only a DPO clears a provider for use',
+        request: { action: 'register.transfer.set', provider: 'twilio', op: 'clear' },
+        allowed: DPOS,
+      },
+      {
+        name: 'C0.9 PD-20: only a DPO withdraws a clearance, never an Owner as such',
+        request: { action: 'register.transfer.set', provider: 'aws', op: 'withdraw' },
+        allowed: DPOS,
+      },
+      {
+        name: 'D41: nobody clears an AI provider before A0, the DPO included',
+        request: { action: 'register.transfer.set', provider: 'openai', op: 'clear' },
+        allowed: NOBODY,
+      },
+      {
+        name: 'D41: nor records Bedrock’s facts',
+        request: { action: 'register.transfer.set', provider: 'bedrock', op: 'record' },
+        allowed: NOBODY,
+      },
+      {
+        name: 'nor a key that isn’t a provider',
+        request: { action: 'register.transfer.set', provider: 'sendgrid', op: 'withdraw' },
+        allowed: NOBODY,
+      },
+    ],
+  },
+  {
     ids: 'ADM-03 ROOM-01 CHAT-01 FILE-01 D16',
     title: 'create (no re-authentication needed; only a person creates)',
     rows: [
@@ -1269,6 +1336,9 @@ const ADMIN_ACTION_IDS: Record<AdminRequest['action'], string> = {
   'channel.transfer_ownership': 'ADM-03',
   'privileged_console.open': 'ADM-12 PDPA-13',
   'flag.set': 'T17 ADM-10',
+  'register.read': 'PDPA-01 PDPA-10 PDPA-13',
+  'register.purpose.set': 'PDPA-01 PDPA-13 D41',
+  'register.transfer.set': 'PDPA-10 PDPA-13 D46',
 }
 const ADMIN_ACTIONS = Object.keys(ADMIN_ACTION_IDS) as AdminRequest['action'][]
 const isAdminRow = (row: Row) => (ADMIN_ACTIONS as string[]).includes(row.request.action)
@@ -1996,6 +2066,68 @@ function runAll(me: Id, check: (w: World, request: Request) => void = () => {}):
   }
   return { allowed, applied, last: w }
 }
+
+// The registers (PDPA-01, PDPA-10) are the DPO's alone (PDPA-13, C0.9 PD-20): the matrix's rows
+// above show each request on its own; these show the rule across every request and every actor, and
+// what re-authentication each needs.
+describe('PDPA-13 C0.9 PD-20: the registers are the DPO’s alone', () => {
+  const REGISTER_REQUESTS: readonly AdminRequest[] = [
+    { action: 'register.read' },
+    { action: 'register.purpose.set', purpose: 'presence_receipts' },
+    ...(['record', 'clear', 'withdraw'] as const).map(
+      (op): AdminRequest => ({ action: 'register.transfer.set', provider: 'apple_push', op }),
+    ),
+  ]
+
+  test('RGS-16 PDPA-13: the registers are the DPO’s alone: a DPO, alone or with another role, reads and changes them, and nobody else does', () => {
+    for (const request of REGISTER_REQUESTS) {
+      expect(allowedIn(W, request), JSON.stringify(request)).toEqual(inOrder(DPOS))
+    }
+    // Ashton holds them as the DPO, not as the Owner: the Owner persona, an Admin and the
+    // Compliance Officer are refused, and so is Ashton once the DPO row is revoked.
+    const ashtonNotDpo = matrixWorld(f => ({
+      ...f,
+      roles: f.roles.map(r => (r.personId === P.ashton && r.role === 'dpo' ? { ...r, revokedAt: 1 } : r)),
+    }))
+    expect(ashtonNotDpo.rolesOf(P.ashton).map(r => r.role)).toEqual(['owner'])
+    for (const request of REGISTER_REQUESTS) {
+      expect(can(ashtonNotDpo, human(P.ashton), request, REAUTH), request.action).toBe(false)
+      expect(allowedIn(ashtonNotDpo, request), request.action).toEqual(['dpo'])
+    }
+  })
+
+  test('RGS-16 ACC-05 Rule 6: a DPO who has left, or whose role was revoked, holds nothing of the registers', () => {
+    const revoked = matrixWorld(f => ({
+      ...f,
+      roles: f.roles.map(r => (r.personId === ONE.dpo ? { ...r, revokedAt: 1 } : r)),
+    }))
+    for (const request of REGISTER_REQUESTS) {
+      expect(can(W, human(P.formerDpo), request, REAUTH), request.action).toBe(false)
+      expect(can(revoked, human(ONE.dpo), request, REAUTH), request.action).toBe(false)
+    }
+  })
+
+  test('RGS-16 §9.4 D46 C0.9 PD-30: even reading them needs a fresh re-authentication, which for a DPO is the PIN', () => {
+    const pinRule: ReauthFacts = { stampFresh: true, pinSet: true, issuedUnderPinRule: true }
+    for (const id of [ONE.dpo, P.ashton]) {
+      expect(reauthMethodOf(W, id, pinRule), id).toBe('pin')
+      for (const request of REGISTER_REQUESTS) {
+        const fresh = { reauthenticated: reauthenticated(W, id, pinRule) }
+        const stale = { reauthenticated: reauthenticated(W, id, { ...pinRule, stampFresh: false }) }
+        expect(can(W, human(id), request, fresh), `${id} ${request.action}`).toBe(true)
+        expect(can(W, human(id), request, stale), `${id} ${request.action}`).toBe(false)
+        expect(can(W, human(id), request), `${id} ${request.action}`).toBe(false)
+      }
+      // A DPO's session that isn't on the PIN rule can't re-authenticate at all: only a new
+      // sign-in, through the PIN step, mends it (D46), so it never reaches the registers.
+      const codeSession: ReauthFacts = { stampFresh: true, pinSet: true, issuedUnderPinRule: false }
+      expect(reauthMethodOf(W, id, codeSession), id).toBe('sign_in')
+      expect(
+        can(W, human(id), { action: 'register.read' }, { reauthenticated: reauthenticated(W, id, codeSession) }),
+      ).toBe(false)
+    }
+  })
+})
 
 describe('Rule 9 ACC-10 ADM-03 ACC-07: no run of admin actions opens content to the person taking them', () => {
   test('Rule 9 ADM-03 ACC-07 CHAT-01: no run of the actions Arjun is allowed lets them read #leadership', () => {

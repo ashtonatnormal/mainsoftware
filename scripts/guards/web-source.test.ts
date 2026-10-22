@@ -584,6 +584,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     expect([...guarded].sort()).toEqual(
       [
         ...CLIPBOARD_FIELD_FILES,
+        'dpo/ReauthPin.tsx',
         'sign-in/CodeStep.tsx',
         'sign-in/PhoneStep.tsx',
         'sign-in/PinStep.tsx',

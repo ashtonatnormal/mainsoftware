@@ -11,10 +11,11 @@ import {
 } from './web.ts'
 
 const personId = '0b9e6f2e-3c1a-4d5b-8e7f-1a2b3c4d5e6f'
+const capabilities = { registers: false }
 
 describe('T21 item 10: GET /api/session', () => {
-  test('T21 item 10: the answer is the person, a name and a zone, and nothing more', () => {
-    const answer = { personId, name: 'Ahmad', timeZone: 'Asia/Kuala_Lumpur' }
+  test('T21 item 10: the answer is the person, a name, a zone and capability booleans, and nothing more', () => {
+    const answer = { personId, name: 'Ahmad', timeZone: 'Asia/Kuala_Lumpur', capabilities }
     expect(SessionResponse.parse(answer)).toEqual(answer)
     for (const extra of [{ phone: '+65 8000 0003' }, { roles: ['admin'] }, { orgId: personId }]) {
       expect(SessionResponse.safeParse({ ...answer, ...extra }).success, Object.keys(extra)[0]).toBe(false)
@@ -24,8 +25,27 @@ describe('T21 item 10: GET /api/session', () => {
     expect(SessionResponse.safeParse({ ...answer, timeZone: '' }).success).toBe(false)
   })
 
+  test('C0.9 PD-26 T21 item 10: capabilities are booleans can() decides, never roles, and the server always sends them', () => {
+    const answer = { personId, name: 'Ashton', timeZone: DEFAULT_TIME_ZONE }
+    for (const registers of [true, false]) {
+      expect(SessionResponse.parse({ ...answer, capabilities: { registers } }).capabilities).toEqual({ registers })
+    }
+    for (const bad of [
+      undefined,
+      null,
+      {},
+      { registers: 'true' },
+      { registers: 1 },
+      { registers: true, roles: ['dpo'] },
+      { registers: true, admin: true },
+      ['registers'],
+    ]) {
+      expect(SessionResponse.safeParse({ ...answer, capabilities: bad }).success, JSON.stringify(bad)).toBe(false)
+    }
+  })
+
   test('migration 0002: a name is bounded at 200 characters as Postgres counts them, emoji included', () => {
-    const answer = { personId, timeZone: DEFAULT_TIME_ZONE }
+    const answer = { personId, timeZone: DEFAULT_TIME_ZONE, capabilities }
     expect(SessionResponse.safeParse({ ...answer, name: 'a'.repeat(200) }).success).toBe(true)
     expect(SessionResponse.safeParse({ ...answer, name: 'a'.repeat(201) }).success).toBe(false)
     // 200 code points, 400 UTF-16 units: the database holds it, so the answer must carry it.
@@ -48,9 +68,31 @@ describe('T21 item 10: GET /api/session', () => {
       personId,
       name: 'Ahmad',
       timeZone: 'UTC',
+      capabilities: { registers: false },
     })
     expect(SessionResponseForClient.safeParse({ name: 'Ahmad', timeZone: 'UTC' }).success).toBe(false)
     expect(SessionResponseForClient.safeParse({ personId, timeZone: 'UTC' }).success).toBe(false)
+  })
+
+  test('C0.9 PD-26 P6: SessionResponseForClient reads a capability true only when the answer says true', () => {
+    const answer = { personId, name: 'Ashton', timeZone: 'UTC' }
+    const read = (value: unknown) => SessionResponseForClient.parse({ ...answer, capabilities: value }).capabilities
+    expect(read({ registers: true })).toEqual({ registers: true })
+    // A capability the client doesn't know yet is dropped, and the ones it knows still read.
+    expect(read({ registers: true, admin: true })).toEqual({ registers: true })
+    for (const value of [
+      { registers: false },
+      { registers: 'true' },
+      { registers: 1 },
+      {},
+      null,
+      'registers',
+      [true],
+    ]) {
+      expect(read(value), JSON.stringify(value)).toEqual({ registers: false })
+    }
+    // An answer from before C0.9, with no capabilities, offers nothing.
+    expect(SessionResponseForClient.parse(answer).capabilities).toEqual({ registers: false })
   })
 })
 

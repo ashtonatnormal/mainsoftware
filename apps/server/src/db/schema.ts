@@ -171,6 +171,8 @@ export interface OutboxEvents {
     | 'person.deactivated'
     | 'acl.changed'
     | 'flag.changed'
+    | 'register.purpose_changed'
+    | 'register.transfer_changed'
     | 'person.added'
     | 'person.updated'
     | 'person.phone_changed'
@@ -270,6 +272,45 @@ export interface Principals {
   archived_by: string | null
 }
 
+export interface ProcessingRegister {
+  id: Generated<string>
+  org_id: string
+  purpose: string
+  ai: boolean
+  pinned: boolean
+  needs_switch: boolean
+  version: number
+  status: 'planned' | 'active' | 'retired'
+  basis:
+    | 'employment'
+    | 'legitimate_interests'
+    | 'business_improvement'
+    | 'consent'
+    | 'deemed_consent_conduct'
+    | 'deemed_consent_notification'
+    | 'other_exception'
+    | null
+  basis_reference: string | null
+  opt_out_days: number | null
+  retention: string | null
+  providers: Generated<string[]>
+  recorded_at: Generated<Timestamp>
+  recorded_by: string | null
+}
+
+export interface ProcessingRestrictions {
+  id: Generated<string>
+  org_id: string
+  person_id: string
+  purpose: string
+  effective_at: Timestamp
+  created_at: Generated<Timestamp>
+  created_by: string
+  case_id: string | null
+  lifted_at: Timestamp | null
+  lifted_by: string | null
+}
+
 export interface Profiles {
   person_id: string
   org_id: string
@@ -364,6 +405,46 @@ export interface Teams {
   archived_by: string | null
 }
 
+export interface TransferClearances {
+  id: Generated<string>
+  org_id: string
+  entry_id: string
+  provider: string
+  register_revision: Int8
+  facts: Json
+  cleared_at: Generated<Timestamp>
+  cleared_by: string
+  cleared_via: 'app' | 'bootstrap'
+  withdrawn_at: Timestamp | null
+  withdrawn_by: string | null
+  withdraw_reason: 'dpo_decision' | 'facts_changed' | null
+}
+
+export interface TransferRegister {
+  id: Generated<string>
+  org_id: string
+  provider: string
+  ai: boolean
+  services: string | null
+  data_types: string | null
+  processing_countries: Generated<string[]>
+  storage_countries: Generated<string[]>
+  countries_confirmed: string | null
+  safeguard: 'dpa' | 'dpa_addendum' | 'certification' | null
+  safeguard_reference: string | null
+  certificate_verified_on: Timestamp | null
+  dpa_terms_confirmed: Generated<boolean>
+  training: 'off' | 'not_applicable' | null
+  zero_retention: 'granted' | 'refused' | 'not_offered' | 'not_applicable' | 'pending' | null
+  provider_retention: string | null
+  retention_confirmed: string | null
+  onward_recipients: string | null
+  review_on: Timestamp | null
+  revision: Generated<Int8>
+  updated_at: Generated<Timestamp>
+  updated_by: string | null
+}
+
 export interface Users {
   id: string
   org_id: string
@@ -405,6 +486,8 @@ export interface DB {
   people: People
   phone_numbers: PhoneNumbers
   principals: Principals
+  processing_register: ProcessingRegister
+  processing_restrictions: ProcessingRestrictions
   profiles: Profiles
   role_assignments: RoleAssignments
   schedule_runs: ScheduleRuns
@@ -412,6 +495,8 @@ export interface DB {
   sessions: Sessions
   team_memberships: TeamMemberships
   teams: Teams
+  transfer_clearances: TransferClearances
+  transfer_register: TransferRegister
   users: Users
   working_hours: WorkingHours
 }

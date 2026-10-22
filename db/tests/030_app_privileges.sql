@@ -6,9 +6,10 @@
 -- passkeys; no UPDATE of a passkey's key or credential id; no write of a session's start,
 -- last-seen or re-authentication time, or of when a PIN last failed, that the database doesn't
 -- stamp; from 0007, reading the outbox or choosing an event's id, position or time, and any grant
--- on jobs, schedules, a fence or the clean-up) fails. Nothing may be granted to PUBLIC at all, and
--- hearth_app can create no schema object or temporary table. 032 pins the worker's roles the same
--- way.
+-- on jobs, schedules, a fence or the clean-up; from 0009, writing a register row itself, any grant
+-- on processing_restrictions, or running the bootstrap's clearance) fails. Nothing may be granted to
+-- PUBLIC at all, and hearth_app can create no schema object or temporary table. 032 pins the
+-- worker's roles the same way.
 \ir fixtures/two_orgs.sql
 
 do $$
@@ -78,6 +79,9 @@ declare
     'outbox_events.ids: INSERT', 'outbox_events.index_class: INSERT', 'outbox_events.org_id: INSERT',
     'outbox_events.purpose: INSERT', 'outbox_events.subject_ids: INSERT', 'outbox_events.tombstone: INSERT',
     'outbox_events.type: INSERT', 'outbox_events.version: INSERT',
+    -- The registers (0009, C0.9 PR 1): read for the DPO's pages, changed only through the DPO's
+    -- functions below; nothing on processing_restrictions until C2.11.
+    'processing_register: SELECT', 'transfer_register: SELECT', 'transfer_clearances: SELECT',
     -- Functions.
     'function is_iana_time_zone(text): EXECUTE',
     -- The outbox's ids check runs as whoever writes the row (0007).
@@ -86,7 +90,14 @@ declare
     -- The two sign-in lookups that run before the org is known (0006).
     'function person_by_phone(text): EXECUTE',
     'function session_by_token(bytea,interval): EXECUTE',
-    'function read_audit_events(timestamp with time zone,timestamp with time zone,bigint,integer): EXECUTE'
+    'function read_audit_events(timestamp with time zone,timestamp with time zone,bigint,integer): EXECUTE',
+    -- The DPO's register changes (0009, PDPA-01, PDPA-10, PDPA-13), and the transfer gate a send
+    -- asks in its own transaction (C0.9 PD-15).
+    'function set_register_purpose(text,integer,text,text,text,integer,text,text[],text,uuid,inet): EXECUTE',
+    'function record_transfer_entry(text,bigint,text,text,text[],text[],text,text,text,date,boolean,text,text,text,text,text,date,boolean,text,uuid,inet): EXECUTE',
+    'function clear_transfer_entry(text,bigint,text,uuid,inet): EXECUTE',
+    'function withdraw_transfer_clearance(text,text,uuid,inet): EXECUTE',
+    'function transfer_cleared(text): EXECUTE'
   ];
 begin
   perform pg_temp.expect_privileges('hearth_app', expected);

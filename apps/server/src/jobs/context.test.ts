@@ -5,8 +5,9 @@ import { z } from 'zod'
 import type { FlagVerdict } from '#src/flags/cache.ts'
 import { JobAttempt } from '#src/jobs/context.ts'
 import { JobAborted, JobRefused, PermanentJobError } from '#src/jobs/errors.ts'
-import { C06_GATE, type Gate } from '#src/jobs/gate.ts'
+import type { Gate } from '#src/jobs/gate.ts'
 import { defineJob, type JobKind } from '#src/jobs/kinds.ts'
+import { coreOnlyGate } from '#src/testing/gates.ts'
 import { captureLogger } from '#src/testing/logs.ts'
 import { pgError, type Statement, scriptedPool } from '#src/testing/pool.ts'
 
@@ -51,7 +52,7 @@ function setup(
   }
   const attempt = new JobAttempt({
     db: p.db,
-    gate: options.gate ?? C06_GATE,
+    gate: options.gate ?? coreOnlyGate,
     flags: { verdict: () => verdict.value as FlagVerdict, registry },
     kind: options.kind ?? kindWith(),
     job: { id: JOB, orgId: ORG, kind: 'it.work', attempt: 1, maxAttempts: 5, subjectId: PERSON, payload: {} },
@@ -134,7 +135,7 @@ describe('C0.6 T15 items 3 and 10 a job’s context: the gate first, the fence l
   })
 
   it('throws a refusal as it is: a kind that never calls step() still makes no effect, since commit() admits too', async () => {
-    const { p, attempt, hooks } = setup({ gate: { ...C06_GATE, processingAllowed: () => false } })
+    const { p, attempt, hooks } = setup({ gate: { ...coreOnlyGate, processingAllowed: () => false } })
     const error = await attempt
       .commit(async trx => sql`insert into it_effects (n) values (1)`.execute(trx), {
         finish: true,

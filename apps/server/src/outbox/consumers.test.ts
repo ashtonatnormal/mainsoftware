@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { C06_GATE, type Gate } from '#src/jobs/gate.ts'
+import { registerGate } from '#src/compliance/gate.ts'
+import type { Gate } from '#src/jobs/gate.ts'
 import { BelowFloor, ConsumerRunner, type OutboxConsumer } from '#src/outbox/consumers.ts'
 import type { OutboxRow } from '#src/outbox/positions.ts'
+import { coreOnlyGate, registerStateOf } from '#src/testing/gates.ts'
 import { captureLogger } from '#src/testing/logs.ts'
 import { pgError, type Statement, scriptedPool } from '#src/testing/pool.ts'
 
@@ -99,7 +101,7 @@ function runner(p: ReturnType<typeof pool>, consumers: OutboxConsumer[], options
     db: p.db,
     consumers,
     flags,
-    gate: options.gate ?? C06_GATE,
+    gate: options.gate ?? coreOnlyGate,
     logger: log.logger,
     pollMs: 500,
   })
@@ -197,7 +199,8 @@ describe('C0.6 T16 one round of an outbox consumer', () => {
     expect(await off.run.round(spec, ORG)).toBe('refused')
     expect(p.texts().filter(text => text.includes("set_config('role'")).length).toBe(0)
     expect(off.log.events('outbox_consumer_paused')).toHaveLength(1)
-    // A consumer with an AI purpose, or naming a provider, is refused by C0.6's gate.
+    // A consumer with an AI purpose, or naming a provider not cleared, is refused by the purpose gate
+    // (here over a register never read, C0.9 PD-07).
     const ai = consumer({ purpose: 'org_brain' })
     const refused = runner(p, [ai.spec])
     expect(await refused.run.round(ai.spec, ORG)).toBe('refused')
@@ -243,7 +246,7 @@ describe('C0.6 T16 one round of an outbox consumer', () => {
 
   it('passes over an event whose subject’s processing switch refuses the purpose, logging its id, and still moves past it', async () => {
     const p = pool({ batch: [eventRow(4, 'person.deactivated', [OTHER]), eventRow(5, 'person.deactivated')] })
-    const gate: Gate = { ...C06_GATE, processingAllowed: (_org, subject) => subject !== OTHER }
+    const gate: Gate = { ...coreOnlyGate, processingAllowed: (_org, subject) => subject !== OTHER }
     const { spec, handled } = consumer()
     const { run, log } = runner(p, [spec], { gate })
     await run.round(spec, ORG)
@@ -258,7 +261,7 @@ describe('C0.6 T16 one round of an outbox consumer', () => {
 
   it('C0.7 S8 T19 item 4: withholds none of a protective consumer’s events for a subject’s switch, while it withholds another’s', async () => {
     const batch = [eventRow(4, 'signin.ended', [OTHER]), eventRow(5, 'person.deactivated', [PERSON, OTHER])]
-    const refusing: Gate = { ...C06_GATE, processingAllowed: () => false }
+    const refusing: Gate = { ...coreOnlyGate, processingAllowed: () => false }
     const protective = consumer({ name: 'it_protective', role: 'hearth_job_revocation', protective: true })
     const plain = consumer()
     const p = pool({ batch })
@@ -277,6 +280,27 @@ describe('C0.6 T16 one round of an outbox consumer', () => {
       expect.objectContaining({ consumer: 'it_protective_ai', reason: 'purpose_refused' }),
     ])
     expect(ai.handled).toEqual([])
+  })
+
+  it('PGT-10 C0.9 PD-07 T19 item 4: with the registers never read, or stale, revocation’s and offboarding’s consumers (accounts) are admitted and withhold nothing', async () => {
+    const batch = [eventRow(4, 'signin.ended', [OTHER]), eventRow(5, 'person.deactivated', [PERSON, OTHER])]
+    // Never read and stale read the same to the gate (FlagCache.register() answers undefined for
+    // both); a register read whose entries would refuse anything else changes nothing for accounts.
+    const unread = registerGate({ register: () => undefined })
+    const refusingAllElse = registerGate({
+      register: () => registerStateOf({ purposes: { accounts: { status: 'retired', basis: 'consent' } } }),
+    })
+    for (const gate of [unread, refusingAllElse]) {
+      const offboarding = consumer({ name: 'it_offboarding' })
+      const revocation = consumer({ name: 'it_revocation', role: 'hearth_job_revocation', protective: true })
+      for (const { spec, handled } of [offboarding, revocation]) {
+        const { run, log } = runner(pool({ batch }), [spec], { gate })
+        expect(await run.round(spec, ORG)).toBe('idle')
+        expect(handled.map(events => events.map(event => event.id))).toEqual([['4', '5']])
+        expect(log.events('outbox_event_withheld')).toEqual([])
+        expect(log.events('outbox_consumer_refused')).toEqual([])
+      }
+    }
   })
 
   it('C0.7 m4: moves the checkpoint past a round whose handle() passed over every event', async () => {
@@ -404,7 +428,7 @@ describe('C0.6 T16 the consumers’ loop', () => {
       db: p.db,
       consumers: [spec],
       flags: { isOn: () => true, revisionsOf: () => [1], reload: async () => {} },
-      gate: C06_GATE,
+      gate: coreOnlyGate,
       logger: log.logger,
       pollMs: 500,
       now: () => now,

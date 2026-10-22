@@ -12,7 +12,10 @@ import {
   idsProblems,
   isAiFlag,
   isAiPurpose,
+  isLockedOn,
+  isPinnedPurpose,
   isPurposeKey,
+  PINNED_PURPOSES,
   PROVIDERS,
   type ProviderKey,
   type PurposeKey,
@@ -43,9 +46,13 @@ export interface JobKind<P extends object = object> {
   readonly timeoutMs: number
   // What happens to its work when its feature is switched off: requeued to wait for it (essential
   // flags' default) or cancelled (optional flags'). A cohort that leaves its person out always
-  // cancels it.
+  // cancels it. A refusal by the purpose gate cancels it either way (the runner waits on none yet),
+  // so work that waits serves only a pinned purpose, which the gate always allows, and names no
+  // provider (G3 below; C0.9 PD-18, TECH-SPEC T22 item 10).
   readonly onFlagOff?: 'requeue' | 'cancel'
-  // Outside providers it sends personal data to (PDPA-10); each must be cleared.
+  // Outside providers it sends personal data to (PDPA-10); each must be cleared. None for work that
+  // waits while its flag is off, or under a locked-on or essential flag, until the runner waits on
+  // a gate refusal (G3).
   readonly providers?: readonly ProviderKey[]
   // It commits in several transactions, each safe to repeat, since a retry starts it again from
   // the top (T15 item 3). Without it, only the finishing commit is allowed.
@@ -118,6 +125,15 @@ export const isRetired = (schedule: ScheduleDef | RetiredSchedule): schedule is 
 // core.system's accounts work protective (T19 item 4), and every payload and ids schema ids only.
 // Until A0 nothing may serve an AI purpose or an ai.* flag (D41): C0.9's purpose gate is the second
 // lock.
+//
+// G3 (C0.9 PD-18, TECH-SPEC T22 item 10): the runner cancels a job the purpose gate refuses, for
+// whatever reason but a spend cap, and a gate never read or gone stale refuses every purpose but
+// the pinned ones, while a locked-on flag still reads on. So a kind whose work waits while its flag
+// is off (onFlagOff 'requeue', or unset under an essential flag) must serve a pinned purpose and
+// name no provider, and so must a kind under a locked-on or essential flag name none, whatever its
+// onFlagOff: a withdrawn clearance or a stale register would otherwise cancel work that must not
+// be lost. The step that first needs otherwise (C0.14's push if essential, C2.2's LiveKit handler,
+// A1) makes the runner skip claims of refused waiting kinds and requeue an essential refusal first.
 export function validateRegistries(registries: Registries, flags: Readonly<Record<string, FlagSpec>>): void {
   const problems: string[] = []
   const flagOf = (key: string) => (Object.hasOwn(flags, key) ? flags[key] : undefined)
@@ -143,6 +159,21 @@ export function validateRegistries(registries: Registries, flags: Readonly<Recor
     if (kinds.has(kind.kind)) problems.push(`${what}: two job kinds have this name`)
     kinds.set(kind.kind, kind)
     checkWork(what, kind.feature, kind.purpose, kind.providers)
+    const flag = flagOf(kind.feature)
+    if (flag !== undefined) {
+      const essential = flag.class === 'essential'
+      const waits = kind.onFlagOff === 'requeue' || (kind.onFlagOff === undefined && essential)
+      if (waits && !isPinnedPurpose(kind.purpose)) {
+        problems.push(
+          `${what}: work that waits while its flag is off serves only a pinned purpose (${PINNED_PURPOSES.join(', ')}), until the runner waits on a gate refusal (TECH-SPEC T22 item 10)`,
+        )
+      }
+      if ((kind.providers ?? []).length > 0 && (waits || essential || isLockedOn(kind.feature, flags))) {
+        problems.push(
+          `${what}: work that waits while its flag is off, or runs under a locked-on or essential flag, names no provider, until the runner waits on a gate refusal (TECH-SPEC T22 item 10)`,
+        )
+      }
+    }
     if (!isJobRole(kind.role) || !JOB_RUN_ROLES.includes(kind.role)) {
       problems.push(`${what}: ${kind.role} is not a role that runs jobs (${JOB_RUN_ROLES.join(', ')})`)
     }

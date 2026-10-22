@@ -4,8 +4,13 @@
 //   1. can() decides flag.set (Principle 1), with a re-authentication from the last 5 minutes
 //      (§9.4): only an Owner or Admin, and never for an ai.* flag, which A0 decides (ADM-05, ADM-10);
 //   2. a key this process doesn't know answers 404, as one the org has no row for does;
-//   3. turning on a feature whose purposes the gate refuses answers 409 purpose_refused: the seam
-//      C0.9's purpose register fills (until then every AI purpose is refused, jobs/gate.ts);
+//   3. a change that lets the feature reach anyone it doesn't reach now (turning it on, or, while
+//      it is on, widening its cohort or giving it to the whole org) answers 409 purpose_refused when
+//      the purpose gate refuses any of its own purposes, judged on the registers read in this
+//      transaction (C0.9 PD-19, TECH-SPEC T22 item 11; compliance/registers.ts). Turning a flag off,
+//      narrowing it, and a change that reaches nobody new are never refused, and no register change
+//      is ever refused because a flag is on. A flag's own purposes are the whole check, since no
+//      flag outside ai.* has a flag under it (G2, packages/shared catalogues.test.ts);
 //   4. set_feature_flag() (migration 0007) re-checks the person and their role FOR SHARE, refuses a
 //      locked flag (HF003) and a change that adds anyone outside the org or who has left it (HF004,
 //      reading them FOR SHARE; someone already named who has since left stays and matches nothing),
@@ -24,10 +29,10 @@ import { authorise } from '#src/access/world.ts'
 import type { Api } from '#src/api.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { inSession, type SessionIds } from '#src/auth/sessions.ts'
+import { purposeAllowed, readRegisterState } from '#src/compliance/registers.ts'
 import { FLAG_LOCKED, INSUFFICIENT_PRIVILEGE, INVALID_COHORT, INVALID_PARAMETER, sqlstateOf } from '#src/db/sqlstate.ts'
 import { publishFlags } from '#src/flags/channel.ts'
 import { type Answer, type ReqInfo, Uuid } from '#src/http.ts'
-import { C06_GATE } from '#src/jobs/gate.ts'
 import { appendOutbox } from '#src/outbox/append.ts'
 
 // The codes only this route answers, which its integration suite must see (and the sign-in
@@ -59,6 +64,32 @@ export const SetFlagBody = z
   })
 export type SetFlagBody = z.output<typeof SetFlagBody>
 
+// A flag's row as the route reads it before the change.
+interface FlagRow {
+  enabled: boolean
+  audience: 'org' | 'cohort'
+  cohort_people: string[]
+  cohort_roles: string[]
+}
+
+// Whether the change lets the feature reach anyone it doesn't reach now (C0.9 PD-19): turning it
+// on; or, while it is on, going from a cohort to the whole org, or naming a person or role the
+// cohort didn't (the new cohort isn't a subset of the old, entry by entry, so a person newly named
+// who already held a named role counts as new). Turning it off, narrowing it, and the same audience
+// again reach nobody new. Ids compare as the database stores them: lower case, as Uuid gives them.
+export function widens(
+  before: FlagRow,
+  after: Pick<SetFlagBody, 'enabled' | 'audience' | 'people' | 'roles'>,
+): boolean {
+  if (!after.enabled) return false
+  if (!before.enabled) return true
+  if (before.audience === 'org') return false
+  if (after.audience === 'org') return true
+  const people = new Set(before.cohort_people)
+  const roles = new Set<string>(before.cohort_roles)
+  return after.people.some(person => !people.has(person)) || after.roles.some(role => !roles.has(role))
+}
+
 export async function setFlag(api: Api, body: SetFlagBody, session: SessionIds, info: ReqInfo): Promise<Answer> {
   if (body.problem !== undefined) throw new ApiError(400, 'invalid_cohort')
   const { orgId } = session
@@ -66,20 +97,24 @@ export async function setFlag(api: Api, body: SetFlagBody, session: SessionIds, 
     await authorise(trx, session, { action: 'flag.set', key: body.key }, 'forbidden')
     const spec = Object.hasOwn(api.flags.registry, body.key) ? api.flags.registry[body.key] : undefined
     if (spec === undefined) throw new ApiError(404, 'not_found')
-    if (body.enabled && spec.purposes.some(purpose => !C06_GATE.purposeAllowed(orgId, purpose))) {
-      throw new ApiError(409, 'purpose_refused')
-    }
-    // The row as it is, so a call that changes nothing (set_feature_flag() returns the same
-    // revision and writes nothing) appends and publishes nothing either. A change committed between
-    // this read and the call at worst adds one flag.changed, which consumers handle by re-reading
-    // the flag (A9).
+    // The row as it is: whether the change reaches anyone new, and so a call that changes nothing
+    // (set_feature_flag() returns the same revision and writes nothing) appends and publishes
+    // nothing either. A change committed between this read and the call at worst adds one
+    // flag.changed, which consumers handle by re-reading the flag (A9); one that would make this
+    // change reach someone new is caught below.
     const before = await trx
       .selectFrom('feature_flags')
-      .select(['id', 'revision'])
+      .select(['id', 'revision', 'enabled', 'audience', 'cohort_people', 'cohort_roles'])
       .where('org_id', '=', orgId)
       .where('key', '=', body.key)
       .executeTakeFirst()
     if (before === undefined) throw new ApiError(404, 'not_found')
+    const widening = widens(before, body)
+    if (widening) {
+      // A plain read of the registers as they are now; hearth_app reads no restrictions.
+      const registers = await readRegisterState(trx, orgId, { restrictions: false })
+      if (spec.purposes.some(purpose => !purposeAllowed(registers, purpose))) throw new ApiError(409, 'purpose_refused')
+    }
     let revision: number
     try {
       const { rows } = await sql<{ revision: string }>`select public.set_feature_flag(${body.key}, ${body.enabled},
@@ -90,6 +125,10 @@ export async function setFlag(api: Api, body: SetFlagBody, session: SessionIds, 
       throw refusalOf(error) ?? error
     }
     const changed = revision !== Number(before.revision)
+    // Another change committed between the read above and set_feature_flag(): a change judged to
+    // reach nobody new was judged on a row that has gone (turned off meanwhile, this would turn it
+    // back on unchecked), so it rolls back and the admin tries again on the row as it is now.
+    if (!widening && changed && revision !== Number(before.revision) + 1) throw new ApiError(409, 'try_again')
     if (changed) {
       await appendOutbox(trx, {
         orgId,

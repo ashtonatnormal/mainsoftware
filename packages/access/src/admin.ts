@@ -1,3 +1,4 @@
+import { isAiProvider, isAiPurpose, isProviderKey, isPurposeKey } from '@hearth/shared'
 import type { Id, OrgRole, Ref } from './model.ts'
 import { OWNER_ONLY_ROLES, TWO_PERSON_ROLES } from './model.ts'
 import type { AdminRequest, RequestContext } from './requests.ts'
@@ -169,6 +170,18 @@ export function adminCan(world: World, actor: Id, request: AdminRequest, context
       // Opening the console only: every read through it is a Rule 9 read against a case, in the
       // privileged module (ADM-12, PDPA-13).
       return request.console === 'compliance' ? world.holds(actor, 'compliance_officer') : world.holds(actor, 'dpo')
+    // PDPA-01 "maintained by the DPO", PDPA-13 "access to the registers": the DPO alone, never an
+    // Owner, Admin or Compliance Officer as such, withdrawing a clearance included (C0.9 PD-20).
+    // Reading needs the fresh re-authentication every admin action does, as reading the audit log
+    // does (PD-30). Not Rule 9: the registers hold no content, and nothing here goes through the
+    // Rule 9 module. An AI purpose stays planned with nothing recorded, and no AI provider is
+    // cleared, until A0, whoever asks (D41); the database refuses both as well (migration 0009).
+    case 'register.read':
+      return world.holds(actor, 'dpo')
+    case 'register.purpose.set':
+      return isPurposeKey(request.purpose) && !isAiPurpose(request.purpose) && world.holds(actor, 'dpo')
+    case 'register.transfer.set':
+      return isProviderKey(request.provider) && !isAiProvider(request.provider) && world.holds(actor, 'dpo')
     default:
       return false
   }

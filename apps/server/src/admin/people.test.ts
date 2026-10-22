@@ -11,6 +11,7 @@ import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { AfterResponse, type ReqInfo } from '#src/http.ts'
 import { staticFlags } from '#src/testing/flags.ts'
 import { appended, type Statement, scriptedPool } from '#src/testing/pool.ts'
+import { NOTHING_CLEARED } from '#src/testing/transfers.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const ADMIN = 'b0000000-0000-4000-8000-000000000001'
@@ -73,6 +74,7 @@ function context(pool: ReturnType<typeof scriptedPool>, options: { publishRevoke
     rp: relyingParty('https://hearth.example.com'),
     otp: { verifyFloorMs: 0, breaker: new Breaker(OTP.breaker) },
     passkeys: false,
+    transfers: NOTHING_CLEARED,
   }
   const info: ReqInfo = {
     ip: '198.51.100.7',

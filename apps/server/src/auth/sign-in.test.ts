@@ -24,6 +24,7 @@ import { valkeyKeys } from '#src/auth/valkey-keys.ts'
 import { AfterResponse, type ReqInfo } from '#src/http.ts'
 import { staticFlags } from '#src/testing/flags.ts'
 import { type Statement, scriptedPool, systemPrincipal } from '#src/testing/pool.ts'
+import { CLEARING, NOTHING_CLEARED } from '#src/testing/transfers.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const PERSON = 'b0000000-0000-4000-8000-000000000001'
@@ -156,6 +157,7 @@ function context(valkey: Redis, pool = scriptedPool(), sms: SmsProvider = checki
     rp: relyingParty('https://hearth.example.com'),
     otp: { verifyFloorMs: 0, breaker: new Breaker(OTP.breaker) },
     passkeys: false,
+    transfers: NOTHING_CLEARED,
   }
   const info: ReqInfo = {
     ip: '198.51.100.7',
@@ -579,12 +581,17 @@ describe('ACC-03 T14 sending a code after the reply', () => {
   // audit row's details.
   async function delivered(
     person: { left?: boolean; numberRemoved?: boolean },
-    options: { sms?: FakeVerify; gate?: Api['gate']; info?: (info: ReqInfo) => void } = {},
+    options: {
+      sms?: FakeVerify
+      transfers?: Api['transfers']
+      info?: (info: ReqInfo) => void
+      pool?: ReturnType<typeof scriptedPool>
+    } = {},
   ) {
-    const pool = orgPool({ ...person, roster: true })
+    const pool = options.pool ?? orgPool({ ...person, roster: true })
     const sms = options.sms ?? new FakeVerify()
     const { api, info, tasks } = context(valkeyWith(undefined).valkey, pool, sms)
-    if (options.gate !== undefined) api.gate = options.gate
+    if (options.transfers !== undefined) api.transfers = options.transfers
     const reply = await requestCode(api, { phone: '+6591234567' }, undefined, info)
     expect(reply.body).toEqual({ status: 'code_sent', expiresInSeconds: 300, codeLength: 6 })
     for (const task of tasks) await task()
@@ -597,41 +604,66 @@ describe('ACC-03 T14 sending a code after the reply', () => {
   }
 
   it('texts a current roster number of someone still here, and audits it attempted', async () => {
-    expect(await delivered({})).toEqual({ sent: ['+6591234567'], audit: { send: 'attempted' } })
+    expect(await delivered({})).toMatchObject({ sent: ['+6591234567'], audit: { send: 'attempted' } })
   })
 
   it('texts nothing to a number removed or moved after the roster lookup, and audits it skipped_number_removed', async () => {
-    expect(await delivered({ numberRemoved: true })).toEqual({ sent: [], audit: { send: 'skipped_number_removed' } })
+    expect(await delivered({ numberRemoved: true })).toMatchObject({
+      sent: [],
+      audit: { send: 'skipped_number_removed' },
+    })
   })
 
   it('texts nothing to someone who left after the roster lookup, and audits it skipped_left', async () => {
-    expect(await delivered({ left: true })).toEqual({ sent: [], audit: { send: 'skipped_left' } })
+    expect(await delivered({ left: true })).toMatchObject({ sent: [], audit: { send: 'skipped_left' } })
   })
 
-  it('PDPA-10 T20: texts nothing through a provider the transfer register has not cleared, and audits it skipped_not_cleared', async () => {
-    // No gate given: C06_GATE, which clears no provider until C0.9.
-    const unset = await delivered({}, { sms: new FakeVerify({ transfer: 'twilio' }) })
-    expect(unset).toEqual({ sent: [], audit: { send: 'skipped_not_cleared' } })
-    const asked: [string, string][] = []
-    const cleared = await delivered(
-      {},
-      {
-        sms: new FakeVerify({ transfer: 'twilio' }),
-        gate: {
-          providerCleared: (orgId, provider) => {
-            asked.push([orgId, provider])
-            return true
-          },
-        },
-      },
-    )
-    expect(cleared).toEqual({ sent: ['+6591234567'], audit: { send: 'attempted' } })
-    expect(asked).toEqual([[ORG, 'twilio']])
-    // The local fake needs no entry: it sends nothing anywhere, so no gate is asked.
-    expect(await delivered({}, { gate: { providerCleared: () => false } })).toEqual({
+  it('XFR-03 PDPA-10 C0.9 PD-15: texts nothing through a provider the transfer register has not cleared, and audits it skipped_not_cleared', async () => {
+    const refused = await delivered({}, { sms: new FakeVerify({ transfer: 'twilio' }), transfers: NOTHING_CLEARED })
+    expect(refused).toMatchObject({ sent: [], audit: { send: 'skipped_not_cleared' } })
+    const twilio = CLEARING('twilio')
+    const cleared = await delivered({}, { sms: new FakeVerify({ transfer: 'twilio' }), transfers: twilio })
+    expect(cleared).toMatchObject({ sent: ['+6591234567'], audit: { send: 'attempted' } })
+    expect(twilio.asked.map(ask => ask.provider)).toEqual(['twilio'])
+    // Another provider's clearance clears nothing for Twilio.
+    expect(
+      await delivered({}, { sms: new FakeVerify({ transfer: 'twilio' }), transfers: CLEARING('aws') }),
+    ).toMatchObject({ sent: [], audit: { send: 'skipped_not_cleared' } })
+    // The local fake needs no entry: it sends nothing anywhere, so nothing is asked.
+    const unasked = CLEARING()
+    expect(await delivered({}, { transfers: unasked })).toMatchObject({
       sent: ['+6591234567'],
       audit: { send: 'attempted' },
     })
+    expect(unasked.asked).toEqual([])
+  })
+
+  it('XFR-03 PDPA-10 C0.9 PD-15 T22 item 8: the clearance is asked in the transaction that decides the send, after the person and the number are read, and the provider only after it commits', async () => {
+    const pool = orgPool({ roster: true })
+    // The statements so far when the clearance is asked, and when the provider is asked to send.
+    let asked: string[] = []
+    let sending: string[] = []
+    const sms = new FakeVerify({ transfer: 'twilio', onSend: () => (sending = pool.texts()) })
+    const twilio = CLEARING('twilio')
+    const transfers: Api['transfers'] = {
+      cleared: async (trx, provider) => {
+        asked = pool.texts()
+        return twilio.cleared(trx, provider)
+      },
+    }
+    expect(await delivered({}, { sms, transfers, pool })).toMatchObject({
+      sent: ['+6591234567'],
+      audit: { send: 'attempted' },
+    })
+    // Inside the send's transaction, after the person (FOR SHARE) and the number are read again.
+    const begun = asked.lastIndexOf('start transaction isolation level read committed')
+    expect(begun).toBeGreaterThan(-1)
+    expect(asked.lastIndexOf('commit')).toBeLessThan(begun)
+    expect(asked.findLastIndex(text => text.startsWith('select deactivated_at from people'))).toBeGreaterThan(begun)
+    expect(asked.findLastIndex(text => text.startsWith('select 1 from phone_numbers'))).toBeGreaterThan(begun)
+    // That transaction commits before the provider is asked.
+    expect(sending.slice(asked.length)).toContain('commit')
+    expect(twilio.asked.map(ask => ask.provider)).toEqual(['twilio'])
   })
 
   it("T7 T20: logs a failed send with the provider's code and HTTP status, never the number", async () => {

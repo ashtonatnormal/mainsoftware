@@ -54,6 +54,14 @@ export const SHELL = {
     trigger: (name: string) => `Account, ${name}`,
     signOut: 'Sign out',
     signOutFailed: "Couldn't sign out. Check your connection and try again.",
+    // The DPO's entry (C0.9 PD-26), shown only when the session's capabilities say so.
+    dataProtection: 'Data protection',
+  },
+  // The DPO's pages' titles (C0.9 PD-26). Everything else they say is in strings/dpo.ts,
+  // dpo-purposes.ts and dpo-transfers.ts, which only their lazy chunks load (PD-31).
+  dpo: {
+    purposes: 'Processing register',
+    transfers: 'Transfer register',
   },
   // The Search bar, built and not shown until C1.7 (OD-04). Never "Search & Ask".
   search: {

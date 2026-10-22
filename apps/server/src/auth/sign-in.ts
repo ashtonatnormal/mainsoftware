@@ -72,7 +72,6 @@ import { type SmsProvider, SmsProviderError, type Verdict } from '#src/auth/sms/
 import { type InOrg, withOrg } from '#src/db/database.ts'
 import { personByPhone } from '#src/db/pre-org.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
-import { C06_GATE } from '#src/jobs/gate.ts'
 import { appendOutbox } from '#src/outbox/append.ts'
 
 // --- Shared with account.ts -----------------------------------------------------------------
@@ -385,9 +384,13 @@ async function deliverCode(
       await audit('skipped_number_removed')
       return false
     }
-    // An outside provider receives the number only once PDPA-10's transfer register clears it (C0.9):
-    // until then nothing is sent, and the reply stays the same as for any other request.
-    if (sms.transfer !== null && !(api.gate ?? C06_GATE).providerCleared(orgId, sms.transfer)) {
+    // An outside provider receives the number only while PDPA-10's transfer register clears it: its
+    // open clearance is read FOR SHARE in this transaction (C0.9 PD-15, TECH-SPEC T22 item 8), so a
+    // withdrawal in progress is waited for. The provider is called after the commit, so one that
+    // commits in between can't stop this code; and only starting a code is gated, so checks and
+    // cancels of codes already sent go on for up to their lifetime. When it isn't cleared nothing
+    // is sent, and the reply stays the same as for any other request.
+    if (sms.transfer !== null && !(await api.transfers.cleared(trx, sms.transfer))) {
       await audit('skipped_not_cleared')
       info.log.error(
         { event: 'sms_provider_not_cleared', provider: sms.name, personId },

@@ -11,6 +11,13 @@
 --
 -- It runs as hearth_owner, which owns the tables and so is not held to row level security, in
 -- one transaction on an empty database: run it twice and the second run fails on the first row.
+--
+-- It writes only tables 0005's schema already has, because the upgrade checks load it into a
+-- database built only that far (scripts/check-sign-in-upgrade.sh, at UP_TO=0006) as well as into a
+-- full build. The rows later migrations give an org, such as its feature flags (0007) and its
+-- register entries (0009), come from their own trigger on orgs, or from their backfill when the seed
+-- was loaded first; a later table's rows belong there or in a test's fixture, not here (TECH-SPEC
+-- T22 item 18, C0.9 PD-29).
 
 do $$
 begin

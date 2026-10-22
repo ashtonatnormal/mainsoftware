@@ -1,8 +1,9 @@
 // The outbox catalogue (INF-OUTBOX, TECH-SPEC T16). Every type an outbox event may have is named
-// here, and the list of names equals migration 0007's outbox_events_type check
-// (apps/server/scripts/check-catalogues.ts). Emitted types have an ids schema and are the only ones
-// the server's appendOutbox() accepts; reserved types are named for the step after each, which
-// gives them their ids, purposes and snapshot rule and makes them emitted.
+// here, and the list of names equals the outbox_events_type check (migration 0007's, widened by
+// each step that emits a type: 0009's for C0.9; apps/server/scripts/check-catalogues.ts). Emitted
+// types have an ids schema, name the step that emits them, and are the only ones the server's
+// appendOutbox() accepts; reserved types are named for the step after each, which gives them their
+// ids, purposes and snapshot rule and makes them emitted.
 //
 // Names are <noun>.<past-tense verb> (person.deactivated), apart from audit codes' imperative
 // person.deactivate. Sign-in sessions are signin.*, never session.*, which C2.4 keeps for recorded
@@ -19,7 +20,8 @@
 //   ids       the other ids consumers need: a z.strictObject of ids only (ids.ts), whose lists hold
 //             at most 100 ids, so a longer one is split into several events of the same type.
 import { z } from 'zod'
-import type { PurposeKey } from './purposes.ts'
+import { PROVIDERS, PURPOSE_KEYS, type PurposeKey } from './purposes.ts'
+import { PURPOSE_STATUSES } from './registers.ts'
 
 export type EventStatus = 'emitted' | 'reserved'
 
@@ -37,15 +39,19 @@ export interface EventSpec {
 
 const ids = z.array(z.uuid()).max(100)
 
-function emitted<const Ids extends z.ZodObject, const P extends readonly PurposeKey[]>(spec: {
-  entity: string
-  purposes: P
-  ids: Ids
-  description: string
-}) {
+// An emitted type, from the BUILD-PLAN step that first emits it.
+function emitted<const Ids extends z.ZodObject, const P extends readonly PurposeKey[]>(
+  stage: string,
+  spec: {
+    entity: string
+    purposes: P
+    ids: Ids
+    description: string
+  },
+) {
   return {
     status: 'emitted',
-    stage: 'C0.6',
+    stage,
     acl: 'none',
     ordering: 'reread',
     tombstone: false,
@@ -70,7 +76,7 @@ function reserved(stage: string, entity: string, description: string, tombstone 
 
 export const EVENTS = {
   // Emitted from C0.6.
-  'signin.started': emitted({
+  'signin.started': emitted('C0.6', {
     entity: 'person',
     purposes: ['accounts'],
     ids: z.strictObject({
@@ -85,7 +91,7 @@ export const EVENTS = {
     }),
     description: 'A person signed in on a device (issueSession)',
   }),
-  'signin.ended': emitted({
+  'signin.ended': emitted('C0.6', {
     entity: 'person',
     purposes: ['accounts'],
     // The sessions' own revoke_reason, so signing out your own device is device_sign_out, as the
@@ -97,37 +103,37 @@ export const EVENTS = {
     }),
     description: 'Sign-in sessions ended: a device signed out, a deactivation or a PIN reset',
   }),
-  'account.pin_set': emitted({
+  'account.pin_set': emitted('C0.6', {
     entity: 'person',
     purposes: ['accounts'],
     ids: z.strictObject({}),
     description: 'A person set their PIN',
   }),
-  'account.pin_reset': emitted({
+  'account.pin_reset': emitted('C0.6', {
     entity: 'person',
     purposes: ['accounts'],
     ids: z.strictObject({}),
     description: 'An admin reset a person’s PIN',
   }),
-  'account.passkey_added': emitted({
+  'account.passkey_added': emitted('C0.6', {
     entity: 'person',
     purposes: ['accounts'],
     ids: z.strictObject({ passkey: z.uuid() }),
     description: 'A person added a passkey',
   }),
-  'account.passkey_removed': emitted({
+  'account.passkey_removed': emitted('C0.6', {
     entity: 'person',
     purposes: ['accounts'],
     ids: z.strictObject({ passkey: z.uuid() }),
     description: 'A person removed a passkey',
   }),
-  'person.deactivated': emitted({
+  'person.deactivated': emitted('C0.6', {
     entity: 'person',
     purposes: ['accounts'],
     ids: z.strictObject({}),
     description: 'An admin deactivated a person (offboarding consumes it)',
   }),
-  'acl.changed': emitted({
+  'acl.changed': emitted('C0.6', {
     entity: 'person',
     purposes: ['accounts', 'content_delivery'],
     // keys: people's keys changed (subject_ids names them) and nothing stored was rewritten, so
@@ -136,12 +142,30 @@ export const EVENTS = {
     ids: z.strictObject({ change: z.enum(['keys', 'rows']), reason: z.enum(['deactivated']) }),
     description: 'Who can read something changed (BUILD-PLAN 1D, open items: the C0.6 outbox-envelope row)',
   }),
-  'flag.changed': emitted({
+  'flag.changed': emitted('C0.6', {
     entity: 'feature_flag',
     purposes: ['service_operation'],
     // The entity is the flag's row, which consumers re-read for its key, cohort and revision (A9).
     ids: z.strictObject({ enabled: z.boolean() }),
     description: 'An Owner or Admin changed a feature flag',
+  }),
+
+  // Emitted from C0.9 (TECH-SPEC T22 item 13, C0.9 PD-22): a register entry changed, through the
+  // DPO's routes or the first-Owner bootstrap. Ids only: the key and what it is now; a consumer
+  // re-reads the row. They carry service_operation and name nobody as a subject.
+  'register.purpose_changed': emitted('C0.9', {
+    // The new version's row (processing_register): each change is a new version (C0.9 PD-04).
+    entity: 'processing_purpose',
+    purposes: ['service_operation'],
+    ids: z.strictObject({ purpose: z.enum(PURPOSE_KEYS), status: z.enum(PURPOSE_STATUSES) }),
+    description: 'The DPO recorded a new version of a purpose’s entry in the processing register',
+  }),
+  'register.transfer_changed': emitted('C0.9', {
+    // The provider's row (transfer_register); cleared says whether it is cleared now.
+    entity: 'transfer_entry',
+    purposes: ['service_operation'],
+    ids: z.strictObject({ provider: z.enum(PROVIDERS), cleared: z.boolean() }),
+    description: 'A transfer-register entry’s facts or clearance changed',
   }),
 
   // Reserved: named in 0007's type list; the step after each gives it the rest.

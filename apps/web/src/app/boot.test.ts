@@ -24,7 +24,12 @@ afterEach(() => {
 })
 
 // Marcus, from the Tembusu seed (db/seed/tembusu.sql).
-const MARCUS = { personId: 'b0000000-0000-4000-8000-000000000003', name: 'Marcus', timeZone: 'Asia/Singapore' }
+const MARCUS = {
+  personId: 'b0000000-0000-4000-8000-000000000003',
+  name: 'Marcus',
+  timeZone: 'Asia/Singapore',
+  capabilities: { registers: false },
+}
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })

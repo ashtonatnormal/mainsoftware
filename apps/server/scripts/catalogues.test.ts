@@ -1,4 +1,4 @@
-import { FLAGS } from '@hearth/shared'
+import { ACTIVE_FROM_START, AI_PROVIDERS, FLAGS, PINNED_PURPOSES, PROVIDERS, PURPOSES } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import type { Coverage } from '#src/outbox/coverage.ts'
 import {
@@ -12,6 +12,11 @@ import {
   type Fn,
   flagProblems,
   matchProblems,
+  type OrgRegisters,
+  type ProviderDefault,
+  type PurposeDefault,
+  type RegisterCode,
+  registerProblems,
   roleProblems,
 } from './catalogues.ts'
 
@@ -535,6 +540,130 @@ end
     ])
     expect(bindingProblems(consumers, checkpointBindings(BODY), probes.slice(1))).toEqual([
       "check-catalogues didn't try a checkpoint of offboarding",
+    ])
+  })
+})
+
+describe('RGS-19 C0.9 T22 item 18 check 6: the registers’ starting rows equal the code that judges them', () => {
+  const code: RegisterCode = {
+    purposes: PURPOSES,
+    pinned: PINNED_PURPOSES,
+    activeFromStart: ACTIVE_FROM_START,
+    providers: PROVIDERS,
+    aiProviders: AI_PROVIDERS,
+  }
+  // processing_register_defaults() and transfer_register_defaults() as migration 0009 writes them.
+  const purposeDefaults: PurposeDefault[] = Object.entries(PURPOSES).map(([purpose, spec]) => ({
+    purpose,
+    ai: spec.ai,
+    pinned: (PINNED_PURPOSES as readonly string[]).includes(purpose),
+    needs_switch: spec.needsSwitch,
+    status: (ACTIVE_FROM_START as readonly string[]).includes(purpose) ? 'active' : 'planned',
+  }))
+  const providerDefaults: ProviderDefault[] = PROVIDERS.map(provider => ({
+    provider,
+    ai: (AI_PROVIDERS as readonly string[]).includes(provider),
+  }))
+  const ORG = 'a0000000-0000-4000-8000-000000000001'
+  const org: OrgRegisters = { org: ORG, purposes: purposeDefaults, providers: providerDefaults, drifted: [] }
+  const changing = (purpose: string, change: Partial<PurposeDefault>) =>
+    purposeDefaults.map(row => (row.purpose === purpose ? { ...row, ...change } : row))
+
+  it('passes when the defaults functions and every org’s rows equal PURPOSES, PINNED_PURPOSES, ACTIVE_FROM_START, PROVIDERS and AI_PROVIDERS', () => {
+    expect(registerProblems(code, purposeDefaults, providerDefaults, [org])).toEqual([])
+    // A database with no org yet has nothing more to compare.
+    expect(registerProblems(code, purposeDefaults, providerDefaults, [])).toEqual([])
+  })
+
+  it('C0.9 PD-06: compares the starting status with ACTIVE_FROM_START, so security_audit and backups start active though not pinned', () => {
+    // "Active exactly when pinned" is not the rule: Hearth already processes for both.
+    const pinnedOnly = purposeDefaults.map(row => ({ ...row, status: row.pinned ? 'active' : 'planned' }))
+    expect(registerProblems(code, pinnedOnly, providerDefaults, [])).toEqual([
+      'security_audit: packages/shared says ai false, pinned false, needs_switch false, status active (PURPOSES, PINNED_PURPOSES, ACTIVE_FROM_START); processing_register_defaults() says ai false, pinned false, needs_switch false, status planned',
+      'backups: packages/shared says ai false, pinned false, needs_switch false, status active (PURPOSES, PINNED_PURPOSES, ACTIVE_FROM_START); processing_register_defaults() says ai false, pinned false, needs_switch false, status planned',
+    ])
+    expect(registerProblems(code, changing('presence_receipts', { status: 'active' }), providerDefaults, [])).toEqual([
+      'presence_receipts: packages/shared says ai false, pinned false, needs_switch false, status planned (PURPOSES, PINNED_PURPOSES, ACTIVE_FROM_START); processing_register_defaults() says ai false, pinned false, needs_switch false, status active',
+    ])
+  })
+
+  it('C0.9 PD-04 PD-07 PD-11: names a purpose whose ai, pinned or needs_switch differs from code', () => {
+    expect(registerProblems(code, changing('org_brain', { ai: false }), providerDefaults, [])).toEqual([
+      'org_brain: packages/shared says ai true, pinned false, needs_switch true, status planned (PURPOSES, PINNED_PURPOSES, ACTIVE_FROM_START); processing_register_defaults() says ai false, pinned false, needs_switch true, status planned',
+    ])
+    expect(registerProblems(code, changing('security_audit', { pinned: true }), providerDefaults, [])).toHaveLength(1)
+    // The transcription test set needs no switch: withdrawal there is by deletion.
+    expect(
+      registerProblems(code, changing('transcription_test_set', { needs_switch: true }), providerDefaults, []),
+    ).toHaveLength(1)
+    // And the code side: a purpose PINNED_PURPOSES gains is a migration's change too.
+    expect(
+      registerProblems({ ...code, pinned: [...PINNED_PURPOSES, 'backups'] }, purposeDefaults, providerDefaults, []),
+    ).toEqual([
+      'backups: packages/shared says ai false, pinned true, needs_switch false, status active (PURPOSES, PINNED_PURPOSES, ACTIVE_FROM_START); processing_register_defaults() says ai false, pinned false, needs_switch false, status active',
+    ])
+  })
+
+  it('compares the purposes and providers both ways', () => {
+    const fewer = purposeDefaults.filter(row => row.purpose !== 'backups')
+    const extra = [
+      ...purposeDefaults,
+      { purpose: 'extra', ai: false, pinned: false, needs_switch: false, status: 'planned' },
+    ]
+    expect(registerProblems(code, fewer, providerDefaults, [])).toEqual([
+      'backups is in packages/shared PURPOSES but not in processing_register_defaults(): a migration adds it, with rows for the orgs already there',
+    ])
+    expect(registerProblems(code, extra, providerDefaults, [])).toEqual([
+      'extra is in processing_register_defaults() but not in packages/shared PURPOSES: add it',
+    ])
+    expect(
+      registerProblems(code, purposeDefaults, [...providerDefaults.slice(1), { provider: 'carrier', ai: false }], []),
+    ).toEqual([
+      'aws is in packages/shared PROVIDERS but not in transfer_register_defaults(): a migration adds it, with rows for the orgs already there',
+      'carrier is in transfer_register_defaults() but not in packages/shared PROVIDERS: add it',
+    ])
+    const bedrock = providerDefaults.map(row => (row.provider === 'bedrock' ? { ...row, ai: false } : row))
+    expect(registerProblems(code, purposeDefaults, bedrock, [])).toEqual([
+      'bedrock: packages/shared says ai true (AI_PROVIDERS); transfer_register_defaults() says ai false',
+    ])
+  })
+
+  it('C0.9 PD-03: names an org missing a row, holding one the defaults don’t list, or whose version 1 differs', () => {
+    const missing: OrgRegisters = {
+      ...org,
+      purposes: purposeDefaults.filter(row => row.purpose !== 'accounts'),
+      providers: providerDefaults.filter(row => row.provider !== 'twilio'),
+    }
+    expect(registerProblems(code, purposeDefaults, providerDefaults, [missing])).toEqual([
+      `org ${ORG} has no version 1 of accounts in processing_register`,
+      `org ${ORG} has no twilio entry in transfer_register`,
+    ])
+    const odd: OrgRegisters = {
+      ...org,
+      purposes: [
+        ...changing('backups', { status: 'planned' }),
+        { ...(purposeDefaults[0] as PurposeDefault), purpose: 'old' },
+      ],
+      providers: [
+        ...providerDefaults.map(row => (row.provider === 'openai' ? { ...row, ai: false } : row)),
+        { provider: 'old', ai: false },
+      ],
+    }
+    expect(registerProblems(code, purposeDefaults, providerDefaults, [odd])).toEqual([
+      `org ${ORG}'s version 1 of backups says ai false, pinned false, needs_switch false, status planned; processing_register_defaults() says ai false, pinned false, needs_switch false, status active`,
+      `org ${ORG} has old in processing_register, which processing_register_defaults() doesn't list`,
+      `org ${ORG}'s openai entry says ai false; transfer_register_defaults() says ai true`,
+      `org ${ORG} has old in transfer_register, which transfer_register_defaults() doesn't list`,
+    ])
+  })
+
+  it('C0.9 PD-04: names a later version whose fixed columns aren’t its version 1’s', () => {
+    expect(
+      registerProblems(code, purposeDefaults, providerDefaults, [
+        { ...org, drifted: [{ purpose: 'security_audit', version: 2 }] },
+      ]),
+    ).toEqual([
+      `org ${ORG}'s version 2 of security_audit has other fixed columns (ai, pinned, needs_switch) than its version 1: every version copies them`,
     ])
   })
 })

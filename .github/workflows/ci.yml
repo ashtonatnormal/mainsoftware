@@ -227,7 +227,15 @@ jobs:
       # outbox_checkpoints_own_row() (the checkpoint trigger on an existing table) so it binds each
       # consumer to its role, and refuses to apply while a checkpoint already there breaks that
       # binding. The seed holds no checkpoint, and a C0.6 deployment holds the offboarding role's,
-      # so 0008 gets its own step (below).
+      # so 0008 gets its own step (below). 0009 (C0.9 PR 1) has no step of its own, for its own
+      # reasons: it changes no existing row; it replaces outbox_events_type with a superset of the
+      # old list, validated in place (an old row can't fail it); and it adds a trigger on orgs that
+      # only adds rows, with a backfill giving the orgs already there their register entries. The
+      # runs below apply it with the rest: the 0006 runs over the seeded data, and the 0008 step
+      # over one outbox event of an existing type (so the new check is validated over a real row)
+      # and an org with no principals, where it also checks that the event is unchanged and that
+      # every org got exactly the defaults' register entries (TECH-SPEC T22 item 18), since the
+      # digest compares no rows.
       # 0006 (C0.5) on top of sessions and accounts 0005 allows, in its own scratch database: its
       # two new session rules mustn't fail on older rows, and its schema must match the fresh build
       # above (hearth_check) apart from the rule older rows leave NOT VALID. Once for each rule, so

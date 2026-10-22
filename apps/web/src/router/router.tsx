@@ -7,6 +7,8 @@
 //     ├── /           → /chats (OD-03: the app lands on Chats)
 //     ├── /today /chats /rooms /tasks /calendar /drive   each tab's screen
 //     ├── /more       the phone's More page
+//     ├── /dpo/purposes /dpo/transfers   the DPO's registers (C0.9 PD-26): no nav entry; the avatar
+//     │                                  menu opens them, and the server decides who may read them
 //     └── $           every other path: "Page not found" inside the shell
 //
 // The splat route sits under _app, so an unknown path (/xyz, /chats/abc, /sign-in/foo) runs _app's
@@ -17,11 +19,12 @@
 // failed to load; every screen is a lazy chunk of its own.
 //
 // Rules the router tests hold (router/router.test.ts):
-// - APP_PATHS (router/paths.ts, import-free) lists exactly the paths registered under _app;
+// - APP_PATHS (router/paths.ts, import-free) lists exactly the paths registered under _app, and
+//   NAV_PATHS those of them the navigation reaches;
 // - no route declares a search param, so no URL carries state (T21 item 5), and the scroll cache is
 //   keyed by pathname alone (D-02);
 // - reserved for later steps and deliberately not routes yet (T21 item 5): /admin/* (C0.16),
-//   /settings/* (the settings registry, C0.9 onwards) and /notice (C0.9).
+//   /settings/* (the settings registry, C0.9 onwards) and /notice (C0.9 PR 2).
 //
 // No route has a loader in C0.8. From C1 a loader fills Query's cache through the runtime in its
 // context (context.runtime.queryClient.ensureQueryData(...)) and returns nothing: Query is the cache.
@@ -125,6 +128,23 @@ const moreRoute = createRoute({
   component: lazyRouteComponent(() => import('@/screens/MoreScreen.tsx'), 'MoreScreen'),
 })
 
+// The DPO's registers (C0.9 PD-26, OD-03): each its own lazy chunk, with its title and no nav entry.
+// Their titles come from strings/shell.ts, which the boot loads anyway; the pages' own copy
+// (strings/dpo*.ts) loads only with their chunks, so the boot's bundle doesn't grow by it (C0.9 PD-31).
+const purposesRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/dpo/purposes',
+  staticData: { title: SHELL.dpo.purposes },
+  component: lazyRouteComponent(() => import('@/dpo/PurposesScreen.tsx'), 'PurposesScreen'),
+})
+
+const transfersRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/dpo/transfers',
+  staticData: { title: SHELL.dpo.transfers },
+  component: lazyRouteComponent(() => import('@/dpo/TransfersScreen.tsx'), 'TransfersScreen'),
+})
+
 const notFoundRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '$',
@@ -143,6 +163,8 @@ export const routeTree = rootRoute.addChildren([
     calendarRoute,
     driveRoute,
     moreRoute,
+    purposesRoute,
+    transfersRoute,
     notFoundRoute,
   ]),
 ])

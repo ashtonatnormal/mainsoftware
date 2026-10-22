@@ -30,6 +30,14 @@ export type ApiPath =
   | '/api/auth/pin/set'
   | '/api/auth/pin/verify'
   | '/api/auth/sign-out'
+  // Re-authenticating with the PIN, inline on the DPO pages until C0.16's sheet (C0.9 PD-26).
+  | '/api/auth/reauth/pin'
+  // The registers (C0.9 PD-20, dpo/queries.ts).
+  | '/api/admin/registers'
+  | '/api/admin/registers/purposes/set'
+  | '/api/admin/registers/transfers/record'
+  | '/api/admin/registers/transfers/clear'
+  | '/api/admin/registers/transfers/withdraw'
 
 // The client's own codes, for failures the server didn't name.
 export type ClientFailureCode = 'network' | 'invalid_response' | 'halted'
