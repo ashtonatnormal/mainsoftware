@@ -378,7 +378,12 @@ describe('T21 item 9: the Origin hook’s one exception, WebKit’s CSP report',
         headers: { ...headers, 'content-type': 'application/csp-report' },
         payload: REPORT_BODY,
       })
-    for (const method of ['PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const) {
+    // The api serves only POST here, so each other method gets a route of its own: refused for its
+    // method, not for a route it never matched.
+    const others = ['PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const
+    for (const method of others)
+      instance.route({ method, url: '/api/csp-report', handler: async () => ({ other: true }) })
+    for (const method of others) {
       expect((await send(method, '/api/csp-report')).statusCode, method).toBe(403)
     }
     for (const url of [

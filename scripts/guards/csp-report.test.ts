@@ -10,9 +10,10 @@
 // It also holds origin.ts to one exception: CSP_REPORT_PATH named once in its code, inside
 // isSameOriginCspReport, which the hook calls once, and every way out of the hook either a pass on
 // one of its three conditions (GET or HEAD, the app's Origin, the exception) or reply.code(403).send
-// (CG-04). CG-05 then runs the real hook in Fastify, so what each pass decides is held too: every
-// method but GET and HEAD refused 403, only the exact app Origin passing, and the exception only on
-// its whole conjunction. The fixture cases prove each check bites.
+// behind no condition of its own, which ends the hook, so nothing runs off its end (CG-04). CG-05
+// then runs the real hook in Fastify, so what each pass decides is held too: every method but GET and
+// HEAD refused 403, only the exact app Origin passing, and the exception only on its whole
+// conjunction. The fixture cases prove each check bites.
 import { CSP_REPORT_PATH } from '@hearth/shared'
 import { fastify } from 'fastify'
 import ts from 'typescript'
@@ -103,8 +104,10 @@ function originUses(path: string, source: string): { path: string[]; calls: numb
 // Every way out of the Origin hook (the function refuseCrossSiteWrites hands to addHook), in order: a
 // pass is named by the condition that guards it (a call by its callee, anything else by its text,
 // and 'unconditional' when nothing does), the refusal by 'refuse 403' when it returns exactly
-// reply.code(403).send(…), and any other reply by its text. Nested functions are their own, so their
-// returns don't count.
+// reply.code(403).send(…), with 'if <condition>' when a condition guards it too, and any other reply
+// by its text. A hook that can run off its end passes whatever reaches it, so that is 'falls through'
+// (any body whose last statement isn't a return, or that isn't a block). Nested functions are their
+// own, so their returns don't count.
 function hookExits(path: string, source: string): string[] {
   const file = parse(path, source)
   const register = file.statements.find(
@@ -136,13 +139,17 @@ function hookExits(path: string, source: string): string[] {
     if (node !== hook && ts.isFunctionLike(node)) return
     if (ts.isReturnStatement(node)) {
       const text = node.expression?.getText(file) ?? ''
-      if (/^reply\.code\(403\)\.send\(/.test(text)) exits.push('refuse 403')
-      else if (/^reply\b/.test(text)) exits.push(`reply ${text}`)
+      if (/^reply\.code\(403\)\.send\(/.test(text)) {
+        const guard = guardOf(node)
+        exits.push(guard === 'unconditional' ? 'refuse 403' : `refuse 403 if ${guard}`)
+      } else if (/^reply\b/.test(text)) exits.push(`reply ${text}`)
       else exits.push(guardOf(node))
     }
     ts.forEachChild(node, visit)
   }
   visit(hook.body)
+  const last = ts.isBlock(hook.body) ? hook.body.statements.at(-1) : undefined
+  if (last === undefined || !ts.isReturnStatement(last)) exits.push('falls through')
   return exits
 }
 
@@ -211,13 +218,32 @@ describe('T21 item 9: the CSP report route the Origin hook lets through stays st
     // A callback inside the hook has returns of its own, which aren't the hook's.
     const nested = ['const keep = [1].filter(n => { return n > 0 })', ...today]
     expect(hookExits('a.ts', hook(nested.join('\n')))).toEqual(expected)
+    // A refusal behind a condition (a webhook exemption written the natural way) lets through what
+    // the condition skips, off the hook's end: it is named by its condition, and the end is a way out.
+    const conditional = [
+      ...today.slice(0, 3),
+      "if (!isProviderWebhook(request)) return reply.code(403).send({ error: 'Forbidden' })",
+    ]
+    expect(hookExits('a.ts', hook(conditional.join('\n')))).toEqual([
+      ...expected.slice(0, 3),
+      'refuse 403 if !isProviderWebhook(request)',
+      'falls through',
+    ])
+    const caught = [
+      ...today.slice(0, 3),
+      "try { if (request.headers['x-skip']) throw new Error(); return reply.code(403).send({ error: 'Forbidden' }) } catch {}",
+    ]
+    expect(hookExits('a.ts', hook(caught.join('\n'))).at(-1)).toBe('falls through')
+    expect(hookExits('a.ts', hook(today.slice(0, 3).join('\n'))).at(-1)).toBe('falls through')
   })
   it('CG-05 OD-12 T21 item 9 CL Security: the real hook in Fastify refuses every method but GET and HEAD 403, passes only the exact app Origin, and the exception only on its whole conjunction', async () => {
     const APP = 'https://hearth.example.com'
     const app = fastify({ logger: false })
     refuseCrossSiteWrites(app, APP)
     app.all('/echo', async () => ({ ok: true }))
-    app.post(CSP_REPORT_PATH, async () => ({ ok: true }))
+    // Every method is served on the report path too, so a refused PUT is refused for its method, not
+    // for a route it never matched.
+    app.all(CSP_REPORT_PATH, async () => ({ ok: true }))
     await app.ready()
     const send = (method: string, url: string, headers: Record<string, string>) =>
       app.inject({ method: method as 'POST', url, headers })
@@ -247,6 +273,9 @@ describe('T21 item 9: the CSP report route the Origin hook lets through stays st
     expect((await send('POST', CSP_REPORT_PATH, webkit)).statusCode).toBe(200)
     const lessThanAll: [string, string, Record<string, string>][] = [
       ['PUT', CSP_REPORT_PATH, webkit],
+      ['PATCH', CSP_REPORT_PATH, webkit],
+      ['DELETE', CSP_REPORT_PATH, webkit],
+      ['OPTIONS', CSP_REPORT_PATH, webkit],
       ['POST', '/echo', webkit],
       ['POST', `${CSP_REPORT_PATH}/`, webkit],
       ['POST', CSP_REPORT_PATH, { 'sec-fetch-site': 'same-origin' }],
