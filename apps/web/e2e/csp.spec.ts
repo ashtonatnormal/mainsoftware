@@ -69,8 +69,8 @@ test('CS-03 BP C0.8 Done OD-12 T21 item 9: in every engine a blocked image raise
   tag: '@smoke',
 }, async ({ page, guard, browserName }) => {
   guard.allowViolation('img-src')
-  // Every report Playwright shows the page sending is answered; WebKit's carries Origin "null" and
-  // Sec-Fetch-Site same-origin, which the root hook takes on this route alone (T21 item 9).
+  // The status of every answer to a report; WebKit's report carries Origin "null" and Sec-Fetch-Site
+  // same-origin, which the root hook takes on this route alone (T21 item 9).
   const answered: number[] = []
   page.on('response', response => {
     if (new URL(response.url()).pathname === '/api/csp-report') answered.push(response.status())
@@ -91,8 +91,8 @@ test('CS-03 BP C0.8 Done OD-12 T21 item 9: in every engine a blocked image raise
   }, `${blocked}/x.png?secret=1`)
   await expect.poll(() => guard.violations.map(violation => violation.directive)).toContain('img-src')
   // The api logs a report only on the path that answers it 204 (CR-07 pins that status through the
-  // same hooks), so the line proves delivery in every engine, whether or not Playwright shows the
-  // request. A refusal's line names the kind of Origin and Sec-Fetch-Site the report carried.
+  // same hooks), so the line proves delivery. A refusal's line names the kind of Origin and
+  // Sec-Fetch-Site the report carried.
   let line: Record<string, unknown> | undefined
   await expect
     .poll(
@@ -109,6 +109,9 @@ test('CS-03 BP C0.8 Done OD-12 T21 item 9: in every engine a blocked image raise
   expect(line).toMatchObject({ directive: 'img-src', blocked, path: '/chats' })
   expect(JSON.stringify(line)).not.toContain('secret')
   expect(JSON.stringify(line)).not.toContain('x.png')
+  // The route logs before it answers, so the answer is waited for: Playwright shows it in all three
+  // engines, and at least one must come, each one 204.
+  await expect.poll(() => answered.length, { timeout: 10_000 }).toBeGreaterThan(0)
   expect(
     answered.every(status => status === 204),
     JSON.stringify(answered),
