@@ -107,7 +107,7 @@ describe('C0.5 T5 the WebSocket upgrade: path, Origin, then session (CLAUDE.md, 
     expect(server.counts().refused.path).toBe(1)
   })
 
-  it('refuses a cross-origin upgrade 403: no Origin, "null", the user-content origin and any other, without a lookup', async () => {
+  it('refuses a cross-origin upgrade 403: no Origin, "null", the user-content origin and any other, without a lookup; Sec-Fetch-Site same-origin changes nothing here (OD-12, T21 item 9)', async () => {
     const { url, server, lookup } = await start()
     const cookie = signedIn().cookie
     const cases: Array<Record<string, string>> = [
@@ -116,6 +116,9 @@ describe('C0.5 T5 the WebSocket upgrade: path, Origin, then session (CLAUDE.md, 
       { cookie, origin: USER_CONTENT_ORIGIN },
       { cookie, origin: 'https://evil.example' },
       { cookie, origin: `${APP_ORIGIN}/` },
+      // The root hook's one exception, WebKit's CSP report, is not the upgrade's.
+      { cookie, origin: 'null', 'sec-fetch-site': 'same-origin' },
+      { cookie, 'sec-fetch-site': 'same-origin' },
     ]
     for (const headers of cases) {
       const response = await refused(url, headers)

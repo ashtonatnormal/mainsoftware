@@ -15,12 +15,14 @@
 // The route has its own child scope, whose one body parser takes application/csp-report, the type
 // browsers send to a report-uri, as JSON of at most 8 KiB. Every other /api route keeps JSON only,
 // and this one takes no other type: not JSON, and not application/reports+json, since the policy
-// has no report-to (T21 item 7). Chromium and Firefox send the page's Origin, which
-// Referrer-Policy same-origin keeps from being null. Safari sends "null", which the root Origin hook
-// lets through on this path alone (origin.ts, T21 item 9); a missing or foreign Origin is refused as
-// for any other route. Safari sends another site's reports with "null" too, so a "null" report is
-// logged only when its page is on the app origin: a site that named this path as its own
-// report-uri can't spend the log's allowance with its visitors' reports.
+// has no report-to (T21 item 7). The root Origin hook lets a report through with the app's Origin,
+// as Chromium and Firefox send it, or with Origin "null" and Sec-Fetch-Site same-origin, as WebKit
+// (Safari, and every browser on iPhone) sends it whatever the page's referrer policy: the hook's one
+// exception (origin.ts isSameOriginCspReport, T21 item 9). Any other report is refused 403 and lost.
+// A "null" report is logged only when its page is on the app origin, so one about another site's
+// page, which only a client that isn't a browser can still send, can't spend the log's allowance.
+// The exception is safe only because this route takes no session, reads no cookie, stores nothing
+// and writes at most the capped, reduced line; scripts/guards/csp-report.test.ts keeps it so.
 //
 // The log is capped at 60 reports a minute per process, however many addresses they come from
 // (createLogCap). Past the cap a report is answered as usual and not logged, and the first report
@@ -189,7 +191,8 @@ export function cspReportRoute(api: Api): (scope: FastifyInstance) => Promise<vo
           request.log.warn({ event: 'csp_reports_dropped', count: dropped }, 'CSP reports went unlogged past the cap')
         }
         const report = reduceReport(parse(CspReportBody, request.body), api.appOrigin)
-        // Safari's report ("null" Origin) about another site's page: answered, never logged.
+        // A "null" report about another site's page (WebKit's own are refused at the hook; only a
+        // client that isn't a browser can still send one): answered, never logged.
         const elsewhere = request.headers.origin === 'null' && report.path === 'other-origin'
         if (!elsewhere && cap.take()) {
           request.log.warn({ event: 'csp_report', ...report }, 'a page broke the CSP')

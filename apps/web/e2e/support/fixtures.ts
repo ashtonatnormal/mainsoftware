@@ -98,7 +98,10 @@ const matches = (pattern: string | RegExp, path: string) =>
 // A navigation cancels what the old document had in flight; each engine words it its own way.
 const CANCELLED = /ERR_ABORTED|NS_BINDING_ABORTED|NS_ERROR_ABORT|cancelled|Load request cancelled/i
 // The CSP blocked the request before it was sent.
-const BLOCKED = /^csp$|ERR_BLOCKED_BY_CSP|NS_ERROR_CONTENT_BLOCKED|Content Security Policy/i
+const BLOCKED = /^csp$|ERR_BLOCKED_BY_CSP|NS_ERROR_CONTENT_BLOCKED|Content[- ]Security[- ]Policy/i
+// A CSP line in the console: Chromium and WebKit say "Content Security Policy", Firefox starts its
+// line "Content-Security-Policy:" (CS-03 runs in all three, T21 item 9).
+const CSP_LINE = /Content[- ]Security[- ]Policy/i
 
 const BINDING = '__e2eCspViolation'
 
@@ -266,11 +269,7 @@ class PageGuard implements Guard {
       const status = Number(/status of (\d{3})/.exec(text)?.[1] ?? Number.NaN)
       if (this.#declared(url.pathname, status, page) || this.#failedAllowed(url.pathname)) return
     }
-    // Chromium and WebKit write "Content Security Policy", Firefox "Content-Security-Policy".
-    if (
-      /Content[- ]Security[- ]Policy/i.test(text) &&
-      [...this.#directives].some(directive => text.includes(directive))
-    ) {
+    if (CSP_LINE.test(text) && [...this.#directives].some(directive => text.includes(directive))) {
       return
     }
     this.#problem(`console error: ${text}`)
