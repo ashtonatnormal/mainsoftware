@@ -163,6 +163,8 @@ begin
   for c in
     select * from (values
       ('{"services": null}'::jsonb, 'Record the services it provides before clearing it.'),
+      -- Text of only whitespace (JavaScript's, as transferProblems() reads it) is no fact.
+      ('{"services": "\t"}', 'Record the services it provides before clearing it.'),
       ('{"data_types": null}', 'Record the personal data it receives before clearing it.'),
       ('{"processing_countries": []}', 'Record the countries where it processes the data before clearing it.'),
       ('{"storage_countries": []}', 'Record the countries where it stores the data before clearing it.'),
@@ -178,6 +180,7 @@ begin
       ('{"provider_retention": null}', 'Record how long it keeps the data before clearing it.'),
       ('{"retention_confirmed": null}', 'Record where and when it confirmed how long it keeps the data in writing before clearing it.'),
       ('{"onward_recipients": null}', 'Record who it passes the data on to (or None) before clearing it.'),
+      ('{"onward_recipients": "\u00a0\u3000\n"}', 'Record who it passes the data on to (or None) before clearing it.'),
       ('{"review_on": null}', 'Set a review date after today before clearing it.'),
       (jsonb_build_object('review_on', pg_temp.today()), 'Set a review date after today before clearing it.'),
       (jsonb_build_object('review_on', pg_temp.today() - 1), 'Set a review date after today before clearing it.'),
@@ -197,6 +200,23 @@ select pg_temp.expect_error($$select * from pg_temp.record('twilio', '{"safeguar
 -- A country code is two capital letters (23514).
 select pg_temp.expect_error($$select * from pg_temp.record('twilio', '{"processing_countries": ["USA"]}')$$, '23514',
                             '%transfer_register_countries%');
+-- A text fact is kept trimmed, so one of only spaces is never recorded, nor one with spaces around
+-- it (23514, the column's own rule, as processing_register's); other whitespace alone is recorded,
+-- and the clearance refuses it, above.
+do $$
+declare
+  f text;
+  v text;
+begin
+  foreach f in array array['services', 'data_types', 'countries_confirmed', 'safeguard_reference', 'provider_retention',
+                           'retention_confirmed', 'onward_recipients'] loop
+    foreach v in array array[' ', E' \t ', ' Padded'] loop
+      perform pg_temp.expect_error(format($f$select * from pg_temp.record('twilio', %L)$f$, jsonb_build_object(f, v)), '23514',
+                                   format('%%transfer_register_%s_check%%', f));
+    end loop;
+  end loop;
+end
+$$;
 -- With every fact, it clears, and a certificate verified today counts.
 select pg_temp.check((select changed from pg_temp.record('twilio', jsonb_build_object('safeguard', 'certification',
                                                                                        'certificate_verified_on', pg_temp.today()))),
@@ -475,9 +495,10 @@ $$;
 
 -- BSC-03 (C0.9 OD-01, PD-23): what the bootstrap's clearance refuses, writing nothing: a transaction
 -- that doesn't act as the org's Hearth principal (42501); a provider other than Twilio or AWS
--- (HF006); a DPO who isn't one, has left, or is another org's (42501); a reason missing or too long
--- (22023); missing facts (HF006, the clearance's own trigger); and a provider cleared in the org
--- before (HF006), even after a withdrawal. As the owner, in org 2.
+-- (HF006); a DPO who isn't one, has left, or is another org's (42501); a reason missing, of only
+-- spaces or too long (22023); missing facts, a text fact of only spaces among them, since the
+-- set-up trims each (HF006, the clearance's own trigger); and a provider cleared in the org before
+-- (HF006), even after a withdrawal. As the owner, in org 2.
 select set_config('test.audit_max', (select max(id)::text from public.audit_events), true);
 select set_config('test.outbox_max', (select max(id)::text from public.outbox_events), true);
 select pg_temp.act_as_owner('2', 'a1');
@@ -501,10 +522,32 @@ select pg_temp.expect_error($$select pg_temp.bootstrap('twilio', 'f1000000-0000-
 select pg_temp.expect_error($$select pg_temp.bootstrap('twilio', 'f2000000-0000-4000-8000-0000000000a5', '{}', '')$$, '22023',
                             'Give the set-up''s reason, from 1 to 2,000 characters.');
 select pg_temp.expect_error($$select pg_temp.bootstrap('twilio', 'f2000000-0000-4000-8000-0000000000a5', '{}', null)$$, '22023');
+select pg_temp.expect_error($$select pg_temp.bootstrap('twilio', 'f2000000-0000-4000-8000-0000000000a5', '{}', E' \t' || U&'\00A0')$$, '22023',
+                            'Give the set-up''s reason, from 1 to 2,000 characters.');
 select pg_temp.expect_error($$select pg_temp.bootstrap('twilio', 'f2000000-0000-4000-8000-0000000000a5', '{}', repeat('x', 2001))$$,
                             '22023');
 select pg_temp.expect_error($$select pg_temp.bootstrap('twilio', 'f2000000-0000-4000-8000-0000000000a5', '{"retention_confirmed": null}',
   'Set-up')$$, 'HF006', 'Record where and when it confirmed how long it keeps the data in writing%');
+do $$
+declare
+  c record;
+begin
+  for c in
+    select * from (values
+      ('services', 'Record the services it provides%'),
+      ('data_types', 'Record the personal data it receives%'),
+      ('countries_confirmed', 'Record where and when it confirmed those countries%'),
+      ('safeguard_reference', 'Record where the safeguard is kept%'),
+      ('provider_retention', 'Record how long it keeps the data before%'),
+      ('retention_confirmed', 'Record where and when it confirmed how long it keeps the data in writing%'),
+      ('onward_recipients', 'Record who it passes the data on to%')
+    ) as v (fact, message)
+  loop
+    perform pg_temp.expect_error(format($f$select pg_temp.bootstrap('twilio', 'f2000000-0000-4000-8000-0000000000a5', %L, 'Set-up')$f$,
+                                        jsonb_build_object(c.fact, E' \t\n' || U&'\00A0\FEFF')), 'HF006', c.message);
+  end loop;
+end
+$$;
 -- aws was cleared in org 2 by its DPO (the fixture's e5), so the set-up can't clear it.
 select pg_temp.expect_error($$select pg_temp.bootstrap('aws', 'f2000000-0000-4000-8000-0000000000a5', '{}', 'Set-up')$$, 'HF006',
                             'That provider has been cleared in this organisation before. The DPO clears it again in Hearth.');
@@ -516,11 +559,12 @@ from public.outbox_events where id > current_setting('test.outbox_max')::bigint;
 select pg_temp.check(revision = 1 and updated_by is null, 'a refused set-up recorded twilio''s facts')
 from public.transfer_register where org_id = pg_temp.id('2', '00') and provider = 'twilio';
 
--- BSC-02 (C0.9 OD-01, PD-23): as the owner, acting as org 2's Hearth principal, the set-up records
--- twilio's facts as Hearth's and clears it in the DPO's name (cleared_via 'bootstrap'), writes one
--- audit row with Hearth as the actor, the reason, and details naming the bootstrap and the DPO
--- (never via or on_behalf_of_id, which 0004 keeps for A4 and A5), and appends one
--- register.transfer_changed event, Hearth acting. The api's gate then reads it as cleared.
+-- BSC-02 (C0.9 OD-01, PD-23, TECH-SPEC T22 item 3): as the owner, acting as org 2's Hearth
+-- principal, the set-up records twilio's facts as Hearth's and clears it in the DPO's name
+-- (cleared_via 'bootstrap'), writes one audit row with Hearth as the actor, the reason, and details
+-- naming the bootstrap, the DPO and each fact that changed, from and to (never via or
+-- on_behalf_of_id, which 0004 keeps for A4 and A5), and appends one register.transfer_changed event,
+-- Hearth acting. The api's gate then reads it as cleared.
 select pg_temp.act_as_owner('2', 'a0');
 select set_config('test.clearance', pg_temp.bootstrap('twilio', pg_temp.id('2', 'a5'), '{}',
                                                       'First set-up: the signed agreement and the provider''s letter')::text, true);
@@ -537,7 +581,18 @@ select pg_temp.check(count(*) = 1 and bool_and(
                        and a.reason = 'First set-up: the signed agreement and the provider''s letter'
                        and a.via is null and a.on_behalf_of_id is null and a.request_id is null
                        and a.details = jsonb_build_object('by', 'bootstrap', 'decided_by', pg_temp.id('2', 'a5'), 'revision', 2,
-                                                          'clearance', current_setting('test.clearance')::uuid)),
+                                                          'was_revision', 1, 'changed', a.details -> 'changed',
+                                                          'clearance', current_setting('test.clearance')::uuid)
+                       -- Every fact the set-up gave, from Hearth's empty revision 1; not the
+                       -- certificate's date, which stayed empty.
+                       and (select array_agg(k order by k) from jsonb_object_keys(a.details -> 'changed') k)
+                           = array['countries_confirmed', 'data_types', 'dpa_terms_confirmed', 'onward_recipients',
+                                   'processing_countries', 'provider_retention', 'retention_confirmed', 'review_on',
+                                   'safeguard', 'safeguard_reference', 'services', 'storage_countries', 'training',
+                                   'zero_retention']
+                       and a.details #> '{changed,services}' = '{"from": null, "to": "Sign-in codes by text message"}'
+                       and a.details #> '{changed,processing_countries}' = '{"from": [], "to": ["IE", "US"]}'
+                       and a.details #> '{changed,dpa_terms_confirmed}' = '{"from": false, "to": true}'),
                      format('the set-up''s audit row is wrong: %s', array_agg(a.details)))
 from public.audit_events a where a.id > current_setting('test.audit_max')::bigint;
 select pg_temp.check(count(*) = 1 and bool_and(
@@ -574,10 +629,14 @@ insert into public.role_assignments (org_id, person_id, role, created_by) values
   (pg_temp.id('3', '00'), pg_temp.id('3', 'a1'), 'owner', pg_temp.id('3', 'a0')),
   (pg_temp.id('3', '00'), pg_temp.id('3', 'a5'), 'dpo', pg_temp.id('3', 'a1'));
 select set_config('app.org_id', pg_temp.id('3', '00')::text, true), set_config('app.user_id', pg_temp.id('3', 'a0')::text, true);
+-- Text given with spaces around it is kept trimmed, as the api keeps the DPO's.
 select pg_temp.check(pg_temp.bootstrap('aws', pg_temp.id('3', 'a5'),
-                                       '{"services": "Hosting, CloudWatch logs", "processing_countries": ["SG"], "storage_countries": ["SG"]}',
-                                       'First set-up') is not null, 'the superuser could not run the set-up');
-select pg_temp.check(count(*) = 1 and bool_and(cleared_via = 'bootstrap' and cleared_by = pg_temp.id('3', 'a5')),
-                     'the superuser''s set-up did not clear aws in the DPO''s name')
+                                       E'{"services": " Hosting, CloudWatch logs\\n", "processing_countries": ["SG"], "storage_countries": ["SG"]}',
+                                       '  First set-up ') is not null, 'the superuser could not run the set-up');
+select pg_temp.check(count(*) = 1 and bool_and(cleared_via = 'bootstrap' and cleared_by = pg_temp.id('3', 'a5')
+                                               and facts ->> 'services' = 'Hosting, CloudWatch logs'),
+                     'the superuser''s set-up did not clear aws''s trimmed facts in the DPO''s name')
 from public.transfer_clearances where org_id = pg_temp.id('3', '00') and provider = 'aws' and withdrawn_at is null;
+select pg_temp.check(count(*) = 1 and bool_and(reason = 'First set-up'), 'the set-up''s reason was not kept trimmed')
+from public.audit_events where org_id = pg_temp.id('3', '00') and action = 'register.transfer_cleared';
 select set_config('app.org_id', '', true), set_config('app.user_id', '', true);

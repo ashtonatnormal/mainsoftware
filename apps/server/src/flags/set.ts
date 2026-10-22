@@ -125,10 +125,14 @@ export async function setFlag(api: Api, body: SetFlagBody, session: SessionIds, 
       throw refusalOf(error) ?? error
     }
     const changed = revision !== Number(before.revision)
-    // Another change committed between the read above and set_feature_flag(): a change judged to
-    // reach nobody new was judged on a row that has gone (turned off meanwhile, this would turn it
-    // back on unchecked), so it rolls back and the admin tries again on the row as it is now.
-    if (!widening && changed && revision !== Number(before.revision) + 1) throw new ApiError(409, 'try_again')
+    // Another change committed between the read above and set_feature_flag(): a change that leaves
+    // the flag on, judged to reach nobody new, was judged on a row that has gone (turned off
+    // meanwhile, this would turn it back on unchecked), so it rolls back and the admin tries again
+    // on the row as it is now. A change that leaves it off reaches nobody whatever the row now
+    // holds, so it is never refused (A0.3's kill switch).
+    if (body.enabled && !widening && changed && revision !== Number(before.revision) + 1) {
+      throw new ApiError(409, 'try_again')
+    }
     if (changed) {
       await appendOutbox(trx, {
         orgId,

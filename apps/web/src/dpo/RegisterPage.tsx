@@ -24,7 +24,7 @@ import { cx } from '@/ui/cx.ts'
 import { EmptyState } from '@/ui/EmptyState.tsx'
 import { Page } from '@/ui/Page.tsx'
 import { toast } from '@/ui/toast.ts'
-import { type Refusal, refusalOfError } from './model.ts'
+import { landedText, type Refusal, refusalOfError } from './model.ts'
 import { Note } from './parts.tsx'
 import { type RegisterWrite, registersQuery, sendWrite } from './queries.ts'
 import { ReauthPin } from './ReauthPin.tsx'
@@ -122,8 +122,9 @@ export interface RegisterWriter {
   reload(): void
 }
 
-// done: called once a write has landed and the registers have been read again, with the toast's
-// text; the caller closes its dialog.
+// done: called once a write has landed and the registers have been read again; the caller closes
+// its dialog. The toast says savedText when the write changed something, else that nothing changed
+// (landedText).
 export function useRegisterWrite(done: () => void, savedText: string = DPO.saved): RegisterWriter {
   const queryClient = useQueryClient()
   const last = useRef<RegisterWrite | undefined>(undefined)
@@ -136,9 +137,9 @@ export function useRegisterWrite(done: () => void, savedText: string = DPO.saved
     last.current = write
     setRefusal(undefined)
     mutation.mutate(write, {
-      onSuccess: async () => {
+      onSuccess: async result => {
         await reread()
-        toast({ text: savedText })
+        toast({ text: landedText(result, savedText) })
         done()
       },
       onError: error => setRefusal(refusalOfError(error)),

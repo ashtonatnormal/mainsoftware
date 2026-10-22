@@ -3,8 +3,8 @@
 // Back fallback are checked against this list, never against whatever a URL held. The router
 // (router/router.tsx) registers exactly APP_PATHS inside its shell, and its test RO-01 holds
 // the two equal; /sign-in sits outside the shell, and the splat route that catches unknown paths is
-// not an app path. Reserved for later steps and deliberately absent: /admin (C0.16), /settings and
-// /notice (C0.9 PR 2) (T21 item 5).
+// not an app path. Reserved for later steps and deliberately absent: /admin (C0.16), /settings (the
+// settings registry) and /notice (C0.9 PR 2) (T21 item 5).
 //
 // Two lists (T21 item 5, C0.9 PD-26):
 // - NAV_PATHS: the places the phone's tab bar and More page and the rail reach (shell/nav.ts),

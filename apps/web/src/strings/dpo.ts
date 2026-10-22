@@ -32,6 +32,8 @@ export const DPO = {
   save: 'Save',
   saving: 'Saving…',
   saved: 'Saved.',
+  // A write that landed and changed nothing (PD-21): the entry was already as sent.
+  nothingChanged: 'Nothing changed.',
   // Shown on a held Save, and above the list of what blocks it.
   fixFirst: 'Fix what’s listed first.',
   beforeSaving: 'Before you can save',
@@ -46,9 +48,11 @@ export const DPO = {
     confirm: 'Confirm',
     confirming: 'Checking…',
     signOut: 'Sign out',
-    // pin_reset_needed in these pages' own words: the shared copy says "Ask", which no text these
-    // pages show may (decision 8).
+    // pin_reset_needed, and pin_locked once only an Owner can unlock it (pin.state admin_locked),
+    // in these pages' own words: the server's copy says "Ask", which no text these pages show may
+    // (decision 8).
     pinResetNeeded: 'Your PIN needs resetting. An Owner resets it, after checking it’s you.',
+    pinAdminLocked: 'Your PIN is locked. An Owner resets it, after checking it’s you.',
   },
 } as const
 

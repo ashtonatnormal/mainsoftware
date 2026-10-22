@@ -51,9 +51,10 @@ export function failureOf(error: unknown): FailureLike {
 export const refusalOfError = (error: unknown): Refusal => refusalOf(failureOf(error))
 
 // The PIN step's own refusals (POST /api/auth/reauth/pin): a session that re-authenticates some
-// other way (409 reauth_method) can only sign in again; a PIN that needs an Owner's reset says so in
-// these pages' words; anything else (a wrong PIN, a lock, a limit, no answer) is said on the field,
-// in the server's words.
+// other way (409 reauth_method) can only sign in again; a PIN that needs an Owner's reset (409
+// pin_reset_needed, or 423 pin_locked once the lock needs one: pin.state admin_locked) says so in
+// these pages' words, since the server's say "Ask"; anything else (a wrong PIN, a lock that ends, a
+// limit, no answer) is said on the field, in the server's words.
 export type PinOutcome =
   | { readonly kind: 'field'; readonly text: string }
   | { readonly kind: 'sign_in'; readonly text: string }
@@ -62,8 +63,16 @@ export function pinOutcomeOf(failure: FailureLike): PinOutcome {
   const method = reauthMethodOf(failure)
   if (method !== undefined && method !== 'pin') return { kind: 'sign_in', text: REAUTH_METHOD_MESSAGES.sign_in.method }
   if (failure.code === 'pin_reset_needed') return { kind: 'field', text: DPO.reauth.pinResetNeeded }
+  if (failure.code === 'pin_locked' && failure.extra.pin?.state === 'admin_locked') {
+    return { kind: 'field', text: DPO.reauth.pinAdminLocked }
+  }
   return { kind: 'field', text: failure.serverMessage }
 }
+
+// The toast once a write lands: its own line only when it changed something; a write that changed
+// nothing wrote nothing (PD-21), so the page doesn't say it did.
+export const landedText = (result: { readonly changed: boolean }, savedText: string): string =>
+  result.changed ? savedText : DPO.nothingChanged
 
 // A PIN is 6 digits; anything else is said before it is sent.
 export function pinEntryProblem(pin: string): string | undefined {

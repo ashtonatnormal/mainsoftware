@@ -2,7 +2,8 @@
 // re-authentication sheet. A read or a write refused with 403 reauth_required {method: 'pin'} shows
 // it where the refusal is: on the page for a read, in the dialog for a write. The PIN goes to POST
 // /api/auth/reauth/pin; once it is confirmed, the caller makes the refused call again, once. The
-// form being edited stays as it was, in component state (never storage, WS-01).
+// form being edited stays as it was, in component state (never storage, WS-01), and the PIN is
+// held only by this step, never by Query's cache (pinStepOptions).
 //
 // The field is the kit's PinField: current-password, so a password manager can fill it, and paste
 // is never blocked (WCAG 3.3.8, WS-13). It takes focus when the step appears. A wrong PIN, a lock
@@ -17,7 +18,7 @@ import { announce } from '@/ui/announce.ts'
 import { Button } from '@/ui/Button.tsx'
 import { PinField, ShowPin } from '@/ui/PinField.tsx'
 import { failureOf, pinEntryProblem, pinOutcomeOf } from './model.ts'
-import { reauthWithPin } from './queries.ts'
+import { pinStepOptions } from './queries.ts'
 import { SignOutNotice } from './SignOutNotice.tsx'
 
 export interface ReauthPinProps {
@@ -32,7 +33,9 @@ export function ReauthPin({ onConfirmed }: ReauthPinProps) {
   const [signIn, setSignIn] = useState<string | undefined>()
   const field = useRef<HTMLInputElement>(null)
   const titleId = useId()
-  const confirm = useMutation({ mutationFn: reauthWithPin })
+  // The PIN being sent, for the mutation to read on each try; emptied once the step settles.
+  const entered = useRef('')
+  const confirm = useMutation(pinStepOptions(entered))
 
   useEffect(() => {
     field.current?.focus()
@@ -48,7 +51,8 @@ export function ReauthPin({ onConfirmed }: ReauthPinProps) {
     if (confirm.isPending) return
     const problem = pinEntryProblem(pin)
     if (problem !== undefined) return fail(problem)
-    confirm.mutate(pin, {
+    entered.current = pin
+    confirm.mutate(undefined, {
       onSuccess: () => {
         setPin('')
         setError(undefined)

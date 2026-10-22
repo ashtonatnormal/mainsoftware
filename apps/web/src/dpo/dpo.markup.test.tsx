@@ -164,6 +164,10 @@ describe('C0.9 PD-26: the DPO pages (dpo/)', () => {
     expect(readable(markup)).toEqual(
       expect.arrayContaining([PURPOSES_COPY.startsWhenNotified, PURPOSES_COPY.laterStages]),
     )
+    // It claims nothing the cards contradict: the pinned purposes, security audit and backups show
+    // as active before any notice exists, so the line sets them apart (T22 items 4 and 5).
+    expect(PURPOSES_COPY.startsWhenNotified).toMatch(/^Apart from the purposes Hearth keeps active, /)
+    expect(PURPOSES_COPY.startsWhenNotified).toContain('Hearth already keeps the audit log and backups.')
     expect(readable(markup).filter(text => aiCopyIn(text) !== undefined)).toEqual([])
     // No tab of the navigation claims the page.
     expect(

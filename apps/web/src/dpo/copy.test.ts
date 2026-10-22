@@ -27,7 +27,8 @@ function stringsIn(value: unknown, where: string): { where: string; text: string
 
 // The refusals the pages pass on as the server words them: the registers' routes and the PIN step
 // (a code the client maps to its own copy, pin_reset_needed, is left out: the pages never show
-// the shared line).
+// the shared line; pin_locked is the lock that ends, since the one only an Owner lifts has its own
+// line, checked below).
 const PASSED_ON = [
   'invalid_request',
   'invalid_pin',
@@ -63,9 +64,13 @@ describe('C0.9 PD-27 PD-31: the DPO pages’ copy', () => {
     expect(
       shown.filter(entry => aiCopyIn(entry.text) !== undefined).map(entry => `${entry.where}: ${entry.text}`),
     ).toEqual([])
-    // The one shared line the pages replace, because it says "Ask".
+    // The server's lines the pages replace, because they say "Ask": pin_reset_needed, and
+    // pin_locked's once only an Owner can unlock it (apps/server auth/errors.ts
+    // PIN_ADMIN_LOCKED_MESSAGE, which the web app can't import; dpo/model.ts pinOutcomeOf).
     expect(aiCopyIn(MESSAGES.pin_reset_needed)).toBeDefined()
     expect(aiCopyIn(DPO_TABLES.DPO.reauth.pinResetNeeded)).toBeUndefined()
+    expect(aiCopyIn("Your PIN is locked. Ask an Owner to reset it. They'll check it's you first.")).toBeDefined()
+    expect(aiCopyIn(DPO_TABLES.DPO.reauth.pinAdminLocked)).toBeUndefined()
   })
 
   it('DPP-06 PD-27: the AI layer’s purposes and providers have no line on the pages: they are left out of the lists the pages draw from', () => {

@@ -132,14 +132,17 @@ export const isCleared = (row: TransferRowForClient): boolean =>
   row.clearance !== null && row.clearance.withdrawnOn === null
 
 // The clearance as the card says it, beside its pill: when and by whom, or how it ended. A provider
-// never cleared has no line but the pill's, and Twilio Verify's says what that stops (T22 item 3).
+// never cleared has no line but the pill's. Twilio Verify's says what not being cleared stops,
+// whether it never was or its clearance was withdrawn or ended (T22 item 3).
 export function clearanceText(row: TransferRowForClient): string | undefined {
   const clearance = row.clearance
   if (clearance === null) return row.provider === 'twilio' ? TRANSFERS_COPY.twilioNotCleared : undefined
   if (clearance.withdrawnOn !== null) {
-    return clearance.withdrawReason === 'facts_changed'
-      ? TRANSFERS_COPY.endedOn(dayText(clearance.withdrawnOn))
-      : TRANSFERS_COPY.withdrawnOn(dayText(clearance.withdrawnOn))
+    const ended =
+      clearance.withdrawReason === 'facts_changed'
+        ? TRANSFERS_COPY.endedOn(dayText(clearance.withdrawnOn))
+        : TRANSFERS_COPY.withdrawnOn(dayText(clearance.withdrawnOn))
+    return row.provider === 'twilio' ? `${ended}. ${TRANSFERS_COPY.twilioNotClearedAgain}` : ended
   }
   if (clearance.clearedVia === 'bootstrap') return TRANSFERS_COPY.clearedAtSetUp(dayText(clearance.clearedOn))
   return clearance.clearedBy === null

@@ -10,12 +10,13 @@
 // worker, so the sign-in happens once and Ashton's one code is the run's only one (personas.ts).
 // Marcus, the project's own persona (a Team Admin), is the one who isn't the DPO.
 //
-// What DPP-E2 records is made up and harmless: nothing in C0.9 PR 1 sends to a push service, and the
-// e2e api's fake SMS provider names no transfer, so clearing or withdrawing changes no send.
+// What DPP-E2 records, and DPP-E5 clears and withdraws again, is made up and harmless: nothing in
+// C0.9 PR 1 sends to a push service, and the e2e api's fake SMS provider names no transfer, so
+// clearing or withdrawing changes no send.
 import { REAUTH_METHOD_MESSAGES } from '@hearth/shared'
 import type { Page } from '@playwright/test'
 import { expectAxeClean } from './support/axe.ts'
-import { noAiCopy, noSidewaysScroll } from './support/checks.ts'
+import { inputs16, noAiCopy, noSidewaysScroll, targets44 } from './support/checks.ts'
 import { stateFile } from './support/env.ts'
 import { expect, test } from './support/fixtures.ts'
 import { E2E_PIN, PERSONAS } from './support/personas.ts'
@@ -77,8 +78,8 @@ test('DPP-E1 PD-26 PD-27 decision 8: the DPO’s avatar menu holds Data protecti
         await page.emulateMedia({ colorScheme: scheme })
         await expectAxeClean(page, `${path} at ${size.width} ${scheme}`, testInfo)
       }
+      expect(await noAiCopy(page), `${path} at ${size.width}`).toEqual([])
     }
-    expect(await noAiCopy(page), path).toEqual([])
     await page.setViewportSize(SIZES.w320)
     expect(await noSidewaysScroll(page), `${path} at 320`).toEqual([])
     await page.setViewportSize(SIZES.w390)
@@ -202,6 +203,81 @@ test('DPP-E2 PDPA-01 PDPA-10 PD-04 PD-05 PD-11 PD-12: the DPO records security_a
   await expect(dialog).toBeHidden()
   await expect(apple).toContainText('Clearance withdrawn on')
   await expect(apple.getByRole('button', { name: 'Clear for use', exact: true })).toBeVisible()
+})
+
+test('DPP-E5 NFR-02 PRD-66 WCAG 2.2 AA T22 item 15: on a phone, the DPO’s two-item avatar menu fits at 320 × 568 and 768 × 480; and at 320 and 390 both pages and every dialog of the edit, clear and withdraw flows have 44 px targets and 16 px inputs, scroll nothing sideways and pass axe', async ({
+  open,
+}, testInfo) => {
+  // SH-08's placement check, with the DPO's menu: every item inside the viewport, and the point at
+  // its centre is the item.
+  for (const size of [SIZES.w320, SIZES.short]) {
+    const page = await open({ ...size, signedIn: ASHTON, phone: true })
+    await page.goto('/chats')
+    await expect(h1(page)).toHaveText('Chats')
+    await page.getByRole('button', { name: /^Account, Ashton/ }).click()
+    const items = accountMenu(page).getByRole('menuitem')
+    expect((await items.allInnerTexts()).map(name => name.trim())).toEqual(['Data protection', 'Sign out'])
+    const placed = await items.evaluateAll(elements =>
+      elements.map(element => {
+        const box = element.getBoundingClientRect()
+        const inside = box.top >= 0 && box.left >= 0 && box.bottom <= innerHeight && box.right <= innerWidth
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+        return { inside, reached: hit !== null && (hit === element || element.contains(hit)) }
+      }),
+    )
+    const every = { inside: true, reached: true }
+    expect(placed, `${size.width} × ${size.height}`).toEqual([every, every])
+    expect(await targets44(page), `the avatar menu at ${size.width} × ${size.height}`).toEqual([])
+  }
+
+  for (const size of [SIZES.w320, SIZES.w390]) {
+    const page = await open({ ...size, signedIn: ASHTON, phone: true })
+    // What NFR-02 asks of every screen, on the page or dialog as it stands.
+    const checked = async (what: string) => {
+      const label = `${what} at ${size.width}`
+      expect(await targets44(page), label).toEqual([])
+      expect(await inputs16(page), label).toEqual([])
+      expect(await noSidewaysScroll(page), label).toEqual([])
+      await expectAxeClean(page, label, testInfo)
+    }
+
+    await page.goto('/dpo/purposes')
+    await expect(firstPurpose(page)).toBeVisible()
+    await checked('/dpo/purposes')
+    await page.getByRole('button', { name: 'Edit Security audit and monitoring' }).click()
+    let dialog = page.getByRole('dialog', { name: 'Edit Security audit and monitoring' })
+    await expect(dialog).toBeVisible()
+    await checked('the purpose dialog')
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(dialog).toBeHidden()
+
+    await page.goto('/dpo/transfers')
+    const apple = card(page, 'Apple Push Notification service')
+    await expect(apple).toContainText('Not cleared')
+    await checked('/dpo/transfers')
+    await apple.getByRole('button', { name: 'Edit Apple Push Notification service' }).click()
+    dialog = page.getByRole('dialog', { name: 'Edit Apple Push Notification service' })
+    await expect(dialog).toContainText('Nothing more is needed to clear it.')
+    await checked('the transfer dialog')
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(dialog).toBeHidden()
+
+    // On the facts DPP-E2 recorded: cleared, then withdrawn, each through its confirmation.
+    await apple.getByRole('button', { name: 'Clear for use', exact: true }).click()
+    dialog = page.getByRole('dialog', { name: 'Clear Apple Push Notification service for use?' })
+    await expect(dialog).toBeVisible()
+    await checked('the clear confirmation')
+    await dialog.getByRole('button', { name: 'Clear for use', exact: true }).click()
+    await expect(dialog).toBeHidden()
+    await expect(apple).toContainText(/Cleared on .* by Ashton/)
+    await apple.getByRole('button', { name: 'Withdraw clearance', exact: true }).click()
+    dialog = page.getByRole('dialog', { name: 'Withdraw Apple Push Notification service’s clearance?' })
+    await expect(dialog).toBeVisible()
+    await checked('the withdraw confirmation')
+    await dialog.getByRole('button', { name: 'Withdraw clearance', exact: true }).click()
+    await expect(dialog).toBeHidden()
+    await expect(apple).toContainText('Clearance withdrawn on')
+  }
 })
 
 test('DPP-E4 PD-20 PDPA-13: someone who isn’t the DPO (Marcus) has no Data protection entry, and his deep link to a register is refused by the api and says the page is the DPO’s', async ({

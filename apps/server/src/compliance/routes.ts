@@ -57,10 +57,19 @@ import { appendOutbox } from '#src/outbox/append.ts'
 // sign-in suite's sweep of every code leaves to it).
 export const REGISTER_ERRORS = ['register_changed', 'register_invalid'] as const
 
-// A check constraint (23514): a fact's shape the table refuses, such as a certification with no
-// verification date. The body's schema and the shared rules catch each before the database, so
-// this is a backstop that answers as the rule it is, never 500.
+// A check constraint (23514) of a register's own table: a fact's shape the table refuses, such as a
+// certification with no verification date. The body's schema and the shared rules catch each
+// before the database, so this is a backstop that answers as the rule it is. Postgres names the
+// constraint, and each of these tables' names starts with its table's (0009). A check of any other
+// table the functions write (the audit log's, say), or one a trigger raises with no constraint,
+// is a fault in the server, which answers 500 and is logged.
 const CHECK_VIOLATION = '23514'
+const REGISTER_CONSTRAINT = /^(?:processing_register|transfer_register|transfer_clearances)_/
+
+function registerCheck(error: unknown): boolean {
+  const { constraint } = error as { constraint?: unknown }
+  return typeof constraint === 'string' && REGISTER_CONSTRAINT.test(constraint)
+}
 
 // What the registers' functions refuse with, as the api answers it (PD-25). A lock not granted in
 // time (55P03), a deadlock or a serialisation failure is the api's 409 try_again already
@@ -70,8 +79,9 @@ function refusalOf(error: unknown): ApiError | undefined {
     case REGISTER_CHANGED:
       return new ApiError(409, 'register_changed')
     case REGISTER_INVALID:
-    case CHECK_VIOLATION:
       return new ApiError(400, 'register_invalid')
+    case CHECK_VIOLATION:
+      return registerCheck(error) ? new ApiError(400, 'register_invalid') : undefined
     case INVALID_PARAMETER:
       return new ApiError(404, 'not_found')
     case INSUFFICIENT_PRIVILEGE:

@@ -417,15 +417,17 @@ describe('RGS-17 C0.9 PD-21 PD-22 PD-25 POST /api/admin/registers/purposes/set',
     }
   })
 
-  it('PD-25: answers the function’s refusals: HF005 409 register_changed, HF006 400 register_invalid, 22023 404, 42501 403', async () => {
-    for (const [sqlstate, status, code] of [
-      ['HF005', 409, 'register_changed'],
-      ['HF006', 400, 'register_invalid'],
-      ['23514', 400, 'register_invalid'],
-      ['22023', 404, 'not_found'],
-      ['42501', 403, 'forbidden'],
+  it('PD-25: answers the function’s refusals: HF005 409 register_changed, HF006 and a register table’s check 400 register_invalid, 22023 404, 42501 403', async () => {
+    for (const [sqlstate, status, code, constraint] of [
+      ['HF005', 409, 'register_changed', undefined],
+      ['HF006', 400, 'register_invalid', undefined],
+      ['23514', 400, 'register_invalid', 'transfer_register_certificate'],
+      ['23514', 400, 'register_invalid', 'processing_register_retention_check'],
+      ['23514', 400, 'register_invalid', 'transfer_clearances_withdrawn'],
+      ['22023', 404, 'not_found', undefined],
+      ['42501', 403, 'forbidden', undefined],
     ] as const) {
-      const pool = org({ call: pgError(sqlstate) })
+      const pool = org({ call: pgError(sqlstate, constraint) })
       const c = context(pool)
       expect(await refusal(setPurpose(c.api, purposeBody(), session(), c.info)), sqlstate).toMatchObject({
         status,
@@ -438,15 +440,24 @@ describe('RGS-17 C0.9 PD-21 PD-22 PD-25 POST /api/admin/registers/purposes/set',
     expect([...REGISTER_ERRORS]).toEqual(['register_changed', 'register_invalid'])
   })
 
-  it('leaves a conflict to the api’s 409 try_again, and anything else unanswered', async () => {
-    const pool = org({ call: pgError('40P01') })
-    const c = context(pool)
-    const error = await setPurpose(c.api, purposeBody(), session(), c.info).then(
-      () => undefined,
-      (e: unknown) => e,
-    )
-    expect(error).not.toBeInstanceOf(ApiError)
-    expect(error).toMatchObject({ code: '40P01' })
+  it('leaves a conflict to the api’s 409 try_again, and anything else unanswered: a check of another table the function writes, or one with no constraint named, is a fault (500, logged)', async () => {
+    for (const [sqlstate, constraint] of [
+      ['40P01', undefined],
+      ['23514', 'audit_events_reason_check'],
+      ['23514', 'outbox_events_type'],
+      ['23514', 'processing_restrictions_lifted'],
+      ['23514', undefined],
+    ] as const) {
+      const pool = org({ call: pgError(sqlstate, constraint) })
+      const c = context(pool)
+      const error = await setPurpose(c.api, purposeBody(), session(), c.info).then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+      expect(error, `${sqlstate} ${constraint}`).not.toBeInstanceOf(ApiError)
+      expect(error).toMatchObject({ code: sqlstate, constraint })
+      expect(pool.texts().at(-1)).toBe('rollback')
+    }
   })
 })
 

@@ -9,8 +9,9 @@
 // A method this build doesn't know, or none, reads as 'sign_in', which always works (the shared
 // extras schema reads an unknown one that way already, api/http.ts).
 //
-// C0.8 ships this reading and the fields the sheet reuses (ui/CodeField.tsx, ui/PinField.tsx);
-// C0.16 builds the sheet and the retry around the first admin action, recorded in T20.
+// C0.8 ships this reading and the fields the sheet reuses (ui/CodeField.tsx, ui/PinField.tsx).
+// C0.9's DPO pages, the first admin actions in the UI, confirm the PIN inline and retry once
+// (dpo/ReauthPin.tsx, T22 item 15); C0.16's sheet replaces that step (T20).
 import type { ReauthMethod } from '@hearth/shared'
 import type { ApiFailure } from './http.ts'
 

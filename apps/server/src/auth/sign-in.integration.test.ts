@@ -1180,8 +1180,8 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(clearance).toEqual({ cleared_by: dpo.id, cleared_via: 'bootstrap', withdrawn_at: null })
   })
 
-  it('XFR-I2 PDPA-10 C0.9 PD-15 PD-20: once the DPO withdraws Twilio, the next code is skipped_not_cleared and a code-method re-authentication answers 503', async () => {
-    // Budgets: M 1 code request (its sign-in) and 1 re-authentication request; P 1; the DPO 1, on
+  it('XFR-I2 PDPA-10 C0.9 PD-15 PD-20: while Twilio is cleared a code-method re-authentication is sent through it; once the DPO withdraws it, the next code is skipped_not_cleared and a re-authentication answers 503, audited', async () => {
+    // Budgets: M 1 code request (its sign-in) and 2 re-authentication requests; P 1; the DPO 1, on
     // the stack's own api, whose fake names no entry.
     const { org, dpo, twilioLike, app } = await twilioOrg()
     const m = await s.person({ org })
@@ -1192,6 +1192,11 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect((await requestCode(mc, m.e164)).status).toBe(200)
     const signedIn = await verifyCode(mc, await twilioLike.nextCode(m.e164))
     expect([signedIn.status, signedIn.body]).toMatchObject([200, { status: 'signed_in' }])
+    // While Twilio is cleared, M's code-method re-authentication asks the clearance too and is sent.
+    const firstCount = twilioLike.countTo(m.e164)
+    const sentReauth = await mc.post('/api/auth/reauth/code/request', {})
+    expect([sentReauth.status, sentReauth.body]).toMatchObject([200, { status: 'code_sent' }])
+    expect(twilioLike.countTo(m.e164)).toBe(firstCount + 1)
 
     const dpoClient = await s.signIn(dpo)
     const withdrawn = await dpoClient.post('/api/admin/registers/transfers/withdraw', { provider: 'twilio' })
@@ -1206,6 +1211,16 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     const asked = await mc.post('/api/auth/reauth/code/request', {})
     expect([asked.status, asked.error]).toEqual([503, 'unavailable'])
     expect(twilioLike.countTo(m.e164)).toBe(sentBefore)
+    expect(s.logs.some(line => line.event === 'sms_provider_not_cleared' && line.personId === m.id)).toBe(true)
+    // Both re-authentication requests are audited: the one sent, then the one skipped.
+    expect(
+      (await auditOf(m))
+        .filter(row => row.action === 'auth.code_requested' && row.details.during === 'reauth')
+        .map(row => row.details),
+    ).toEqual([
+      { during: 'reauth', send: 'attempted' },
+      { during: 'reauth', send: 'skipped_not_cleared' },
+    ])
     // The DPO's own session carries on (their PIN re-authenticates them, never a code).
     expect((await dpoClient.get('/api/admin/registers')).status).toBe(200)
   })

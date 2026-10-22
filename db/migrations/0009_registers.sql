@@ -140,8 +140,9 @@ revoke execute on function public.processing_register_defaults() from public;
 -- binds protection comparable to the PDPA, names the countries and requires prompt notice of an
 -- incident; whether it trains on the data; the result of applying for zero retention; how long it
 -- keeps the data, with its written confirmation; who it passes the data on to; and when the entry
--- is next reviewed. Revision 1 is Hearth's, with nothing recorded; nobody can change a fact while a
--- clearance is open (transfer_register_check).
+-- is next reviewed. Text facts are kept trimmed, so text of only spaces is never stored (as
+-- processing_register keeps its own). Revision 1 is Hearth's, with nothing recorded; nobody can
+-- change a fact while a clearance is open (transfer_register_check).
 create table public.transfer_register (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.orgs (id),
@@ -149,20 +150,20 @@ create table public.transfer_register (
   -- Fixed per provider by transfer_register_defaults(): an AI provider (openai, bedrock) is never
   -- cleared before A0.
   ai boolean not null,
-  services text check (length(services) between 1 and 500),
-  data_types text check (length(data_types) between 1 and 1000),
+  services text check (services = btrim(services) and length(services) between 1 and 500),
+  data_types text check (data_types = btrim(data_types) and length(data_types) between 1 and 1000),
   processing_countries text[] not null default '{}',
   storage_countries text[] not null default '{}',
-  countries_confirmed text check (length(countries_confirmed) between 1 and 500),
+  countries_confirmed text check (countries_confirmed = btrim(countries_confirmed) and length(countries_confirmed) between 1 and 500),
   safeguard text check (safeguard in ('dpa', 'dpa_addendum', 'certification')),
-  safeguard_reference text check (length(safeguard_reference) between 1 and 500),
+  safeguard_reference text check (safeguard_reference = btrim(safeguard_reference) and length(safeguard_reference) between 1 and 500),
   certificate_verified_on date,
   dpa_terms_confirmed boolean not null default false,
   training text check (training in ('off', 'not_applicable')),
   zero_retention text check (zero_retention in ('granted', 'refused', 'not_offered', 'not_applicable', 'pending')),
-  provider_retention text check (length(provider_retention) between 1 and 1000),
-  retention_confirmed text check (length(retention_confirmed) between 1 and 500),
-  onward_recipients text check (length(onward_recipients) between 1 and 1000),
+  provider_retention text check (provider_retention = btrim(provider_retention) and length(provider_retention) between 1 and 1000),
+  retention_confirmed text check (retention_confirmed = btrim(retention_confirmed) and length(retention_confirmed) between 1 and 500),
+  onward_recipients text check (onward_recipients = btrim(onward_recipients) and length(onward_recipients) between 1 and 1000),
   review_on date,
   revision bigint not null default 1 check (revision >= 1),
   updated_at timestamptz not null default now(),
@@ -285,7 +286,9 @@ create trigger transfer_register_check before update on public.transfer_register
 -- storage countries and their written confirmation; the safeguard and its reference (a certificate
 -- not verified on a date still to come); the agreement's terms; training; a zero-retention result
 -- (pending isn't one); the provider's retention and its written confirmation; who it passes the data
--- on to; and a review date after today in the org's time zone. An AI provider is never cleared
+-- on to; and a review date after today in the org's time zone. Text of only whitespace is no fact,
+-- whitespace as JavaScript's trim() reads it (the api's body schema and transferProblems() trim
+-- with it), so the two refuse the same facts whoever wrote them. An AI provider is never cleared
 -- before A0 (D41). The entry is read FOR SHARE, so a change to its facts in progress makes this
 -- wait and then see it, and one that starts later waits for this transaction; the row is stamped
 -- with the provider, the revision and the facts read then. The messages can be shown as they are;
@@ -295,6 +298,8 @@ language plpgsql set search_path = '' as $$
 declare
   e public.transfer_register%rowtype;
   today date;
+  -- Empty, or only JavaScript's whitespace (String.prototype.trim()'s set).
+  blank constant text := '^[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*$';
 begin
   select * into e from public.transfer_register t where t.org_id = new.org_id and t.id = new.entry_id for share;
   if not found then
@@ -306,19 +311,19 @@ begin
   select (pg_catalog.now() at time zone o.time_zone)::date into today from public.orgs o where o.id = new.org_id;
   if e.ai then
     raise exception 'Providers for later stages can''t be cleared until their stage begins.' using errcode = 'HF006';
-  elsif e.services is null then
+  elsif coalesce(e.services ~ blank, true) then
     raise exception 'Record the services it provides before clearing it.' using errcode = 'HF006';
-  elsif e.data_types is null then
+  elsif coalesce(e.data_types ~ blank, true) then
     raise exception 'Record the personal data it receives before clearing it.' using errcode = 'HF006';
   elsif pg_catalog.cardinality(e.processing_countries) = 0 then
     raise exception 'Record the countries where it processes the data before clearing it.' using errcode = 'HF006';
   elsif pg_catalog.cardinality(e.storage_countries) = 0 then
     raise exception 'Record the countries where it stores the data before clearing it.' using errcode = 'HF006';
-  elsif e.countries_confirmed is null then
+  elsif coalesce(e.countries_confirmed ~ blank, true) then
     raise exception 'Record where and when it confirmed those countries in writing before clearing it.' using errcode = 'HF006';
   elsif e.safeguard is null then
     raise exception 'Record the safeguard for the transfer before clearing it.' using errcode = 'HF006';
-  elsif e.safeguard_reference is null then
+  elsif coalesce(e.safeguard_reference ~ blank, true) then
     raise exception 'Record where the safeguard is kept before clearing it.' using errcode = 'HF006';
   elsif e.certificate_verified_on > today then
     raise exception 'A certificate can''t be verified on a date still to come.' using errcode = 'HF006';
@@ -329,11 +334,11 @@ begin
     raise exception 'Record whether it trains on the data before clearing it.' using errcode = 'HF006';
   elsif e.zero_retention is null or e.zero_retention = 'pending' then
     raise exception 'Record the zero-retention result before clearing it. Pending isn''t a result.' using errcode = 'HF006';
-  elsif e.provider_retention is null then
+  elsif coalesce(e.provider_retention ~ blank, true) then
     raise exception 'Record how long it keeps the data before clearing it.' using errcode = 'HF006';
-  elsif e.retention_confirmed is null then
+  elsif coalesce(e.retention_confirmed ~ blank, true) then
     raise exception 'Record where and when it confirmed how long it keeps the data in writing before clearing it.' using errcode = 'HF006';
-  elsif e.onward_recipients is null then
+  elsif coalesce(e.onward_recipients ~ blank, true) then
     raise exception 'Record who it passes the data on to (or None) before clearing it.' using errcode = 'HF006';
   elsif e.review_on is null or e.review_on <= today then
     raise exception 'Set a review date after today before clearing it.' using errcode = 'HF006';
@@ -833,9 +838,11 @@ revoke execute on function public.transfer_cleared(text) from public;
 -- Hearth writing. SECURITY INVOKER and granted to nobody, so only the owner (and a superuser) can
 -- run it: the reviewed bootstrap script, in its own transaction, acting as the org's Hearth
 -- principal (app.org_id and app.user_id set as withOrg sets them). It records the facts (Hearth as
--- updated_by) and a clearance in the DPO's name, cleared_via 'bootstrap', which
+-- updated_by; text trimmed, as the api trims the DPO's, so a fact of only whitespace is missing
+-- and the clearance refuses it) and a clearance in the DPO's name, cleared_via 'bootstrap', which
 -- transfer_clearances_check() checks like any other; writes one audit row with Hearth as the
--- actor, the reason, and in details that the bootstrap did it and which DPO decided (never via or
+-- actor, the reason (trimmed, and more than whitespace), and in details that the bootstrap did it, which DPO
+-- decided, and each fact that changed, from and to, as record_transfer_entry() does (never via or
 -- on_behalf_of_id, which 0004 keeps for A4 and A5); and appends register.transfer_changed. It clears
 -- only a provider never cleared in the org: a clearance after a withdrawal is the DPO's, in the app.
 -- Returns the clearance's id. The messages can be shown as they are.
@@ -866,7 +873,12 @@ declare
   cur public.transfer_register%rowtype;
   proposed public.transfer_register%rowtype;
   at_revision bigint;
+  diff jsonb;
   clearance uuid := pg_catalog.gen_random_uuid();
+  -- Whitespace at either end, as JavaScript's trim() reads it (transfer_clearances_check()).
+  edges constant text := '^[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+'
+                         '|[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+$';
+  why text := nullif(pg_catalog.regexp_replace(reason, edges, '', 'g'), '');
 begin
   if org is null or hearth is null or not exists (
        select 1 from public.principals p
@@ -877,7 +889,7 @@ begin
   if provider_key is null or provider_key not in ('twilio', 'aws') then
     raise exception 'The set-up clears only Twilio Verify and AWS. The DPO clears the rest in Hearth.' using errcode = 'HF006';
   end if;
-  if reason is null or pg_catalog.length(reason) not between 1 and 2000 then
+  if why is null or pg_catalog.length(why) > 2000 then
     raise exception 'Give the set-up''s reason, from 1 to 2,000 characters.' using errcode = 'invalid_parameter_value';
   end if;
   -- The DPO named, read FOR SHARE in the lock order, so a deactivation or revocation in progress
@@ -903,23 +915,28 @@ begin
       using errcode = 'HF006';
   end if;
   proposed := cur;
-  proposed.services := bootstrap_transfer_clearance.services;
-  proposed.data_types := bootstrap_transfer_clearance.data_types;
+  proposed.services := nullif(pg_catalog.regexp_replace(bootstrap_transfer_clearance.services, edges, '', 'g'), '');
+  proposed.data_types := nullif(pg_catalog.regexp_replace(bootstrap_transfer_clearance.data_types, edges, '', 'g'), '');
   proposed.processing_countries := public.transfer_countries(bootstrap_transfer_clearance.processing_countries);
   proposed.storage_countries := public.transfer_countries(bootstrap_transfer_clearance.storage_countries);
-  proposed.countries_confirmed := bootstrap_transfer_clearance.countries_confirmed;
+  proposed.countries_confirmed := nullif(pg_catalog.regexp_replace(bootstrap_transfer_clearance.countries_confirmed, edges, '', 'g'), '');
   proposed.safeguard := bootstrap_transfer_clearance.safeguard;
-  proposed.safeguard_reference := bootstrap_transfer_clearance.safeguard_reference;
+  proposed.safeguard_reference := nullif(pg_catalog.regexp_replace(bootstrap_transfer_clearance.safeguard_reference, edges, '', 'g'), '');
   proposed.certificate_verified_on := bootstrap_transfer_clearance.certificate_verified_on;
   proposed.dpa_terms_confirmed := coalesce(bootstrap_transfer_clearance.dpa_terms_confirmed, false);
   proposed.training := bootstrap_transfer_clearance.training;
   proposed.zero_retention := bootstrap_transfer_clearance.zero_retention;
-  proposed.provider_retention := bootstrap_transfer_clearance.provider_retention;
-  proposed.retention_confirmed := bootstrap_transfer_clearance.retention_confirmed;
-  proposed.onward_recipients := bootstrap_transfer_clearance.onward_recipients;
+  proposed.provider_retention := nullif(pg_catalog.regexp_replace(bootstrap_transfer_clearance.provider_retention, edges, '', 'g'), '');
+  proposed.retention_confirmed := nullif(pg_catalog.regexp_replace(bootstrap_transfer_clearance.retention_confirmed, edges, '', 'g'), '');
+  proposed.onward_recipients := nullif(pg_catalog.regexp_replace(bootstrap_transfer_clearance.onward_recipients, edges, '', 'g'), '');
   proposed.review_on := bootstrap_transfer_clearance.review_on;
   at_revision := cur.revision;
-  if public.transfer_register_facts(proposed) is distinct from public.transfer_register_facts(cur) then
+  select coalesce(pg_catalog.jsonb_object_agg(w.key, pg_catalog.jsonb_build_object('from', w.value, 'to', n.value)), '{}')
+  into diff
+  from pg_catalog.jsonb_each(public.transfer_register_facts(cur)) w
+  join pg_catalog.jsonb_each(public.transfer_register_facts(proposed)) n on n.key = w.key
+  where w.value is distinct from n.value;
+  if diff <> '{}' then
     update public.transfer_register t
     set services = proposed.services, data_types = proposed.data_types, processing_countries = proposed.processing_countries,
         storage_countries = proposed.storage_countries, countries_confirmed = proposed.countries_confirmed,
@@ -935,9 +952,9 @@ begin
   insert into public.transfer_clearances (id, org_id, entry_id, cleared_by, cleared_via)
   values (clearance, org, cur.id, dpo, 'bootstrap');
   insert into public.audit_events (org_id, actor_id, action, target_type, target_id, reason, details)
-  values (org, hearth, 'register.transfer_cleared', 'transfer_entry', provider_key, reason,
+  values (org, hearth, 'register.transfer_cleared', 'transfer_entry', provider_key, why,
           pg_catalog.jsonb_build_object('by', 'bootstrap', 'decided_by', dpo, 'revision', at_revision,
-                                        'clearance', clearance));
+                                        'was_revision', cur.revision, 'changed', diff, 'clearance', clearance));
   insert into public.outbox_events (org_id, type, entity_type, entity_id, actor_id, actor_kind, purpose, ids)
   values (org, 'register.transfer_changed', 'transfer_entry', cur.id, hearth, 'system', 'service_operation',
           pg_catalog.jsonb_build_object('provider', provider_key, 'cleared', true));

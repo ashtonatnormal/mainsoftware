@@ -159,7 +159,8 @@ export const PURPOSE_PROBLEMS = [
 ] as const
 export type PurposeProblem = (typeof PURPOSE_PROBLEMS)[number]
 
-// Text counts as recorded once it holds more than spaces, as the table stores it trimmed.
+// Text counts as recorded once it holds more than whitespace (trim()'s), as the table stores it
+// trimmed and the clearance trigger reads it (0009 transfer_clearances_check(), RGS-I4).
 const recorded = (text: string | null): text is string => text !== null && text.trim() !== ''
 
 const NEEDS_NOTHING = { reference: false, optOutDays: false } as const

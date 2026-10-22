@@ -9,8 +9,10 @@ export const TRANSFERS_COPY = {
     'Each provider outside Singapore that receives personal data, what it receives and where, and whether you’ve cleared it for use.',
   cleared: 'Cleared',
   notCleared: 'Not cleared',
-  // Twilio Verify, never cleared in the org: what that stops (T22 item 3).
+  // Twilio Verify, never cleared in the org, or its clearance withdrawn or ended: what that stops
+  // (T22 item 3).
   twilioNotCleared: 'No sign-in code is sent until it’s cleared.',
+  twilioNotClearedAgain: 'No sign-in code is sent until it’s cleared again.',
   clearedOn: (day: string, name: string) => `Cleared on ${day} by ${name}`,
   clearedAtSetUp: (day: string) => `Cleared at set-up on ${day}`,
   withdrawnOn: (day: string) => `Clearance withdrawn on ${day}`,

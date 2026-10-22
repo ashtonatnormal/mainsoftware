@@ -8,13 +8,16 @@ import {
   SetPurposeBody,
   TransferWriteResponse,
 } from '@hearth/shared'
+import { MutationObserver } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ApiFailure } from '@/api/http.ts'
+import { createQueryClient } from '@/session/query-client.ts'
 import { DPO } from '@/strings/dpo.ts'
 import { PURPOSE_PROBLEM_COPY } from '@/strings/dpo-purposes.ts'
 import { PROVIDER_CHECKS, TRANSFER_PROBLEM_COPY, TRANSFERS_COPY } from '@/strings/dpo-transfers.ts'
-import { dayText, failureOf, pinEntryProblem, pinOutcomeOf, refusalOf } from './model.ts'
+import { dayText, failureOf, landedText, pinEntryProblem, pinOutcomeOf, refusalOf } from './model.ts'
 import { purposeBodyOf, purposeEditor, purposeFormOf, purposeView } from './purposes-model.ts'
-import { reauthWithPin, registersQuery, sendWrite, WRITE_PATHS } from './queries.ts'
+import { pinStepOptions, reauthWithPin, registersQuery, sendWrite, WRITE_PATHS } from './queries.ts'
 import { COMPLETE_FACTS, registersForClient, TODAY } from './testing/registers.ts'
 import { countriesOf, recordBodyOf, reviewOf, transferEditor, transferFormOf, transferView } from './transfers-model.ts'
 
@@ -155,6 +158,10 @@ describe('C0.9 PD-26: the DPO pages’ model (dpo/model.ts)', () => {
       answers.push(json(200, written))
       expect(await sendWrite(write as Parameters<typeof sendWrite>[0])).toEqual({ changed: true })
     }
+    // A write that changed nothing says so, never its saved line (PD-21).
+    expect(landedText({ changed: true }, DPO.saved)).toBe('Saved.')
+    expect(landedText({ changed: false }, DPO.saved)).toBe('Nothing changed.')
+    expect(landedText({ changed: false }, TRANSFERS_COPY.clearedToast('LiveKit Cloud'))).toBe('Nothing changed.')
     answers.push(json(200, { status: 'reauthenticated', validForSeconds: 300 }))
     await reauthWithPin('284917')
 
@@ -315,11 +322,36 @@ describe('C0.9 PD-26: the DPO pages’ model (dpo/model.ts)', () => {
     // Not cleared: a review date today is not overdue; and nothing recorded holds Clear for use.
     const mozilla = transferView(transferOf(registers, 'mozilla_push'), TODAY)
     expect(mozilla).toMatchObject({ cleared: false, clearance: undefined, clearHeld: TRANSFERS_COPY.clearHeld })
-    // Twilio Verify never cleared says what that stops.
+    // Twilio Verify not cleared says what that stops: never cleared, withdrawn, or ended by a plain
+    // Save of new facts.
     const never = registersForClient()
     expect(transferView(transferOf(never, 'twilio'), TODAY).clearance).toBe(
       'No sign-in code is sent until it’s cleared.',
     )
+    for (const [withdrawReason, line] of [
+      ['dpo_decision', 'Clearance withdrawn on Sat 10 Oct 2026. No sign-in code is sent until it’s cleared again.'],
+      [
+        'facts_changed',
+        'Clearance ended on Sat 10 Oct 2026, when new facts were saved. No sign-in code is sent until it’s cleared again.',
+      ],
+    ] as const) {
+      const ended = registersForClient(
+        {},
+        {
+          twilio: {
+            ...COMPLETE_FACTS,
+            revision: 3,
+            clearance: {
+              ...cleared('app', 'Ashton Teo'),
+              withdrawnOn: '2026-10-10',
+              withdrawnBy: 'Ashton Teo',
+              withdrawReason,
+            },
+          },
+        },
+      )
+      expect(transferView(transferOf(ended, 'twilio'), TODAY)).toMatchObject({ cleared: false, clearance: line })
+    }
     expect(mozilla.review).toEqual({ text: 'Review by Thu 22 Oct 2026', overdue: false })
     expect(reviewOf(transferOf(registers, 'aws_sms'), TODAY)).toBeUndefined()
     // Every provider shown says what checks it; only Twilio Verify is checked today.
@@ -428,7 +460,59 @@ describe('C0.9 PD-26: the DPO pages’ model (dpo/model.ts)', () => {
       kind: 'field',
       text: DPO.reauth.pinResetNeeded,
     })
+    // A lock only an Owner lifts: the server's line (auth/errors.ts PIN_ADMIN_LOCKED_MESSAGE) says
+    // "Ask", so the pages word it; a lock that ends is said in the server's words.
+    const adminLocked = "Your PIN is locked. Ask an Owner to reset it. They'll check it's you first."
+    expect(pinOutcomeOf(failure('pin_locked', { pin: { state: 'admin_locked' } }, adminLocked))).toEqual({
+      kind: 'field',
+      text: DPO.reauth.pinAdminLocked,
+    })
+    expect(
+      pinOutcomeOf(
+        failure('pin_locked', { pin: { state: 'locked', until: '2026-10-22T09:00:00Z' } }, MESSAGES.pin_locked),
+      ),
+    ).toEqual({ kind: 'field', text: MESSAGES.pin_locked })
     expect(pinEntryProblem('12345')).toBe(MESSAGES.invalid_pin)
     expect(pinEntryProblem('284917')).toBeUndefined()
+  })
+
+  it('DPP-04 PD-30 WS-01: the PIN step’s mutation keeps the PIN out of Query’s cache: it takes no variables, reads the PIN on each try (a retry after try_again sends it again), empties the step’s holder once settled, and is dropped once no step observes it', async () => {
+    const client = createQueryClient(() => {}, { random: () => 0 })
+    const sent: string[] = []
+    const answers: (ApiFailure | undefined)[] = [
+      new ApiFailure(409, 'try_again', MESSAGES.try_again),
+      undefined,
+      new ApiFailure(401, 'pin_wrong', MESSAGES.pin_wrong),
+    ]
+    const entered = { current: '284917' }
+    const observer = new MutationObserver(
+      client,
+      pinStepOptions(entered, async pin => {
+        sent.push(pin)
+        const answer = answers.shift()
+        if (answer !== undefined) throw answer
+      }),
+    )
+    const cached = () =>
+      JSON.stringify(
+        client
+          .getMutationCache()
+          .getAll()
+          .map(mutation => mutation.state),
+      )
+    await observer.mutate()
+    expect(sent).toEqual(['284917', '284917'])
+    expect(entered.current).toBe('')
+    expect(cached()).not.toContain('284917')
+    // A wrong PIN: refused, and held nowhere either.
+    entered.current = '615203'
+    await expect(observer.mutate()).rejects.toMatchObject({ code: 'pin_wrong' })
+    expect(sent.at(-1)).toBe('615203')
+    expect(entered.current).toBe('')
+    expect(cached()).not.toMatch(/284917|615203/)
+    // Once no step observes it, it is gone at once (gcTime 0).
+    observer.reset()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(client.getMutationCache().getAll()).toEqual([])
   })
 })

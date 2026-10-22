@@ -16,8 +16,12 @@ export const PURPOSES_COPY = {
   recorded: 'Recorded',
   // A pinned purpose (PD-07).
   pinned: 'Kept active by Hearth: it runs sign-in and Hearth’s own upkeep, so it can’t be retired or rest on consent.',
-  // Nothing is notified until the notice is published (PD-08), and AI rows are hidden (PD-27).
-  startsWhenNotified: 'A purpose starts only once the published notice lists it.',
+  // Nothing is notified until the notice is published (PD-08), so no feature gated on an unpinned
+  // purpose can turn on (the flags interlock, the job gate); the pinned purposes are allowed in every
+  // state, and the audit log and backups run whatever the register says (T22 items 4 to 6). AI rows
+  // are hidden (PD-27).
+  startsWhenNotified:
+    'Apart from the purposes Hearth keeps active, a feature serving a purpose turns on only once the published notice lists it. Hearth already keeps the audit log and backups.',
   laterStages: 'Purposes for later stages are recorded, and listed here when their stage starts.',
   warnings: 'Check before you save',
 } as const

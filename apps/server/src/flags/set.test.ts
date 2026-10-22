@@ -385,6 +385,22 @@ describe('C0.6 T17 item 9 POST /api/admin/flags/set', () => {
     })
   })
 
+  it('PGT-11 C0.9 PD-19 T22 item 11: a turn-off racing another change still succeeds, appends flag.changed and reads no register', async () => {
+    // The row read says on for the whole org; meanwhile another admin changed it (revision 2), so
+    // set_feature_flag() returns 3. Off reaches nobody, whatever the row now holds.
+    for (const before of [{ enabled: true }, { enabled: true, audience: 'cohort', cohort_people: [MEMBER] }] as const) {
+      const pool = org({ before: before as Partial<FlagRow>, revision: '3' })
+      const c = context(pool)
+      expect(await setFlag(c.api, body({ key: 'it.unnotified', enabled: false }), session(), c.info)).toMatchObject({
+        body: { key: 'it.unnotified', enabled: false, revision: 3 },
+      })
+      expect(pool.texts().at(-1)).toBe('commit')
+      expect(appended(pool.statements).map(event => event.type)).toEqual(['flag.changed'])
+      expect(c.published).toHaveLength(1)
+      expect(registerReads(pool)).toEqual([])
+    }
+  })
+
   it('maps set_feature_flag()’s refusals: locked 409, a cohort outside the org 400, unknown 404, refused 403', async () => {
     for (const [code, status, error] of [
       ['HF003', 409, 'flag_locked'],

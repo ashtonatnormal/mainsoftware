@@ -414,9 +414,16 @@ describe('C0.9 T22 the registers through the DPO’s routes (PDPA-01, PDPA-10, P
     const later = CLEARING_FACTS.reviewOn
     const complete: TransferFacts = { ...CLEARING_FACTS }
     // Each case: the facts recorded, the problem the shared rules list first, and the words of the
-    // trigger's (or, for a certification with no date, the table's) refusal.
-    const cases: Array<[Partial<TransferFacts>, TransferProblem | undefined, RegExp | undefined]> = [
+    // trigger's refusal, or the table's own constraint that refuses the facts first (23514).
+    const cases: Array<
+      [Partial<TransferFacts>, TransferProblem | undefined, RegExp | { constraint: string } | undefined]
+    > = [
       [{ services: null }, 'services', /Record the services it provides/],
+      // Blank text is no fact to either: spaces the table refuses as it stores text trimmed, and
+      // other whitespace (JavaScript's trim() set) the trigger refuses as missing.
+      [{ services: '   ' }, 'services', { constraint: 'transfer_register_services_check' }],
+      [{ services: '\t\n' }, 'services', /Record the services it provides/],
+      [{ onwardRecipients: '\u00a0\u3000' }, 'onward_recipients', /Record who it passes the data on to/],
       [{ dataTypes: null, training: null }, 'data_types', /Record the personal data it receives/],
       [{ processingCountries: [] }, 'processing_countries', /where it processes the data/],
       [{ storageCountries: [] }, 'storage_countries', /where it stores the data/],
@@ -426,7 +433,7 @@ describe('C0.9 T22 the registers through the DPO’s routes (PDPA-01, PDPA-10, P
       [
         { safeguard: 'certification', certificateVerifiedOn: null },
         'certificate_unverified',
-        /transfer_register_certificate/,
+        { constraint: 'transfer_register_certificate' },
       ],
       [
         { safeguard: 'certification', certificateVerifiedOn: later },
@@ -464,8 +471,8 @@ describe('C0.9 T22 the registers through the DPO’s routes (PDPA-01, PDPA-10, P
         (e: unknown) => e as { code?: string; message?: string; constraint?: string },
       )
       if (refusal === undefined) expect(error?.message, 'complete facts clear').toBe('cleared')
-      else if (problem === 'certificate_unverified') {
-        expect([error?.code, error?.constraint]).toEqual(['23514', 'transfer_register_certificate'])
+      else if (!(refusal instanceof RegExp)) {
+        expect([error?.code, error?.constraint], JSON.stringify(change)).toEqual(['23514', refusal.constraint])
       } else {
         expect(error?.code, JSON.stringify(change)).toBe('HF006')
         expect(error?.message, JSON.stringify(change)).toMatch(refusal)

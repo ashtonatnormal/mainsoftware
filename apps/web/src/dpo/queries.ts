@@ -6,7 +6,9 @@
 //   edit is refused with register_changed, PD-25).
 // - the four writes, each answering only whether anything changed; the page reads the registers
 //   again rather than trusting its own copy.
-// - POST /api/auth/reauth/pin, the inline PIN step's (C0.16's sheet replaces it).
+// - POST /api/auth/reauth/pin, the inline PIN step's (C0.16's sheet replaces it). The PIN is never
+//   the mutation's variables, which the document's MutationCache keeps after the step settles
+//   (pinStepOptions).
 // Nothing is kept outside Query's cache, which lives as long as the document and the person (D-01);
 // an unsaved form is component state, never storage (WS-01).
 import {
@@ -49,4 +51,18 @@ export async function sendWrite(write: RegisterWrite): Promise<{ changed: boolea
 
 export async function reauthWithPin(pin: string): Promise<void> {
   await apiPost('/api/auth/reauth/pin', { pin }, ReauthenticatedSchema)
+}
+
+// The PIN step's mutation (ReauthPin). The PIN is read from the step's own holder on each try, so a
+// retry after 409 try_again sends it again, and the holder is emptied once the step settles, even
+// if the step has gone by then. The mutation takes no variables, so the cache's state never holds
+// the PIN, and gcTime 0 drops the mutation as soon as no step observes it.
+export function pinStepOptions(entered: { current: string }, send: (pin: string) => Promise<void> = reauthWithPin) {
+  return {
+    mutationFn: () => send(entered.current),
+    onSettled: () => {
+      entered.current = ''
+    },
+    gcTime: 0,
+  }
 }
