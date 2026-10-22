@@ -28,6 +28,7 @@ import {
   expect,
   type Page,
   type Request,
+  type TestInfo,
 } from '@playwright/test'
 import { E2E_ORIGIN } from './env.ts'
 import { SignedOutContexts } from './signed-out.ts'
@@ -69,10 +70,18 @@ export interface Guard {
   watch(context: BrowserContext): Promise<void>
   // Every CSP violation seen so far.
   readonly violations: readonly Violation[]
-  // open() calls it when the test body ends, before it closes its contexts: what happens from then
-  // on is the harness's, not the page's (closing a context, Playwright takes a throwaway screenshot
-  // of each page, which in WebKit adds an inline style the CSP blocks), so it is printed, not counted.
+  // open() calls it when the test body ends, before it closes its contexts, and the guard itself
+  // before it closes the default context's pages: what happens from then on is the harness's, not
+  // the page's, so it is printed, not counted.
   end(): void
+  // After end(): closes a context's pages before the context closes, when nothing has gone wrong so
+  // far. Closing a context, Playwright screenshots every page still open in it (screenshot:
+  // 'only-on-failure' keeps the shot only for a failed test), and in WebKit its screenshot code
+  // toggles a <style>body {}</style> in the head to sync animations, from a world the page's CSP
+  // binds: style-src blocks it, and WebKit raises a violation and sends a report, which the api
+  // logs (T21 item 9) and so spends the log's allowance. With the pages closed first there is no
+  // shot to take. Once something has failed, the pages stay open for the shot Playwright keeps.
+  closePages(context: BrowserContext, testInfo: TestInfo): Promise<void>
 }
 
 export interface Violation {
@@ -123,6 +132,11 @@ class PageGuard implements Guard {
 
   end(): void {
     this.#ended = true
+  }
+
+  async closePages(context: BrowserContext, testInfo: TestInfo): Promise<void> {
+    if (testInfo.status !== testInfo.expectedStatus || this.report().length > 0) return
+    for (const page of context.pages()) await page.close()
   }
 
   #problem(line: string): void {
@@ -274,6 +288,9 @@ export const test = base.extend<{ guard: Guard; open: Open }>({
       const guard = new PageGuard()
       await guard.watch(context)
       await use(guard)
+      // The default context closes after this fixture, so its pages close here (closePages).
+      guard.end()
+      await guard.closePages(context, testInfo)
       if (guard.late.length > 0)
         console.log(`the page guard, after the test (not counted):\n  ${guard.late.join('\n  ')}`)
       // Checked after the test, so a test that already failed reports its own error first.
@@ -309,6 +326,9 @@ export const test = base.extend<{ guard: Guard; open: Open }>({
       return context.newPage()
     })
     guard.end()
-    for (const context of contexts) await context.close()
+    for (const context of contexts) {
+      await guard.closePages(context, testInfo)
+      await context.close()
+    }
   },
 })

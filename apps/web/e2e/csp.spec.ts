@@ -80,7 +80,8 @@ test('CS-03 BP C0.8 Done OD-12 T21 item 9: in every engine a blocked image raise
   const from = logOffset()
   // An image from another origin, which img-src 'self' blocks before any request leaves the page.
   // The host names the engine, so the line found is this test's own: the projects run at once, and
-  // WebKit's harness reports (an inline style, after a context closes) reach the same log.
+  // WebKit's harness reports (an inline style, when a failed test's context closes) reach the same
+  // log.
   const blocked = `https://cs-03-${browserName}.example.invalid`
   await page.evaluate(src => {
     const image = document.createElement('img')
