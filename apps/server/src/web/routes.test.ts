@@ -603,4 +603,18 @@ describe('C0.8 OD-12 POST /api/csp-report', () => {
     for (const response of refused) expect([response.statusCode, response.json()]).toEqual([400, REFUSED])
     expect(reportLines(logs)).toEqual([])
   })
+
+  it('CR-07 OD-12 T21 item 9: a report from the app origin whose page is on another site is answered 204 and logged as other-origin; only a "null" one goes unlogged', async () => {
+    // CR-02 sends another site's page only with a "null" Origin, so this case is what fails if the
+    // route stops reading the Origin and drops every other-origin report. Chromium and Firefox send
+    // the page's own Origin, so the app's Origin on another site's page comes from a client outside
+    // a browser, and is logged, within the cap, as any app-origin report is.
+    const { post, logs } = setup()
+    const elsewhere = { 'csp-report': { ...REPORT['csp-report'], 'document-uri': 'https://evil.example/page' } }
+    const response = await post(CSP_REPORT_PATH, elsewhere, { origin: APP_ORIGIN })
+    expect([response.statusCode, response.body]).toEqual([204, ''])
+    expect(reportLines(logs)).toHaveLength(1)
+    expect(reportLines(logs)[0]).toMatchObject({ level: 40, event: 'csp_report', ...REDUCED, path: 'other-origin' })
+    expect(JSON.stringify(logs)).not.toContain(MARKER)
+  })
 })
