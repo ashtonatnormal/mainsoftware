@@ -77,7 +77,7 @@ import {
   openIdentityChannel,
   reloadForUpdate,
 } from '@/session/document.ts'
-import { createNoticeStore, type NoticeStore } from '@/session/notice.ts'
+import { createNoticeStore, type NoticeMark, type NoticeStore } from '@/session/notice.ts'
 import { createQueryClient } from '@/session/query-client.ts'
 
 export type SessionEndReason = LeftReason
@@ -230,15 +230,14 @@ export function startSessionRuntime(info: SessionInfo, env: RuntimeEnv): Session
     () => notice.check(),
   )
 
-  // Each standing query's request is tagged with how many acknowledgements this document had made
-  // when it was sent, so an answer that crossed one is known (heard()'s stale). Query dispatches no
-  // new fetch when a refetch replaces one in flight, so the refetch after an acknowledgement tags
-  // the queries it sends again itself.
-  const askedAt = new Map<string, number>()
+  // Each standing query's request is tagged with the notice store's mark when it was sent (how many
+  // acknowledgements and moves to required this document had made or heard), so an answer that
+  // crossed one is known (heard()'s asked). Query dispatches no new fetch when a refetch replaces
+  // one in flight, so the refetch after an acknowledgement tags the queries it sends again itself.
+  const askedAt = new Map<string, NoticeMark>()
   const tagActive = () => {
     for (const query of queryClient.getQueryCache().getAll())
-      if (STANDING_KEYS.has(query.queryKey[0]) && query.isActive())
-        askedAt.set(query.queryHash, notice.acknowledgements())
+      if (STANDING_KEYS.has(query.queryKey[0]) && query.isActive()) askedAt.set(query.queryHash, notice.mark())
   }
 
   const notice: NoticeStore = createNoticeStore({
@@ -259,25 +258,20 @@ export function startSessionRuntime(info: SessionInfo, env: RuntimeEnv): Session
     if (event.type !== 'updated' || !STANDING_KEYS.has(event.query.queryKey[0])) return
     const { action, query } = event
     if (action.type === 'fetch') {
-      askedAt.set(query.queryHash, notice.acknowledgements())
+      askedAt.set(query.queryHash, notice.mark())
       return
     }
     // The runtime's own seeding is no answer.
     if (action.type !== 'success' || action.manual === true) return
-    const stale = (askedAt.get(query.queryHash) ?? notice.acknowledgements()) !== notice.acknowledgements()
+    const asked = askedAt.get(query.queryHash) ?? notice.mark()
     if (query.queryKey[0] === noticeQuery.queryKey[0]) {
       const answer = action.data as Partial<Pick<NoticeForClient, 'person' | 'standing'>> | undefined
       if (answer?.person !== undefined && answer.person !== info.personId) end('person_changed')
-      else if (answer?.standing !== undefined) notice.heard(answer.standing, stale)
+      else if (answer?.standing !== undefined) notice.heard(answer.standing, asked, 'notice')
       return
     }
     const answer = action.data as Partial<Pick<SessionInfo, 'personId' | 'notice'>> | undefined
-    if (answer?.personId !== info.personId || answer.notice === undefined) return
-    // A session answer asking for the notice, sent after the last acknowledgement here: a newer
-    // version was published, and the cached notice answer may still say the older one was
-    // acknowledged, so it goes the way required() drops it, and /notice never shows it.
-    if (answer.notice === 'required' && !stale) notice.required()
-    else notice.heard(answer.notice, stale)
+    if (answer?.personId === info.personId && answer.notice !== undefined) notice.heard(answer.notice, asked, 'session')
   })
 
   // The session answer, watched for as long as the document lives: a focus or reconnect refetches

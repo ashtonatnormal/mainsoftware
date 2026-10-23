@@ -778,6 +778,31 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     expect(runtime.queryClient.getQueryData(['notice'])).toBeUndefined()
   })
 
+  it('NTW-03 C0.9 PD-46: a session answer saying acknowledged whose request was sent before a 403 notice_required landed changes nothing: it may speak of a version since replaced', async () => {
+    let answerSession: ((response: Response) => void) | undefined
+    stubFetch({
+      '/api/session': () =>
+        new Promise<Response>(resolve => {
+          answerSession = resolve
+        }),
+      '/api/flags': () => json(403, { error: 'notice_required', message: 'Read the notice.' }),
+    })
+    const { env, net } = fakeEnv()
+    const runtime = runtimeModule.startSessionRuntime(MARCUS, env)
+    goLive(net.last())
+    // Sent while acknowledged; a newer version is published meanwhile, and another request hears it.
+    const refetched = runtime.queryClient.refetchQueries({ queryKey: ['session'] })
+    await vi.waitFor(() => expect(answerSession).toBeDefined())
+    await runtime.queryClient
+      .fetchQuery({ queryKey: ['flags'], queryFn: () => http.apiGet('/api/flags', z.unknown()) })
+      .catch(() => {})
+    expect(runtime.notice.standing()).toBe('required')
+    answerSession?.(json(200, MARCUS))
+    await refetched
+    await tick()
+    expect(runtime.notice.standing()).toBe('required')
+  })
+
   it("NTW-03 C0.9 PD-46 T22 item 31: another tab's { t: 'notice' } makes this tab ask GET /api/notice, whose answer starts the live connection", async () => {
     const calls = stubFetch({
       '/api/notice': () => json(200, noticeAnswer('acknowledged')),

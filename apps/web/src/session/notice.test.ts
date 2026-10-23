@@ -26,7 +26,7 @@ describe('C0.9 PD-46: the notice store (session/notice.ts)', () => {
     expect(here.seen).toEqual(['acknowledged'])
     // start() opens it the first time and does nothing after; resume() ends only a 4403 pause.
     expect(here.steps).toEqual(['start', 'resume', 'refetch', 'post'])
-    expect(here.notice.acknowledgements()).toBe(1)
+    expect(here.notice.mark()).toEqual({ acknowledgements: 1, requirements: 0 })
 
     const elsewhere = store('required')
     elsewhere.notice.acknowledged('elsewhere')
@@ -50,21 +50,49 @@ describe('C0.9 PD-46: the notice store (session/notice.ts)', () => {
     }
   })
 
-  it('NTW-02 PD-46: an answer saying acknowledged moves the standing forward whenever it arrives; any other moves it only when it isn’t stale', () => {
+  it('NTW-02 PD-46: an answer saying acknowledged moves the standing forward unless its request crossed a move to required; any other moves it only when it crossed no acknowledgement', () => {
     const { notice, steps, seen } = store('required')
-    notice.heard('acknowledged', true)
+    // Sent before an acknowledgement here (which it doesn't know of): still true, so it moves.
+    const before = notice.mark()
+    notice.heard('acknowledged', before, 'notice')
     expect(notice.standing()).toBe('acknowledged')
     expect(steps).toEqual(['start', 'resume', 'refetch'])
     // No post: the answer came from the server, not from this tab's acknowledgement.
-    notice.heard('required', true)
+    const acked = { ...before, acknowledgements: before.acknowledgements - 1 }
+    notice.heard('required', acked, 'notice')
     expect(notice.standing()).toBe('acknowledged')
-    notice.heard('required', false)
+    notice.heard('required', notice.mark(), 'notice')
     expect(notice.standing()).toBe('required')
     // Published or not is the server's to say, both ways.
-    notice.heard('unpublished', false)
+    notice.heard('unpublished', notice.mark(), 'notice')
     expect(notice.standing()).toBe('unpublished')
-    notice.heard('unpublished', false)
+    notice.heard('unpublished', notice.mark(), 'notice')
     expect(seen).toEqual(['acknowledged', 'required', 'unpublished'])
+  })
+
+  it('NTW-02 PD-46: an acknowledged answer whose request was sent before a move to required changes nothing, since it may speak of a version since replaced; one sent after it moves the standing', () => {
+    const { notice, steps, seen } = store('acknowledged')
+    // A session request in flight while acknowledged; a 403 notice_required lands first.
+    const inFlight = notice.mark()
+    notice.required()
+    expect(notice.mark()).toEqual({ acknowledgements: 0, requirements: 1 })
+    notice.heard('acknowledged', inFlight, 'session')
+    expect(notice.standing()).toBe('required')
+    expect(steps).toEqual(['reset'])
+    notice.heard('acknowledged', notice.mark(), 'session')
+    expect(notice.standing()).toBe('acknowledged')
+    expect(seen).toEqual(['required', 'acknowledged'])
+  })
+
+  it('NTW-02 PD-46: the session asking for the notice resets the cached notice answer, as a hint does; GET /api/notice saying so keeps the answer it brought', () => {
+    const fromSession = store('acknowledged')
+    fromSession.notice.heard('required', fromSession.notice.mark(), 'session')
+    expect(fromSession.notice.standing()).toBe('required')
+    expect(fromSession.steps).toEqual(['reset'])
+    const fromNotice = store('acknowledged')
+    fromNotice.notice.heard('required', fromNotice.notice.mark(), 'notice')
+    expect(fromNotice.notice.standing()).toBe('required')
+    expect(fromNotice.steps).toEqual([])
   })
 
   it('NTW-02 T22 item 31: check() asks GET /api/notice only while the standing isn’t acknowledged', () => {

@@ -10,11 +10,12 @@
 //   router sends the tab to /notice (router/router.tsx, NoticeWatcher), and the cached notice answer
 //   is reset, so /notice shows what GET /api/notice says now, never an older answer. A hint while
 //   the standing is required already changes nothing;
-// - heard(): an answer that states the standing, GET /api/notice's or the session's. An answer
-//   saying acknowledged moves the standing forward whenever it arrives; one saying anything else
-//   moves it back only when its request was sent after the last acknowledgement here, so a request
-//   that crossed the acknowledgement can't send the tab back to /notice. A session answer saying
-//   required that isn't stale goes through required() instead (session/runtime.ts), for its reset;
+// - heard(): an answer that states the standing, GET /api/notice's or the session's, with the mark
+//   its request was sent at (mark()). An answer saying acknowledged moves the standing forward
+//   unless its request was sent before the last move to required, since it may speak of a version
+//   since replaced; one saying anything else moves it back only when its request was sent after the
+//   last acknowledgement here, so a request that crossed the acknowledgement can't send the tab back
+//   to /notice. A session answer saying required resets the cached notice answer as required() does;
 // - acknowledged(from): the person acknowledged, here (this tab's POST /api/notice/acknowledge) or
 //   elsewhere (another tab's { t: 'notice' }, or an answer that says so). The live connection
 //   starts, if the standing kept it off since the boot (the runtime starts it only once the
@@ -32,18 +33,27 @@ import { type AppPath, isAppPath } from '@/router/paths.ts'
 
 export type NoticeSource = 'here' | 'elsewhere'
 
+// Which answer states the standing: GET /api/notice's, or the session's (GET /api/session).
+export type NoticeAnswerFrom = 'notice' | 'session'
+
+// What a request knew when it was sent: how many acknowledgements, and how many moves to required,
+// this document had made or heard by then. An answer whose request crossed one may be out of date.
+export interface NoticeMark {
+  readonly acknowledgements: number
+  readonly requirements: number
+}
+
 export interface NoticeStore {
   standing(): NoticeStanding
   // Calls the listener after each change of standing; returns the stop.
   subscribe(listener: () => void): () => void
   required(): void
-  // stale: the answer's request was sent before the last acknowledgement here.
-  heard(standing: NoticeStanding, stale: boolean): void
+  // asked: the mark the answer's request was sent at.
+  heard(standing: NoticeStanding, asked: NoticeMark, from: NoticeAnswerFrom): void
   acknowledged(from: NoticeSource): void
   check(): void
-  // How many acknowledgements this document has made or heard: a request sent at one count and
-  // answered at another crossed one (heard()'s stale).
-  acknowledgements(): number
+  // The mark a request sent now carries (heard()'s asked).
+  mark(): NoticeMark
   rememberReturn(path: string): void
   takeReturn(): AppPath | undefined
 }
@@ -76,11 +86,13 @@ function step(run: () => void): void {
 export function createNoticeStore(deps: NoticeStoreDeps): NoticeStore {
   let standing: NoticeStanding = deps.initial
   let count = 0
+  let requirements = 0
   let kept: AppPath | undefined
   const listeners = new Set<() => void>()
 
   const set = (next: NoticeStanding) => {
     if (next === standing) return
+    if (next === 'required') requirements += 1
     standing = next
     for (const listener of [...listeners]) step(listener)
   }
@@ -112,18 +124,25 @@ export function createNoticeStore(deps: NoticeStoreDeps): NoticeStore {
       step(deps.resetNotice)
       set('required')
     },
-    heard(next, stale) {
+    heard(next, asked, from) {
       if (next === 'acknowledged') {
+        // Sent before the last move to required: it may speak of a version since replaced.
+        if (asked.requirements !== requirements) return
         if (standing !== 'acknowledged') acknowledged('elsewhere')
         return
       }
-      if (!stale) set(next)
+      // Sent before the last acknowledgement here: it may speak of a version since acknowledged.
+      if (asked.acknowledgements !== count) return
+      // The session asking for the notice: a newer version was published, and the cached notice
+      // answer may still say the older one was acknowledged, so it goes, as with required().
+      if (next === 'required' && from === 'session' && standing !== 'required') step(deps.resetNotice)
+      set(next)
     },
     acknowledged,
     check() {
       if (standing !== 'acknowledged') step(deps.fetchNotice)
     },
-    acknowledgements: () => count,
+    mark: () => ({ acknowledgements: count, requirements }),
     rememberReturn(path) {
       kept = isAppPath(path) ? path : undefined
     },
