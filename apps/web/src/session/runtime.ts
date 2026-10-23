@@ -272,7 +272,12 @@ export function startSessionRuntime(info: SessionInfo, env: RuntimeEnv): Session
       return
     }
     const answer = action.data as Partial<Pick<SessionInfo, 'personId' | 'notice'>> | undefined
-    if (answer?.personId === info.personId && answer.notice !== undefined) notice.heard(answer.notice, stale)
+    if (answer?.personId !== info.personId || answer.notice === undefined) return
+    // A session answer asking for the notice, sent after the last acknowledgement here: a newer
+    // version was published, and the cached notice answer may still say the older one was
+    // acknowledged, so it goes the way required() drops it, and /notice never shows it.
+    if (answer.notice === 'required' && !stale) notice.required()
+    else notice.heard(answer.notice, stale)
   })
 
   // The session answer, watched for as long as the document lives: a focus or reconnect refetches

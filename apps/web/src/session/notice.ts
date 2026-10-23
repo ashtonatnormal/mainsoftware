@@ -13,7 +13,8 @@
 // - heard(): an answer that states the standing, GET /api/notice's or the session's. An answer
 //   saying acknowledged moves the standing forward whenever it arrives; one saying anything else
 //   moves it back only when its request was sent after the last acknowledgement here, so a request
-//   that crossed the acknowledgement can't send the tab back to /notice;
+//   that crossed the acknowledgement can't send the tab back to /notice. A session answer saying
+//   required that isn't stale goes through required() instead (session/runtime.ts), for its reset;
 // - acknowledged(from): the person acknowledged, here (this tab's POST /api/notice/acknowledge) or
 //   elsewhere (another tab's { t: 'notice' }, or an answer that says so). The live connection
 //   starts, if the standing kept it off since the boot (the runtime starts it only once the

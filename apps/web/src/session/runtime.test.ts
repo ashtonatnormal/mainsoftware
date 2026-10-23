@@ -768,11 +768,14 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     await tick()
     expect(runtime.notice.standing()).toBe('acknowledged')
 
-    // Sent after it: a newer version was published meanwhile.
+    // Sent after it: a newer version was published meanwhile. The cached notice answer, which may
+    // still say the older version was acknowledged, is dropped, so /notice never shows it.
+    runtime.queryClient.setQueryData(['notice'], noticeAnswer('acknowledged'))
     session = () => json(200, { ...MARCUS, notice: 'required' })
     await runtime.queryClient.refetchQueries({ queryKey: ['session'] })
     await tick()
     expect(runtime.notice.standing()).toBe('required')
+    expect(runtime.queryClient.getQueryData(['notice'])).toBeUndefined()
   })
 
   it("NTW-03 C0.9 PD-46 T22 item 31: another tab's { t: 'notice' } makes this tab ask GET /api/notice, whose answer starts the live connection", async () => {
