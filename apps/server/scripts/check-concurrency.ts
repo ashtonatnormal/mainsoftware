@@ -40,9 +40,15 @@
 // deactivation, and a record or a contact change by a DPO being deactivated or losing the role
 // (NTR-11); a record against the person's own acknowledgement, each order (NTR-12); and, in an org
 // of its own (BREAK_GLASS_FIXTURE), the re-clear against a DPO's sign-in, each order (BGR-01),
-// against a DPO's sessions ending (BGR-02), against another re-clear (BGR-03) and against the DPO's
-// own clear in the app (BGR-04). The re-clear sets its own 2 s lock_timeout, so each case's first
-// transaction commits as soon as the re-clear is seen waiting, as race() does.
+// against a DPO's sessions ending (BGR-02), against another re-clear (BGR-03), against the DPO's
+// own clear in the app (BGR-04) and against the named DPO losing the role or being deactivated
+// (BGR-05). The re-clear sets its own 2 s lock_timeout, so each case's first transaction commits as
+// soon as the re-clear is seen waiting, as race() does. BGR-06 isn't a race but needs a connection
+// of its own: a session that set a longer transaction_timeout, under a lower value the transaction
+// set, outlives its old timer because the re-clear starts the timer again at 30 s. NTR-13 builds a
+// database of its own up to 0010 and applies 0011 while a gated request holds the notice tables and
+// then reads a clearance: the migration never waits while it holds one of the three, so neither
+// fails.
 //
 // Each case opens two connections to a throwaway database (concurrency_check, built from
 // db/migrations/ with the migrator, owned by hearth_owner), starts the change in one, starts the
@@ -818,6 +824,7 @@ const dpoSignIn = (dpo: string, device: string, session: string, check = false):
         end $$`,
 })
 const REGISTER_SIGNED_IN = 'A Data Protection Officer is signed in, so they clear Twilio Verify again in Hearth.'
+const REGISTER_NOT_DPO = 'The person named as the DPO must be at the organisation and hold the DPO role.'
 const REGISTER_CLEARED_ALREADY = 'Twilio Verify is cleared already. The DPO changes its entry in Hearth.'
 // The break-glass org between cases (the watcher, as the superuser): Twilio withdrawn by g(81), and
 // every session ended, so the next case starts with Twilio not cleared and no DPO signed in.
@@ -2266,7 +2273,117 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
       await resetBreakGlass(watcher)
     },
   ],
+  [
+    'BGR-05 PDPA-10 C0.9 OD-20 PD-79: a re-clear waits for the named DPO losing the role, or being deactivated, and is refused',
+    async watcher => {
+      // The revocation holds only the role row, so the re-clear's FOR SHARE on it is what waits.
+      await refused(revokeDpo(BREAK_GLASS_ORG, g('81'), g('85')), reclear('81'), REGISTER_NOT_DPO)(watcher)
+      expect((await openTwilio(watcher)) === null, 'a re-clear naming a DPO who lost the role cleared Twilio')
+      await watcher.query(
+        `insert into public.role_assignments (org_id, person_id, role, created_by) values ($1, $2, 'dpo', $3)`,
+        [BREAK_GLASS_ORG, g('81'), g('a0')],
+      )
+      // The deactivation holds the person's row, which the holders loop waits for and then reads
+      // again without them.
+      await refused(deactivateIn(BREAK_GLASS_ORG, g('82'), g('85')), reclear('82'), REGISTER_NOT_DPO)(watcher)
+      expect((await openTwilio(watcher)) === null, 'a re-clear naming a DPO who left cleared Twilio')
+      // g(82) back at the org, past keep_history (the watcher is the superuser), for later cases.
+      await watcher.query('begin')
+      await watcher.query('set local session_replication_role = replica')
+      await watcher.query(
+        'update public.people set deactivated_at = null, deactivated_by = null where org_id = $1 and id = $2',
+        [BREAK_GLASS_ORG, g('82')],
+      )
+      await watcher.query('commit')
+      await resetBreakGlass(watcher)
+    },
+  ],
+  [
+    'BGR-06 PDPA-10 C0.9 OD-20 PD-79: the re-clear starts its transaction’s timer again at 30 s, under a longer one its session set and a lower value set over it',
+    async watcher => {
+      // The session's 4 s timer starts at begin; lowering the value to 2 s doesn't shorten it. A
+      // re-clear 1.5 s in that kept it would be ended at 4 s, inside the 3 s sleep after it.
+      const a = new Client({ ...connection, database: DB, options: '-c transaction_timeout=4s' })
+      a.on('error', () => {})
+      await a.connect()
+      try {
+        await a.query('begin')
+        await a.query('set local role hearth_owner')
+        await a.query("select set_config('transaction_timeout', '2s', true)")
+        await a.query('select pg_sleep(1.5)')
+        await a.query(reclear('81').sql)
+        const after = await a
+          .query<{ v: string }>("select pg_sleep(3), current_setting('transaction_timeout') as v")
+          .then(
+            result => result.rows[0]?.v ?? null,
+            (error: unknown) => `ended: ${message(error)}`,
+          )
+        expect(after === '30s', `4.5 s into the transaction, 3 s after the re-clear, it read ${after ?? 'nothing'}`)
+        await a.query('rollback')
+      } finally {
+        await a.end().catch(() => {})
+      }
+      expect((await openTwilio(watcher)) === null, 'the rolled-back re-clear cleared Twilio')
+    },
+  ],
+  [
+    'NTR-13 C0.9 PR 3a: 0011 applied while a gated request holds the notice tables and then reads a clearance never waits holding one of the three, so both commit',
+    async watcher => {
+      const db = 'concurrency_0011_check'
+      const admin = await connect('postgres')
+      try {
+        await admin.query(`drop database if exists ${db} with (force)`)
+        await admin.query(`create database ${db} owner hearth_owner template template0`)
+      } finally {
+        await admin.end()
+      }
+      try {
+        const built = await migrate({ databaseUrl: url(db), role: 'hearth_owner', before: '0011' })
+        if (built.error !== undefined) throw new Error(`the migrations before 0011 failed: ${message(built.error)}`)
+        // As the notice gate reads (requireNotice), then a re-authentication code's transfer check.
+        const request = await connect(db)
+        try {
+          const pid = (await request.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]?.pid ?? 0
+          await request.query('begin')
+          await request.query("set local lock_timeout = '10s'")
+          await request.query('select count(*) from public.notice_versions')
+          await request.query('select count(*) from public.notice_acknowledgments')
+          const migrating = migrate({ databaseUrl: url(db), role: 'hearth_owner' })
+          expect(await heldUp(watcher, db, pid), '0011 was never held up by the request')
+          const read = await request.query('select count(*) from public.transfer_clearances').then(
+            () => undefined,
+            (error: unknown) => message(error),
+          )
+          await request.query(read === undefined ? 'commit' : 'rollback')
+          const { error } = await migrating
+          expect(read === undefined, `the request's clearance read failed: ${read}`)
+          expect(error === undefined, `0011 failed: ${error === undefined ? '' : message(error)}`)
+        } finally {
+          await request.end()
+        }
+      } finally {
+        const cleanup = await connect('postgres')
+        await cleanup.query(`drop database if exists ${db} with (force)`)
+        await cleanup.end()
+      }
+    },
+  ],
 ]
+
+// Whether the migrator in `db` (any backend there but `except`) is held up, asked of Postgres for
+// up to 10 seconds: sleeping between attempts at its locks, or waiting on a table.
+async function heldUp(watcher: Client, db: string, except: number): Promise<boolean> {
+  for (let tries = 0; tries < 200; tries += 1) {
+    const result = await watcher.query<{ n: string }>(
+      `select count(*) as n from pg_stat_activity
+       where datname = $1 and pid <> $2 and (wait_event = 'PgSleep' or (wait_event_type = 'Lock' and wait_event = 'relation'))`,
+      [db, except],
+    )
+    if (Number(result.rows[0]?.n ?? 0) > 0) return true
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  return false
+}
 
 async function main(): Promise<number> {
   if (!LOCAL_HOSTS.has(host)) {

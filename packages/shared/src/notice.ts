@@ -272,8 +272,9 @@ export function noticeChanges(before: NoticeSources, after: NoticeSources): Noti
 const Version = z.int().min(0).max(2_147_483_647)
 // When something happened, as an ISO instant: the screens show it in the viewer's own zone.
 const Instant = z.iso.datetime({ offset: true })
-// A day, YYYY-MM-DD, in the org's zone.
-const Day = z.iso.date()
+// A day, YYYY-MM-DD, in the org's zone, from year 1: Postgres's date has no year 0, and a body's
+// day is cast to one (22008, which nothing answers, so it would be a 500).
+const Day = z.iso.date().refine(day => day >= '0001-01-01', { message: 'a day from year 1' })
 // sha-256, in hex: what ties the DPO's preview to what is published (C0.9 PD-36).
 const Digest = z.string().regex(/^[0-9a-f]{64}$/)
 

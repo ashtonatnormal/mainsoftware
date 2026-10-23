@@ -699,7 +699,8 @@ select set_config('app.org_id', '', true), set_config('app.user_id', '', true);
 --   - no marker, or a marker of another value: the set-up's refusal (0009's message and order);
 --   - the marker for a provider never cleared in the org (org 3's Twilio): refused, so no first
 --     clearance is ever an emergency;
---   - aws, cleared before: 0009's message; a review date 91 days ahead;
+--   - aws, cleared before: 0009's message; a review date 91 days ahead (90 goes ahead, in a
+--     savepoint);
 --   - a person named as the DPO who isn't one, has left, is another org's, or is nobody (42501);
 --   - facts left incomplete, or a review date not after today (the clearance's trigger, HF006);
 --   - a5 with a live session; Twilio already cleared, with a review date inside the cap.
@@ -722,6 +723,22 @@ select pg_temp.expect_error($$select pg_temp.reclear('f2000000-0000-4000-8000-00
 select pg_temp.expect_error($$select pg_temp.reclear('f2000000-0000-4000-8000-0000000000a5',
   jsonb_build_object('review_on', pg_temp.today() + 91))$$, 'HF006',
   'An emergency re-clear sets a review date at most 90 days ahead. The DPO sets a later one in Hearth.');
+-- The cap's edge: 90 days ahead goes ahead (in a savepoint, so the refusals below still start from
+-- Twilio withdrawn).
+do $$
+begin
+  perform pg_temp.check(pg_temp.reclear(pg_temp.id('2', 'a5'), jsonb_build_object('review_on', pg_temp.today() + 90)) is not null,
+                        'a re-clear with a review date 90 days ahead was refused');
+  perform set_config('role', 'none', true);
+  perform pg_temp.check((select cleared_via = 'break_glass' and review_on = pg_temp.today() + 90
+                         from public.transfer_clearances c join public.transfer_register t on t.id = c.entry_id
+                         where c.org_id = pg_temp.id('2', '00') and c.provider = 'twilio' and c.withdrawn_at is null),
+                        'a re-clear 90 days ahead did not clear twilio as break_glass with that review date');
+  raise exception 'roll the re-clear back' using errcode = 'HT001';
+exception when sqlstate 'HT001' then
+  null;
+end
+$$;
 do $$
 declare
   who uuid;
@@ -782,10 +799,12 @@ select pg_temp.check(not exists (select 1 from public.transfer_clearances
                      'a refused re-clear cleared twilio or aws');
 -- Its bounds (PD-79): a re-clear that goes ahead leaves its 2 s lock_timeout and 30 s
 -- transaction_timeout set for the rest of its transaction (a refused one rolls back with them),
--- replacing a longer transaction_timeout the transaction already runs and keeping a shorter one;
--- the set-up (org 3's twilio, cleared for the first time) never sets them. Each in a savepoint.
--- (That the timer then ends the transaction 30 s after the re-clear, whatever ran before, is
--- Postgres's: switched off and on again, it starts afresh.)
+-- whatever transaction_timeout the transaction already runs: a longer one, a shorter one, and one
+-- lowered under a longer one (whose timer Postgres keeps running, which is why the re-clear always
+-- restarts it); the set-up (org 3's twilio, cleared for the first time) never sets them. Each in a
+-- savepoint. (That the timer then ends the transaction 30 s after the re-clear, whatever ran
+-- before, is Postgres's: switched off and on again, it starts afresh. BGR-05 in
+-- apps/server/scripts/check-concurrency.ts shows it on a connection whose session set a longer one.)
 do $$
 declare
   lock_was constant text := current_setting('lock_timeout');
@@ -808,14 +827,17 @@ begin
                         'a rolled-back re-clear left its bounds or its marker set');
   declare
     running text;
+    setting text;
   begin
-    foreach running in array array['5min', '10s'] loop
+    foreach running in array array['5min', '10s', '5min then 10s'] loop
       begin
-        perform set_config('transaction_timeout', running, true);
+        foreach setting in array string_to_array(running, ' then ') loop
+          perform set_config('transaction_timeout', setting, true);
+        end loop;
         perform pg_temp.act_as_owner('2', 'a0');
         perform set_config('hearth.break_glass', 'twilio_reclear', true);
         perform pg_temp.bootstrap('twilio', pg_temp.id('2', 'a5'), jsonb_build_object('review_on', pg_temp.today() + 30), 'Bounds');
-        perform pg_temp.check(current_setting('transaction_timeout') = case running when '5min' then '30s' else '10s' end,
+        perform pg_temp.check(current_setting('transaction_timeout') = '30s',
                               format('with %s running, the re-clear left transaction_timeout %s', running,
                                      current_setting('transaction_timeout')));
         raise exception 'roll the re-clear back' using errcode = 'HT001';

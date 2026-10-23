@@ -1212,6 +1212,24 @@ describe('NTS-07 C0.9 OD-19 PD-75 PD-76 POST /api/admin/notice/acknowledgements/
     }
   })
 
+  it('a control character in the note, a NUL above all (which Postgres can’t take as text, 22021), is 400 notice_invalid before the function, after can()', async () => {
+    for (const note of ['Signed a printed\u0000copy', '\u0000', 'Signed a\tprinted copy', 'Signed\u007fcopy']) {
+      const pool = org({ call: [{ version: 1, changed: true }] })
+      const c = context(pool)
+      expect(
+        await refusal(recordAcknowledgement(c.api, record({ note }), session(), c.info)),
+        JSON.stringify(note),
+      ).toMatchObject({ status: 400, code: 'notice_invalid' })
+      expect(pool.texts().some(text => text.startsWith('select "person_id", "role"'))).toBe(true)
+      expect(callOf(pool, 'record_notice_acknowledgement')).toBeUndefined()
+    }
+    // Whitespace at the ends is the function's to trim, as before.
+    const pool = org({ call: [{ version: 1, changed: true }] })
+    const c = context(pool)
+    await recordAcknowledgement(c.api, record({ note: '\tSigned a printed copy\n' }), session(), c.info)
+    expect(callOf(pool, 'record_notice_acknowledgement')?.values[3]).toBe('\tSigned a printed copy\n')
+  })
+
   it('answers the function’s refusals: HF007 409 notice_changed, HF008 400 notice_invalid, 22023 404, 42501 403 in the api’s own words, and a conflict as the api’s try_again', async () => {
     for (const [sqlstate, status, code] of [
       ['HF007', 409, 'notice_changed'],
@@ -1241,6 +1259,7 @@ describe('NTS-07 C0.9 OD-19 PD-75 PD-76 POST /api/admin/notice/acknowledgements/
       { person: MEMBER.toUpperCase() },
       { notice: 'not-a-version' },
       { acknowledgedOn: '21 October 2026' },
+      { acknowledgedOn: '0000-01-01' },
       { note: 'x'.repeat(2001) },
       { device: DEVICE },
     ]) {

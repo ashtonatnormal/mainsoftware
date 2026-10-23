@@ -144,25 +144,29 @@ export function RecordDialog({ version, onClose }: { version: string; onClose():
         )}
         {people !== undefined && editor === undefined && <p>{RECORD.nobody}</p>}
         {people !== undefined && editor !== undefined && (
-          <form
-            id={formId}
-            method="post"
-            noValidate
-            onSubmit={event => {
-              event.preventDefault()
-              submit()
-            }}
-            className="flex flex-col gap-4"
-          >
+          <>
+            {/* Outside the form: the PIN step it may show is a form of its own, and a form inside a
+                form never sends its submit. */}
             <WriteRefusal writer={record} />
-            <RecordFields
-              first={first}
-              people={people}
-              editor={editor}
-              form={form}
-              onChange={change => setForm(before => ({ ...before, ...change }))}
-            />
-          </form>
+            <form
+              id={formId}
+              method="post"
+              noValidate
+              onSubmit={event => {
+                event.preventDefault()
+                submit()
+              }}
+              className="flex flex-col gap-4"
+            >
+              <RecordFields
+                first={first}
+                people={people}
+                editor={editor}
+                form={form}
+                onChange={change => setForm(before => ({ ...before, ...change }))}
+              />
+            </form>
+          </>
         )}
       </div>
     </Dialog>
@@ -186,6 +190,8 @@ function RecordFields({
   useEffect(() => {
     first.current?.focus()
   }, [first])
+  // The line saying the list was cut is the person field's description, so it is heard on the field.
+  const moreId = useId()
   return (
     <>
       {editor.same && (
@@ -201,8 +207,13 @@ function RecordFields({
           value={form.person}
           options={editor.options}
           onChange={event => onChange({ person: event.currentTarget.value })}
+          aria-describedby={people.more ? moreId : undefined}
         />
-        {people.more && <p className="text-small text-muted">{RECORD.more}</p>}
+        {people.more && (
+          <p id={moreId} className="text-small text-muted">
+            {RECORD.more}
+          </p>
+        )}
       </div>
       <DateField
         label={RECORD.day}

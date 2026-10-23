@@ -12,7 +12,8 @@
 // - ConnectionBanner, which renders nothing while the live connection is fine;
 // - #screen, the one scroll container, whose position the router restores within the document
 //   (data-scroll-restoration-id; never across a document, D-02), and which takes a tab stop of its
-//   own only while it scrolls with nothing in the tab order (ui/scroller-focus.ts, WCAG 2.1.1);
+//   own only while it scrolls with nothing in the tab order, as a region named by the h1
+//   (ui/scroller-focus.ts, WCAG 2.1.1, 4.1.2);
 // - the Toaster, over the bottom of <main>, after #screen in reading order.
 // Neither <main> nor the frame scrolls or clips, so a Menu opening from the header or the rail's foot
 // lies over the screen in full (the Menu contract, ui/Menu.tsx).
@@ -35,6 +36,9 @@ import { InShell } from './in-shell.ts'
 import { Rail } from './Rail.tsx'
 import { TabBar } from './TabBar.tsx'
 
+// The screen's h1, which names #screen while it is a tab stop of its own (ui/scroller-focus.ts).
+const SCREEN_TITLE_ID = 'screen-title'
+
 export function Shell() {
   const runtime = useRuntime()
   // The deepest match's path and static data, as plain values, so the shell renders again only
@@ -43,7 +47,7 @@ export function Shell() {
   const title = useMatches({ select: matches => matches.at(-1)?.staticData.title })
   const immersive = useMatches({ select: matches => matches.at(-1)?.staticData.immersive === true })
   const screen = useRef<HTMLDivElement>(null)
-  useEffect(() => (screen.current === null ? undefined : keepReachable(screen.current)), [])
+  useEffect(() => (screen.current === null ? undefined : keepReachable(screen.current, SCREEN_TITLE_ID)), [])
   return (
     <>
       <SkipLink />
@@ -53,6 +57,7 @@ export function Shell() {
           <ScreenHeader
             key={path}
             title={title ?? SHELL.appName}
+            titleId={SCREEN_TITLE_ID}
             actions={
               <div className="rail:hidden">
                 <AvatarMenu placement="bottom-end" />

@@ -37,11 +37,14 @@
 -- The locks 0011 takes: the new table's foreign keys take SHARE ROW EXCLUSIVE on orgs and
 -- principals, which conflicts only with writes to them (today only the bootstrap makes any). The
 -- three tables every request or send reads (transfer_clearances, notice_versions,
--- notice_acknowledgments) are locked last, by one lock table in the app's lock order, before their
--- ALTER TABLEs, so the migration never holds a later one while it waits for an earlier one, and
--- can't deadlock with a send (which holds transfer_clearances and then reads notice_versions) or an
--- acknowledgement (which holds notice_versions and then inserts into notice_acknowledgments). The
--- ACCESS EXCLUSIVE locks are held only until the commit.
+-- notice_acknowledgments) are locked last, before their ALTER TABLEs. Requests read them in both
+-- orders: a sign-in send holds transfer_clearances and then reads notice_versions, while a gated
+-- request reads the notice first (the notice gate) and then may read a clearance (a
+-- re-authentication code's send, the registers). No one order of the three avoids a deadlock with
+-- both, so the migration never waits while it holds one: it asks for all three without waiting,
+-- and when one is busy it lets go of what it took, waits a moment and asks again, for up to about
+-- 10 s, then fails with 55P03 and the deploy's migrate step is run again. The ACCESS EXCLUSIVE
+-- locks are held only until the commit.
 --
 -- The DPO's free text (the contact, a recorded acknowledgement's note) is held to Hearth's list of
 -- AI wording (AI_COPY, packages/shared), and a purpose on deemed consent by conduct to the purposes
@@ -541,16 +544,16 @@ revoke execute on function public.publish_notice(integer, text, text, text[], in
 -- Twilio Verify alone, with no clearance open, while no current DPO has a live session: a session
 -- not revoked or expired, on a device not signed out, of someone still at the org holding dpo (idle
 -- time isn't counted, which fails closed). Before its first lock it bounds its own transaction (a
--- 2 s lock_timeout and a 30 s transaction_timeout, transaction-local, as withOrg() sets them), since
--- it then holds every current DPO's person row FOR NO KEY UPDATE, until their set is stable: a code
--- sent before a withdrawal can still finish a sign-in after it (verifyCode() asks the provider by
--- its reference with no transfer gate), and each sign-in step reads the person FOR SHARE first, so a
--- DPO sign-in in progress finishes first and its session is then seen, and one that starts later
--- waits for this. The review date is at most 90 days ahead (the DPO sets a later one in Hearth). The
--- facts are given as at set-up; the recovery mode passes those of the Twilio clearance the latest
--- published version links (else the last ended one's), so by default they are what the notice
--- states. It records cleared_via 'break_glass' and, in the audit row, details.by 'break_glass' with
--- the clearance that last ended and why.
+-- 2 s lock_timeout and a 30 s transaction_timeout, transaction-local, as withOrg() sets them, the
+-- timer started afresh), since it then holds every current DPO's person row FOR NO KEY UPDATE,
+-- until their set is stable: a code sent before a withdrawal can still finish a sign-in after it
+-- (verifyCode() asks the provider by its reference with no transfer gate), and each sign-in step
+-- reads the person FOR SHARE first, so a DPO sign-in in progress finishes first and its session is
+-- then seen, and one that starts later waits for this. The review date is at most 90 days ahead
+-- (the DPO sets a later one in Hearth). The facts are given as at set-up; the recovery mode passes
+-- those of the Twilio clearance the latest published version links (else the last ended one's), so
+-- by default they are what the notice states. It records cleared_via 'break_glass' and, in the
+-- audit row, details.by 'break_glass' with the clearance that last ended and why.
 create or replace function public.bootstrap_transfer_clearance(
   provider_key text,
   dpo uuid,
@@ -641,14 +644,13 @@ begin
     -- Its own bounds, before its first lock (PD-79): a lock it can't get within 2 s answers 55P03
     -- and the caller runs it again; a transaction left open after it ends 30 s from here, rolling
     -- the re-clear back, so it never holds the DPOs' rows or the outbox's horizon. Postgres starts
-    -- the transaction's timer only when none is running, so a longer one the caller's session set
-    -- (or none) is switched off and started again from here; one of 30 s or less is kept. Both
-    -- stay set when this returns (the function's own set clause restores only search_path).
+    -- the transaction's timer only when none is running, and lowering the setting never shortens
+    -- one that is, and SQL can read only the setting, never the timer. So the timer is always
+    -- switched off and started again here, at 30 s. Both stay set when this returns (the
+    -- function's own set clause restores only search_path).
     perform pg_catalog.set_config('lock_timeout', '2s', true);
-    if (select s.setting::bigint from pg_catalog.pg_settings s where s.name = 'transaction_timeout')
-       not between 1 and 30000 then
-      perform pg_catalog.set_config('transaction_timeout', '0', true), pg_catalog.set_config('transaction_timeout', '30s', true);
-    end if;
+    perform pg_catalog.set_config('transaction_timeout', '0', true);
+    perform pg_catalog.set_config('transaction_timeout', '30s', true);
     select (pg_catalog.now() at time zone o.time_zone)::date into today from public.orgs o where o.id = org;
     if bootstrap_transfer_clearance.review_on > today + 90 then
       raise exception 'An emergency re-clear sets a review date at most 90 days ahead. The DPO sets a later one in Hearth.'
@@ -767,13 +769,30 @@ grant execute on function
     public.publish_notice(integer, text, text, text[], integer[], uuid[], integer, text, uuid, inet)
   to hearth_app;
 
--- The tables every request or send reads, locked in the app's lock order (CLAUDE.md, Database),
--- so this never holds a later one while it waits for an earlier one: a send holds
--- transfer_clearances FOR SHARE and then reads notice_versions, and an acknowledgement holds
--- notice_versions FOR SHARE and then inserts into notice_acknowledgments. Postgres takes a list's
--- locks in the order given, and holds them until the commit.
-lock table public.transfer_clearances, public.notice_versions, public.notice_acknowledgments
-  in access exclusive mode;
+-- The tables every request or send reads, locked without ever waiting while one is held. A
+-- sign-in send holds transfer_clearances FOR SHARE and then reads notice_versions; a gated request
+-- reads notice_versions and notice_acknowledgments (the notice gate) and then, for a
+-- re-authentication code or a register read, transfer_clearances. Waiting for one while holding
+-- another could close a cycle with either, so each attempt asks for all three with NOWAIT in a
+-- block of its own: a busy table fails the attempt, whose rollback lets go of what it took, and
+-- the next attempt follows 0.1 s later. Postgres takes a list's locks in the order given, and
+-- holds them until the commit. After 100 attempts (about 10 s, the migrator's lock_timeout) it
+-- fails with 55P03, and the migrate step is run again.
+do $$
+begin
+  for attempt in 1..100 loop
+    begin
+      lock table public.transfer_clearances, public.notice_versions, public.notice_acknowledgments
+        in access exclusive mode nowait;
+      return;
+    exception when lock_not_available then
+      perform pg_catalog.pg_sleep(0.1);
+    end;
+  end loop;
+  raise exception 'transfer_clearances, notice_versions and notice_acknowledgments stayed in use for 10 s. Run the migrate step again.'
+    using errcode = 'lock_not_available';
+end
+$$;
 
 -- C0.9 OD-20, PD-80: a clearance can now be the break-glass re-clear's, for Twilio Verify alone.
 -- transfer_clearances_cleared_via_check is Postgres's name for 0009's inline column check. Every row

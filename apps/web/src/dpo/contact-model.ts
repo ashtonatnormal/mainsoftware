@@ -12,6 +12,7 @@ import {
   type ContactRowForClient,
   type ContactStated,
   contactProblems,
+  flatText,
   normalisePostal,
   postalLines,
   type SetContactJSON,
@@ -92,12 +93,13 @@ export function contactFormOf(row: ContactRowForClient | null): ContactForm {
 
 // POST /api/admin/notice/contact/set's body: the settings version the page read (null while none is
 // recorded), and each field as the api reads it (SetContactBody): trimmed, a blank one not
-// recorded, and the postal address's lines normalised (normalisePostal()).
+// recorded, the role title as one line (flatText(), so a pasted tab is a space, never a "not one
+// line" problem the DPO can't see), and the postal address's lines normalised (normalisePostal()).
 export function contactBodyOf(row: ContactRowForClient | null, form: ContactForm): SetContactJSON {
   const postal = normalisePostal(form.postal)
   return {
     seen: row?.version ?? null,
-    title: form.title.trim(),
+    title: flatText(form.title),
     email: textOrNull(form.email),
     phone: textOrNull(form.phone),
     postal: postal === '' ? null : postal,

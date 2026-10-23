@@ -5,9 +5,12 @@
 //   runbook resolves: to a file and, with an anchor, to one of that file's headings;
 // - RB-02: each runbook but the README has the fixed sections, in order, with ## Code paths last.
 //   Others, such as ## Don't, may sit between them;
-// - RB-03: no runbook holds a phone number, an email address, a 12-digit run (an AWS account id),
-//   an ARN, a Twilio SID or a link other than one on the PDPC's site, since a runbook names roles
-//   only (CLAUDE.md, Security and privacy). A finding names the line and the kind, never the value;
+// - RB-03: no runbook holds a phone number (+ and digits with spaces, hyphens, dots or brackets, or
+//   a Singapore number written locally), an email address, an AWS account id (12 digits, run
+//   together or in hyphenated fours), an ARN, a Twilio SID, a link other than one on the PDPC's site,
+//   or a link by any scheme but http(s), since a runbook names roles only (CLAUDE.md, Security and
+//   privacy). A finding names the line and the kind, never the value. These are shapes: a person's
+//   name or a postal address has none, so review keeps those out;
 // - RB-04: every name a ## Code paths section lists in backticks exists now, so a runbook never
 //   leans on code that isn't there. A name() is a function a migration creates; an /api/… path is
 //   one the server registers (api.ts's prefixes joined to each route module's paths); any other
@@ -19,7 +22,9 @@
 //   once it exists;
 // - RB-05 (C0.9 OD-18, PD-86): every purpose CONDUCT_WITHDRAWABLE lists has a row in
 //   withdrawal-by-hand.md's table whose "How you stop it for one person" cell says how, since the
-//   notice tells people such a purpose stops for them; and every row names a real purpose.
+//   notice tells people such a purpose stops for them; and every row names a real purpose. "Says
+//   how" is a heuristic (a cell that isn't empty and doesn't start by saying it can't be done, isn't
+//   possible or isn't active yet), which the DPO's review of every change backs up.
 // Comments are stripped before the server's and the packages' code is searched, so a mention in a
 // comment proves nothing.
 import { posix } from 'node:path'
@@ -189,12 +194,15 @@ describe('RB-02 (C0.9 PD-81): each runbook has the fixed sections, in order, Cod
 
 // What a public runbook must never hold. Each pattern is one kind; a finding names the kind only.
 const IDENTIFYING: readonly { kind: string; pattern: RegExp }[] = [
-  // + and a run of six or more digits, spaces or hyphens, starting with a digit: any international number.
-  { kind: 'a phone number', pattern: /\+(?=[ -]*\d)[\d -]{6,}/ },
+  // + and a run of six or more digits, spaces, hyphens, dots or brackets, whose first figure is a
+  // digit: any international number, however it is grouped.
+  { kind: 'a phone number', pattern: /\+(?=[ ().-]*\d)[\d ().-]{6,}/ },
   // A Singapore number written locally: eight digits starting 3, 6, 8 or 9, split after the fourth or not.
   { kind: 'a phone number', pattern: /(?<!\d)[3689]\d{3}[ -]?\d{4}(?!\d)/ },
   { kind: 'an email address', pattern: /[\w.%+-]+@[\w-]+(?:\.[\w-]+)+/ },
   { kind: 'a 12-digit run (an AWS account id)', pattern: /\d{12}/ },
+  // As the AWS Console shows an account id.
+  { kind: 'a 12-digit run (an AWS account id)', pattern: /(?<!\d)\d{4}-\d{4}-\d{4}(?!\d)/ },
   { kind: 'an ARN', pattern: /\barn:aws[\w-]*:/i },
   { kind: 'a Twilio SID', pattern: /\b(?:AC|VA|SK|PN|MG|US)[0-9a-fA-F]{32}\b/ },
 ]
@@ -212,12 +220,20 @@ const hostsIn = (line: string): string[] =>
       .toLowerCase(),
   )
 
+// The scheme of every address with one (s3://, ftp://) and every Markdown link with one
+// ([text](mailto:…)) a line holds, lower case. A scheme named in prose or code (`mailto:`) is none.
+const schemesIn = (line: string): string[] =>
+  [...line.matchAll(/\b([a-z][a-z0-9+.-]*):\/\/|\]\(\s*<?([a-z][a-z0-9+.-]*):/gi)].map(([, address, link]) =>
+    (address ?? link ?? '').toLowerCase(),
+  )
+
 // Each finding, as "path:line: kind", each kind once a line.
 function identifying(path: string, text: string): string[] {
   const found: string[] = []
   for (const [index, line] of text.split('\n').entries()) {
     const kinds = new Set(IDENTIFYING.filter(({ pattern }) => pattern.test(line)).map(({ kind }) => kind))
     for (const host of hostsIn(line)) if (!LINKABLE.has(host)) kinds.add(`a link to ${host}`)
+    for (const scheme of schemesIn(line)) if (scheme !== 'https' && scheme !== 'http') kinds.add(`a link by ${scheme}:`)
     for (const kind of kinds) found.push(`${path}:${index + 1}: ${kind}`)
   }
   return found
@@ -235,7 +251,11 @@ describe('RB-03 (C0.9 OD-21, PD-81): no runbook holds a number, an address, an a
       'See https://example.com/x and www.example.org.',
       'Through its online form on www.pdpc.gov.sg, or https://www.pdpc.gov.sg/report.',
       'Start with + and the country code, such as +65. Within 30 calendar days, 500 people, 2,000 characters.',
-      'Use `mailto:` and `tel:` links; ACRA’s BizFile+ on 23 Oct 2026.',
+      'Use `mailto:` and `tel:` links; ACRA’s BizFile+ on 23 Oct 2026 (2026-10-23), step 2 (of 7).',
+      'Call +1 (415) 555-0100, or +65.6123.4567.',
+      'Account 1234-5678-9012.',
+      'Bucket s3://hearth-prod-recordings-acme/ and [the share](ftp://files.acme.example/dpo).',
+      'Write [to the DPO](mailto:dpo) or [call](tel:0).',
     ].join('\n')
     expect(identifying('x.md', planted)).toEqual([
       'x.md:1: a phone number',
@@ -246,6 +266,12 @@ describe('RB-03 (C0.9 OD-21, PD-81): no runbook holds a number, an address, an a
       'x.md:6: a Twilio SID',
       'x.md:7: a link to example.com',
       'x.md:7: a link to www.example.org',
+      'x.md:11: a phone number',
+      'x.md:12: a 12-digit run (an AWS account id)',
+      'x.md:13: a link by s3:',
+      'x.md:13: a link by ftp:',
+      'x.md:14: a link by mailto:',
+      'x.md:14: a link by tel:',
     ])
   })
 
@@ -466,8 +492,10 @@ describe('RB-04 (C0.9 PD-81): every code path a runbook names exists now', () =>
 
 // --- RB-05: a stop by hand for every purpose CONDUCT_WITHDRAWABLE lists ---------------------------
 
-// A "How you stop it for one person" cell that says it can't yet be done.
-const NOT_HOW = /^(?:it can['’]t be\b|not active in C0\b|as above\b|the step that makes it active\b)/i
+// A "How you stop it for one person" cell that starts by saying it can't yet be done, or points
+// elsewhere: a heuristic, which the DPO's review of every change backs up.
+const NOT_HOW =
+  /^(?:(?:it )?(?:can['’]?t|cannot)\b|(?:it(?:['’]s| is) )?not (?:possible|yet|active)\b|n\/a\b|none\b|nothing\b|as above\b|the step that makes it active\b)/i
 
 // The withdrawal table's rows: each purpose key and its "How you stop it for one person" cell.
 function withdrawalRows(text: string): Map<string, string> | undefined {
@@ -513,18 +541,39 @@ describe('RB-05 (C0.9 OD-18, PD-86): each purpose CONDUCT_WITHDRAWABLE lists has
     '| `content_delivery` | not active in C0 | the step that makes it active fills this row | n/a |',
     '| `access_logs` | not active in C0 | as above | n/a |',
     '| `presence_receipts` | the receipts | the DPO turns them off for the person on the roster | the rest |',
+    '| `session_slides` | the slides | It cannot be stopped until C2.11 | n/a |',
+    '| `session_sharing` | the sharing | Not possible yet | n/a |',
+    '| `people_insights` | the counts | n/a | n/a |',
     '',
     'Text after the table.',
   ].join('\n')
 
   it('passes an empty list and a purpose whose row says how, and fails the rest, on planted text', () => {
-    const purposes = ['security_audit', 'backups', 'content_delivery', 'access_logs', 'presence_receipts']
+    const purposes = [
+      'security_audit',
+      'backups',
+      'content_delivery',
+      'access_logs',
+      'presence_receipts',
+      'session_slides',
+      'session_sharing',
+      'people_insights',
+    ]
     expect(withdrawalProblems(table, [], purposes)).toEqual([])
     expect(withdrawalProblems(table, ['presence_receipts'], purposes)).toEqual([])
     expect(
       withdrawalProblems(
         table,
-        ['security_audit', 'backups', 'content_delivery', 'access_logs', 'session_slides'],
+        [
+          'security_audit',
+          'backups',
+          'content_delivery',
+          'access_logs',
+          'session_slides',
+          'session_sharing',
+          'people_insights',
+          'recording_meetings',
+        ],
         purposes,
       ),
     ).toEqual([
@@ -532,7 +581,10 @@ describe('RB-05 (C0.9 OD-18, PD-86): each purpose CONDUCT_WITHDRAWABLE lists has
       "backups: its row doesn't say how",
       "content_delivery: its row doesn't say how",
       "access_logs: its row doesn't say how",
-      'session_slides: no row',
+      "session_slides: its row doesn't say how",
+      "session_sharing: its row doesn't say how",
+      "people_insights: its row doesn't say how",
+      'recording_meetings: no row',
     ])
     expect(withdrawalProblems(table, [], purposes.slice(1))).toEqual(['security_audit: not a purpose'])
     expect(withdrawalProblems('No table here.', [], purposes)).toEqual(['no "How you stop it for one person" table'])

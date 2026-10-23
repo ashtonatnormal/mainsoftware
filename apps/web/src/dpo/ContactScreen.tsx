@@ -24,7 +24,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { Pencil } from 'lucide-react'
-import { useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { focusAfter } from '@/lib/focus.ts'
 import { DPO } from '@/strings/dpo.ts'
 import { CONTACT } from '@/strings/dpo-contact.ts'
 import { Button, buttonClass } from '@/ui/Button.tsx'
@@ -78,6 +79,26 @@ export function ContactContent({ answer }: { answer: ContactAdminForClient }) {
   const [editing, setEditing] = useState(false)
   const view = contactView(answer)
   const titleId = useId()
+  // A first save swaps "Record contact details" for the contact and its Edit button before the
+  // dialog closes, so the opener is gone and focus would drop to <body>: a save, or a reload after
+  // register_changed, puts it on the card's button, Edit (or Record contact details while there is
+  // still none; lib/focus.ts, the h1 if there is neither). Cancel and Escape leave the opener in
+  // place, and the dialog gives focus back to it.
+  // It moves from an effect, once the dialog has gone: a save lands outside any React event, so
+  // React commits the close in a later task, and a frame can come first, while the modal dialog
+  // still leaves the page behind it inert and focus() there does nothing. The dialog's own cleanup
+  // has run by the time this effect does (React runs a removed component's cleanups first).
+  const action = useRef<HTMLButtonElement>(null)
+  const refocus = useRef(false)
+  useEffect(() => {
+    if (editing || !refocus.current) return
+    refocus.current = false
+    focusAfter(() => action.current)
+  }, [editing])
+  const saved = () => {
+    refocus.current = true
+    setEditing(false)
+  }
   return (
     <>
       <p>{CONTACT.intro}</p>
@@ -91,7 +112,7 @@ export function ContactContent({ answer }: { answer: ContactAdminForClient }) {
               {CONTACT.none.title}
             </h2>
             <p>{CONTACT.none.body}</p>
-            <Button variant="primary" className="self-start" onClick={() => setEditing(true)}>
+            <Button ref={action} variant="primary" className="self-start" onClick={() => setEditing(true)}>
               {CONTACT.none.record}
             </Button>
           </>
@@ -117,13 +138,19 @@ export function ContactContent({ answer }: { answer: ContactAdminForClient }) {
               </>
             )}
             <Facts facts={view.facts} />
-            <Button icon={Pencil} className="self-start" aria-label={CONTACT.edit} onClick={() => setEditing(true)}>
+            <Button
+              ref={action}
+              icon={Pencil}
+              className="self-start"
+              aria-label={CONTACT.edit}
+              onClick={() => setEditing(true)}
+            >
               {DPO.editButton}
             </Button>
           </>
         )}
       </section>
-      {editing && <ContactDialog answer={answer} onClose={() => setEditing(false)} />}
+      {editing && <ContactDialog answer={answer} onClose={() => setEditing(false)} onSaved={saved} />}
     </>
   )
 }
@@ -177,18 +204,28 @@ function useContactWrite(done: () => void): ContactWriter {
   }
 }
 
-// Exported for its markup test (dpo/dpo.markup.test.tsx).
-export function ContactDialog({ answer, onClose }: { answer: ContactAdminForClient; onClose(): void }) {
+// Exported for its markup test (dpo/dpo.markup.test.tsx). onSaved closes it once a save, or a
+// reload after register_changed, has been read again; onClose is Cancel and Escape.
+export function ContactDialog({
+  answer,
+  onClose,
+  onSaved = onClose,
+}: {
+  answer: ContactAdminForClient
+  onClose(): void
+  onSaved?: () => void
+}) {
   const row = answer.contact
   const [form, setForm] = useState<ContactForm>(() => contactFormOf(row))
   const editor = contactEditor(form, answer)
-  const writer = useContactWrite(onClose)
+  const writer = useContactWrite(onSaved)
   const formId = useId()
   const problemId = useId()
   const set = (change: Partial<ContactForm>) => setForm(before => ({ ...before, ...change }))
   const held = writer.pending ? DPO.saving : editor.problems.length > 0 ? DPO.fixFirst : undefined
-  // Each field's problem lines, by the ids of their items in the list below the fields.
-  const problemsOf = (field: keyof ContactForm) =>
+  // Each field's problem lines, by the ids of their items in the list below the fields (a missing
+  // channel's, which names no field, under undefined).
+  const problemsOf = (field: keyof ContactForm | undefined) =>
     editor.problems.flatMap((problem, at) => (problem.field === field ? [`${problemId}${at}`] : []))
   const submit = () => {
     if (held === undefined) writer.send(contactBodyOf(row, form))
@@ -229,40 +266,48 @@ export function ContactDialog({ answer, onClose }: { answer: ContactAdminForClie
             value={form.title}
             onChange={title => set({ title })}
           />
-          <p className="text-small text-muted">{CONTACT.dialog.channels}</p>
-          <TextField
-            label={CONTACT.dialog.email}
-            name="contact-email"
-            type="email"
-            inputMode="email"
-            hint={CONTACT.dialog.emailHint}
-            maxLength={CONTACT_EMAIL_MAX}
-            problems={problemsOf('email')}
-            value={form.email}
-            onChange={email => set({ email })}
-          />
-          <TextField
-            label={CONTACT.dialog.phone}
-            name="contact-phone"
-            type="tel"
-            inputMode="tel"
-            hint={CONTACT.dialog.phoneHint}
-            maxLength={CONTACT_PHONE_MAX}
-            problems={problemsOf('phone')}
-            value={form.phone}
-            onChange={phone => set({ phone })}
-          />
-          <TextField
-            label={CONTACT.dialog.postal}
-            name="contact-postal"
-            multiline
-            rows={3}
-            hint={CONTACT.dialog.postalHint}
-            maxLength={CONTACT_POSTAL_MAX}
-            problems={problemsOf('postal')}
-            value={form.postal}
-            onChange={postal => set({ postal })}
-          />
+          {/* The three ways to reach the DPO are one group, and its legend says any one will do, so
+              each field is heard with it (WCAG 1.3.1, 3.3.2); the line saying none is given yet
+              describes the group. */}
+          <fieldset
+            aria-describedby={problemsOf(undefined).join(' ') || undefined}
+            className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0"
+          >
+            <legend className="mb-4 p-0 text-small text-muted">{CONTACT.dialog.channels}</legend>
+            <TextField
+              label={CONTACT.dialog.email}
+              name="contact-email"
+              type="email"
+              inputMode="email"
+              hint={CONTACT.dialog.emailHint}
+              maxLength={CONTACT_EMAIL_MAX}
+              problems={problemsOf('email')}
+              value={form.email}
+              onChange={email => set({ email })}
+            />
+            <TextField
+              label={CONTACT.dialog.phone}
+              name="contact-phone"
+              type="tel"
+              inputMode="tel"
+              hint={CONTACT.dialog.phoneHint}
+              maxLength={CONTACT_PHONE_MAX}
+              problems={problemsOf('phone')}
+              value={form.phone}
+              onChange={phone => set({ phone })}
+            />
+            <TextField
+              label={CONTACT.dialog.postal}
+              name="contact-postal"
+              multiline
+              rows={3}
+              hint={CONTACT.dialog.postalHint}
+              maxLength={CONTACT_POSTAL_MAX}
+              problems={problemsOf('postal')}
+              value={form.postal}
+              onChange={postal => set({ postal })}
+            />
+          </fieldset>
           {editor.problems.length > 0 && (
             <Note tone="info" title={DPO.beforeSaving}>
               <ul className="flex list-disc flex-col gap-1 pl-5">

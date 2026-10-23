@@ -37,12 +37,12 @@ The break-glass re-clear restores Twilio Verify's clearance when no DPO can sign
 ### Branch A: re-clear Twilio Verify
 
 1. The person on call opens a production session under the logged break-glass role.
-2. The person on call runs the bootstrap script's recovery mode, non-interactively. In one transaction as `hearth_owner`, acting as the organisation's Hearth principal, it sets the emergency marker and the same timeouts the server's transactions have, reads the facts of the Twilio Verify clearance the latest published version names (or, with none, the clearance that ended last), and calls the bootstrap's function for `twilio` with those facts, the new review date, the DPO's id and the reason. All of them are read at run time, never typed into this repository or a chat.
+2. The person on call runs the bootstrap script's recovery mode, non-interactively. It connects with a 30-second transaction timeout, and in one transaction as `hearth_owner`, acting as the organisation's Hearth principal, it sets the emergency marker and the server's 2-second lock timeout, reads the facts of the Twilio Verify clearance the latest published version names (or, with none, the clearance that ended last), and calls the bootstrap's function for `twilio` with those facts, the new review date, the DPO's id and the reason. All of them are read at run time, never typed into this repository or a chat.
 3. If it answers that a DPO is signed in, the person on call stops: that DPO clears Twilio Verify in Hearth (Before you start, step 1).
 4. If it answers that Twilio Verify is cleared already, the person on call stops: someone else cleared it.
 5. If it timed out waiting for a lock, the person on call runs it once more.
 
-Until the bootstrap PR lands there is no recovery mode, and no production either (C0.11, C0.12), so until then this branch applies outside production only.
+Until the bootstrap PR lands there is no recovery mode and no production (C0.11, C0.12), so this branch can't be run anywhere yet. In local development, rebuild the database with `npm run db:reset`; never call the function by hand.
 
 ### Branch B: don't re-clear
 
@@ -66,7 +66,7 @@ Until the bootstrap PR lands there is no recovery mode, and no production either
 ## Don't
 
 - Don't reset the DPO's PIN, deactivate them or sign out their devices while Twilio Verify isn't cleared, unless that DPO can't use their session to clear it (Before you start, step 2): it ends the last session that could.
-- Never call the function by hand in an interactive transaction: an open transaction holds every DPO's row and stalls their access. The function ends one left open after 30 seconds anyway.
+- Never call the function by hand in an interactive transaction: an open transaction holds every DPO's row and stalls their access. The function ends one left open 30 seconds after the call anyway.
 - Never write to a table directly.
 - Never use the Rule 9 module's credential.
 - Never let a coding agent run any step.

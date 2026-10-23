@@ -872,6 +872,14 @@ describe('NTG-14 PDPA-02 PDPA-13 C0.9 OD-10 OD-13 PD-74: “Your rights” gives
       'Role: Data Protection Officer',
       'Post: 1 Example Road, #02-01 Example House, Singapore 000000',
     ])
+    // Commas or semicolons typed at a line's end aren't doubled; a full stop (an abbreviation's) stays.
+    for (const [typed, printed] of [
+      ['1 Example Road,\nUnit #01-02,\nSingapore 000000', 'Post: 1 Example Road, Unit #01-02, Singapore 000000'],
+      ['1 Example Road ;\n,\nSingapore 000000', 'Post: 1 Example Road, Singapore 000000'],
+      ['1 Example St.\nSingapore 000000', 'Post: 1 Example St., Singapore 000000'],
+    ] as const) {
+      expect(items({ ...CONTACT, email: null, postal: typed })[1], typed).toBe(printed)
+    }
   })
 
   it('NTG-14 PD-33: headings, items and line breaks planted in the contact stay inside their line', () => {

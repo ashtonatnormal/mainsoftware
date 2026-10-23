@@ -616,10 +616,14 @@ describe('C0.9 OD-19 PD-75 PD-76: the acknowledgements the DPO records', () => {
     expect(RecordAcknowledgementBody.parse(body)).toEqual(body)
     // A long note parses, so the dialog words it, up to a bound no note reaches.
     expect(RecordAcknowledgementBody.safeParse({ ...body, note: 'x'.repeat(2000) }).success).toBe(true)
+    expect(RecordAcknowledgementBody.safeParse({ ...body, acknowledgedOn: '0001-01-01' }).success).toBe(true)
     for (const bad of [
       { ...body, person: person.toUpperCase() },
       { ...body, notice: 'v1' },
       { ...body, acknowledgedOn: '2026-02-30' },
+      // Postgres's date has no year 0 (22008), so it is the body's refusal, never a 500.
+      { ...body, acknowledgedOn: '0000-01-01' },
+      { ...body, acknowledgedOn: '0000-02-29' },
       { ...body, acknowledgedOn: null },
       { ...body, note: 'x'.repeat(2001) },
       { ...body, note: undefined },

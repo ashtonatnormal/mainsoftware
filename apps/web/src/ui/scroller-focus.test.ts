@@ -66,20 +66,24 @@ describe('D-08, WCAG 2.1.1: the screen stays within a keyboard’s reach', () =>
     expect(TABBABLE).toContain('[tabindex]:not([tabindex="-1"])')
   })
 
-  it('SF-02 WCAG 2.1.1 KB-03: keepReachable keeps tabindex in step with the content and the size, writing only changes, and stops when told', () => {
+  it('SF-02 WCAG 2.1.1 4.1.2 KB-03: keepReachable keeps the tab stop, its role and its name in step with the content and the size, together, writing only changes, and stops when told', () => {
     vi.stubGlobal('ResizeObserver', FakeObserver)
     vi.stubGlobal('MutationObserver', FakeObserver)
     const { box, attributes, writes } = scroller()
-    const stop = keepReachable(box as unknown as HTMLElement)
+    const stop = keepReachable(box as unknown as HTMLElement, 'screen-title')
     const [sizes, changes] = FakeObserver.made
     if (sizes === undefined || changes === undefined) throw new Error('both observers are made')
-    // Text that scrolls: the scroller is the stop.
-    expect(attributes.get('tabindex')).toBe('0')
+    // Text that scrolls: the scroller is the stop, a region named by the screen's h1.
+    expect(Object.fromEntries(attributes)).toEqual({
+      tabindex: '0',
+      role: 'region',
+      'aria-labelledby': 'screen-title',
+    })
     expect(sizes.watched).toEqual(new Set([box, ...box.children]))
-    // A link arrives: the tab order is the content's alone.
+    // A link arrives: the tab order is the content's alone, and the container is no region.
     box.content = [element()]
     changes.callback([{ type: 'attributes', target: {} }])
-    expect(attributes.has('tabindex')).toBe(false)
+    expect(attributes.size).toBe(0)
     // Only a hidden or inert one is left: it can't be reached, so the scroller is the stop again.
     box.content = [element({ shown: false }), element({ inert: true })]
     changes.callback([{ type: 'childList', target: {} }])
@@ -94,7 +98,9 @@ describe('D-08, WCAG 2.1.1: the screen stays within a keyboard’s reach', () =>
     box.children = [{ child: 2 }]
     changes.callback([{ type: 'childList', target: box }])
     expect(sizes.watched).toEqual(new Set([box, ...box.children]))
-    expect(writes).toEqual(['set tabindex=0', 'remove tabindex', 'set tabindex=0', 'remove tabindex'])
+    const on = ['set role=region', 'set aria-labelledby=screen-title', 'set tabindex=0']
+    const off = ['remove tabindex', 'remove role', 'remove aria-labelledby']
+    expect(writes).toEqual([...on, ...off, ...on, ...off])
     stop()
     expect(sizes.watched.size).toBe(0)
     expect(changes.watched.size).toBe(0)
@@ -103,7 +109,7 @@ describe('D-08, WCAG 2.1.1: the screen stays within a keyboard’s reach', () =>
   it('SF-03: with no observers (react-dom/server, or an old browser) it does nothing and does not throw', () => {
     vi.stubGlobal('ResizeObserver', undefined)
     const { box, writes } = scroller()
-    keepReachable(box as unknown as HTMLElement)()
+    keepReachable(box as unknown as HTMLElement, 'screen-title')()
     expect(writes).toEqual([])
   })
 })

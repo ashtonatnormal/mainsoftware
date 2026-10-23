@@ -8,8 +8,7 @@ Someone writes, calls or posts a question or a complaint about how their persona
 
 ## Who does what
 
-- The DPO reads and answers it, alone (C0.9 OD-14).
-- An Owner is told that a complaint exists, never what it says, and only with the complainant's agreement.
+- The DPO reads and answers it, alone (C0.9 OD-14). Nobody else is told that it exists.
 
 ## Before you start
 

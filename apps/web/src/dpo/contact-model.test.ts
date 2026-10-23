@@ -98,6 +98,10 @@ describe('C0.9 PD-70: the DPO’s contact page (dpo/contact-model.ts)', () => {
     expect(SetContactBody.parse(body)).toEqual(body)
     expect(contactBodyOf(contactRow({ version: 4 }), form).seen).toBe(4)
     expect(contactBodyOf(null, { ...form, postal: ' \n ' }).postal).toBeNull()
+    // A tab pasted into the role title (a text input keeps it) is a space, as the api reads it.
+    const tabbed = contactBodyOf(null, { ...form, title: 'Data\tProtection Officer' })
+    expect(tabbed.title).toBe('Data Protection Officer')
+    expect(SetContactBody.parse(tabbed)).toEqual(tabbed)
   })
 
   it('CTW-04 PD-64 OD-11: what holds a save back is listed in set_dpo_contact()’s order, each with the field it is about (a missing channel with none), checked on the body the save would send; a save warns the notice goes out of date only once a version is published', () => {
@@ -122,7 +126,12 @@ describe('C0.9 PD-70: the DPO’s contact page (dpo/contact-model.ts)', () => {
     expect(copy.problems).toEqual([
       { field: 'title', text: 'The role title uses wording Hearth keeps off its screens. Reword it.' },
     ])
-    // Stray spaces and blank lines the api drops are never held against the form.
+    // Stray spaces and blank lines the api drops are never held against the form, nor a tab pasted
+    // into the role title, which looks like one line and is sent as one.
+    expect(
+      contactEditor({ title: 'Data\tProtection Officer', email: 'dpo@tembusu.example', phone: '', postal: '' }, none)
+        .problems,
+    ).toEqual([])
     expect(
       contactEditor(
         {

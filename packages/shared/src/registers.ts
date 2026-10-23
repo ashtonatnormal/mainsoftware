@@ -376,8 +376,9 @@ export function transferProblems(entry: { provider: string } & TransferFacts, to
 
 // A day, YYYY-MM-DD. The answer gives days in the org's time zone, never times: when someone
 // recorded or cleared something is shown as a day, as the devices list shows its dates
-// (apps/server/src/admin/people.ts).
-const Day = z.iso.date()
+// (apps/server/src/admin/people.ts). From year 1: Postgres's date has no year 0, and a body's day
+// is cast to one (22008, which nothing answers, so it would be a 500).
+const Day = z.iso.date().refine(day => day >= '0001-01-01', { message: 'a day from year 1' })
 
 // Postgres bounds text in code points, where a JavaScript string's length counts UTF-16 units.
 const codePoints = (text: string) => [...text].length

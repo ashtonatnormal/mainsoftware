@@ -9,7 +9,7 @@ Someone asks for a copy of their personal data, or how it has been used or discl
 ## Who does what
 
 - The DPO handles it, alone.
-- The person on call for production reads production only as step 3 says.
+- The person on call for production reads production only as step 3 says, and never reads content.
 
 ## Before you start
 
@@ -19,8 +19,8 @@ Someone asks for a copy of their personal data, or how it has been used or discl
 ## Steps
 
 1. The DPO lists what C0 holds about a person: their roster facts (name, department, manager, roles); their number; their devices and sessions (labels and times); their sign-in and code audit rows; whether they set a PIN (never the PIN); their notice acknowledgements; and the registers' general description of how data is used and who receives it.
-2. The DPO gathers what the app shows: the person's own Settings › Privacy (the contact, the notice and their acknowledgements, with the day and how for any the DPO recorded). Their devices have no screen until C0.16, but the routes exist: `GET /api/devices`, from the person's own tab, and `GET /api/admin/people/:person/devices`, an Admin's view with labels and dates only (see [Before C0.16's console](README.md#before-c016s-console-what-exists)).
-3. Until C1.11's Rule 9 service and C6.1's console, the person on call gathers the rest only through a read-only production query for that one requester, under the logged break-glass role, citing the request in the break-glass log, and a second person reviews it. Never through the Rule 9 module's credential, and never by a coding agent. This is CLAUDE.md's one exception to "never one person's rows" (Security and privacy). The output goes only under `local-data/`.
+2. The DPO gathers what the DPO's own pages show: the published notice, the contact, and the registers' general description (the processing register and Transfers). The DPO sees no one person's Settings, devices or acknowledgements in C0: the Notice tab shows counts only. A requester who still has a session may choose to show their own Settings › Privacy (the contact, the notice and their acknowledgements, with the day and how for any the DPO recorded) and their own devices (`GET /api/devices`, from their own tab; see [Before C0.16's console](README.md#before-c016s-console-what-exists)). Someone who has left, or has no account, has neither.
+3. Until C6.1's console replaces this procedure, the person on call gathers the rest of step 1's records (the devices and sessions, the sign-in and code audit rows, whether a PIN is set, the acknowledgements) only through a read-only production query for that one requester, under the logged break-glass role, citing the request in the break-glass log, and a second person reviews it. Never content: chat, direct messages and, later, recordings, transcripts and docs are read only through C1.11's Rule 9 service, never under this step. Never through the Rule 9 module's credential, and never by a coding agent. This is CLAUDE.md's one exception to "never one person's rows" (Security and privacy). The output goes only under `local-data/`. Once the organisation chooses its audit-log readers (C0.16), the DPO reads the sign-in and code audit rows through `read_audit_events()` instead.
 4. The DPO reviews every item before it is released, and withholds other people's data (PDPA-05a).
 5. The DPO replies in writing, by a channel outside Hearth.
 6. If the DPO needs more than 30 days, the DPO tells the requester in writing, within the 30 days, when they will have it.
@@ -41,9 +41,7 @@ Someone asks for a copy of their personal data, or how it has been used or discl
 - `read_audit_events()`
 - `apps/web/src/settings/PrivacySettings.tsx`
 - `devices.list_own`
-- `person.list_devices`
 - `/api/devices`
-- `/api/admin/people/:person/devices`
 - `/dpo/purposes`
 - `/dpo/transfers`
 - `/settings/privacy`

@@ -495,7 +495,7 @@ test('DPP-E6 PDPA-02 PD-37 PD-48 PD-62 PD-68 C-05: the Notice tab, from the Regi
   expect(publishes).toEqual([])
 })
 
-test('DPP-E7 PDPA-13 OD-10 PD-64 PD-70: the DPO opens Contact from the Registers links; with none recorded the page says so, and Record contact details opens the dialog with the role title filled in; no channel, or a phone number without +, holds Save back with a line saying why; a made-up role, mailbox and address save, and the card then says the published notice doesn’t give them yet; the page and the dialog pass axe at 320, 390 and 1440 px in both schemes, with no AI copy, 44 px targets, 16 px inputs and nothing sideways', async ({
+test('DPP-E7 PDPA-13 OD-10 PD-64 PD-70: the DPO opens Contact from the Registers links; with none recorded the page says so, and Record contact details opens the dialog with the role title filled in; no channel, or a phone number without +, holds Save back with a line saying why; a made-up role, mailbox and address save, focus lands on Edit, and the card then says the published notice doesn’t give them yet; the page and the dialog pass axe at 320, 390 and 1440 px in both schemes, with no AI copy, 44 px targets, 16 px inputs and nothing sideways', async ({
   open,
   guard,
 }, testInfo) => {
@@ -604,6 +604,8 @@ test('DPP-E7 PDPA-13 OD-10 PD-64 PD-70: the DPO opens Contact from the Registers
   })
   await expect(toasts(page).getByText('Contact details saved.', { exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { level: 2, name: 'Data Protection Officer' })).toBeVisible()
+  // The button that opened the dialog has gone with the empty card, so focus is on Edit, never <body>.
+  await expect(page.getByRole('button', { name: 'Edit contact details', exact: true })).toBeFocused()
   await expect(page.getByText('Not in the published notice yet', { exact: true })).toBeVisible()
   await expect(
     page.getByText('The published notice doesn’t give your contact details yet. Publish a new version so it does.', {
@@ -617,22 +619,35 @@ test('DPP-E7 PDPA-13 OD-10 PD-64 PD-70: the DPO opens Contact from the Registers
   await checked('/dpo/contact with a contact', [SIZES.w390], ['light'])
 })
 
-test('DPP-E8 PDPA-03 OD-19 PD-75 PD-76: from the Notice tab, Record an acknowledgement lists the seed’s people but the DPO, by name and department with no number or status; a day after today and no note are each held back on the page; Rachel, a day and how are recorded, the body naming her, the placeholder version, the day and the note; the toast says so, the dialog closes and focus is back on the button; the dialog passes axe at 320 and 390 px in both schemes, with 44 px targets, 16 px inputs and nothing sideways', async ({
+test('DPP-E8 PDPA-03 OD-19 PD-75 PD-76: from the Notice tab, Record an acknowledgement lists the seed’s people but the DPO, by name and department with no number or status; a day after today and no note are each held back on the page; Rachel, a day and how are recorded, the body naming her, the placeholder version, the day and the note, once more after the dialog’s PIN step when the first is refused for a fresh re-authentication; the toast says so, the dialog closes and focus is back on the button; the dialog passes axe at 320 and 390 px in both schemes, with 44 px targets, 16 px inputs and nothing sideways', async ({
   open,
   guard,
 }, testInfo) => {
   test.setTimeout(120_000)
-  guard.expectResponses(PIN_ASKED('/api/admin/notice', '/api/admin/notice/people'))
+  guard.expectResponses([
+    ...PIN_ASKED('/api/admin/notice', '/api/admin/notice/people'),
+    { path: '/api/admin/notice/acknowledgements/record', status: 403 },
+  ])
   const page = await open({ ...SIZES.w390, signedIn: ASHTON })
-  // The list is the api's (a read, which writes nothing); the record is answered here.
+  // The list is the api's (a read, which writes nothing); the record is answered here: the first
+  // with the refusal the api gives a PIN-rule session past its 5 minutes, so the dialog's own PIN
+  // step is shown (outside its form, since a form in a form never sends), the next recorded.
   const recorded: unknown[] = []
   await page.route('**/api/admin/notice/acknowledgements/record', route => {
     recorded.push(route.request().postDataJSON())
-    return route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ version: 0, changed: true }),
-    })
+    return route.fulfill(
+      recorded.length === 1
+        ? {
+            status: 403,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              error: 'reauth_required',
+              message: REAUTH_METHOD_MESSAGES.pin.required,
+              method: 'pin',
+            }),
+          }
+        : { status: 200, contentType: 'application/json', body: JSON.stringify({ version: 0, changed: true }) },
+    )
   })
   const listed = page.waitForResponse(
     response => new URL(response.url()).pathname === '/api/admin/notice/people' && response.status() === 200,
@@ -685,15 +700,21 @@ test('DPP-E8 PDPA-03 OD-19 PD-75 PD-76: from the Notice tab, Record an acknowled
   await how.fill('Signed a printed copy at induction')
   await expect(dialog.getByText('Before you can record', { exact: true })).toHaveCount(0)
   await record.click()
+  const pin = dialog.getByLabel('Your PIN', { exact: true })
+  await expect(pin).toBeVisible()
+  expect(await dialog.locator('form form').count()).toBe(0)
+  const confirmed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/auth/reauth/pin')
+  await pin.fill(E2E_PIN)
+  await pin.press('Enter')
+  expect((await confirmed).status()).toBe(200)
   await expect(dialog).toBeHidden()
-  expect(recorded).toEqual([
-    {
-      person: rachel?.id,
-      notice: people.latest.notice,
-      acknowledgedOn: people.today,
-      note: 'Signed a printed copy at induction',
-    },
-  ])
+  const body = {
+    person: rachel?.id,
+    notice: people.latest.notice,
+    acknowledgedOn: people.today,
+    note: 'Signed a printed copy at induction',
+  }
+  expect(recorded).toEqual([body, body])
   await expect(toasts(page).getByText('Recorded: Rachel Goh acknowledged version 0.', { exact: true })).toBeVisible()
   await expect(opener).toBeFocused()
 })

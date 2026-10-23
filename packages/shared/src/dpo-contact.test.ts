@@ -289,6 +289,12 @@ describe('DCS-03 C0.9 PD-64 PD-70: SetContactBody', () => {
       email: null,
       postal: null,
     })
+    // The role title is one line: a pasted tab or another control character, or a run of spaces,
+    // is one space (flatText()), so contactProblems() never reads a title that looks like one line
+    // as not one.
+    const flat = SetContactBody.parse({ ...body, title: ` Data\tProtection${BELL}  Officer ` })
+    expect(flat.title).toBe('Data Protection Officer')
+    expect(contactProblems(flat)).toEqual([])
     expect(normalisePostal('a\rb\r\nc\nd')).toBe('a\nb\nc\nd')
     expect(normalisePostal(`  a ${NEXT_LINE} b  \n\n  `)).toBe('a b')
   })

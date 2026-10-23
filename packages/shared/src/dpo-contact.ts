@@ -72,7 +72,14 @@ export function postalLines(postal: string): string[] {
     .map(line => line.trim())
     .filter(line => line !== '')
 }
-export const postalOneLine = (postal: string): string => postalLines(postal).join(', ')
+// On one line (the notice's "Post:"), its lines joined with commas, each line first losing the
+// commas or semicolons it ends with, so "1 Example Road,\nSingapore" never prints ",,". A full stop
+// stays: it may end an abbreviation ("St.").
+export const postalOneLine = (postal: string): string =>
+  postalLines(postal)
+    .map(line => line.replace(/[\s,;]+$/u, ''))
+    .filter(line => line !== '')
+    .join(', ')
 
 // Whether two contacts are the same: every field null in both or exactly equal.
 export function sameContact(a: DpoContact, b: DpoContact): boolean {
@@ -179,17 +186,22 @@ function typed(max: number) {
 }
 
 // POST /api/admin/notice/contact/set: the settings version the page showed (null while none is
-// recorded) and the contact, trimmed, with a blank field read as not recorded and the postal
-// address's lines normalised (normalisePostal()). A wrong email or phone shape still parses, so it
-// is a problem the page explains (400 register_invalid), not a bad request. The DPO comes from the
-// session, never the body.
+// recorded) and the contact, trimmed, with a blank field read as not recorded, the role title read
+// as one line (flatText(): a tab or another control character pasted into it becomes a space, so
+// it is never refused as "not one line" when it looks like one) and the postal address's lines
+// normalised (normalisePostal()). A wrong email or phone shape still parses, so it is a problem the
+// page explains (400 register_invalid), not a bad request. The DPO comes from the session, never
+// the body.
 export const SetContactBody = z.strictObject({
   seen: SettingsVersion.nullable(),
   title: z
     .string()
     .trim()
     .max(480)
-    .transform(text => (text === '' ? null : text)),
+    .transform(text => {
+      const line = flatText(text)
+      return line === '' ? null : line
+    }),
   email: typed(1000),
   phone: typed(1000),
   postal: z

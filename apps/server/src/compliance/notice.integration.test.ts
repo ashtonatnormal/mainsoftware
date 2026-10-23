@@ -941,7 +941,9 @@ describe('C0.9 PR 2 the privacy notice and the acknowledgement gate (PDPA-02, PD
     ).toHaveLength(1)
 
     // Refused: yourself, a leaver, another org's person and an unknown id (can()'s, before the
-    // function), an unknown version, tomorrow and an AI_COPY word in the note.
+    // function), an unknown version, tomorrow, year 0 (which Postgres's date lacks, so the body's
+    // 400), an AI_COPY word in the note, a blank note, and a control character in it (a NUL, which
+    // Postgres can't take as text, and a tab, the function's own HF008).
     const recordedBefore = await s.query('select 1 from notice_acknowledgments where org_id = $1', [org.id])
     for (const [change, status, code] of [
       [{ person: dpo.id }, 403, 'forbidden'],
@@ -952,6 +954,9 @@ describe('C0.9 PR 2 the privacy notice and the acknowledgement gate (PDPA-02, PD
       [{ person: owner.id, acknowledgedOn: dayAfter(today) }, 400, 'notice_invalid'],
       [{ person: owner.id, note: 'Signed with an agent present' }, 400, 'notice_invalid'],
       [{ person: owner.id, note: '   ' }, 400, 'notice_invalid'],
+      [{ person: owner.id, acknowledgedOn: '0000-01-01' }, 400, 'invalid_request'],
+      [{ person: owner.id, note: 'Signed a printed\u0000copy' }, 400, 'notice_invalid'],
+      [{ person: owner.id, note: 'Signed a\tprinted copy' }, 400, 'notice_invalid'],
     ] as const) {
       const refused = await record(change)
       expect([refused.status, refused.error], JSON.stringify(change)).toEqual([status, code])

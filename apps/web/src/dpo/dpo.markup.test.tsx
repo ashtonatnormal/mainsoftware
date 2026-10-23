@@ -636,6 +636,15 @@ describe('C0.9 PD-70 OD-19: the contact page and recording an acknowledgement (d
     }
     expect(describedBy(markup, email)).toEqual([CONTACT.dialog.emailHint])
     expect(describedBy(markup, phone)).toEqual([CONTACT.dialog.phoneHint])
+    // The three channels are one group whose legend says any one will do (WCAG 1.3.1, 3.3.2); the
+    // role title isn't in it, and the line saying none is given yet describes the group.
+    const group = markup.slice(markup.indexOf('<fieldset'), markup.indexOf('</fieldset>'))
+    expect(decoded(group)).toContain(`>${CONTACT.dialog.channels}</legend>`)
+    for (const control of [email, phone, postal]) expect(group).toContain(`id="${control?.get('id')}"`)
+    expect(group).not.toContain(`id="${title?.get('id')}"`)
+    expect(describedBy(markup, tags(markup, 'fieldset')[0])).toEqual([
+      'Give an email address, a phone number or a postal address.',
+    ])
     // No channel yet: listed with no field marked, and Save held.
     expect(readable(markup)).toEqual(
       expect.arrayContaining([DPO.beforeSaving, 'Give an email address, a phone number or a postal address.']),
@@ -659,6 +668,8 @@ describe('C0.9 PD-70 OD-19: the contact page and recording an acknowledgement (d
       'The role title uses wording Hearth keeps off its screens. Reword it.',
     ])
     expect(controlOf(marked, 'Email address')?.has('aria-invalid')).toBe(false)
+    // With a channel given, nothing describes the group.
+    expect(tags(marked, 'fieldset')[0]?.has('aria-describedby')).toBe(false)
 
     // Once a version is published, saving makes it out of date (OD-11).
     const edit = alone(
@@ -744,9 +755,13 @@ describe('C0.9 PD-70 OD-19: the contact page and recording an acknowledgement (d
     expect(buttons(markup).find(button => button.name === RECORD.record)).toMatchObject({ held: true, type: 'submit' })
     expect(readable(markup).filter(text => aiCopyIn(text) !== undefined)).toEqual([])
 
+    expect(controlOf(markup, RECORD.person)?.has('aria-describedby')).toBe(false)
+
+    // A cut list says so, and the line describes the person field, so it is heard on the field.
     const cut = alone(<RecordDialog version="0" onClose={() => {}} />, {
       people: noticePeopleForClient({ more: true }),
     })
     expect(readable(cut)).toContain(RECORD.more)
+    expect(describedBy(cut, controlOf(cut, RECORD.person))).toEqual([RECORD.more])
   })
 })

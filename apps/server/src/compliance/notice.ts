@@ -848,13 +848,17 @@ export async function readNoticePeople(api: Api, session: SessionIds, info: ReqI
 // (notice.acknowledgement.record: the DPO, for someone else still at the organisation, so yourself,
 // a leaver, another org's person and an unknown id are 403 before the function); the note is held
 // to AI_COPY, since the person sees it in Settings (400 notice_invalid: PD-65, the route's alone, as
-// record_notice_acknowledgement() is its one caller); then the function re-checks the DPO, reads the
-// person FOR SHARE, refuses any version but the latest (HF007, 409 notice_changed) and a day or note
-// it can't take (HF008, 400), and records the row on no device, with the day and the note, once per
-// person and version. The audit row names the person, the version and the day, never the note.
-// notice.acknowledged goes to the outbox in the same transaction when something was recorded, the
-// DPO acting, so the person's sockets are admitted within one check. The DPO's device comes from
-// the session, never the body.
+// record_notice_acknowledgement() is its one caller), and a control character in it is refused here
+// too (400 notice_invalid, as the function's HF008 answers one), because Postgres can't take a NUL
+// as text at all and would refuse the parameter (22021) before the function runs; then the
+// function re-checks the DPO, reads the person FOR SHARE, refuses any version but the latest
+// (HF007, 409 notice_changed) and any other day or note it can't take (HF008, 400), and records the
+// row on no device, with the day and the note, once per person and version. The audit row names the
+// person, the version and the day, never the note. notice.acknowledged goes to the outbox in the
+// same transaction when something was recorded, the DPO acting, for later consumers (catalogue:
+// notice); nothing consumes it yet. The person is let in because the REST gate and the gateway's
+// admission read the standing afresh (noticeStandings(), any method): at their next request, and
+// for sockets at accept and in each check. The DPO's device comes from the session, never the body.
 export async function recordAcknowledgement(
   api: Api,
   body: z.output<typeof RecordAcknowledgementBody>,
@@ -865,6 +869,7 @@ export async function recordAcknowledgement(
   const answer = await inSession(api, info, session, async (trx): Promise<AcknowledgeResponseJSON> => {
     await authorise(trx, session, { action: 'notice.acknowledgement.record', person: body.person }, 'forbidden')
     if (aiCopyIn(flatText(body.note)) !== undefined) throw new ApiError(400, 'notice_invalid')
+    if (/\p{Cc}/u.test(body.note.trim())) throw new ApiError(400, 'notice_invalid')
     const { rows } = await refusing(
       sql<{ version: number; changed: boolean }>`
         select version, changed from public.record_notice_acknowledgement(${body.person}::uuid, ${body.notice}::uuid,

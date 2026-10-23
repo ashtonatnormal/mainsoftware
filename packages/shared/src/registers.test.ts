@@ -422,6 +422,9 @@ describe('C0.9 PD-20 PD-21: the bodies the routes take', () => {
       { ...body, storageCountries: Array.from({ length: 61 }, () => 'SG') },
       { ...body, reviewOn: '2027-02-30' },
       { ...body, reviewOn: '1 Oct 2027' },
+      // Postgres's date has no year 0 (22008), so it is the body's refusal, never a 500.
+      { ...body, reviewOn: '0000-01-01' },
+      { ...body, certificateVerifiedOn: '0000-02-29' },
       { ...body, safeguard: 'contract' },
       { ...body, keepCleared: undefined },
       { ...body, extra: true },
