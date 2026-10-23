@@ -3,7 +3,7 @@
 // noticeProblems() and noticeWarnings() say of a draft. publish_notice() (migration 0010) refuses
 // the same problems in the database (db/tests/160_notice.sql, NTD-05); the screens that show the
 // words hold them to AI_COPY again (apps/web, NTW-10).
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { aiCopyIn } from './ai-copy.ts'
 import { PINNED_PURPOSES } from './flags.ts'
 import {
@@ -17,6 +17,7 @@ import {
   DOES_NOT,
   DOES_NOT_EXEMPT,
   generateNotice,
+  NOTICE_COUNTRY_NAMES,
   NOTICE_GENERATOR,
   NOTICE_PROVIDER_NAMES,
   NOTICE_SECTIONS,
@@ -331,14 +332,9 @@ describe('NTG-02 C0.9 PD-33 PD-35 PD-53: every section and every basis', () => {
     // holds (0009), 60 of the longest-named countries where it processes and 60 more where it
     // stores, and a 200-character org name.
     const long = (n: number) => 'é'.repeat(n)
-    const letters = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i))
-    const regions = new Intl.DisplayNames('en-GB', { type: 'region', fallback: 'none' })
-    const longest = letters
-      .flatMap(a => letters.map(b => `${a}${b}`))
-      .map(code => ({ code, name: regions.of(code) }))
-      .filter(region => region.name !== undefined && region.name !== region.code)
-      .sort((a, b) => (b.name ?? '').length - (a.name ?? '').length)
-      .map(region => region.code)
+    const longest = Object.entries(NOTICE_COUNTRY_NAMES)
+      .sort(([, a], [, b]) => b.length - a.length)
+      .map(([code]) => code)
     const largest: NoticeInput = {
       org: long(200),
       purposes: NON_AI_PURPOSE_KEYS.map(key =>
@@ -417,12 +413,33 @@ describe('NTG-04 C0.9 PD-35 D41: what the notice never lists', () => {
 })
 
 describe('NTG-05 PDPA-02 PDPA-10: countries are named, in British English', () => {
-  it('NTG-05: a code is shown by its name, falling back to the code for one ICU doesn’t know; lists read "a, b and c"', () => {
+  it('NTG-05: a code is shown by its name, falling back to the code for one the table doesn’t name; lists read "a, b and c"', () => {
     const facts = { ...TWILIO, processingCountries: ['SG', 'GB', 'AA'], storageCountries: ['SG', 'GB', 'AA'] }
     const body = generateNotice(input({ clearances: [clearance('twilio', facts)] }))
     expect(itemsOf(body, NOTICE_SECTIONS.providers, NOTICE_PROVIDER_NAMES.twilio)).toContain(
       'Where it processes and stores the data: Singapore, United Kingdom and AA.',
     )
+  })
+
+  it('NTG-05 NTG-09: the names come from the fixed table, never the runtime’s ICU, so a Node upgrade renames no country', () => {
+    const facts = { ...TWILIO, processingCountries: ['CI', 'TR', 'US'], storageCountries: ['CI', 'TR', 'US'] }
+    const draft = input({ clearances: [clearance('twilio', facts)] })
+    const before = generateNotice(draft)
+    expect(itemsOf(before, NOTICE_SECTIONS.providers, NOTICE_PROVIDER_NAMES.twilio)).toContain(
+      'Where it processes and stores the data: Côte d’Ivoire, Türkiye and United States.',
+    )
+    // A runtime whose ICU names every region differently.
+    const renamed = vi.spyOn(Intl.DisplayNames.prototype, 'of').mockReturnValue('Renamed')
+    try {
+      expect(generateNotice(draft)).toBe(before)
+    } finally {
+      renamed.mockRestore()
+    }
+    for (const [code, name] of Object.entries(NOTICE_COUNTRY_NAMES)) {
+      expect(code, name).toMatch(/^[A-Z]{2}$/)
+      expect(name.trim(), code).toBe(name)
+      expect(aiCopyIn(name), code).toBeUndefined()
+    }
   })
 })
 
@@ -588,8 +605,8 @@ describe('NTG-07 C0.9 PD-37 PD-38: what holds a draft back, and what it warns of
 describe('NTG-09 C0.9 PD-36: NOTICE_GENERATOR names these exact words', () => {
   // One digest per generator id. A change to the words fails this: give the generator a new id and
   // pin its digest here, so every version records which words wrote it, and the DPO's tab shows the
-  // notice out of date. A fixture with countries whose names are stable, so an ICU update doesn't
-  // move it (TECH-SPEC T22 item 36, ICU country names).
+  // notice out of date. Country names come from the generator's own table (NTG-05), so a Node
+  // upgrade doesn't move it.
   const PINNED: Readonly<Record<string, string>> = { 'c09.1': '4c47a8c307f25504' }
 
   it('NTG-09: the output of a fixed draft has the digest pinned for this generator id, which 0010 admits', () => {
