@@ -178,6 +178,21 @@ describe('T16 the outbox catalogue', () => {
     expect(transfer.ids.safeParse({ provider: 'sendgrid', cleared: true }).success).toBe(false)
     expect(transfer.ids.safeParse({ provider: 'twilio', cleared: true, countries: ['US'] }).success).toBe(false)
   })
+
+  it('C0.9 PD-50 T22 item 33: the notice events are emitted from C0.9, carry accounts, and hold the version, never its words', () => {
+    const published = EVENTS['notice.published']
+    const acknowledged = EVENTS['notice.acknowledged']
+    expect(published).toMatchObject({ status: 'emitted', stage: 'C0.9', entity: 'notice' })
+    expect(acknowledged).toMatchObject({ status: 'emitted', stage: 'C0.9', entity: 'person' })
+    for (const spec of [published, acknowledged]) expect(spec.purposes).toEqual(['accounts'])
+    const notice = 'a0000000-0000-4000-8000-0000000000e1'
+    expect(published.ids.safeParse({ version: 0 }).success).toBe(true)
+    expect(published.ids.safeParse({ version: -1 }).success).toBe(false)
+    expect(published.ids.safeParse({ version: 1, body: 'Local stand-in' }).success).toBe(false)
+    expect(acknowledged.ids.safeParse({ notice, version: 3 }).success).toBe(true)
+    expect(acknowledged.ids.safeParse({ notice: 'v3', version: 3 }).success).toBe(false)
+    expect(acknowledged.ids.safeParse({ notice, version: 3, method: 'in_app' }).success).toBe(false)
+  })
 })
 
 describe('T15 item 8 T16 item 15: ids only', () => {

@@ -182,6 +182,13 @@ export function adminCan(world: World, actor: Id, request: AdminRequest, context
       return isPurposeKey(request.purpose) && !isAiPurpose(request.purpose) && world.holds(actor, 'dpo')
     case 'register.transfer.set':
       return isProviderKey(request.provider) && !isAiProvider(request.provider) && world.holds(actor, 'dpo')
+    // PDPA-02 "generated from the register": the DPO, who keeps the register, alone reads the draft
+    // with its problems and the counts of who has acknowledged, and publishes a version, after the
+    // same fresh re-authentication (C0.9 PD-49); never an Owner, Admin or Compliance Officer as such.
+    // Not Rule 9: the counts name nobody, and nothing here reads content.
+    case 'notice.read':
+    case 'notice.publish':
+      return world.holds(actor, 'dpo')
     default:
       return false
   }

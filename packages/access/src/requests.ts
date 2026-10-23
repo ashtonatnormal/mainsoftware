@@ -87,6 +87,10 @@ export type AdminRequest =
   | { action: 'register.read' }
   | { action: 'register.purpose.set'; purpose: string }
   | { action: 'register.transfer.set'; provider: string; op: 'record' | 'clear' | 'withdraw' }
+  // The privacy notice (PDPA-02, PDPA-03; C0.9 PD-49): reading the draft the registers make, with
+  // its problems, the counts of who has acknowledged and the history, and publishing a version.
+  | { action: 'notice.read' }
+  | { action: 'notice.publish' }
 
 // Your own session, devices and passkeys (ACC-02, ACC-04, T21), for any active person. Reading your
 // own session, listing and signing out devices need no re-authentication and are never refused,
@@ -104,6 +108,11 @@ export type SelfRequest =
   // system principal (R9-03), and no re-authentication. It names no one, so it can't reach anyone
   // else's session.
   | { action: 'session.read_own' }
+  // The privacy notice (PDPA-02, PDPA-03, ACC-12; C0.9 PD-49): reading the current version with
+  // your own acknowledgements, and acknowledging it, on this session's device, for any active
+  // person and with no re-authentication, so the notice gate never locks anyone out.
+  | { action: 'notice.read_own' }
+  | { action: 'notice.acknowledge_own' }
 
 // A live topic on the realtime gateway (BUILD-PLAN C0.7, TECH-SPEC T19 item 7): a person's own,
 // their org's, or a team's. C1.1 adds spaces, decided by canRead or by membership (OD-05).
@@ -152,6 +161,8 @@ export const ADMIN_ACTIONS = new Set<string>([
   'register.read',
   'register.purpose.set',
   'register.transfer.set',
+  'notice.read',
+  'notice.publish',
 ])
 
 export function isAdminRequest(request: Request): request is AdminRequest {
@@ -164,6 +175,8 @@ export const SELF_ACTIONS = new Set<string>([
   'passkeys.add_own',
   'passkeys.remove_own',
   'session.read_own',
+  'notice.read_own',
+  'notice.acknowledge_own',
 ])
 
 export function isSelfRequest(request: Request): request is SelfRequest {

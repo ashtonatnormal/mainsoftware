@@ -1,5 +1,5 @@
 -- T18, CLAUDE.md Database: the worker's roles (0007, 0008; 0009 lets hearth_queue read the registers,
--- T22 item 9). The worker logs in as hearth_worker, which
+-- and 0010 the notice's versions and links, T22 item 9). The worker logs in as hearth_worker, which
 -- holds nothing itself and takes one job role per transaction; each job role gets only the grants
 -- its jobs need. This pins every privilege each job role can use on every table, column, sequence
 -- and function, however it got it, as 030 does hearth_app's, so any new grant must be added here on
@@ -54,9 +54,29 @@ select pg_temp.expect_privileges('hearth_queue', array[
   'processing_restrictions.effective_at: SELECT', 'processing_restrictions.id: SELECT',
   'processing_restrictions.lifted_at: SELECT', 'processing_restrictions.org_id: SELECT',
   'processing_restrictions.person_id: SELECT', 'processing_restrictions.purpose: SELECT',
+  -- And the notice (0010, T22 item 9): the latest version's id, number and whether it was generated,
+  -- and the purposes it lists at which register version ("notified", C0.9 PD-40; a pinned purpose's
+  -- staleness, B-04). Whether each open clearance is stated comes from notice_provider_states(),
+  -- never a clearance's facts or a version's providers (B-06, C-03); never a version's text, who
+  -- published it, or anyone's acknowledgement.
+  'notice_versions.generator: SELECT', 'notice_versions.id: SELECT', 'notice_versions.org_id: SELECT',
+  'notice_versions.version: SELECT',
+  'notice_version_purposes.notice_version_id: SELECT', 'notice_version_purposes.org_id: SELECT',
+  'notice_version_purposes.purpose: SELECT', 'notice_version_purposes.register_version: SELECT',
   'function is_ids_only(jsonb): EXECUTE',
+  'function notice_provider_states(): EXECUTE',
   'function worker_org_ids(): EXECUTE'
 ]);
+
+-- C-03, B-06: spelt out, since a column grant would hand the worker the DPO's written confirmations:
+-- hearth_queue reads no clearance's facts and nothing of a version's providers, runs neither
+-- notice_facts() nor transfer_send_state(), and reads stated through notice_provider_states().
+select pg_temp.check(not has_column_privilege('hearth_queue', 'public.transfer_clearances', 'facts', 'SELECT')
+                     and not has_any_column_privilege('hearth_queue', 'public.notice_version_providers', 'SELECT')
+                     and not has_function_privilege('hearth_queue', 'public.notice_facts(jsonb)', 'EXECUTE')
+                     and not has_function_privilege('hearth_queue', 'public.transfer_send_state(text)', 'EXECUTE')
+                     and has_function_privilege('hearth_queue', 'public.notice_provider_states()', 'EXECUTE'),
+                     'hearth_queue reads clearance facts or a version''s providers, runs notice_facts() or transfer_send_state(), or can''t run notice_provider_states()');
 
 select pg_temp.expect_privileges('hearth_job_offboarding', array[
   -- The offboarding consumer: read the outbox, start and move its own checkpoint, read the floors.

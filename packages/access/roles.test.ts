@@ -7,7 +7,8 @@
 // dimensions one row can't show: re-authentication, the two-person rule, changing your own roles,
 // ended roles, roles with no admin power yet, a run of every admin action an Admin may take, which
 // never opens #leadership, (from C0.8) the PIN roles and the re-authentication method each
-// session uses (D46), and (from C0.9) the registers, which are the DPO's alone (PDPA-13).
+// session uses (D46), and (from C0.9) the registers, which are the DPO's alone (PDPA-13), and the
+// privacy notice, which the DPO alone publishes and everyone reads and acknowledges (PDPA-03).
 //
 // The actors are the fixture org (src/testing) plus one persona per role holding exactly that role,
 // so each role's powers show on their own, and the seed's combined holders, which show that roles
@@ -1191,6 +1192,22 @@ const SECTIONS: readonly Section[] = [
     ],
   },
   {
+    ids: 'NTA-05 PDPA-02 PDPA-03 C0.9 PD-49',
+    title: 'notice.read and notice.publish (the DPO alone, who keeps the register it is generated from)',
+    rows: [
+      {
+        name: 'PDPA-02: only a DPO reads the draft, its problems and the counts of who has acknowledged, never an Owner, Admin or Compliance Officer as such, nor a DPO who has left',
+        request: { action: 'notice.read' },
+        allowed: DPOS,
+      },
+      {
+        name: 'PDPA-02 PDPA-03: only a DPO publishes a version',
+        request: { action: 'notice.publish' },
+        allowed: DPOS,
+      },
+    ],
+  },
+  {
     ids: 'ADM-03 ROOM-01 CHAT-01 FILE-01 D16',
     title: 'create (no re-authentication needed; only a person creates)',
     rows: [
@@ -1303,6 +1320,24 @@ const SECTIONS: readonly Section[] = [
       },
     ],
   },
+  {
+    ids: 'NTA-05 PDPA-02 PDPA-03 ACC-12 C0.9 PD-49',
+    title: 'the privacy notice: reading it and acknowledging it (no re-authentication)',
+    rows: [
+      {
+        // A leaver, another org's Owner, an assistant, an agent and the system principal are refused
+        // (ACC-05, ACC-11, R9-03, D16): nobody acknowledges for anyone else.
+        name: 'PDPA-02: everyone active reads the current notice and their own acknowledgements',
+        request: { action: 'notice.read_own' },
+        allowed: ACTIVE_PEOPLE,
+      },
+      {
+        name: 'PDPA-03 ACC-12: everyone active acknowledges it, each for themselves',
+        request: { action: 'notice.acknowledge_own' },
+        allowed: ACTIVE_PEOPLE,
+      },
+    ],
+  },
 ]
 
 const ALL_ROWS: readonly Row[] = SECTIONS.flatMap(s => s.rows)
@@ -1339,6 +1374,8 @@ const ADMIN_ACTION_IDS: Record<AdminRequest['action'], string> = {
   'register.read': 'PDPA-01 PDPA-10 PDPA-13',
   'register.purpose.set': 'PDPA-01 PDPA-13 D41',
   'register.transfer.set': 'PDPA-10 PDPA-13 D46',
+  'notice.read': 'PDPA-02 PDPA-13',
+  'notice.publish': 'PDPA-02 PDPA-03',
 }
 const ADMIN_ACTIONS = Object.keys(ADMIN_ACTION_IDS) as AdminRequest['action'][]
 const isAdminRow = (row: Row) => (ADMIN_ACTIONS as string[]).includes(row.request.action)
@@ -1350,6 +1387,8 @@ const SELF_ACTION_IDS: Record<SelfRequest['action'], string> = {
   'passkeys.add_own': 'ACC-02 T14',
   'passkeys.remove_own': 'ACC-02 T14',
   'session.read_own': 'T17 T21',
+  'notice.read_own': 'PDPA-02',
+  'notice.acknowledge_own': 'PDPA-03 ACC-12',
 }
 const SELF_KINDS = Object.keys(SELF_ACTION_IDS) as SelfRequest['action'][]
 const PASSKEY_ACTIONS: readonly SelfRequest['action'][] = ['passkeys.add_own', 'passkeys.remove_own']
@@ -1450,15 +1489,18 @@ describe('§9.4 ADM-02: every admin request needs a fresh re-authentication', ()
     })
   }
 
-  test('§9.4 ACC-04 T21: reading your own session and client flags, listing and signing out your own devices and creating things need no re-authentication', () => {
+  test('§9.4 ACC-04 T21 C0.9 PD-49: reading your own session and client flags, listing and signing out your own devices, reading and acknowledging the notice, and creating things need no re-authentication', () => {
     const rows = ALL_ROWS.filter(
       r =>
         r.request.action === 'session.read_own' ||
         r.request.action === 'devices.sign_out_own' ||
         r.request.action === 'devices.list_own' ||
+        r.request.action === 'notice.read_own' ||
+        r.request.action === 'notice.acknowledge_own' ||
         r.request.action === 'create',
     )
     expect(rows.some(r => r.request.action === 'session.read_own')).toBe(true)
+    expect(rows.some(r => r.request.action === 'notice.acknowledge_own')).toBe(true)
     for (const row of rows) {
       for (const context of [undefined, {}, { reauthenticated: false }]) {
         expect(allowedIn(worldOf(row), row.request), `${JSON.stringify(context)}: ${row.name}`).toEqual(
@@ -1469,6 +1511,8 @@ describe('§9.4 ADM-02: every admin request needs a fresh re-authentication', ()
     expect(can(W, human(ONE.member), { action: 'session.read_own' })).toBe(true)
     expect(can(W, human(ONE.member), { action: 'devices.sign_out_own' })).toBe(true)
     expect(can(W, human(ONE.member), { action: 'devices.list_own' })).toBe(true)
+    expect(can(W, human(ONE.member), { action: 'notice.read_own' })).toBe(true)
+    expect(can(W, human(ONE.member), { action: 'notice.acknowledge_own' })).toBe(true)
     expect(can(W, human(P.marcus), { action: 'devices.sign_out_own', device: DEV.marcusPhone })).toBe(true)
   })
 
@@ -2125,6 +2169,54 @@ describe('PDPA-13 C0.9 PD-20: the registers are the DPO’s alone', () => {
       expect(
         can(W, human(id), { action: 'register.read' }, { reauthenticated: reauthenticated(W, id, codeSession) }),
       ).toBe(false)
+    }
+  })
+})
+
+// The privacy notice (PDPA-02, PDPA-03; C0.9 PD-49): the DPO alone publishes it, as they alone keep
+// the register it is generated from, and everyone reads and acknowledges their own. Which of these
+// passes the notice gate in each standing is packages/access's notice.test.ts (NTA-01 to NTA-04).
+describe('NTA-05 PDPA-02 PDPA-03 C0.9 PD-49: the notice is the DPO’s to publish and everyone’s to acknowledge', () => {
+  const ADMIN: readonly AdminRequest[] = [{ action: 'notice.read' }, { action: 'notice.publish' }]
+  const OWN: readonly SelfRequest[] = [{ action: 'notice.read_own' }, { action: 'notice.acknowledge_own' }]
+
+  test('NTA-05 PDPA-02: a DPO, alone or with another role, reads the draft and publishes, and nobody else does; Ashton does so as the DPO, not as the Owner', () => {
+    for (const request of ADMIN) expect(allowedIn(W, request), request.action).toEqual(inOrder(DPOS))
+    const ashtonNotDpo = matrixWorld(f => ({
+      ...f,
+      roles: f.roles.map(r => (r.personId === P.ashton && r.role === 'dpo' ? { ...r, revokedAt: 1 } : r)),
+    }))
+    for (const request of ADMIN) {
+      expect(can(ashtonNotDpo, human(P.ashton), request, REAUTH), request.action).toBe(false)
+      expect(can(W, human(P.formerDpo), request, REAUTH), request.action).toBe(false)
+    }
+  })
+
+  test('NTA-05 §9.4 D46 C0.9 PD-30: publishing and reading the draft need the DPO’s fresh PIN', () => {
+    const pinRule: ReauthFacts = { stampFresh: true, pinSet: true, issuedUnderPinRule: true }
+    for (const request of ADMIN) {
+      expect(can(W, human(ONE.dpo), request, { reauthenticated: reauthenticated(W, ONE.dpo, pinRule) })).toBe(true)
+      const stale = { reauthenticated: reauthenticated(W, ONE.dpo, { ...pinRule, stampFresh: false }) }
+      expect(can(W, human(ONE.dpo), request, stale), request.action).toBe(false)
+      expect(can(W, human(ONE.dpo), request), request.action).toBe(false)
+    }
+  })
+
+  test('NTA-05 PDPA-03 ACC-12 R9-03: everyone active reads and acknowledges their own, with or without re-authentication; nobody does so for anyone else', () => {
+    for (const request of OWN) {
+      for (const context of [undefined, {}, { reauthenticated: false }, REAUTH]) {
+        expect(
+          ACTORS.filter(a => can(W, a.subject, request, context)).map(a => a.key),
+          `${request.action} ${JSON.stringify(context)}`,
+        ).toEqual(inOrder(ACTIVE_PEOPLE))
+      }
+      // A field naming someone else changes nothing: the server acknowledges for the session's own
+      // person and device, and the request names neither.
+      for (const named of [P.ashton, P.formerDpo, ORG_2_PEOPLE.owner]) {
+        const smuggled = { ...request, person: named, device: DEV.marcusPhone } as unknown as SelfRequest
+        for (const a of ACTORS)
+          expect(can(W, a.subject, smuggled), `${a.key} ${request.action}`).toBe(can(W, a.subject, request))
+      }
     }
   })
 })

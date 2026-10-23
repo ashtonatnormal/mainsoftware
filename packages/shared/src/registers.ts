@@ -473,6 +473,15 @@ export const RegisterWriteResponseForClient = z.object({ changed: z.boolean() })
 const NonAiPurpose = z.enum(PURPOSE_KEYS).refine(key => !PURPOSES[key].ai, { message: 'an AI purpose (C0.9 PD-27)' })
 const NonAiProvider = z.enum(PROVIDERS).refine(key => !isAiProvider(key), { message: 'an AI provider (C0.9 PD-27)' })
 
+// Whether the published notice says what the registers say (C0.9 PD-48), which the register pages
+// show as a banner and the Notice link's badge:
+//   up_to_date   publishing now would write the latest version again (the draft is unchanged)
+//   out_of_date  a version is published, and publishing now would write another one; a stand-in
+//                as the latest always is
+//   none         no version is published yet
+export const NOTICE_STATUSES = ['up_to_date', 'out_of_date', 'none'] as const
+export type NoticeStatus = (typeof NOTICE_STATUSES)[number]
+
 // One purpose's current entry: its highest version.
 const purposeRow = {
   purpose: NonAiPurpose,
@@ -489,6 +498,12 @@ const purposeRow = {
   recordedOn: Day,
   // Who recorded this version; null for version 1, which is Hearth's.
   recordedBy: PersonName.nullable(),
+  // The latest published version lists the purpose at this version (C0.9 PD-40). Until it does, a
+  // purpose that isn't pinned isn't in use: the purpose gate refuses it.
+  notified: z.boolean(),
+  // A pinned purpose the latest generated version doesn't list at this version (C0.9 PD-61): it
+  // runs anyway, for everyone, so the published notice is out of date until the next publish.
+  stale: z.boolean(),
 }
 
 // A provider's clearance: the open one, or else the last that ended.
@@ -525,6 +540,9 @@ const transferRow = {
   updatedOn: Day,
   // Who recorded these facts; null while they are Hearth's (the starting row, or the bootstrap's).
   updatedBy: PersonName.nullable(),
+  // Cleared, but the latest generated version states other facts for the provider, so nothing is
+  // sent to it until a version that states these is published (C0.9 PD-41).
+  sendsWait: z.boolean(),
 }
 
 const Clearance = z.strictObject(clearance)
@@ -534,11 +552,13 @@ const PurposeRow = z.strictObject(purposeRow)
 
 // GET /api/admin/registers (C0.9 PD-20, PD-27): the current entry of every purpose and provider
 // outside the AI layer, and today in the org's time zone, against which the page judges review
-// dates and the shared rules. The server types its answer with this, so an AI row can't leave it.
+// dates and the shared rules; from C0.9 PR 2, whether the published notice is up to date with them
+// (PD-48). The server types its answer with this, so an AI row can't leave it.
 export const RegistersResponse = z.strictObject({
   today: Day,
   purposes: z.array(PurposeRow).max(PURPOSE_KEYS.length),
   transfers: z.array(TransferRow).max(PROVIDERS.length),
+  notice: z.enum(NOTICE_STATUSES),
 })
 export type RegistersJSON = z.infer<typeof RegistersResponse>
 export type PurposeRowJSON = z.infer<typeof PurposeRow>
@@ -560,17 +580,28 @@ const nameForClient = PersonName.nullable().catch(null)
 
 // The web app's reading of the same answer (P6): fields the server adds later are dropped, a name
 // it can't read shows as nobody's, and a row it can't read, or one for an AI purpose or provider
-// (C0.9 PD-27), is left out rather than breaking the page. An answer with no readable day fails.
+// (C0.9 PD-27), is left out rather than breaking the page. A notice marker it can't read claims
+// nothing: no "not in use", no "sends wait", no stale or out-of-date banner. An answer with no
+// readable day fails.
 export const RegistersResponseForClient = z.object({
   today: Day,
-  purposes: readableRows(z.object({ ...purposeRow, recordedBy: nameForClient })),
+  purposes: readableRows(
+    z.object({
+      ...purposeRow,
+      recordedBy: nameForClient,
+      notified: z.boolean().catch(true),
+      stale: z.boolean().catch(false),
+    }),
+  ),
   transfers: readableRows(
     z.object({
       ...transferRow,
       updatedBy: nameForClient,
+      sendsWait: z.boolean().catch(false),
       clearance: z.object({ ...clearance, clearedBy: nameForClient, withdrawnBy: nameForClient }).nullable(),
     }),
   ),
+  notice: z.enum(NOTICE_STATUSES).catch('up_to_date'),
 })
 export type RegistersForClient = z.infer<typeof RegistersResponseForClient>
 export type PurposeRowForClient = RegistersForClient['purposes'][number]

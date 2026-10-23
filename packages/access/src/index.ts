@@ -5,7 +5,8 @@
 // here: privileged access (Rule 9) lives only in the server's Rule 9 module. From C0.7 it also
 // decides the realtime gateway's live topics (topic.subscribe; canTopics for the re-checks). From
 // C0.8 it decides who signs in with the PIN and how a session re-authenticates (reauth.ts, D46),
-// and who reads their own session and client flags (session.read_own, T21).
+// and who reads their own session and client flags (session.read_own, T21). From C0.9 it decides
+// what anyone may do before acknowledging the current privacy notice (notice.ts, PDPA-03).
 export { isAdmin, isOwner } from './admin.ts'
 export {
   type Audience,
@@ -26,6 +27,7 @@ export { type IndexClass, indexClassOf, SEARCHABLE_CLASSES, strictest } from './
 export { eraToken, keysOf, membersToken, orgToken, personToken, teamAdminsToken, teamToken } from './keys.ts'
 export { type AclRow, aclOf, filterReadable, listAccessible, type SourceRun, sourceAllowed } from './lists.ts'
 export * from './model.ts'
+export { admitsSocket, NOTICE_FREE, NOTICE_SETUP, type NoticeStanding, type NoticeUse, noticeAdmits } from './notice.ts'
 export { type Acl, allows, attendeesOf, NOBODY, readersOf } from './readers.ts'
 export { holdsPinRole, type ReauthFacts, reauthenticated, reauthMethodOf } from './reauth.ts'
 export type {
