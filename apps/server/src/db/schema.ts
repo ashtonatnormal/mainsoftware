@@ -129,6 +129,19 @@ export interface NoticeAcknowledgments {
   recorded_by: string | null
 }
 
+export interface NoticeVersionProviders {
+  org_id: string
+  notice_version_id: string
+  clearance_id: string
+}
+
+export interface NoticeVersionPurposes {
+  org_id: string
+  notice_version_id: string
+  purpose: string
+  register_version: number
+}
+
 export interface NoticeVersions {
   id: Generated<string>
   org_id: string
@@ -136,6 +149,7 @@ export interface NoticeVersions {
   body: string
   published_at: Generated<Timestamp>
   published_by: string
+  generator: string | null
 }
 
 export interface Orgs {
@@ -477,6 +491,8 @@ export interface DB {
   feature_flags: FeatureFlags
   jobs: Jobs
   notice_acknowledgments: NoticeAcknowledgments
+  notice_version_providers: NoticeVersionProviders
+  notice_version_purposes: NoticeVersionPurposes
   notice_versions: NoticeVersions
   orgs: Orgs
   outbox_checkpoints: OutboxCheckpoints

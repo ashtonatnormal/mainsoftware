@@ -16,6 +16,7 @@ const AHMAD = {
   name: 'Ahmad',
   timeZone: 'Asia/Kuala_Lumpur',
   capabilities: { registers: false },
+  notice: 'acknowledged' as const,
 }
 
 describe('T21 D-01: who the document belongs to (boot/load-session.ts)', () => {

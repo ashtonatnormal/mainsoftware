@@ -9,8 +9,11 @@
 //     read, and people whose keys changed, whom the decision lane re-checks against Postgres.
 //   - A change to a flag the browser may see (client: true) nudges every socket of its org, with no
 //     values, coalesced on its trailing edge (T19 item 10, P4).
-//   - The admission hook (C0.9) is asked inside the gateway's own transactions; unset, everyone is
-//     admitted and nothing is queried.
+//   - The admission hook (C0.9 PD-45, realtime/admission.ts) is asked inside the gateway's own
+//     transactions: only someone who has acknowledged the org's latest notice holds a socket. It is
+//     always wired; only a test sets admissionForTests, to another hook or to 'none' (C0.7's
+//     behaviour: everyone admitted, nothing queried), and main.ts never names it
+//     (scripts/guards/api-test-overrides.test.ts).
 //   - Readiness: the full check fails while the process stops, while either revocation channel isn't
 //     subscribed, while the stream reader is stuck, and while the last two periodic checks with
 //     sockets to check both failed; the local one, for the load balancer, only before both channels
@@ -26,6 +29,7 @@ import { sessionByToken } from '#src/db/pre-org.ts'
 import type { FlagCache } from '#src/flags/cache.ts'
 import type { Subscriptions } from '#src/pubsub.ts'
 import type { Check } from '#src/ready.ts'
+import { NOTICE_ADMISSION } from '#src/realtime/admission.ts'
 import { type Admission, type CheckOrg, orgChecker } from '#src/realtime/checks.ts'
 import { type GatewayPolicy, gatewayPolicy } from '#src/realtime/policy.ts'
 import { attachSocketServer, type SocketServer } from '#src/realtime/socket.ts'
@@ -50,8 +54,10 @@ export interface RealtimeDeps {
   keyPrefix: string
   // How often every open socket is checked; SOCKET_RECHECK_MS unless a test shortens it.
   recheckMs?: number
-  // C0.9's acknowledgement gate.
-  admission?: Admission
+  // Tests only (main.ts never sets it): C0.9's acknowledgement gate replaced by another hook, or
+  // 'none' for C0.7's behaviour (no admission, nothing queried). Unset, production's
+  // NOTICE_ADMISSION, with admission on (PD-45, B-07, C-07).
+  admissionForTests?: Admission | 'none'
   // A test's shorter timings (realtime/policy.ts overrides, and the bound and the check's deadline).
   policy?: Partial<GatewayPolicy>
   revokeWithinMs?: number
@@ -76,7 +82,8 @@ export function registerRealtime(
   const { db, logger, flags, valkey, reader, subscriptions } = deps
   const policy = gatewayPolicy(deps.policy)
   const latency = new RevocationLatency({ logger, summaryMs: 0 })
-  const checker = orgChecker(db, { admission: deps.admission, policy })
+  const admission = deps.admissionForTests === 'none' ? undefined : (deps.admissionForTests ?? NOTICE_ADMISSION)
+  const checker = orgChecker(db, { admission, policy })
   const server = attachSocketServer(app, {
     appOrigin: deps.appOrigin,
     logger,
@@ -91,7 +98,7 @@ export function registerRealtime(
     ...(deps.revokeWithinMs === undefined ? {} : { revokeWithinMs: deps.revokeWithinMs }),
     ...(deps.recheckTimeoutMs === undefined ? {} : { recheckTimeoutMs: deps.recheckTimeoutMs }),
     ...(deps.policy === undefined ? {} : { policy: deps.policy }),
-    admission: deps.admission !== undefined,
+    admission: admission !== undefined,
     latency,
     ...(valkey !== undefined && reader !== undefined
       ? { stream: target => new StreamReader({ valkey, reader, keyPrefix: deps.keyPrefix, target, logger, policy }) }

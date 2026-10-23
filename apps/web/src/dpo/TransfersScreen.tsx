@@ -14,8 +14,23 @@
 // - Clear for use: clears the saved facts, after a confirmation; held while any is missing.
 // - Withdraw clearance: after a confirmation that says what withdrawing stops for this provider.
 // Every write sends the revision the page read where it takes one; a newer one is refused with
-// register_changed and Reload (PD-25). The router loads this module lazily (router/router.tsx).
-import { type ProviderKey, SAFEGUARDS, TRAINING, type TransferRowForClient, ZERO_RETENTION } from '@hearth/shared'
+// register_changed and Reload (PD-25).
+//
+// The published notice (C0.9 PD-41, PD-48, PD-59): the Notice link's badge and a banner say whether
+// it still says what the registers say; a cleared provider whose facts the published notice doesn't
+// state says nothing is sent to it until the next publish (Twilio Verify: only the DPO gets sign-in
+// codes); and once a generated version states a cleared provider's facts, the dialog says what a
+// change to one of them stops until the next publish (dpo/notice-markers.tsx). The router loads
+// this module lazily (router/router.tsx).
+import {
+  noticeFactsOf,
+  type ProviderKey,
+  SAFEGUARDS,
+  sameNoticeFacts,
+  TRAINING,
+  type TransferRowForClient,
+  ZERO_RETENTION,
+} from '@hearth/shared'
 import { Pencil } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { DPO } from '@/strings/dpo.ts'
@@ -29,14 +44,25 @@ import {
 import { Button } from '@/ui/Button.tsx'
 import { Dialog } from '@/ui/Dialog.tsx'
 import { Select } from '@/ui/Select.tsx'
+import {
+  factsSaveStops,
+  factsStopText,
+  NoticeBadge,
+  NoticeBanner,
+  noticeGenerated,
+  ProviderNoticeMarker,
+  SaveStopsNote,
+} from './notice-markers.tsx'
 import { CheckRow, DateField, Facts, Note, Pill, TextField } from './parts.tsx'
 import { RegisterPage, type RegisterWriter, useRegisterWrite, WriteRefusal } from './RegisterPage.tsx'
 import {
   countriesOf,
   countryNames,
   recordBodyOf,
+  rowFacts,
   type TransferForm,
   transferEditor,
+  transferFactsOf,
   transferFormOf,
   transferView,
 } from './transfers-model.ts'
@@ -72,6 +98,7 @@ function TransferCard({
             ))}
         </div>
       )}
+      <ProviderNoticeMarker row={row} />
       <Facts facts={view.facts} />
       <p className="text-small text-muted">
         <span className="font-medium text-fg">{TRANSFERS_COPY.checkedBy}: </span>
@@ -199,12 +226,31 @@ function CountriesField({
   )
 }
 
-export function TransferDialog({ row, today, onClose }: { row: TransferRowForClient; today: string; onClose(): void }) {
+// generated: the latest published version is a generated one (noticeGenerated), so it states the
+// facts of every provider it lists.
+export function TransferDialog({
+  row,
+  today,
+  generated = false,
+  onClose,
+}: {
+  row: TransferRowForClient
+  today: string
+  generated?: boolean
+  onClose(): void
+}) {
   const [form, setForm] = useState<TransferForm>(() => transferFormOf(row))
   // A plain Save of a cleared entry's changed facts is waiting for its confirmation.
   const [confirming, setConfirming] = useState(false)
   const editor = transferEditor(row, form, today)
   const view = transferView(row, today)
+  // A change to a fact the notice states (C0.9 PD-41) stops sends to the provider until the next
+  // publish, once a generated version states it.
+  const stops = factsSaveStops(
+    row,
+    !sameNoticeFacts(noticeFactsOf(transferFactsOf(form)), noticeFactsOf(rowFacts(row))),
+    generated,
+  )
   const writer = useRegisterWrite(onClose)
   const formId = useId()
   const confirmText = useRef<HTMLParagraphElement>(null)
@@ -414,6 +460,7 @@ export function TransferDialog({ row, today, onClose }: { row: TransferRowForCli
             value={form.reviewOn}
             onChange={reviewOn => set({ reviewOn })}
           />
+          <div role="status">{stops && <SaveStopsNote text={factsStopText(row, view.name)} />}</div>
           {editor.problems.length > 0 ? (
             <Note
               tone="info"
@@ -435,12 +482,13 @@ export function TransfersScreen() {
   const [opened, setOpened] = useState<Opened | undefined>()
   const close = () => setOpened(undefined)
   return (
-    <RegisterPage current="transfers">
+    <RegisterPage current="transfers" noticeBadge={registers => <NoticeBadge status={registers.notice} />}>
       {registers => {
         const row = registers.transfers.find(each => each.provider === opened?.provider)
         const today = registers.today
         return (
           <>
+            <NoticeBanner registers={registers} />
             <p className="text-muted">{TRANSFERS_COPY.intro}</p>
             <ul className="flex flex-col gap-3">
               {registers.transfers.map(each => (
@@ -453,7 +501,13 @@ export function TransfersScreen() {
               ))}
             </ul>
             {row !== undefined && opened?.kind === 'edit' && (
-              <TransferDialog key={row.provider} row={row} today={today} onClose={close} />
+              <TransferDialog
+                key={row.provider}
+                row={row}
+                today={today}
+                generated={noticeGenerated(registers)}
+                onClose={close}
+              />
             )}
             {row !== undefined && opened?.kind === 'clear' && (
               <ClearDialog key={row.provider} row={row} today={today} onClose={close} />

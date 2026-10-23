@@ -375,4 +375,74 @@ describe('D46 the dormant passkeys, switched on for this suite alone (ACC-02, T1
     ])
     expect((await wc.post('/api/auth/passkey/options', {})).error).toBe('attempt_expired')
   })
+
+  it('NTI-01 C0.9 Done PD-43: the passkey routes keep the acknowledgement gate: the signed-in ones answer 403 notice_required to someone who hasn’t acknowledged the latest version, and let them through once they have', async () => {
+    // Budgets: none (the harness signs M in). NTI-01 (compliance/notice.integration.test.ts) sweeps
+    // every other /api route, on a stack with passkeys off; this is the one suite that registers
+    // these, so it sweeps them, and a passkey route added later must say how the gate classes it.
+    // The second step of adding one reads its challenge first: with none, which only the gated first
+    // step issues, it answers 401 passkey_expired, and it asks the gate again before it writes.
+    const assertion = {
+      id: Buffer.alloc(16, 1).toString('base64url'),
+      rawId: Buffer.alloc(16, 1).toString('base64url'),
+      type: 'public-key',
+      response: {
+        clientDataJSON: Buffer.from('{}').toString('base64url'),
+        authenticatorData: Buffer.alloc(37).toString('base64url'),
+        signature: Buffer.alloc(70, 3).toString('base64url'),
+      },
+      clientExtensionResults: {},
+    }
+    const registration = {
+      id: Buffer.alloc(16, 2).toString('base64url'),
+      rawId: Buffer.alloc(16, 2).toString('base64url'),
+      type: 'public-key',
+      response: {
+        clientDataJSON: Buffer.from('{}').toString('base64url'),
+        attestationObject: Buffer.alloc(64, 2).toString('base64url'),
+      },
+      clientExtensionResults: {},
+    }
+    type RouteClass = 'before_session' | 'gated' | 'after_challenge'
+    const ROUTES: Readonly<Record<string, { class: RouteClass; body: unknown }>> = {
+      'POST /api/auth/passkey/options': { class: 'before_session', body: {} },
+      'POST /api/auth/passkey/verify': { class: 'before_session', body: { response: assertion } },
+      'POST /api/auth/reauth/passkey/options': { class: 'gated', body: {} },
+      'POST /api/auth/reauth/passkey/verify': { class: 'gated', body: { response: assertion } },
+      'POST /api/auth/passkeys/register/options': { class: 'gated', body: {} },
+      'POST /api/auth/passkeys/register/verify': { class: 'after_challenge', body: { response: registration } },
+      'POST /api/auth/passkeys/remove': { class: 'gated', body: { passkey: '00000000-0000-4000-8000-000000000000' } },
+    }
+    const collected = [
+      ...new Set(
+        s.routes
+          .filter(route => /^\/api\/auth\/(?:passkeys?|reauth\/passkey)\//.test(route.url))
+          .map(route => `${route.method === 'HEAD' ? 'GET' : route.method} ${route.url}`),
+      ),
+    ].sort()
+    expect(collected).toEqual(Object.keys(ROUTES).sort())
+
+    const m = await s.person({ roles: ['leadership'], pin: s.newPin(), acknowledged: false })
+    const mc = await s.signIn(m)
+    const send = (key: string) => mc.post(key.split(' ')[1] ?? '', ROUTES[key]?.body ?? {})
+    for (const key of Object.keys(ROUTES)) {
+      const reply = await send(key)
+      const expected = { gated: [403, 'notice_required'], after_challenge: [401, 'passkey_expired'] } as const
+      const sample = ROUTES[key]
+      if (sample !== undefined && sample.class !== 'before_session') {
+        expect([key, reply.status, reply.error]).toEqual([key, ...expected[sample.class]])
+      } else {
+        expect([key, reply.error], key).not.toEqual([key, 'notice_required'])
+      }
+    }
+    // Nothing a gated request asked for happened: no passkey, and no audit row about M.
+    expect(await s.query('select 1 from passkeys where user_id = $1', [m.id])).toEqual([])
+    expect((await auditOf(m)).map(row => row.action)).not.toContain('auth.passkey_added')
+
+    await s.acknowledge(m)
+    for (const key of Object.keys(ROUTES)) {
+      const reply = await send(key)
+      expect([key, reply.error], key).not.toEqual([key, 'notice_required'])
+    }
+  })
 })

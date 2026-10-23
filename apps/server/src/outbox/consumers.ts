@@ -20,9 +20,13 @@
 //      switch refuses its purpose, unless the consumer is protective (it only takes access away,
 //      as C0.7's revocation consumer does: no one's switch may hold back the revocation of their
 //      access, or of anyone else's in the same event; TECH-SPEC T19 item 4, PDPA-04), whose events
-//      are never withheld per subject; move the checkpoint by compare-and-set from the position read
-//      (no row: a reset slipped in, so the round rolls back); end with feature_fence(), with the
-//      flag revisions the round was admitted under, so nothing commits after its flag changed.
+//      are never withheld per subject. A refusal while the gate no longer allows the consumer's
+//      purpose at all (the register gone stale mid-round, or changed) is no subject's: the round
+//      rolls back and keeps its place (RoundRefused, C0.9 A-12, PD-51, T22 item 32), so an event is
+//      never dropped for a register the worker can't confirm; move the checkpoint by
+//      compare-and-set from the position read (no row: a reset slipped in, so the round rolls
+//      back); end with feature_fence(), with the flag revisions the round was admitted under, so
+//      nothing commits after its flag changed.
 // A full batch runs the next round at once; otherwise the next comes after the poll (500 ms).
 //
 // Before an org's first round, the restore check (T16 item 18, at start only: A3) stops every
@@ -89,7 +93,8 @@ export type RoundResult =
   | 'full'
   // Nothing more to read for now.
   | 'idle'
-  // Not admitted: the feature is off, or the gate refuses the purpose or a provider.
+  // Not admitted: the feature is off, or the gate refuses the purpose or a provider; or the gate
+  // stopped allowing the purpose during the round, which rolled back (C0.9 PD-51).
   | 'refused'
   // Another round for this consumer and org holds the lock.
   | 'busy'
@@ -105,6 +110,12 @@ export type RoundResult =
 // The checkpoint wasn't where the round read it: a reset slipped in.
 class CheckpointMoved extends Error {
   override name = 'CheckpointMoved'
+}
+
+// A subject's switch refused an event while the gate no longer allows the consumer's purpose: the
+// register went stale or changed during the round, which rolls back (C0.9 PD-51).
+class RoundRefused extends Error {
+  override name = 'RoundRefused'
 }
 
 // A reset to a position the clean-up has already deleted past.
@@ -304,6 +315,15 @@ export class ConsumerRunner {
         await this.#flags.reload(orgId)
         return 'fenced'
       }
+      if (error instanceof RoundRefused) {
+        // Nothing was withheld or moved; the next round's admission pauses the consumer until the
+        // purpose is allowed again (#refusal), and then handles the event.
+        log.info(
+          { event: 'outbox_round_refused', reason: 'register_unconfirmed' },
+          'the registers no longer allow the purpose: the round rolled back and keeps its place',
+        )
+        return 'refused'
+      }
       throw error
     }
   }
@@ -405,10 +425,14 @@ export class ConsumerRunner {
   }
 
   // Whether every subject's processing switch allows the consumer's purpose (PDPA-04); an event
-  // whose subject refuses it is passed over, and logged by id. A protective consumer's never is.
+  // whose subject refuses it is passed over, and logged by id. A protective consumer's never is. A
+  // refusal while the gate no longer allows the purpose itself throws RoundRefused instead (PD-51):
+  // the switch can't be told from a register the worker no longer has, and withholding would move
+  // the checkpoint past the event for good.
   #processingAllowed(consumer: OutboxConsumer, orgId: string, row: OutboxRow, log: Logger): boolean {
     if (consumer.protective === true) return true
     if (row.subjects.every(subject => this.#gate.processingAllowed(orgId, subject, consumer.purpose))) return true
+    if (!this.#gate.purposeAllowed(orgId, consumer.purpose)) throw new RoundRefused()
     log.info({ event: 'outbox_event_withheld', eventId: row.id }, 'an event was passed over for its subject')
     return false
   }

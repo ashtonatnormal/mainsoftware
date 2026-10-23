@@ -26,7 +26,9 @@
 //      PROVIDERS and AI_PROVIDERS equal transfer_register_defaults() (keys and ai), both ways; every
 //      org has exactly those rows (one this makes too, in a transaction it rolls back, whose rows
 //      come from the trigger on orgs), and every later version keeps its version 1's fixed columns
-//      (C0.9, TECH-SPEC T22 item 18).
+//      (C0.9, TECH-SPEC T22 item 18); and, from C0.9 PR 2, NOTICE_TRANSFER_FACTS equals the keys
+//      notice_facts() (0010) builds, each read from the snapshot's key of the same name (PD-41). No
+//      runtime role may run notice_facts(), so this superuser calls it.
 // The runtime roles are found as scripts/check-migrations.sh finds them: every role granted
 // something in the database (the owner aside), and every role that can use one of them by SET or
 // INHERIT. The integration suites' sweep (apps/server/src/testing/writes.ts) checks the writes the
@@ -41,6 +43,7 @@ import {
   AI_PROVIDERS,
   EVENT_TYPES,
   FLAGS,
+  NOTICE_TRANSFER_FACTS,
   PINNED_PURPOSES,
   PROVIDERS,
   PURPOSES,
@@ -61,6 +64,8 @@ import {
   flagProblems,
   type Grant,
   matchProblems,
+  noticeFactProbe,
+  noticeFactProblems,
   type OrgRegisters,
   type ProviderDefault,
   type PurposeDefault,
@@ -208,6 +213,18 @@ try {
     await client.query<ProviderDefault>('select provider, ai from public.transfer_register_defaults()')
   ).rows
   const orgs = await readOrgRegisters()
+  // Every key a clearance's snapshot may hold (transfer_register_facts(), 0009), each with a value
+  // of its own name, so notice_facts() shows which it reads and from where.
+  const snapshotKeys = (
+    await client.query<{ key: string }>(
+      'select jsonb_object_keys(public.transfer_register_facts(null::public.transfer_register)) as key',
+    )
+  ).rows.map(row => row.key)
+  const noticeFacts = (
+    await client.query<{ facts: unknown }>('select public.notice_facts($1::jsonb) as facts', [
+      JSON.stringify(noticeFactProbe([...new Set([...snapshotKeys, ...NOTICE_TRANSFER_FACTS])])),
+    ])
+  ).rows[0]?.facts
 
   const problems = [
     ...coverageProblems(WRITES, grants, functions),
@@ -230,13 +247,14 @@ try {
       providerDefaults,
       orgs,
     ),
+    ...noticeFactProblems(NOTICE_TRANSFER_FACTS, noticeFacts),
   ]
   if (problems.length > 0) {
     process.stderr.write(`The catalogues and the database disagree:\n${problems.map(p => `  - ${p}`).join('\n')}\n`)
     process.exitCode = 1
   } else {
     process.stdout.write(
-      `OK: ${grants.length} write grants and ${functions.length} functions covered; ${types.length} event types, ${defaults.length} flags, ${settable.length} job roles, ${consumers.length} consumers' checkpoint bindings, and ${purposeDefaults.length} purposes and ${providerDefaults.length} providers in ${orgs.length} orgs' registers match.\n`,
+      `OK: ${grants.length} write grants and ${functions.length} functions covered; ${types.length} event types, ${defaults.length} flags, ${settable.length} job roles, ${consumers.length} consumers' checkpoint bindings, ${purposeDefaults.length} purposes and ${providerDefaults.length} providers in ${orgs.length} orgs' registers, and ${NOTICE_TRANSFER_FACTS.length} stated notice facts match.\n`,
     )
   }
 } finally {

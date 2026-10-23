@@ -6,6 +6,10 @@
 //   edit is refused with register_changed, PD-25).
 // - the four writes, each answering only whether anything changed; the page reads the registers
 //   again rather than trusting its own copy.
+// - GET /api/admin/notice, the Notice tab's (C0.9 PD-48), under its own key with the same policy,
+//   so a draft the DPO is reading is never swapped under them; and POST /api/admin/notice/publish,
+//   which sends the latest version and the digest the tab previewed (PD-36), and answers the new
+//   version's number.
 // - POST /api/auth/reauth/pin, the inline PIN step's (C0.16's sheet replaces it). The PIN is never
 //   the mutation's variables, which the document's MutationCache keeps after the step settles
 //   (pinStepOptions).
@@ -13,6 +17,9 @@
 // an unsaved form is component state, never storage (WS-01).
 import {
   type ClearTransferJSON,
+  NoticeAdminResponseForClient,
+  type PublishJSON,
+  PublishResponseForClient,
   ReauthenticatedSchema,
   type RecordTransferJSON,
   RegistersResponseForClient,
@@ -47,6 +54,21 @@ export const WRITE_PATHS = {
 export async function sendWrite(write: RegisterWrite): Promise<{ changed: boolean }> {
   const answer = await apiPost(WRITE_PATHS[write.kind], write.body, RegisterWriteResponseForClient)
   return { changed: answer?.changed === true }
+}
+
+export const noticeAdminQuery = queryOptions({
+  queryKey: ['notice-admin'] as const,
+  queryFn: ({ signal }) => apiGet('/api/admin/notice', NoticeAdminResponseForClient, { signal }),
+  staleTime: 0,
+  refetchOnWindowFocus: false,
+  refetchOnReconnect: false,
+})
+
+export async function publishNotice(body: PublishJSON): Promise<{ version: number }> {
+  const answer = await apiPost('/api/admin/notice/publish', body, PublishResponseForClient)
+  // A 2xx is always read with the schema, so an answer is there.
+  if (answer === undefined) throw new Error('publish answered nothing')
+  return { version: answer.version }
 }
 
 export async function reauthWithPin(pin: string): Promise<void> {

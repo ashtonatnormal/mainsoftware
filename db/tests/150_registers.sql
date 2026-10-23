@@ -177,6 +177,8 @@ begin
         'function record_transfer_entry(text,bigint,text,text,text[],text[],text,text,text,date,boolean,text,text,text,text,text,date,boolean,text,uuid,inet): EXECUTE',
         'function set_register_purpose(text,integer,text,text,text,integer,text,text[],text,uuid,inet): EXECUTE',
         'function transfer_cleared(text): EXECUTE',
+        -- The transfer gate's four answers (0010, C0.9 B-03), which transfer_cleared() wraps.
+        'function transfer_send_state(text): EXECUTE',
         'function withdraw_transfer_clearance(text,text,uuid,inet): EXECUTE',
         'processing_register: SELECT', 'transfer_clearances: SELECT', 'transfer_register: SELECT']
       when 'hearth_queue' then array[
@@ -188,7 +190,9 @@ begin
         'transfer_clearances.id: SELECT', 'transfer_clearances.org_id: SELECT', 'transfer_clearances.provider: SELECT',
         'transfer_clearances.withdrawn_at: SELECT',
         'transfer_register.org_id: SELECT', 'transfer_register.provider: SELECT', 'transfer_register.review_on: SELECT',
-        'transfer_register.revision: SELECT']
+        'transfer_register.revision: SELECT',
+        -- The register version a notice lists a purpose at (0010, C0.9 PD-40), which the filter names.
+        'notice_version_purposes.register_version: SELECT']
       else '{}'::text[] end;
     perform pg_temp.check(actual = (select array_agg(e order by e) from unnest(expected) e) or (actual = '{}' and expected = '{}'),
                           format('%s on the registers: %s', r, actual));

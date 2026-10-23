@@ -1,6 +1,6 @@
-// The DPO's registers in a real browser against the real api (C0.9 PD-20, PD-26, PD-27, PD-30;
-// PDPA-01, PDPA-10, PDPA-13; OD-03; TECH-SPEC T22 item 15). Chromium only (not @smoke), and no
-// visual shots: C0.16 moves the pages under /admin.
+// The DPO's registers and Notice tab in a real browser against the real api (C0.9 PD-20, PD-26,
+// PD-27, PD-30, PD-48; PDPA-01, PDPA-02, PDPA-10, PDPA-13; OD-03; TECH-SPEC T22 items 15 and 31).
+// Chromium only (not @smoke), and no visual shots: C0.16 moves the pages under /admin.
 //
 // Ashton, the seed's Owner and DPO (D35), holds PIN roles, so no storage state signs him in. The
 // file signs him in once, through the api, before its tests (support/sign-in-api.ts): one code, then
@@ -12,8 +12,10 @@
 //
 // What DPP-E2 records, and DPP-E5 clears and withdraws again, is made up and harmless: nothing in
 // C0.9 PR 1 sends to a push service, and the e2e api's fake SMS provider names no transfer, so
-// clearing or withdrawing changes no send.
-import { REAUTH_METHOD_MESSAGES } from '@hearth/shared'
+// clearing or withdrawing changes no send. DPP-E6 publishes nothing: the seed's org keeps its
+// placeholder version 0 until SE-05 publishes version 1, last in the run (session-end.spec.ts); its
+// ready draft and its free-text problem are answers the test gives the page itself (C-05).
+import { generateNotice, NoticeAdminResponse, REAUTH_METHOD_MESSAGES } from '@hearth/shared'
 import type { Page } from '@playwright/test'
 import { expectAxeClean } from './support/axe.ts'
 import { inputs16, noAiCopy, noSidewaysScroll, targets44 } from './support/checks.ts'
@@ -48,7 +50,7 @@ const nextYear = () => {
   return date.toISOString().slice(0, 10)
 }
 
-test('DPP-E1 PD-26 PD-27 decision 8: the DPO’s avatar menu holds Data protection, which opens the processing register; both registers pass axe at 320, 390 and 1440 px in both schemes, show no AI copy, and scroll nothing sideways at 320', async ({
+test('DPP-E1 PD-26 PD-27 PD-47 decision 8 B-09: the DPO’s avatar menu holds Settings, Data protection and Sign out, and Data protection opens the processing register; both registers pass axe at 320, 390 and 1440 px in both schemes, show no AI copy, and scroll nothing sideways at 320', async ({
   open,
 }, testInfo) => {
   const page = await open({ ...SIZES.w390, signedIn: ASHTON })
@@ -56,7 +58,7 @@ test('DPP-E1 PD-26 PD-27 decision 8: the DPO’s avatar menu holds Data protecti
   await expect(h1(page)).toHaveText('Chats')
   await page.getByRole('button', { name: /^Account, Ashton/ }).click()
   const items = accountMenu(page).getByRole('menuitem')
-  expect((await items.allInnerTexts()).map(name => name.trim())).toEqual(['Data protection', 'Sign out'])
+  expect((await items.allInnerTexts()).map(name => name.trim())).toEqual(['Settings', 'Data protection', 'Sign out'])
   await items.filter({ hasText: 'Data protection' }).click()
   await expect(page).toHaveURL(/\/dpo\/purposes$/)
   await expect(h1(page)).toHaveText('Processing register')
@@ -205,7 +207,7 @@ test('DPP-E2 PDPA-01 PDPA-10 PD-04 PD-05 PD-11 PD-12: the DPO records security_a
   await expect(apple.getByRole('button', { name: 'Clear for use', exact: true })).toBeVisible()
 })
 
-test('DPP-E5 NFR-02 PRD-66 WCAG 2.2 AA T22 item 15: on a phone, the DPO’s two-item avatar menu fits at 320 × 568 and 768 × 480; and at 320 and 390 both pages and every dialog of the edit, clear and withdraw flows have 44 px targets and 16 px inputs, scroll nothing sideways and pass axe', async ({
+test('DPP-E5 NFR-02 PRD-66 WCAG 2.2 AA T22 item 15 PD-47: on a phone, the DPO’s three-item avatar menu fits at 320 × 568 and 768 × 480; and at 320 and 390 both pages and every dialog of the edit, clear and withdraw flows have 44 px targets and 16 px inputs, scroll nothing sideways and pass axe', async ({
   open,
 }, testInfo) => {
   // SH-08's placement check, with the DPO's menu: every item inside the viewport, and the point at
@@ -216,7 +218,7 @@ test('DPP-E5 NFR-02 PRD-66 WCAG 2.2 AA T22 item 15: on a phone, the DPO’s two-
     await expect(h1(page)).toHaveText('Chats')
     await page.getByRole('button', { name: /^Account, Ashton/ }).click()
     const items = accountMenu(page).getByRole('menuitem')
-    expect((await items.allInnerTexts()).map(name => name.trim())).toEqual(['Data protection', 'Sign out'])
+    expect((await items.allInnerTexts()).map(name => name.trim())).toEqual(['Settings', 'Data protection', 'Sign out'])
     const placed = await items.evaluateAll(elements =>
       elements.map(element => {
         const box = element.getBoundingClientRect()
@@ -226,7 +228,7 @@ test('DPP-E5 NFR-02 PRD-66 WCAG 2.2 AA T22 item 15: on a phone, the DPO’s two-
       }),
     )
     const every = { inside: true, reached: true }
-    expect(placed, `${size.width} × ${size.height}`).toEqual([every, every])
+    expect(placed, `${size.width} × ${size.height}`).toEqual([every, every, every])
     expect(await targets44(page), `the avatar menu at ${size.width} × ${size.height}`).toEqual([])
   }
 
@@ -280,17 +282,182 @@ test('DPP-E5 NFR-02 PRD-66 WCAG 2.2 AA T22 item 15: on a phone, the DPO’s two-
   }
 })
 
-test('DPP-E4 PD-20 PDPA-13: someone who isn’t the DPO (Marcus) has no Data protection entry, and his deep link to a register is refused by the api and says the page is the DPO’s', async ({
+// A draft ready to publish, as GET /api/admin/notice would answer it once every active purpose has
+// its basis and retention: the generator's own words for made-up entries, read with the strict
+// schema so the answer is one the server could give. The digest is a stand-in: nothing publishes.
+function readyAnswer(today: string) {
+  const placeholder = {
+    id: 'e0000000-0000-4000-8000-000000000001',
+    version: 0,
+    publishedAt: '2026-10-01T01:00:00.000Z',
+    publishedBy: 'Ashton Teo',
+    generated: false,
+  }
+  const body = generateNotice({
+    org: 'Tembusu Logistics',
+    purposes: [
+      {
+        key: 'accounts',
+        version: 2,
+        status: 'active',
+        basis: 'employment',
+        basisReference: null,
+        retention: 'While you work here, then 30 days',
+        providers: [],
+      },
+      {
+        key: 'backups',
+        version: 2,
+        status: 'active',
+        basis: 'legitimate_interests',
+        basisReference: 'Assessment 2, in the DPO’s file',
+        retention: '35 days',
+        providers: [],
+      },
+    ],
+    clearances: [],
+  })
+  return NoticeAdminResponse.parse({
+    today,
+    latest: { ...placeholder, acknowledged: 11, people: 12 },
+    draft: {
+      version: 1,
+      body,
+      digest: 'ab'.repeat(32),
+      problems: [],
+      warnings: [{ code: 'dpo_contact_pending' }],
+      changes: {
+        since: 0,
+        purposes: { added: ['accounts', 'backups'], changed: [], removed: [] },
+        providers: { added: [], changed: [], removed: [] },
+        wording: true,
+      },
+      upToDate: false,
+    },
+    history: [placeholder],
+  })
+}
+
+test('DPP-E6 PDPA-02 PD-37 PD-48 PD-62 C-05: the Notice tab, from the Registers links (badged Out of date), shows the placeholder version 0 with a count of acknowledgements, what holds publishing back with a link to the processing register, Publish held and no preview; a ready draft shows its words and Publish asks first, and Cancel publishes nothing; free text the screens keep off is named by its field, never quoted; each state passes axe with no AI copy, 44 px targets and nothing sideways', async ({
+  open,
+}, testInfo) => {
+  // Three states of the tab, each through axe at its sizes and schemes.
+  test.setTimeout(120_000)
+  const page = await open({ ...SIZES.w390, signedIn: ASHTON })
+  const publishes: string[] = []
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/admin/notice/publish') publishes.push(request.method())
+  })
+  // What NFR-02 and decision 8 ask of the tab as it stands, at each size, in both schemes.
+  const checked = async (what: string, sizes = CHECK_SIZES, schemes: readonly ('light' | 'dark')[] = SCHEMES) => {
+    for (const size of sizes) {
+      await page.setViewportSize(size)
+      for (const scheme of schemes) {
+        await page.emulateMedia({ colorScheme: scheme })
+        await expectAxeClean(page, `${what} at ${size.width} ${scheme}`, testInfo)
+      }
+      expect(await noAiCopy(page), `${what} at ${size.width}`).toEqual([])
+      expect(await targets44(page), `${what} at ${size.width}`).toEqual([])
+    }
+    await page.setViewportSize(SIZES.w320)
+    expect(await noSidewaysScroll(page), `${what} at 320`).toEqual([])
+    await page.setViewportSize(SIZES.w390)
+    await page.emulateMedia({ colorScheme: 'light' })
+  }
+
+  // The seed's org as DPP-E2 left it: version 0 is a placeholder, and the pinned purposes and
+  // backups still have no basis or retention, so the draft can't be written yet.
+  await page.goto('/dpo/purposes')
+  await expect(firstPurpose(page)).toBeVisible()
+  const registers = page.getByRole('navigation', { name: 'Registers' })
+  const noticeLink = registers.getByRole('link', { name: /^Notice/ })
+  await expect(noticeLink).toContainText('Out of date')
+  await noticeLink.click()
+  await expect(page).toHaveURL(/\/dpo\/notice$/)
+  await expect(h1(page)).toHaveText('Publish the notice')
+  await expect(registers.getByRole('link', { name: /^Notice/ })).toHaveAttribute('aria-current', 'page')
+  const published = page.getByRole('region', { name: 'The published notice' })
+  await expect(published.getByText(/^Version 0, published .+ by Ashton Teo\.$/)).toBeVisible()
+  await expect(published.getByText(/^It’s a placeholder, not written from the registers\./)).toBeVisible()
+  await expect(
+    published.getByText(/^\d+ of the \d+ people at the organisation have acknowledged version 0\.$/),
+  ).toBeVisible()
+  await expect(page.getByText('Before you can publish', { exact: true })).toBeVisible()
+  // Under the purpose it names: the list of what the next version adds names it too.
+  await expect(
+    page
+      .getByRole('listitem')
+      .filter({ hasText: /^Backups/ })
+      .filter({ hasText: 'Record its legal basis.' }),
+  ).toBeVisible()
+  const publish = page.getByRole('button', { name: 'Publish version 1', exact: true })
+  await expect(publish).toHaveAttribute('aria-disabled', 'true')
+  await expect(page.getByText('The preview shows once what’s listed above is fixed.', { exact: true })).toBeVisible()
+  await checked('/dpo/notice with problems')
+  await page.getByRole('link', { name: 'Open the processing register', exact: true }).click()
+  await expect(page).toHaveURL(/\/dpo\/purposes$/)
+  await expect(page.getByRole('link', { name: 'Open the notice', exact: true })).toBeVisible()
+
+  // A ready draft, as the page would get it once the bases and retentions are recorded.
+  let answer: unknown = readyAnswer(new Date().toISOString().slice(0, 10))
+  await page.route('**/api/admin/notice', route =>
+    route.request().method() === 'GET'
+      ? route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(answer) })
+      : route.fallback(),
+  )
+  await page.goto('/dpo/notice')
+  const preview = page.getByRole('region', { name: 'Preview of version 1, as people will read it' })
+  await expect(preview.getByRole('heading', { level: 3, name: 'About this notice' })).toBeVisible()
+  await expect(preview.getByRole('heading', { level: 4, name: /^Accounts and sign-in/ })).toBeVisible()
+  await expect(page.getByText('Now listed', { exact: true })).toBeVisible()
+  await expect(publish).not.toHaveAttribute('aria-disabled')
+  await checked('/dpo/notice ready')
+  await publish.click()
+  const confirm = page.getByRole('dialog', { name: 'Publish version 1?' })
+  await expect(confirm).toContainText(
+    'Everyone, you included, acknowledges version 1 before using Hearth again. People using Hearth now are taken to it within half a minute.',
+  )
+  await checked('the publish confirmation', [SIZES.w320, SIZES.w390], ['light'])
+  await confirm.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(confirm).toBeHidden()
+  await expect(h1(page)).toHaveText('Publish the notice')
+
+  // Free text Hearth keeps off its screens (PD-62): the problem names the purpose and the field,
+  // never the words, so the page itself stays clean.
+  const ready = readyAnswer(new Date().toISOString().slice(0, 10))
+  answer = {
+    ...ready,
+    draft: {
+      ...ready.draft,
+      body: null,
+      digest: null,
+      problems: [{ code: 'free_text_ai_copy', purpose: 'backups', field: 'retention' }],
+    },
+  }
+  NoticeAdminResponse.parse(answer)
+  await page.goto('/dpo/notice')
+  await expect(
+    page.getByText('“How long it’s kept” uses wording Hearth keeps off its screens. Reword it.', { exact: true }),
+  ).toBeVisible()
+  await expect(publish).toHaveAttribute('aria-disabled', 'true')
+  await checked('/dpo/notice with free text kept off', [SIZES.w390], ['light'])
+  expect(publishes).toEqual([])
+})
+
+test('DPP-E4 PD-20 PD-49 PDPA-13 B-09: someone who isn’t the DPO (Marcus) has Settings and Sign out but no Data protection entry, and his deep links to a register and to the Notice tab are refused by the api and say the page is the DPO’s', async ({
   open,
   guard,
 }) => {
-  guard.expectResponses([{ path: '/api/admin/registers', status: 403 }])
+  guard.expectResponses([
+    { path: '/api/admin/registers', status: 403 },
+    { path: '/api/admin/notice', status: 403 },
+  ])
   const page = await open({ ...SIZES.w390, signedIn: true })
   await page.goto('/chats')
   await expect(h1(page)).toHaveText('Chats')
   await page.getByRole('button', { name: 'Account, Marcus' }).click()
   const items = accountMenu(page).getByRole('menuitem')
-  expect((await items.allInnerTexts()).map(name => name.trim())).toEqual(['Sign out'])
+  expect((await items.allInnerTexts()).map(name => name.trim())).toEqual(['Settings', 'Sign out'])
   await page.keyboard.press('Escape')
 
   const refusal = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/registers')
@@ -302,4 +469,15 @@ test('DPP-E4 PD-20 PDPA-13: someone who isn’t the DPO (Marcus) has no Data pro
   ).toBeVisible()
   await expect(page.getByRole('navigation', { name: 'Registers' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /^Edit / })).toHaveCount(0)
+
+  // The Notice tab is the DPO's alone too (PD-49).
+  const noticeRefusal = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/notice')
+  await page.goto('/dpo/notice')
+  expect((await noticeRefusal).status()).toBe(403)
+  await expect(h1(page)).toHaveText('Publish the notice')
+  await expect(
+    page.getByRole('heading', { level: 2, name: 'This page is for the Data Protection Officer.' }),
+  ).toBeVisible()
+  await expect(page.getByRole('navigation', { name: 'Registers' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /^Publish / })).toHaveCount(0)
 })

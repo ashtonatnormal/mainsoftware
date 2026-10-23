@@ -12,6 +12,11 @@
 // A refusal with signed_out (a 401) from any query or mutation ends the session: this is the one
 // place that notices it (T21 item 3), and it calls onSignedOut once. halted is the session already
 // ending.
+//
+// A refusal with notice_required (a 403: the person hasn't acknowledged the current privacy notice,
+// C0.9 PD-43 and PD-46) from any query or mutation calls onNoticeRequired, each time: it is a hint,
+// so the session runtime sends the tab to /notice, whose own answer decides. It is never retried,
+// as no other 403 is.
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query'
 import { ApiFailure } from '@/api/http.ts'
 
@@ -32,11 +37,21 @@ export function retryDelay(failureCount: number, random: () => number = Math.ran
   return Math.floor(random() * Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** failureCount))
 }
 
-export function createQueryClient(onSignedOut: () => void, options: { random?: () => number } = {}): QueryClient {
+export interface QueryClientOptions {
+  random?: () => number
+  onNoticeRequired?: () => void
+}
+
+export function createQueryClient(onSignedOut: () => void, options: QueryClientOptions = {}): QueryClient {
   const random = options.random ?? Math.random
   let signedOut = false
   const onError = (error: unknown) => {
-    if (signedOut || !(error instanceof ApiFailure) || error.code !== 'signed_out') return
+    if (signedOut || !(error instanceof ApiFailure)) return
+    if (error.status === 403 && error.code === 'notice_required') {
+      options.onNoticeRequired?.()
+      return
+    }
+    if (error.code !== 'signed_out') return
     signedOut = true
     onSignedOut()
   }

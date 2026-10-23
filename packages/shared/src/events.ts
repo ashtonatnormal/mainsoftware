@@ -20,6 +20,7 @@
 //   ids       the other ids consumers need: a z.strictObject of ids only (ids.ts), whose lists hold
 //             at most 100 ids, so a longer one is split into several events of the same type.
 import { z } from 'zod'
+import { IDS_NUMBER_MAX } from './ids.ts'
 import { PROVIDERS, PURPOSE_KEYS, type PurposeKey } from './purposes.ts'
 import { PURPOSE_STATUSES } from './registers.ts'
 
@@ -168,6 +169,25 @@ export const EVENTS = {
     description: 'A transfer-register entry’s facts or clearance changed',
   }),
 
+  // Emitted from C0.9 PR 2 (TECH-SPEC T22 item 33, C0.9 PD-50): the DPO published a notice version,
+  // or a person acknowledged one, through publish_notice() and acknowledge_notice(), the notice
+  // tables' only writers. Both carry accounts: the notice is what everyone acknowledges before
+  // using their account (ACC-12). Ids only: the version's number, never its words.
+  'notice.published': emitted('C0.9', {
+    // The version's row (notice_versions).
+    entity: 'notice',
+    purposes: ['accounts'],
+    ids: z.strictObject({ version: z.int().min(0).max(IDS_NUMBER_MAX) }),
+    description: 'The DPO published a version of the privacy notice',
+  }),
+  'notice.acknowledged': emitted('C0.9', {
+    // The person, who is also its subject; notice names the version's row.
+    entity: 'person',
+    purposes: ['accounts'],
+    ids: z.strictObject({ notice: z.uuid(), version: z.int().min(0).max(IDS_NUMBER_MAX) }),
+    description: 'A person acknowledged a version of the privacy notice',
+  }),
+
   // Reserved: named in 0007's type list; the step after each gives it the rest.
   'person.added': reserved('C0.16', 'person', 'A person was added to the roster'),
   'person.updated': reserved('C0.16', 'person', 'A person’s roster entry changed'),
@@ -181,8 +201,6 @@ export const EVENTS = {
   ),
   'role.changed': reserved('C0.16', 'person', 'A role was granted or revoked'),
   'profile.updated': reserved('C0.15', 'person', 'A profile or working hours changed'),
-  'notice.published': reserved('C0.9', 'notice', 'A privacy notice version was published'),
-  'notice.acknowledged': reserved('C0.9', 'person', 'A person acknowledged a notice'),
   'message.created': reserved('C1.1', 'message', 'A message was posted'),
   'message.updated': reserved('C1.1', 'message', 'A message was edited (BUILD-PLAN 1D, open items: the C1.1 row)'),
   'message.deleted': reserved('C1.1', 'message', 'A message was deleted', true),

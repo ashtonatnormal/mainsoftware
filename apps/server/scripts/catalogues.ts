@@ -660,3 +660,33 @@ export function registerProblems(
   }
   return problems
 }
+
+// 6, from C0.9 PR 2: the facts a notice version states about a provider (C0.9 PD-41, TECH-SPEC T22
+// item 18) are the same in code and in the database, both ways: packages/shared
+// NOTICE_TRANSFER_FACTS lists exactly the keys notice_facts() (0010) builds, and notice_facts() reads
+// each from the snapshot's key of the same name. probe is what notice_facts() returned for a
+// snapshot that holds every key a clearance's snapshot may (transfer_register_facts(), 0009) with
+// the value `v:<key>` (noticeFactProbe()), so a fact it reads from another key shows.
+export const noticeFactProbe = (keys: readonly string[]): Record<string, string> =>
+  Object.fromEntries(keys.map(key => [key, `v:${key}`]))
+
+export function noticeFactProblems(code: readonly string[], probe: unknown): string[] {
+  if (typeof probe !== 'object' || probe === null || Array.isArray(probe)) {
+    return ['notice_facts() returned no object']
+  }
+  const stated = probe as Record<string, unknown>
+  const problems: string[] = []
+  for (const key of code) {
+    if (!Object.hasOwn(stated, key)) {
+      problems.push(`${key} is in packages/shared NOTICE_TRANSFER_FACTS but notice_facts() doesn't state it`)
+    } else if (stated[key] !== `v:${key}`) {
+      problems.push(`notice_facts() states ${key} from another fact of the snapshot`)
+    }
+  }
+  for (const key of Object.keys(stated)) {
+    if (!code.includes(key)) {
+      problems.push(`notice_facts() states ${key}, which packages/shared NOTICE_TRANSFER_FACTS doesn't list`)
+    }
+  }
+  return problems
+}

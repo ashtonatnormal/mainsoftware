@@ -19,6 +19,17 @@ export function pgError(code: string, constraint?: string): Error {
   return Object.assign(new Error(`postgres error ${code}`), { code, constraint })
 }
 
+// The acknowledgement gate's standing read (compliance/notice-standing.ts; C0.9 PD-43): when a
+// test's answer gives it no rows, everyone it asks about has acknowledged the latest notice, so a
+// test of anything behind the gate needn't script it. A test of the gate answers it itself
+// (standingsOf below), and the integration suites run the real read.
+const isStandingRead = (text: string) =>
+  text.startsWith('select x.person, case when v.id is null') && text.includes('from notice_acknowledgments a')
+
+// The standing read's rows: these people, each in this standing.
+export const standingsOf = (people: readonly string[], standing: 'acknowledged' | 'required' | 'unpublished') =>
+  people.map(person => ({ person, standing }))
+
 // `wait`, when given, runs before each statement is answered, so a test can hold the database.
 export function scriptedPool(
   answer: Answer = () => [],
@@ -37,7 +48,10 @@ export function scriptedPool(
       const statement = { text: text.replace(/\s+/g, ' ').trim(), values }
       statements.push(statement)
       if (wait) await wait(statement)
-      const answered = answer(statement)
+      let answered = answer(statement)
+      if (Array.isArray(answered) && answered.length === 0 && isStandingRead(statement.text)) {
+        answered = standingsOf((statement.values.find(Array.isArray) ?? []) as string[], 'acknowledged')
+      }
       if (answered instanceof Error) throw answered
       const write = /^(insert|update|delete|merge)\b/i.exec(statement.text)?.[1]?.toUpperCase()
       const rows = Array.isArray(answered) ? answered : (answered.rows ?? [])

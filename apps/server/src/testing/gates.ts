@@ -16,6 +16,11 @@ export interface RegisterStateSpec {
   // The providers with an open clearance.
   cleared?: string[]
   notified?: string[]
+  // The latest notice version (none unless given; C0.9 PR 2), the cleared providers it states, and
+  // the pinned purposes it no longer describes.
+  notice?: { id?: string; generated: boolean } | null
+  stated?: string[]
+  stale?: string[]
   // Live restrictions, each in effect from `effectiveAt` (epoch ms; 0 unless given).
   restrictions?: { person: string; purpose: string; effectiveAt?: number; id?: string }[]
 }
@@ -36,10 +41,20 @@ export function registerStateOf(spec: RegisterStateSpec = {}): RegisterState {
     providers: new Map(
       (spec.cleared ?? []).map((provider, n) => [
         provider,
-        { revision: 2, reviewOn: null, clearance: `c0000000-0000-4000-8000-${String(n + 1).padStart(12, '0')}` },
+        {
+          revision: 2,
+          reviewOn: null,
+          clearance: `c0000000-0000-4000-8000-${String(n + 1).padStart(12, '0')}`,
+          stated: (spec.stated ?? []).includes(provider),
+        },
       ]),
     ),
     notified: new Set(spec.notified ?? []),
+    notice:
+      spec.notice === undefined || spec.notice === null
+        ? null
+        : { id: spec.notice.id ?? 'd0000000-0000-4000-8000-0000000000a1', generated: spec.notice.generated },
+    stale: new Set(spec.stale ?? []),
     restrictions:
       spec.restrictions === undefined
         ? undefined

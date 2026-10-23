@@ -29,7 +29,7 @@ const session = (userId = ADMIN) => ({
 
 // The test registry the route accepts keys from (A5): production's flags and three test ones.
 // it.unnotified names security_audit, which isn't pinned, so the purpose gate refuses it until a
-// published notice lists it (C0.9 PR 2).
+// published notice lists it (C0.9 PD-40), and the scripted org has no notice version.
 const REGISTRY = {
   ...FLAGS,
   'it.optional': {
@@ -289,7 +289,7 @@ describe('C0.6 T17 item 9 POST /api/admin/flags/set', () => {
   it('PGT-11 C0.9 PD-19 T22 item 11: turning on reads the registers in the route’s transaction, after can() and the row, and refuses a purpose that isn’t allowed', async () => {
     const pool = org()
     const c = context(pool)
-    // security_audit is active, but no published notice lists it until C0.9 PR 2 (PGT-04).
+    // security_audit is active, but the scripted org has no notice version to list it (PGT-04, PD-40).
     expect(
       await refusal(setFlag(c.api, body({ key: 'it.unnotified', enabled: true }), session(), c.info)),
     ).toMatchObject({ status: 409, code: 'purpose_refused' })

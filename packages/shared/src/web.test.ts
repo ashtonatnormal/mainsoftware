@@ -5,6 +5,7 @@ import {
   ApiErrorBody,
   DEFAULT_TIME_ZONE,
   FlagsResponse,
+  NOTICE_STANDINGS,
   readFlagsAnswer,
   SessionResponse,
   SessionResponseForClient,
@@ -12,10 +13,11 @@ import {
 
 const personId = '0b9e6f2e-3c1a-4d5b-8e7f-1a2b3c4d5e6f'
 const capabilities = { registers: false }
+const notice = 'acknowledged'
 
 describe('T21 item 10: GET /api/session', () => {
-  test('T21 item 10: the answer is the person, a name, a zone and capability booleans, and nothing more', () => {
-    const answer = { personId, name: 'Ahmad', timeZone: 'Asia/Kuala_Lumpur', capabilities }
+  test('T21 item 10 C0.9 PD-46: the answer is the person, a name, a zone, capability booleans and the notice standing, and nothing more', () => {
+    const answer = { personId, name: 'Ahmad', timeZone: 'Asia/Kuala_Lumpur', capabilities, notice }
     expect(SessionResponse.parse(answer)).toEqual(answer)
     for (const extra of [{ phone: '+65 8000 0003' }, { roles: ['admin'] }, { orgId: personId }]) {
       expect(SessionResponse.safeParse({ ...answer, ...extra }).success, Object.keys(extra)[0]).toBe(false)
@@ -26,7 +28,7 @@ describe('T21 item 10: GET /api/session', () => {
   })
 
   test('C0.9 PD-26 T21 item 10: capabilities are booleans can() decides, never roles, and the server always sends them', () => {
-    const answer = { personId, name: 'Ashton', timeZone: DEFAULT_TIME_ZONE }
+    const answer = { personId, name: 'Ashton', timeZone: DEFAULT_TIME_ZONE, notice }
     for (const registers of [true, false]) {
       expect(SessionResponse.parse({ ...answer, capabilities: { registers } }).capabilities).toEqual({ registers })
     }
@@ -45,7 +47,7 @@ describe('T21 item 10: GET /api/session', () => {
   })
 
   test('migration 0002: a name is bounded at 200 characters as Postgres counts them, emoji included', () => {
-    const answer = { personId, timeZone: DEFAULT_TIME_ZONE, capabilities }
+    const answer = { personId, timeZone: DEFAULT_TIME_ZONE, capabilities, notice }
     expect(SessionResponse.safeParse({ ...answer, name: 'a'.repeat(200) }).success).toBe(true)
     expect(SessionResponse.safeParse({ ...answer, name: 'a'.repeat(201) }).success).toBe(false)
     // 200 code points, 400 UTF-16 units: the database holds it, so the answer must carry it.
@@ -64,11 +66,14 @@ describe('T21 item 10: GET /api/session', () => {
       'Europe/London',
     )
     // A field added later is dropped, not refused; a missing person or name still fails.
-    expect(SessionResponseForClient.parse({ personId, name: 'Ahmad', timeZone: 'UTC', canAdmin: true })).toEqual({
+    expect(
+      SessionResponseForClient.parse({ personId, name: 'Ahmad', timeZone: 'UTC', notice, canAdmin: true }),
+    ).toEqual({
       personId,
       name: 'Ahmad',
       timeZone: 'UTC',
       capabilities: { registers: false },
+      notice,
     })
     expect(SessionResponseForClient.safeParse({ name: 'Ahmad', timeZone: 'UTC' }).success).toBe(false)
     expect(SessionResponseForClient.safeParse({ personId, timeZone: 'UTC' }).success).toBe(false)
@@ -93,6 +98,30 @@ describe('T21 item 10: GET /api/session', () => {
     }
     // An answer from before C0.9, with no capabilities, offers nothing.
     expect(SessionResponseForClient.parse(answer).capabilities).toEqual({ registers: false })
+  })
+
+  test('PDPA-03 ACC-12 C0.9 PD-43: the server always sends the standing, one of acknowledged, required and unpublished', () => {
+    expect([...NOTICE_STANDINGS]).toEqual(['acknowledged', 'required', 'unpublished'])
+    const answer = { personId, name: 'Nadia', timeZone: DEFAULT_TIME_ZONE, capabilities }
+    for (const standing of NOTICE_STANDINGS) {
+      expect(SessionResponse.parse({ ...answer, notice: standing }).notice).toBe(standing)
+    }
+    for (const bad of [undefined, null, '', 'Acknowledged', 'none', true, 0, { standing: 'acknowledged' }]) {
+      expect(SessionResponse.safeParse({ ...answer, notice: bad }).success, JSON.stringify(bad)).toBe(false)
+    }
+  })
+
+  test('P6 C0.9 PD-46: SessionResponseForClient reads a standing it can’t read as required, so /notice decides', () => {
+    const answer = { personId, name: 'Nadia', timeZone: 'UTC', capabilities }
+    for (const standing of NOTICE_STANDINGS) {
+      expect(SessionResponseForClient.parse({ ...answer, notice: standing }).notice).toBe(standing)
+    }
+    // Missing (an answer from before C0.9 PR 2), unknown or of another type: never read as acknowledged.
+    for (const value of [undefined, null, '', 'ACKNOWLEDGED', 'exempt', true, 1, ['acknowledged']]) {
+      expect(SessionResponseForClient.parse({ ...answer, notice: value }).notice, JSON.stringify(value)).toBe(
+        'required',
+      )
+    }
   })
 })
 

@@ -27,7 +27,9 @@ export const CHECK_SIZES: readonly Size[] = [SIZES.w320, SIZES.w390, SIZES.deskt
 
 export const SCHEMES = ['light', 'dark'] as const
 
-// Every route the shell serves in C0.8, with its h1 (router/router.tsx).
+// Every route the shell serves to everyone, with its h1 (router/router.tsx): C0.8's, and Settings
+// with its Privacy section (C0.9 PD-47). The DPO's pages are dpo.spec.ts's, and /notice, outside
+// the shell, is sign-in.spec.ts's (SI-10) and session-end.spec.ts's (SE-05).
 export const SCREENS = [
   { path: '/today', title: 'Today' },
   { path: '/chats', title: 'Chats' },
@@ -36,6 +38,8 @@ export const SCREENS = [
   { path: '/calendar', title: 'Calendar' },
   { path: '/drive', title: 'Drive' },
   { path: '/more', title: 'More' },
+  { path: '/settings', title: 'Settings' },
+  { path: '/settings/privacy', title: 'Privacy' },
   { path: '/xyz', title: 'Page not found' },
 ] as const
 

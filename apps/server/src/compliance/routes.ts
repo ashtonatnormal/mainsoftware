@@ -19,8 +19,15 @@
 //   4. on a real change, register.purpose_changed or register.transfer_changed goes to the outbox
 //      in the same transaction (T16; PD-22).
 // Nothing is published after the commit: the api keeps no copy of the registers (its sends ask
-// transfer_cleared() in their own transactions, PD-15), and the worker sees the change at its
+// transfer_send_state() in their own transactions, PD-15), and the worker sees the change at its
 // next flag read, within one poll (PD-16).
+//
+// From C0.9 PR 2 the read also says how the published notice stands against the registers (PD-48):
+// per purpose, whether the latest version lists it at its current version (notified, PD-40) and,
+// for a pinned purpose, whether the latest generated version no longer does (stale, PD-61); per
+// provider, whether its sends wait for a version that states its facts (sendsWait, PD-41); and
+// whether publishing now would write a new version (notice), from the same draft the Notice tab
+// shows (compliance/notice.ts noticeDraft()). None of them changes what a write may do.
 import {
   type ClearTransferBody,
   isAiProvider,
@@ -42,6 +49,8 @@ import { authorise } from '#src/access/world.ts'
 import type { Api } from '#src/api.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { inSession, type SessionIds } from '#src/auth/sessions.ts'
+import { noticeDraft, noticeStatusOf } from '#src/compliance/notice.ts'
+import { type RegisterState, readRegisterState } from '#src/compliance/registers.ts'
 import type { InOrg } from '#src/db/database.ts'
 import {
   INSUFFICIENT_PRIVILEGE,
@@ -149,7 +158,7 @@ type TransferRow = {
 // Each purpose's current entry (its highest version) outside the AI layer, with the name of who
 // recorded it from the roster (none for version 1, which is Hearth's), and days in the org's time
 // zone, never times (as the devices list gives them, admin/people.ts).
-async function readPurposes(trx: InOrg, orgId: string): Promise<PurposeRowJSON[]> {
+async function readPurposes(trx: InOrg, orgId: string, state: RegisterState): Promise<PurposeRowJSON[]> {
   const { rows } = await sql<PurposeRow>`
     select distinct on (r.purpose) r.purpose, r.version, r.status, r.basis, r.basis_reference, r.opt_out_days,
       r.retention, r.providers, r.pinned, r.needs_switch,
@@ -179,6 +188,8 @@ async function readPurposes(trx: InOrg, orgId: string): Promise<PurposeRowJSON[]
         needsSwitch: row.needs_switch,
         recordedOn: row.recorded_on,
         recordedBy: row.recorded_by,
+        notified: state.notified.has(purpose),
+        stale: state.stale.has(purpose),
       },
     ]
   })
@@ -187,7 +198,7 @@ async function readPurposes(trx: InOrg, orgId: string): Promise<PurposeRowJSON[]
 // Each provider's entry outside the AI layer, with its open clearance, or else the last that
 // ended (none if it was never cleared), and the names of who recorded the facts (none while they
 // are Hearth's: the starting row's, or the bootstrap's), cleared and withdrew.
-async function readTransfers(trx: InOrg, orgId: string): Promise<TransferRowJSON[]> {
+async function readTransfers(trx: InOrg, orgId: string, state: RegisterState): Promise<TransferRowJSON[]> {
   const { rows } = await sql<TransferRow>`
     select t.provider, t.revision, t.services, t.data_types, t.processing_countries, t.storage_countries,
       t.countries_confirmed, t.safeguard, t.safeguard_reference, t.certificate_verified_on::text as certificate_verified_on,
@@ -216,6 +227,12 @@ async function readTransfers(trx: InOrg, orgId: string): Promise<TransferRowJSON
   return NON_AI_PROVIDERS.flatMap(provider => {
     const row = byKey.get(provider)
     if (row === undefined) return []
+    // Cleared, and the latest generated version states other facts (or none) for it: nothing is
+    // sent to it until a version that states these is published (PD-41). Before the first generated
+    // version (none, or a stand-in) nothing waits.
+    const entry = state.providers.get(provider)
+    const sendsWait =
+      entry !== undefined && entry.clearance !== null && state.notice?.generated === true && !entry.stated
     return [
       {
         provider,
@@ -238,6 +255,7 @@ async function readTransfers(trx: InOrg, orgId: string): Promise<TransferRowJSON
         reviewOn: row.review_on,
         updatedOn: row.updated_on,
         updatedBy: row.updated_by,
+        sendsWait,
         clearance:
           row.cleared_on === null || row.cleared_via === null || row.cleared_revision === null
             ? null
@@ -257,8 +275,11 @@ async function readTransfers(trx: InOrg, orgId: string): Promise<TransferRowJSON
 
 // The current entry of every purpose and provider outside the AI layer, with today in the org's
 // time zone, against which the page judges review dates and the shared rules; the version and
-// revision each edit names (seen). In a read-only transaction, so the acting session is re-read
-// with no lock; the request counts as use of the session.
+// revision each edit names (seen); and the notice's markers, from the registers' copy the worker
+// and the flags route read (compliance/registers.ts) and the Notice tab's draft. In a read-only
+// transaction, so the acting session is re-read with no lock; the request counts as use of the
+// session. Each read is a statement of its own, as in PR 1: a change committing between them shows
+// at the next read.
 export async function readRegisters(api: Api, session: SessionIds, info: ReqInfo): Promise<Answer> {
   const { orgId } = session
   const body = await inSession(
@@ -272,7 +293,14 @@ export async function readRegisters(api: Api, session: SessionIds, info: ReqInfo
       const today = rows[0]?.today
       // Past authorise() the org exists.
       if (today === undefined) throw new ApiError(404, 'not_found')
-      return { today, purposes: await readPurposes(trx, orgId), transfers: await readTransfers(trx, orgId) }
+      const state = await readRegisterState(trx, orgId, { restrictions: false })
+      const draft = await noticeDraft(trx, orgId)
+      return {
+        today,
+        purposes: await readPurposes(trx, orgId, state),
+        transfers: await readTransfers(trx, orgId, state),
+        notice: noticeStatusOf(draft),
+      }
     },
     { readOnly: true },
   )

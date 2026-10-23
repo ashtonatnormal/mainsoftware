@@ -569,6 +569,72 @@ describe('T21 T19 item 10: the gateway client (live/gateway-client.ts)', () => {
     expect(seen.probes).toEqual([15_000])
   })
 
+  it('GW-25 NTW-04 (7) C0.9 PD-46: resume() resumes only a 4403 pause: after a 4426 the client stays paused with its probes running, and on a live or never-started client it does nothing', async () => {
+    const old = connected({ random: () => 0.5 })
+    old.socket.serverClose(4426, 'client_outdated')
+    old.client.resume()
+    expect(old.client.status()).toBe('paused')
+    old.clock.advance(600_000)
+    expect(old.net.sockets).toHaveLength(1)
+    // Still asking whether the session holds, every 30 s from the first at 15 s.
+    expect(old.seen.probes).toEqual(Array.from({ length: 20 }, (_, n) => 15_000 + n * 30_000))
+
+    // A 4403 pause resumes; once live again, a second resume() opens nothing more, and a 4426 after
+    // it is a pause resume() can't end either.
+    const notice = connected()
+    notice.socket.serverClose(4403, 'notice_required')
+    notice.client.resume()
+    notice.net.last().connect()
+    expect(notice.client.status()).toBe('live')
+    notice.client.resume()
+    expect(notice.net.sockets).toHaveLength(2)
+    notice.net.last().serverClose(4426, 'client_outdated')
+    notice.client.resume()
+    notice.clock.advance(600_000)
+    expect(notice.net.sockets).toHaveLength(2)
+    expect(notice.client.status()).toBe('paused')
+
+    // Never started (the runtime keeps it off until the notice is acknowledged): resume() opens
+    // nothing, and start() still does.
+    const idle = setup()
+    idle.client.resume()
+    expect(idle.net.sockets).toHaveLength(0)
+    idle.client.start()
+    expect(idle.net.sockets).toHaveLength(1)
+  })
+
+  it('GW-26 NTW-04 (7) C0.9 PD-45 PD-46: startPaused() opens no socket and probes as a 4403’s pause does, from a random point in the first 30 s and every 30 s after; signed_out signs out; resume() opens the first socket, after which start() does nothing', async () => {
+    const paused = setup({ random: () => 0.5 })
+    paused.client.startPaused()
+    expect(paused.client.status()).toBe('paused')
+    expect(paused.seen.notice).toBe(0)
+    paused.clock.advance(75_000)
+    expect(paused.net.sockets).toHaveLength(0)
+    expect(paused.seen.probes).toEqual([15_000, 45_000, 75_000])
+    paused.client.start()
+    expect(paused.net.sockets).toHaveLength(0)
+    paused.client.resume()
+    expect(paused.net.sockets).toHaveLength(1)
+    paused.net.last().connect()
+    expect(paused.client.status()).toBe('live')
+    paused.client.start()
+    expect(paused.net.sockets).toHaveLength(1)
+    // Live, the probes stop.
+    paused.clock.advance(120_000)
+    expect(paused.seen.probes).toEqual([15_000, 45_000, 75_000])
+
+    // A sign-out elsewhere, heard by the first probe: the client stops, and resume() opens nothing.
+    const out = setup({ random: () => 0.5 })
+    out.setProbe(async () => 'signed_out')
+    out.client.startPaused()
+    out.clock.advance(15_000)
+    await flush()
+    expect(out.seen.signedOut).toBe(1)
+    expect(out.client.status()).toBe('stopped')
+    out.client.resume()
+    expect(out.net.sockets).toHaveLength(0)
+  })
+
   // Probes that answer only when the case says, each with its own answer.
   function heldProbes(setProbe: (next: () => Promise<ProbeAnswer>) => void) {
     const answers: ((said: ProbeAnswer) => void)[] = []

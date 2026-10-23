@@ -25,10 +25,14 @@ export const ROUTE_WORDS = [
   'calendar',
   'drive',
   'more',
-  // The DPO pages, /dpo/purposes and /dpo/transfers (C0.9 PD-26).
+  // The DPO pages, /dpo/purposes and /dpo/transfers (C0.9 PD-26), and /dpo/notice (PD-48).
   'dpo',
   'purposes',
   'transfers',
+  // /notice, and /settings and /settings/privacy (C0.9 PD-46, PD-47).
+  'notice',
+  'settings',
+  'privacy',
   'sign-in',
 ] as const
 

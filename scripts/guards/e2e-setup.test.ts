@@ -322,12 +322,21 @@ describe('T21: the web e2e set-up (apps/web/playwright.config.ts, e2e/support)',
       if (persona.account) expect(seed.acknowledged.has(nn), `${persona.name}: acknowledged`).toBe(true)
     }
     // The marked exceptions: the three PIN-role holders, in PERSONAS order (Ashton, the DPO, for the
-    // registers' pages, C0.9 PD-26; Priya and Wei Ling for the PIN steps, AQ-02), and the one without
-    // an account (ACC-03); every storage-state persona signs in on the code alone and has an account.
+    // registers' pages and the Notice tab, C0.9 PD-26 and PD-48; Priya and Wei Ling for the PIN
+    // steps, AQ-02), and the one without an account (ACC-03); every storage-state persona signs in on
+    // the code alone and has an account.
     expect(personas.filter(persona => persona.pinRole).map(persona => persona.name)).toEqual([
       'Ashton',
       'Priya',
       'Wei Ling',
+    ])
+    // Ashton's two codes (C0.9 PD-55): dpo.spec.ts's in chromium, and SE-05's in
+    // chromium-session-end, which runs after every other project, so the publish there meets no
+    // other project's sessions and his second code never replaces the first while it is in use.
+    const ashton = personas.find(persona => persona.name === 'Ashton')
+    expect(ashton?.uses.map(use => [use.stage, use.requests])).toEqual([
+      ['chromium', 1],
+      ['chromium-session-end', 1],
     ])
     expect(personas.filter(persona => persona.roster && !persona.account).map(persona => persona.name)).toEqual([
       'Nadia',

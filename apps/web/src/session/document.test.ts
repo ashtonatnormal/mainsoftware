@@ -185,6 +185,40 @@ describe('T21 D-01: a session is a document (session/document.ts)', () => {
     expect(bus.open.size).toBe(1)
   })
 
+  it("NTW-06 C0.9 PD-46 T22 item 31: the notice message is { t: 'notice' } alone; another tab's calls onNotice and never onIdentity, this tab's own doesn't come back, and a listener without onNotice (a signed-out tab) ignores it", async () => {
+    const { env, bus } = fakeEnv()
+    const identity = vi.fn()
+    const notice = vi.fn()
+    const channel = doc.openIdentityChannel(env, identity, notice)
+    const otherTab = new bus.FakeChannel(doc.IDENTITY_CHANNEL)
+    const heard: unknown[] = []
+    otherTab.onmessage = event => heard.push(event.data)
+
+    channel.postNotice()
+    await tick()
+    // No id, no data, and never back to this document.
+    expect(heard).toEqual([{ t: 'notice' }])
+    expect(doc.NOTICE_MESSAGE).toEqual({ t: 'notice' })
+    expect([identity.mock.calls.length, notice.mock.calls.length]).toEqual([0, 0])
+
+    otherTab.postMessage({ t: 'notice' })
+    await tick()
+    expect([identity.mock.calls.length, notice.mock.calls.length]).toEqual([0, 1])
+    otherTab.postMessage({ t: 'identity' })
+    await tick()
+    expect([identity.mock.calls.length, notice.mock.calls.length]).toEqual([1, 1])
+
+    // A document that listens for identity alone, as a signed-out one does (app/boot.tsx), hears
+    // nothing from a notice message.
+    channel.close()
+    const signedOut = vi.fn()
+    doc.openIdentityChannel(env, signedOut)
+    otherTab.postMessage({ t: 'notice' })
+    await tick()
+    expect(signedOut).not.toHaveBeenCalled()
+    expect(notice).toHaveBeenCalledTimes(1)
+  })
+
   it('DC-02: with no channel open, a post goes through a channel opened for it and closed at once', async () => {
     const { env, bus } = fakeEnv()
     const otherTab = new bus.FakeChannel(doc.IDENTITY_CHANNEL)

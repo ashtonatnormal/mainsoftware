@@ -165,7 +165,8 @@ describe('C0.9 T22 the registers through the DPO’s routes (PDPA-01, PDPA-10, P
       basis: 'legitimate_interests',
       providers: ['aws'],
     })
-    // Still not allowed: no published notice lists it until C0.9 PR 2 (PGT-04, PD-08).
+    // Still not allowed: the latest version, the harness's stand-in, lists no purpose (PGT-04, PD-08,
+    // PD-40).
     expect(gate.purposeAllowed(org.id, 'security_audit')).toBe(false)
     expect(gate.purposeAllowed(org.id, 'accounts')).toBe(true)
     const read = await registers(client)

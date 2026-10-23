@@ -13,6 +13,7 @@ import {
   CONSENT_BASES,
   NON_AI_PROVIDERS,
   NON_AI_PURPOSE_KEYS,
+  NOTICE_STATUSES,
   PURPOSE_PROBLEMS,
   PURPOSE_STATUSES,
   type PurposeEntry,
@@ -423,6 +424,8 @@ describe('C0.9 PD-20 PD-27: the answers', () => {
     needsSwitch: false,
     recordedOn: '2026-10-01',
     recordedBy: null,
+    notified: false,
+    stale: false,
   }
   const transferRow = {
     provider: 'twilio',
@@ -430,6 +433,7 @@ describe('C0.9 PD-20 PD-27: the answers', () => {
     ...FACTS,
     updatedOn: '2026-10-01',
     updatedBy: null,
+    sendsWait: false,
     clearance: {
       clearedOn: '2026-10-01',
       clearedBy: 'Ashton Tan',
@@ -440,7 +444,7 @@ describe('C0.9 PD-20 PD-27: the answers', () => {
       withdrawReason: null,
     },
   }
-  const answer = { today: TODAY, purposes: [purposeRow], transfers: [transferRow] }
+  const answer = { today: TODAY, purposes: [purposeRow], transfers: [transferRow], notice: 'none' }
 
   it('RGS-14: RegistersResponse is strict and carries nothing of the AI layer', () => {
     expect(RegistersResponse.parse(answer)).toEqual(answer)
@@ -458,6 +462,8 @@ describe('C0.9 PD-20 PD-27: the answers', () => {
       { ...answer, transfers: [{ ...transferRow, processingCountries: ['us'] }] },
       { ...answer, transfers: [{ ...transferRow, clearance: { ...transferRow.clearance, clearedVia: 'script' } }] },
       { ...answer, transfers: [{ ...transferRow, updatedBy: 'a'.repeat(201) }] },
+      { ...answer, notice: 'stale' },
+      { ...answer, purposes: [{ ...purposeRow, notified: 'yes' }] },
     ]) {
       expect(RegistersResponse.safeParse(bad).success, JSON.stringify(bad).slice(0, 120)).toBe(false)
     }
@@ -489,8 +495,60 @@ describe('C0.9 PD-20 PD-27: the answers', () => {
     expect(read.purposes[1]?.recordedBy).toBeNull()
     expect(read.transfers.map(row => row.provider)).toEqual(['twilio'])
     expect(read.transfers[0]?.clearance?.clearedBy).toBeNull()
-    expect(Object.keys(read)).toEqual(['today', 'purposes', 'transfers'])
+    expect(Object.keys(read)).toEqual(['today', 'purposes', 'transfers', 'notice'])
     expect(RegistersResponseForClient.safeParse({ purposes: [], transfers: [] }).success).toBe(false)
+  })
+
+  it('C0.9 PD-40 PD-41 PD-48 PD-61: the answer says per purpose whether it is notified and whether a pinned one is stale, per provider whether its sends wait, and whether the notice is up to date', () => {
+    expect([...NOTICE_STATUSES]).toEqual(['up_to_date', 'out_of_date', 'none'])
+    for (const notice of NOTICE_STATUSES) expect(RegistersResponse.parse({ ...answer, notice }).notice).toBe(notice)
+    const marked = {
+      ...answer,
+      purposes: [{ ...purposeRow, notified: true, stale: true }],
+      transfers: [{ ...transferRow, sendsWait: true }],
+      notice: 'out_of_date',
+    }
+    expect(RegistersResponse.parse(marked)).toEqual(marked)
+    // The server always sends every marker.
+    const { notified: _notified, ...unmarkedPurpose } = purposeRow
+    const { sendsWait: _sendsWait, ...unmarkedTransfer } = transferRow
+    const { notice: _notice, ...noNotice } = answer
+    for (const bad of [
+      { ...answer, purposes: [unmarkedPurpose] },
+      { ...answer, transfers: [unmarkedTransfer] },
+      noNotice,
+    ]) {
+      expect(RegistersResponse.safeParse(bad).success, JSON.stringify(bad).slice(0, 120)).toBe(false)
+    }
+  })
+
+  it('P6 C0.9 PD-48: a notice marker the web app can’t read claims nothing: no “not in use”, no “sends wait”, no banner', () => {
+    const read = RegistersResponseForClient.parse({
+      ...answer,
+      purposes: [{ ...purposeRow, notified: 'no', stale: 'yes' }],
+      transfers: [{ ...transferRow, sendsWait: 1 }],
+      notice: 'stale',
+    })
+    expect(read.purposes[0]).toMatchObject({ notified: true, stale: false })
+    expect(read.transfers[0]?.sendsWait).toBe(false)
+    expect(read.notice).toBe('up_to_date')
+    // An answer from before PR 2, with no markers at all, reads the same way.
+    const { notified: _n, stale: _s, ...oldPurpose } = purposeRow
+    const { sendsWait: _w, ...oldTransfer } = transferRow
+    const old = RegistersResponseForClient.parse({ today: TODAY, purposes: [oldPurpose], transfers: [oldTransfer] })
+    expect(old.purposes[0]).toMatchObject({ notified: true, stale: false })
+    expect(old.transfers[0]?.sendsWait).toBe(false)
+    expect(old.notice).toBe('up_to_date')
+    // What the server said reads as it said it.
+    const said = RegistersResponseForClient.parse({
+      ...answer,
+      purposes: [{ ...purposeRow, notified: false, stale: true }],
+      transfers: [{ ...transferRow, sendsWait: true }],
+      notice: 'out_of_date',
+    })
+    expect(said.purposes[0]).toMatchObject({ notified: false, stale: true })
+    expect(said.transfers[0]?.sendsWait).toBe(true)
+    expect(said.notice).toBe('out_of_date')
   })
 
   it('RGS-14: each write answers its entry, its version or revision, and whether anything changed', () => {

@@ -15,8 +15,9 @@
 // the contract tests (testing/fake-twilio.ts). main.ts builds it only through createTwilioVerify(),
 // which fixes Twilio's URL and refuses this machine (DEPLOY_ENV local or test, or a localhost
 // APP_ORIGIN), independently of config.ts. It is asked to send only while 'twilio' is cleared in
-// the org's transfer register (PDPA-10): sign-in and re-authentication ask transfer_cleared() first
-// (compliance/transfers.ts, TECH-SPEC T22 item 8).
+// the org's transfer register (PDPA-10) and the notice allows the send: sign-in and
+// re-authentication ask transfer_send_state() first and send as codeMaySend() says
+// (compliance/transfers.ts; TECH-SPEC T22 item 8, C0.9 PD-59).
 import { z } from 'zod'
 import { type SmsProvider, SmsProviderError, type SmsProviderErrorKind, type Verdict } from '#src/auth/sms/provider.ts'
 import { isLoopbackOrigin } from '#src/config.ts'

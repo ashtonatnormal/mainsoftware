@@ -164,6 +164,8 @@ describe('C0.8 T21 item 10 T17 item 11 GET /api/session and GET /api/flags on th
       name: 'Ahmad',
       timeZone: 'Asia/Kuala_Lumpur',
       capabilities: { registers: false },
+      // Their standing with the org's notice (C0.9 PD-46): the harness acknowledges its stand-in.
+      notice: 'acknowledged',
     })
     const without = await (await s.signIn(other)).get('/api/session')
     expect(without.status).toBe(200)
@@ -172,7 +174,12 @@ describe('C0.8 T21 item 10 T17 item 11 GET /api/session and GET /api/flags on th
       name: `Person ${other.id.slice(0, 8)}`,
       timeZone: 'Asia/Jakarta',
       capabilities: { registers: false },
+      notice: 'acknowledged',
     })
+    // Someone who hasn't acknowledged the latest version is asked to (NTS-03).
+    const unacknowledged = await s.person({ org, acknowledged: false })
+    const required = await (await s.signIn(unacknowledged)).get('/api/session')
+    expect([required.status, SessionResponse.parse(required.body).notice]).toEqual([200, 'required'])
     // The DPO may reach the registers (can() allows register.read once they re-authenticate),
     // which the shell shows as its "Data protection" entry; an Owner who isn't the DPO may not.
     const dpo = await s.person({ org, roles: ['dpo'] })

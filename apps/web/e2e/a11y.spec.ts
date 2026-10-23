@@ -3,8 +3,10 @@
 // looping the viewport and the colour scheme, so each screen is loaded once. The PIN steps and the
 // locked view are checked where sign-in.spec.ts reaches them (SI-09, SI-11).
 import type { Page, TestInfo } from '@playwright/test'
+import { NOTICE } from '../src/strings/notice.ts'
+import { SHELL } from '../src/strings/shell.ts'
 import { expectAxeClean } from './support/axe.ts'
-import { noAiCopy } from './support/checks.ts'
+import { noAiCopy, noClippedText, noSidewaysScroll, withTextSpacing, withTextZoom } from './support/checks.ts'
 import { expect, test } from './support/fixtures.ts'
 import { PERSONAS, typed } from './support/personas.ts'
 import { CHECK_SIZES, SCHEMES, SCREENS, SIZES, type Size } from './support/viewports.ts'
@@ -127,6 +129,23 @@ async function axeWithoutWash(page: Page, label: string, sizes: readonly Size[],
 // and the sign-in steps are a card on it.
 const WASH_SIZES = [SIZES.w390, SIZES.desktop] as const
 
+// /notice as someone who hasn't acknowledged the current version sees it, the box and Acknowledge
+// included: Marcus's own session and notice answers, read from the server and passed on with the
+// standing set to required. SI-10 reaches the same page by Nadia's sign-in, which her code limits
+// keep to one run, and /notice isn't in SCREENS (support/viewports.ts). Nothing is acknowledged.
+async function asNoticeRequired(page: Page): Promise<void> {
+  for (const [path, field] of [
+    ['**/api/session', 'notice'],
+    ['**/api/notice', 'standing'],
+  ] as const) {
+    await page.route(path, async route => {
+      const response = await route.fetch()
+      const body = (await response.json()) as Record<string, unknown>
+      await route.fulfill({ response, json: { ...body, [field]: 'required' } })
+    })
+  }
+}
+
 // One test per screen, as A11Y-01 is, so each stays well inside the 60 s a test may take.
 for (const screen of SCREENS) {
   test(`A11Y-04 T21 item 6: with the wash taken off, axe checks the contrast it lists as incomplete over the wash on ${screen.path} at 390 and 1440 px, light and dark`, async ({
@@ -163,4 +182,32 @@ test('A11Y-04 T21 item 6: with the wash taken off, axe checks the same on the si
   await expect(page.getByLabel('6-digit code')).toHaveAttribute('aria-invalid', 'true')
   await withoutWash(page)
   await axeWithoutWash(page, 'the code step with an error', WASH_SIZES, testInfo)
+})
+
+test('A11Y-04 NF-08 NF-09 T21 item 6 C0.9 PD-46: /notice, whose text sits on the wash, passes axe with the wash taken off at 390 and 1440 px in both schemes, and clips nothing and scrolls nothing sideways with WCAG text spacing at 320 px or 200% text at 320 and 390 px', async ({
+  open,
+}, testInfo) => {
+  const page = await open({ ...SIZES.w390, signedIn: true, bypassCSP: true })
+  await asNoticeRequired(page)
+  await page.goto('/notice')
+  await expect(h1(page)).toHaveText(SHELL.notice)
+  await expect(page.getByRole('button', { name: NOTICE.acknowledge, exact: true })).toBeVisible()
+  await withoutWash(page)
+  await axeWithoutWash(page, '/notice', WASH_SIZES, testInfo)
+
+  // NF-08 and NF-09 (nfr02.spec.ts), each on a fresh load of the page, as they run over SCREENS.
+  await page.setViewportSize(SIZES.w320)
+  await page.reload()
+  await expect(h1(page)).toHaveText(SHELL.notice)
+  await withTextSpacing(page)
+  expect(await noClippedText(page), '/notice with text spacing at 320').toEqual([])
+  expect(await noSidewaysScroll(page), '/notice with text spacing at 320').toEqual([])
+  await page.reload()
+  await expect(h1(page)).toHaveText(SHELL.notice)
+  await withTextZoom(page, 2)
+  for (const size of [SIZES.w320, SIZES.w390]) {
+    await page.setViewportSize(size)
+    expect(await noClippedText(page), `/notice at 200% text at ${size.width}`).toEqual([])
+    expect(await noSidewaysScroll(page), `/notice at 200% text at ${size.width}`).toEqual([])
+  }
 })

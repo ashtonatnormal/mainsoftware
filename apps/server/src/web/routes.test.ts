@@ -66,6 +66,9 @@ interface Script {
   roles?: { role: string; team_id: string | null }[]
   // What the session answer's read finds.
   found?: { name: string; time_zone: string }
+  // The person's standing with the notice, as its read finds it (C0.9 PD-46); unset, the scripted
+  // pool's own default, acknowledged.
+  standing?: 'acknowledged' | 'required' | 'unpublished'
 }
 
 // A signed-in request's statements, answered: the pre-org lookup, the acting session's re-read,
@@ -92,6 +95,9 @@ function signedIn(script: Script = {}) {
     }
     if (text.includes('from "devices"')) return [{ id: DEVICE, user_id: PERSON, signed_out_at: null }]
     if (text.includes('coalesce(pr.display_name')) return script.found === undefined ? [] : [script.found]
+    if (script.standing !== undefined && text.startsWith('select x.person,')) {
+      return [{ person: PERSON, standing: script.standing }]
+    }
     return []
   })
 }
@@ -405,6 +411,7 @@ describe('C0.8 T21 item 10 GET /api/session', () => {
       name: 'Ahmad',
       timeZone: 'Asia/Kuala_Lumpur',
       capabilities: { registers: false },
+      notice: 'acknowledged',
     })
     expect(SessionResponse.safeParse(response.json()).success).toBe(true)
     // The fallbacks are the read's own: the profile first, then the roster's name and the org's
@@ -441,6 +448,35 @@ describe('C0.8 T21 item 10 GET /api/session', () => {
       expect(response.json().capabilities, JSON.stringify(roles)).toEqual({ registers })
       expect(SessionResponse.safeParse(response.json()).success).toBe(true)
     }
+  })
+
+  it('NTS-03 C0.9 PD-46 T22 item 31: notice is the person’s standing, read plainly in the answer’s own read-only transaction; capabilities.registers stays can()’s, so the DPO keeps it before acknowledging', async () => {
+    for (const standing of ['acknowledged', 'required', 'unpublished'] as const) {
+      const pool = signedIn({
+        roles: [{ role: 'dpo', team_id: null }],
+        found: { name: 'Ashton', time_zone: 'Asia/Singapore' },
+        standing,
+      })
+      const { get } = setup({ db: pool.db })
+      const response = await get('/api/session', COOKIE)
+      expect(response.statusCode, standing).toBe(200)
+      expect(response.json(), standing).toMatchObject({ notice: standing, capabilities: { registers: true } })
+      expect(SessionResponse.parse(response.json()).notice).toBe(standing)
+      const texts = pool.texts()
+      const read = pool.statements.find(statement => statement.text.startsWith('select x.person,'))
+      expect(read?.values).toEqual([ORG, [PERSON], ORG])
+      expect(read?.text).not.toMatch(/\bfor (share|update|no key update|key share)\b/)
+      const at = texts.indexOf(read?.text ?? '')
+      const begun = texts.lastIndexOf('start transaction isolation level read committed read only', at)
+      expect(begun, standing).toBeGreaterThan(-1)
+      expect(texts.slice(begun, at)).not.toContain('commit')
+      expect(texts.slice(begun, at).some(text => text.includes('coalesce(pr.display_name'))).toBe(true)
+    }
+    // GET /api/flags (session.read_own, exempt) reads no standing at all (OD-14 keeps its poll cheap).
+    const flagsPool = signedIn({ roles: [], standing: 'required' })
+    const flagsApp = setup({ db: flagsPool.db, flags: staticFlags(REGISTRY) })
+    expect((await flagsApp.get('/api/flags', COOKIE)).statusCode).toBe(200)
+    expect(flagsPool.texts().some(text => text.startsWith('select x.person,'))).toBe(false)
   })
 
   it('T21 item 10: a person the read can’t find reads as signed out, without clearing the cookie', async () => {

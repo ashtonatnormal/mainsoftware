@@ -33,16 +33,19 @@
 //    most one every 5 s. No frame within 10 s of a ping means the socket is dead: close it (4000)
 //    and reconnect.
 // 7. Closes: 4401 signs out (onSignedOut) and never reconnects. 4403 pauses with nothing wiped
-//    (onNoticeRequired) until resume(). 4426 pauses (onOutdated: the runtime reloads). 1008 naming
-//    abuse waits 30–60 s. Any other close of a socket that opened waits within the spread, once an
-//    episode; every later failure, and every socket that never opened, waits full jitter from 1 s
-//    to 30 s. 30 s into an episode the status is stalled, and probe() (GET /api/flags) runs at a
-//    random point in the next 5 s and every 30 s after while it lasts; signed_out signs out. A
-//    welcome ends the episode. While paused there is no socket to hear a 4401, so probe() runs at a
-//    random point in the first 30 s and every 30 s after until resume(), and signed_out signs out
-//    there too (T21 item 4). A probe unanswered after 20 s is let go and its request ended (probe()'s
-//    signal aborts, as it does on stop()): the next runs on time, and a late answer counts for
-//    nothing.
+//    (onNoticeRequired: the runtime sends the tab to /notice) until resume(), which the person's
+//    acknowledgement calls (C0.9 PD-46). 4426 pauses (onOutdated: the runtime reloads) for good:
+//    resume() resumes only a 4403 pause, since this build stays too old, and a reload is a new
+//    document with a client of its own. 1008 naming abuse waits 30–60 s. Any other close of a
+//    socket that opened waits within the spread, once an episode; every later failure, and every
+//    socket that never opened, waits full jitter from 1 s to 30 s. 30 s into an episode the status
+//    is stalled, and probe() (GET /api/flags) runs at a random point in the next 5 s and every 30 s
+//    after while it lasts; signed_out signs out. A welcome ends the episode. While paused there is
+//    no socket to hear a 4401, so probe() runs at a random point in the first 30 s and every 30 s
+//    after while the pause lasts, and signed_out signs out there too (T21 item 4); startPaused(),
+//    for a document whose person hasn't acknowledged the notice, starts in that pause. A probe
+//    unanswered after 20 s is let go and its request ended (probe()'s signal aborts, as it does on
+//    stop()): the next runs on time, and a late answer counts for nothing.
 //
 // Known limit (T21 item 4): realtime refuses a session's 9th socket at the upgrade with 429, which
 // the browser shows as a 1006 close, so a 9th tab retries and reads as stalled while its probe
@@ -102,7 +105,7 @@ export interface GatewayDeps {
   onNudge(what: GatewayNudge): void
   // 4401, or a probe answering signed_out. The client has stopped.
   onSignedOut(): void
-  // 4403: C0.9 shows the notice, then calls resume().
+  // 4403: the runtime shows /notice; acknowledging there calls resume() (C0.9 PD-46).
   onNoticeRequired(): void
   // 4426, or a welcome in a version this build doesn't speak.
   onOutdated(): void
@@ -290,7 +293,8 @@ export class GatewayClient {
   #status: LiveStatus = 'connecting'
   #started = false
   #stopped = false
-  #paused = false
+  // Why the client is paused, until resume() (a 4403's notice) or for good (a 4426's outdated build).
+  #pausedFor: 'notice' | 'outdated' | undefined
   // What the views hold: topic → how many holds, and the linger timer once none is left.
   readonly #holds = new Map<string, Hold>()
   // Topics whose retries come back in a row, for the doubling.
@@ -330,6 +334,17 @@ export class GatewayClient {
     this.#open()
   }
 
+  // Starts paused for the notice, for a document whose person hasn't acknowledged the current
+  // version (C0.9 PD-45, PD-46): no socket, since the gateway admits nobody then, and the probe
+  // asking whether the session holds, as a 4403's pause does (header item 7), so a sign-out
+  // elsewhere is heard within 30 s on /notice and on the DPO's pages before v0 alike. resume(),
+  // once the notice is acknowledged, opens the first socket; start() then does nothing.
+  startPaused(): void {
+    if (this.#started || this.#stopped) return
+    this.#started = true
+    this.#pause('notice')
+  }
+
   // Closes 1000, clears every timer, and never reconnects.
   stop(): void {
     if (this.#stopped) return
@@ -337,10 +352,11 @@ export class GatewayClient {
     this.#setStatus('stopped')
   }
 
-  // After 4403's notice is acknowledged (C0.9), or to try again after 4426.
+  // After a 4403's notice is acknowledged (C0.9 PD-46). Nothing else resumes: a 4426 pause lasts
+  // as long as this build does, and an unpaused client is left as it is.
   resume(): void {
-    if (!this.#paused || this.#stopped) return
-    this.#paused = false
+    if (this.#pausedFor !== 'notice' || this.#stopped) return
+    this.#pausedFor = undefined
     this.#open()
   }
 
@@ -425,7 +441,7 @@ export class GatewayClient {
 
   #connect(): void {
     this.#reconnectTimer = undefined
-    if (this.#stopped || this.#paused) return
+    if (this.#stopped || this.#pausedFor !== undefined) return
     let ws: WebSocketLike
     try {
       ws = new this.#deps.WebSocket(this.#deps.url)
@@ -513,7 +529,7 @@ export class GatewayClient {
     this.#detach(socket)
     if (code === GATEWAY_CLOSE.signedOut.code) this.#signedOut()
     else if (code === GATEWAY_CLOSE.noticeRequired.code) {
-      this.#pause()
+      this.#pause('notice')
       this.#deps.onNoticeRequired()
     } else if (code === GATEWAY_CLOSE.clientOutdated.code) this.#outdated()
     else if (code === GATEWAY_CLOSE.badFrame.code && ABUSE.has(reason)) this.#retry(socket, 'abuse')
@@ -524,7 +540,7 @@ export class GatewayClient {
   // episode; failed: a try that never opened or never got its welcome, which waits full jitter, as
   // does any close after the episode's spread is spent; abuse: 30–60 s.
   #retry(socket: Socket | undefined, how: 'closed' | 'failed' | 'abuse'): void {
-    if (this.#stopped || this.#paused) return
+    if (this.#stopped || this.#pausedFor !== undefined) return
     const random = () => this.#deps.random()
     let wait: number
     if (how === 'abuse') {
@@ -592,7 +608,7 @@ export class GatewayClient {
       ends.abort()
     }, CLIENT_POLICY.probeTimeoutMs)
     const episode = this.#failingSince
-    const paused = this.#paused
+    const paused = this.#pausedFor
     let answer: Promise<ProbeAnswer>
     try {
       answer = this.#deps.probe(ends.signal)
@@ -608,7 +624,7 @@ export class GatewayClient {
         this.#probeAbort = undefined
         this.#timers.clear(deadline)
         if (said !== 'signed_out' || this.#stopped) return
-        if (this.#failingSince === episode && this.#paused === paused) this.#signedOut()
+        if (this.#failingSince === episode && this.#pausedFor === paused) this.#signedOut()
       })
   }
 
@@ -619,17 +635,17 @@ export class GatewayClient {
   }
 
   #outdated(): void {
-    this.#pause()
+    this.#pause('outdated')
     this.#deps.onOutdated()
   }
 
-  // 4403 and 4426: no reconnect until resume(); the holds and every cached topic stay
-  // (T19 item 10). With no socket, nothing would hear a 4401, so the probe keeps asking whether
-  // the session holds (header item 7), first at a random point in the next 30 s, so the tabs one
-  // 4403 paused together don't ask together.
-  #pause(): void {
+  // 4403 and 4426: no reconnect (until resume(), for 4403 alone); the holds and every cached topic
+  // stay (T19 item 10). With no socket, nothing would hear a 4401, so the probe keeps asking
+  // whether the session holds (header item 7), first at a random point in the next 30 s, so the
+  // tabs one 4403 paused together don't ask together.
+  #pause(why: 'notice' | 'outdated'): void {
     if (this.#socket !== undefined) this.#detach(this.#socket)
-    this.#paused = true
+    this.#pausedFor = why
     this.#timers.clear(this.#reconnectTimer)
     this.#reconnectTimer = undefined
     this.#endEpisode()

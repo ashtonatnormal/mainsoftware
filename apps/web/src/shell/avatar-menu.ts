@@ -1,6 +1,8 @@
 // What the avatar menu holds (T21; OD-05): a registry, so each later step adds its own entry here
-// and the menu itself never changes (C0.9's notice, C0.14 to C0.18's devices, notifications and
-// settings, A4's assistant settings). It holds, in order:
+// and the menu itself never changes (C0.14 to C0.18's devices and notifications; later sections of
+// Settings go in its own registry, settings/sections.ts). It holds, in order:
+// - Settings (C0.9 PD-47): everyone's, opening /settings, where the privacy notice is always
+//   available (PDPA-02);
 // - Data protection (C0.9 PD-26, OD-03): the DPO's registers, shown only when the session answer's
 //   capabilities say can() allows reading them (registers). Hiding it is a courtesy, never the
 //   check: the pages' every request is decided by the server, which refuses anyone else;
@@ -11,7 +13,7 @@
 // back (offline, a 5xx), the session and this document stay as they were, and an error toast says
 // so; it stays until it is closed (X5), and focus is back on the menu's button already.
 import type { SessionForClient } from '@hearth/shared'
-import { LogOut, type LucideIcon, ShieldCheck } from 'lucide-react'
+import { LogOut, type LucideIcon, Settings, ShieldCheck } from 'lucide-react'
 import type { AppPath } from '@/router/paths.ts'
 import type { SessionRuntime } from '@/session/runtime.ts'
 import { SHELL } from '@/strings/shell.ts'
@@ -37,6 +39,15 @@ export interface AvatarMenuItem {
   run(context: AvatarMenuContext): Promise<void>
 }
 
+export const settingsItem: AvatarMenuItem = {
+  id: 'settings',
+  label: SHELL.account.settings,
+  icon: Settings,
+  async run({ navigate }) {
+    navigate('/settings')
+  },
+}
+
 export const dpoItem: AvatarMenuItem = {
   id: 'data-protection',
   label: SHELL.account.dataProtection,
@@ -57,7 +68,7 @@ export const signOutItem: AvatarMenuItem = {
   },
 }
 
-export const AVATAR_MENU: readonly AvatarMenuItem[] = [dpoItem, signOutItem]
+export const AVATAR_MENU: readonly AvatarMenuItem[] = [settingsItem, dpoItem, signOutItem]
 
 // The items this person sees, in the registry's order.
 export function menuItemsFor(session: MenuSession): AvatarMenuItem[] {

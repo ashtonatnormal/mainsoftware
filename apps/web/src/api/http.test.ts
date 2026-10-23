@@ -39,6 +39,7 @@ const PERSON = {
   name: 'Marcus',
   timeZone: 'Asia/Singapore',
   capabilities: { registers: false },
+  notice: 'acknowledged' as const,
 }
 
 async function failureOf(promise: Promise<unknown>) {

@@ -21,10 +21,11 @@ import {
 import { FakeVerify } from '#src/auth/sms/fake.ts'
 import { type SmsProvider, SmsProviderError, type Verdict } from '#src/auth/sms/provider.ts'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
+import { SEND_STATES } from '#src/compliance/transfers.ts'
 import { AfterResponse, type ReqInfo } from '#src/http.ts'
 import { staticFlags } from '#src/testing/flags.ts'
 import { type Statement, scriptedPool, systemPrincipal } from '#src/testing/pool.ts'
-import { CLEARING, NOTHING_CLEARED } from '#src/testing/transfers.ts'
+import { CLEARING, NOTHING_CLEARED, STATE } from '#src/testing/transfers.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const PERSON = 'b0000000-0000-4000-8000-000000000001'
@@ -580,7 +581,7 @@ describe('ACC-03 T14 sending a code after the reply', () => {
   // A code request for a roster number, with its after-reply work run: what was texted, and the
   // audit row's details.
   async function delivered(
-    person: { left?: boolean; numberRemoved?: boolean },
+    person: { left?: boolean; numberRemoved?: boolean; roles?: string[] },
     options: {
       sms?: FakeVerify
       transfers?: Api['transfers']
@@ -618,13 +619,45 @@ describe('ACC-03 T14 sending a code after the reply', () => {
     expect(await delivered({ left: true })).toMatchObject({ sent: [], audit: { send: 'skipped_left' } })
   })
 
-  it('XFR-03 PDPA-10 C0.9 PD-15: texts nothing through a provider the transfer register has not cleared, and audits it skipped_not_cleared', async () => {
-    const refused = await delivered({}, { sms: new FakeVerify({ transfer: 'twilio' }), transfers: NOTHING_CLEARED })
-    expect(refused).toMatchObject({ sent: [], audit: { send: 'skipped_not_cleared' } })
-    const twilio = CLEARING('twilio')
-    const cleared = await delivered({}, { sms: new FakeVerify({ transfer: 'twilio' }), transfers: twilio })
-    expect(cleared).toMatchObject({ sent: ['+6591234567'], audit: { send: 'attempted' } })
-    expect(twilio.asked.map(ask => ask.provider)).toEqual(['twilio'])
+  it('XFR-03 PDPA-10 C0.9 PD-15 PD-59 B-03: texts everyone while the notice states the clearance, a holder of dpo alone before any version or once it no longer does, and nobody without a clearance, auditing each skip', async () => {
+    const sent = ['+6591234567']
+    const expected = {
+      not_cleared: [
+        { sent: [], send: 'skipped_not_cleared' },
+        { sent: [], send: 'skipped_not_cleared' },
+      ],
+      no_notice: [
+        { sent: [], send: 'skipped_no_notice' },
+        { sent, send: 'attempted' },
+      ],
+      cleared: [
+        { sent, send: 'attempted' },
+        { sent, send: 'attempted' },
+      ],
+      unstated: [
+        { sent: [], send: 'skipped_unstated' },
+        { sent, send: 'attempted' },
+      ],
+    } as const
+    for (const state of SEND_STATES) {
+      for (const [n, roles] of [[], ['dpo']].entries()) {
+        const transfers = STATE('twilio', state)
+        const result = await delivered({ roles }, { sms: new FakeVerify({ transfer: 'twilio' }), transfers })
+        const want = expected[state][n]
+        expect(result, `${state} ${roles}`).toMatchObject({ sent: want?.sent, audit: { send: want?.send } })
+        expect(
+          transfers.asked.map(ask => ask.provider),
+          state,
+        ).toEqual(['twilio'])
+      }
+    }
+    // An Owner holds a PIN role, but not dpo: before any version, no code (OD-01).
+    expect(
+      await delivered(
+        { roles: ['owner'] },
+        { sms: new FakeVerify({ transfer: 'twilio' }), transfers: STATE('twilio', 'no_notice') },
+      ),
+    ).toMatchObject({ sent: [], audit: { send: 'skipped_no_notice' } })
     // Another provider's clearance clears nothing for Twilio.
     expect(
       await delivered({}, { sms: new FakeVerify({ transfer: 'twilio' }), transfers: CLEARING('aws') }),
@@ -638,32 +671,67 @@ describe('ACC-03 T14 sending a code after the reply', () => {
     expect(unasked.asked).toEqual([])
   })
 
-  it('XFR-03 PDPA-10 C0.9 PD-15 T22 item 8: the clearance is asked in the transaction that decides the send, after the person and the number are read, and the provider only after it commits', async () => {
-    const pool = orgPool({ roster: true })
-    // The statements so far when the clearance is asked, and when the provider is asked to send.
+  it('XFR-03 C0.9 PD-59 B-03: logs a held-back code by its state, with the provider and person only: not cleared and unstated at error, no notice yet at info', async () => {
+    for (const [state, level, event] of [
+      ['not_cleared', 'error', 'sms_provider_not_cleared'],
+      ['unstated', 'error', 'sms_provider_unstated'],
+      ['no_notice', 'info', 'sms_provider_no_notice'],
+    ] as const) {
+      let logs: { error: unknown[][]; info: unknown[][] } = { error: [], info: [] }
+      await delivered(
+        {},
+        {
+          sms: new FakeVerify({ transfer: 'twilio' }),
+          transfers: STATE('twilio', state),
+          info: info =>
+            (logs = { error: vi.mocked(info.log.error).mock.calls, info: vi.mocked(info.log.info).mock.calls }),
+        },
+      )
+      const other = level === 'error' ? 'info' : 'error'
+      expect(
+        logs[level].map(call => call[0]),
+        state,
+      ).toEqual([{ event, provider: 'fake', personId: PERSON }])
+      expect(
+        logs[other].filter(call => String((call[0] as { event?: string }).event).startsWith('sms_')),
+        state,
+      ).toEqual([])
+    }
+  })
+
+  it('XFR-03 PDPA-10 C0.9 PD-15 PD-59 T22 item 8 C-01: the dpo holding and then the send state are read in the transaction that decides the send, after the person and the number, and the provider is asked only after it commits', async () => {
+    const pool = orgPool({ roster: true, roles: ['dpo'] })
+    // The statements so far when the state is asked, and when the provider is asked to send.
     let asked: string[] = []
     let sending: string[] = []
     const sms = new FakeVerify({ transfer: 'twilio', onSend: () => (sending = pool.texts()) })
-    const twilio = CLEARING('twilio')
+    const unstated = STATE('twilio', 'unstated')
     const transfers: Api['transfers'] = {
-      cleared: async (trx, provider) => {
+      ...unstated,
+      state: async (trx, provider) => {
         asked = pool.texts()
-        return twilio.cleared(trx, provider)
+        return unstated.state(trx, provider)
       },
     }
     expect(await delivered({}, { sms, transfers, pool })).toMatchObject({
       sent: ['+6591234567'],
       audit: { send: 'attempted' },
     })
-    // Inside the send's transaction, after the person (FOR SHARE) and the number are read again.
+    // Inside the send's transaction, after the person (FOR SHARE) and the number are read again, and
+    // after the person's roles, read with no lock (hearth_app holds only SELECT on role_assignments).
     const begun = asked.lastIndexOf('start transaction isolation level read committed')
     expect(begun).toBeGreaterThan(-1)
     expect(asked.lastIndexOf('commit')).toBeLessThan(begun)
-    expect(asked.findLastIndex(text => text.startsWith('select deactivated_at from people'))).toBeGreaterThan(begun)
-    expect(asked.findLastIndex(text => text.startsWith('select 1 from phone_numbers'))).toBeGreaterThan(begun)
+    const person = asked.findLastIndex(text => text.startsWith('select deactivated_at from people'))
+    const number = asked.findLastIndex(text => text.startsWith('select 1 from phone_numbers'))
+    const roles = asked.findLastIndex(text => text.startsWith('select person_id, role, team_id, revoked_at'))
+    expect(person).toBeGreaterThan(begun)
+    expect(number).toBeGreaterThan(person)
+    expect(roles).toBeGreaterThan(number)
+    expect(asked[roles]).not.toMatch(/\bfor (share|update|no key update|key share)\b/)
     // That transaction commits before the provider is asked.
     expect(sending.slice(asked.length)).toContain('commit')
-    expect(twilio.asked.map(ask => ask.provider)).toEqual(['twilio'])
+    expect(unstated.asked.map(ask => ask.provider)).toEqual(['twilio'])
   })
 
   it("T7 T20: logs a failed send with the provider's code and HTTP status, never the number", async () => {

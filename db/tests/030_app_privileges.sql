@@ -7,7 +7,8 @@
 -- last-seen or re-authentication time, or of when a PIN last failed, that the database doesn't
 -- stamp; from 0007, reading the outbox or choosing an event's id, position or time, and any grant
 -- on jobs, schedules, a fence or the clean-up; from 0009, writing a register row itself, any grant
--- on processing_restrictions, or running the bootstrap's clearance) fails. Nothing may be granted to
+-- on processing_restrictions, or running the bootstrap's clearance; from 0010, adding a notice
+-- version, a link or an acknowledgement itself, or running notice_facts()) fails. Nothing may be granted to
 -- PUBLIC at all, and hearth_app can create no schema object or temporary table. 032 pins the
 -- worker's roles the same way.
 \ir fixtures/two_orgs.sql
@@ -52,12 +53,13 @@ declare
     'passkeys.credential_id: INSERT', 'passkeys.org_id: INSERT', 'passkeys.public_key: INSERT',
     'passkeys.transports: INSERT', 'passkeys.user_id: INSERT',
     'passkeys.counter: UPDATE', 'passkeys.last_used_at: UPDATE', 'passkeys.removed_at: UPDATE', 'passkeys.removed_by: UPDATE',
-    'notice_versions: INSERT', 'notice_versions: SELECT',
+    -- The notice (0003, 0010, C0.9 PD-42): read the versions, what each lists, and who acknowledged
+    -- which, for the acknowledgement gate and the DPO's Notice tab; never add a version or an
+    -- acknowledgement directly (publish_notice() and acknowledge_notice() below are the only writers).
+    'notice_versions: SELECT',
+    'notice_version_purposes: SELECT', 'notice_version_providers: SELECT',
     'audit_log_readers: SELECT',
     'notice_acknowledgments: SELECT',
-    'notice_acknowledgments.device_id: INSERT', 'notice_acknowledgments.method: INSERT',
-    'notice_acknowledgments.notice_version_id: INSERT', 'notice_acknowledgments.org_id: INSERT',
-    'notice_acknowledgments.person_id: INSERT', 'notice_acknowledgments.recorded_by: INSERT',
     -- The logs: add rows, nothing else, and never choose an entry's id or time.
     'audit_events.action: INSERT', 'audit_events.actor_id: INSERT',
     'audit_events.case_id: INSERT', 'audit_events.details: INSERT', 'audit_events.device_id: INSERT',
@@ -97,12 +99,25 @@ declare
     'function record_transfer_entry(text,bigint,text,text,text[],text[],text,text,text,date,boolean,text,text,text,text,text,date,boolean,text,uuid,inet): EXECUTE',
     'function clear_transfer_entry(text,bigint,text,uuid,inet): EXECUTE',
     'function withdraw_transfer_clearance(text,text,uuid,inet): EXECUTE',
-    'function transfer_cleared(text): EXECUTE'
+    'function transfer_cleared(text): EXECUTE',
+    -- The notice (0010, C0.9 PR 2): the DPO publishes and everyone acknowledges through the two
+    -- functions; the transfer gate's four answers, which a code send asks (B-03, C-02); and whether
+    -- each open clearance is stated, never its facts (B-06).
+    'function publish_notice(integer,text,text,text[],integer[],uuid[],text,uuid,inet): EXECUTE',
+    'function acknowledge_notice(uuid,text,uuid,inet): EXECUTE',
+    'function transfer_send_state(text): EXECUTE',
+    'function notice_provider_states(): EXECUTE'
   ];
 begin
   perform pg_temp.expect_privileges('hearth_app', expected);
 end
 $$;
+
+-- C-03: nobody runs notice_facts() or notice_check_dpo() (0010); only the owner's definer functions
+-- call them.
+select pg_temp.check(not has_function_privilege('hearth_app', 'public.notice_facts(jsonb)', 'EXECUTE')
+                     and not has_function_privilege('hearth_app', 'public.notice_check_dpo(uuid,uuid)', 'EXECUTE'),
+                     'hearth_app can run notice_facts() or notice_check_dpo()');
 
 -- Nothing in the schema is granted to PUBLIC, table or column.
 select pg_temp.check(count(*) = 0, format('granted to PUBLIC: %s', string_agg(what, ', ')))

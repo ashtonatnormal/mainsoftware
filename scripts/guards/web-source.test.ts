@@ -418,7 +418,7 @@ describe('T21: the web source guard (apps/web/src)', () => {
     ])
   })
 
-  it('WS-11 T21 item 13 D46 CL Database: no file under sign-in/ or session/, or named for either, reads the flags client (flags never gate an access control), and no folder elsewhere is named for either', () => {
+  it('WS-11 T21 item 13 D46 CL Database C0.9 PD-43 C-10: no file under sign-in/ or session/, or named for either, reads the flags client (flags never gate an access control, the notice store included), and no folder elsewhere is named for either', () => {
     const problems = (path: string, source: string): string[] => {
       const modules = specifiersOf(path, source)
         .filter(specifier => srcTarget(path, specifier)?.startsWith('flags/'))
@@ -492,6 +492,8 @@ describe('T21: the web source guard (apps/web/src)', () => {
     const READS: readonly string[] = [
       'boot/load-session.ts',
       'session/document.ts',
+      // The notice store: the acknowledgement gate is never a flag (C0.9 PD-43, C-10).
+      'session/notice.ts',
       'session/query-client.ts',
       'session/runtime.ts',
       'sign-in/CodeStep.tsx',

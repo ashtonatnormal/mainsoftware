@@ -4,7 +4,8 @@
 // the project's persona (Marcus in Chromium; Farah and Daniel for the @smoke cases in WebKit and
 // Firefox).
 import type { Page } from '@playwright/test'
-import { noAiCopy, visibleH1s } from './support/checks.ts'
+import { SETTINGS } from '../src/strings/notice.ts'
+import { noAiCopy, noSidewaysScroll, targets44, visibleH1s } from './support/checks.ts'
 import { expect, type Guard, test } from './support/fixtures.ts'
 import { hasRail, SCREENS, SIZES } from './support/viewports.ts'
 
@@ -153,7 +154,7 @@ test('SH-07 OD-04 decision 8: no searchbox in the shell and no AI copy on any sc
   }
 })
 
-test('SH-08 OD-05 WCAG 2.4.11: the avatar menu holds Sign out only, and at 320 × 568, 768 × 480 (rail) and 1440 × 900 every item lies inside the viewport, and the point at its centre is the item', async ({
+test('SH-08 OD-05 WCAG 2.4.11 C0.9 PD-47 B-09: the avatar menu holds Settings and Sign out, and at 320 × 568, 768 × 480 (rail) and 1440 × 900 every item lies inside the viewport, and the point at its centre is the item', async ({
   open,
 }) => {
   for (const size of [SIZES.w320, SIZES.short, SIZES.desktop]) {
@@ -165,7 +166,7 @@ test('SH-08 OD-05 WCAG 2.4.11: the avatar menu holds Sign out only, and at 320 �
     await trigger.click()
     await expect(trigger).toHaveAttribute('aria-expanded', 'true')
     const items = page.getByRole('menu', { name: 'Account' }).getByRole('menuitem')
-    expect((await items.allInnerTexts()).map(name => name.trim())).toEqual(['Sign out'])
+    expect((await items.allInnerTexts()).map(name => name.trim())).toEqual(['Settings', 'Sign out'])
     const placed = await items.evaluateAll(elements =>
       elements.map(element => {
         const box = element.getBoundingClientRect()
@@ -174,7 +175,10 @@ test('SH-08 OD-05 WCAG 2.4.11: the avatar menu holds Sign out only, and at 320 �
         return { inside, reached: hit !== null && (hit === element || element.contains(hit)) }
       }),
     )
-    expect(placed, `${size.width} × ${size.height}`).toEqual([{ inside: true, reached: true }])
+    expect(placed, `${size.width} × ${size.height}`).toEqual([
+      { inside: true, reached: true },
+      { inside: true, reached: true },
+    ])
     await page.keyboard.press('Escape')
     await expect(trigger).toHaveAttribute('aria-expanded', 'false')
     await expect(trigger).toBeFocused()
@@ -304,4 +308,42 @@ test('SH-14 X11 WCAG 4.1.3: a screen that fails inside the shell is announced, w
   await expect(h1(page)).toHaveText('More')
   await expect(h1(page)).toBeFocused()
   await expect(page.locator('[aria-live="assertive"]')).toHaveText(/Something went wrong/)
+})
+
+test('NTE-01 PDPA-02 PDPA-03 C0.9 PD-47: Settings, from the avatar menu, lists Privacy; Privacy shows the current notice, when Marcus acknowledged it and his acknowledgements, at 320 and 1440 px with nothing sideways, 44 px targets and no AI copy', async ({
+  open,
+}) => {
+  for (const size of [SIZES.w320, SIZES.desktop]) {
+    const page = await open({ ...size, signedIn: true })
+    await page.goto('/chats')
+    await expect(h1(page)).toHaveText('Chats')
+    await page.getByRole('button', { name: 'Account, Marcus' }).click()
+    await page.getByRole('menu', { name: 'Account' }).getByRole('menuitem', { name: 'Settings' }).click()
+    await expect(page).toHaveURL(/\/settings$/)
+    await expect(h1(page)).toHaveText('Settings')
+    await expect(page).toHaveTitle('Settings – Hearth')
+    const sections = page.getByRole('navigation', { name: SETTINGS.sections.label })
+    await expect(sections.getByRole('link')).toHaveCount(1)
+    expect(await noSidewaysScroll(page), `/settings at ${size.width}`).toEqual([])
+    expect(await targets44(page), `/settings at ${size.width}`).toEqual([])
+    expect(await noAiCopy(page), `/settings at ${size.width}`).toEqual([])
+
+    await sections.getByRole('link', { name: /^Privacy/ }).click()
+    await expect(page).toHaveURL(/\/settings\/privacy$/)
+    await expect(h1(page)).toHaveText('Privacy')
+    const screen = page.locator('#screen')
+    await expect(screen.getByRole('heading', { level: 2, name: SETTINGS.privacy.noticeTitle })).toBeVisible()
+    // The seed's notice v0, which Marcus acknowledged in the app (db/seed/tembusu.sql).
+    await expect(screen.getByText(/^Version 0 · published /)).toBeVisible()
+    await expect(screen.getByText(/^You acknowledged version 0 on .+ \(in the app\)\.$/)).toBeVisible()
+    await expect(screen.getByRole('heading', { level: 2, name: SETTINGS.privacy.historyTitle })).toBeVisible()
+    await expect(screen.getByRole('listitem').filter({ hasText: /^Version 0, .+ \(in the app\)$/ })).toHaveCount(1)
+    expect(await visibleH1s(page)).toEqual(['Privacy'])
+    expect(await noSidewaysScroll(page), `/settings/privacy at ${size.width}`).toEqual([])
+    expect(await targets44(page), `/settings/privacy at ${size.width}`).toEqual([])
+    expect(await noAiCopy(page), `/settings/privacy at ${size.width}`).toEqual([])
+    // Back returns to the list, a real URL each.
+    await page.goBack()
+    await expect(h1(page)).toHaveText('Settings')
+  }
 })

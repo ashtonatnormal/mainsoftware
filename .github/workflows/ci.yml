@@ -253,6 +253,18 @@ jobs:
       - env:
           CHECK_DB: hearth_upgrade_check
         run: UP_TO=0008 scripts/check-migrations.sh && scripts/check-revocation-upgrade.sh
+      # 0010 (C0.9 PR 2) changes no existing row, but from it the notice versions and
+      # acknowledgements already there decide who may use Hearth and whether a provider may receive
+      # personal data, which the digest can't see (C0.9 PD-54). So it gets its own step, over the
+      # seed and orgs holding stand-in versions, acknowledgements made in the app (one outliving its
+      # device) and recorded by the DPO, and Twilio cleared with no version and under a stand-in: every
+      # row unchanged and nothing linked, hearth_app no longer writing either notice table, an older
+      # version refused and the latest acknowledged, the transfer gate keeping PR 1's answers before
+      # the first generated version, and the schema matching the fresh build. The two 0006 runs and
+      # the 0008 step above apply 0010 too, over the seed.
+      - env:
+          CHECK_DB: hearth_upgrade_check
+        run: UP_TO=0010 scripts/check-migrations.sh && scripts/check-notice-upgrade.sh
       # The schema digest the upgrade checks compare (scripts/schema-digest.sql), against pairs of
       # throwaway databases: each respect it was widened for (partitions, options, sequences,
       # identity and generated columns, collations, default privileges, schemas, NOT VALID,

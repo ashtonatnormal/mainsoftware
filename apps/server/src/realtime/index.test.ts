@@ -1,15 +1,15 @@
 import type { AddressInfo } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
-import { FLAGS, type FlagSpec } from '@hearth/shared'
+import { FLAGS, type FlagSpec, type NoticeStanding } from '@hearth/shared'
 import { pino } from 'pino'
 import { describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { buildApp } from '#src/app.ts'
 import { sha256 } from '#src/auth/crypto.ts'
 import { Subscriptions } from '#src/pubsub.ts'
-import { registerRealtime } from '#src/realtime/index.ts'
+import { type RealtimeDeps, registerRealtime } from '#src/realtime/index.ts'
 import { captureLogger } from '#src/testing/logs.ts'
-import { type Statement, scriptedPool, systemPrincipal } from '#src/testing/pool.ts'
+import { type Statement, scriptedPool, standingsOf, systemPrincipal } from '#src/testing/pool.ts'
 import { fakeStreams } from '#src/testing/streams.ts'
 import { fakeSubscriber } from '#src/testing/subscriber.ts'
 
@@ -24,11 +24,16 @@ const session = (n: number, orgId = ORG) => ({
   deviceId: `b0000000-0000-4000-8000-0000000000d${n}`,
 })
 const isSessionCheck = (statement: Statement) => statement.text.startsWith('select s.id, s.user_id,')
+const isStandingRead = (statement: Statement) => statement.text.startsWith('select x.person,')
 
 // The database as realtime reads it: TOKEN is session 1's, every session asked about is live, and
-// the org has its system principal.
-function database() {
+// the org has its system principal; the notice's standing read (C0.9 PD-45) finds `standing` for
+// everyone it asks about, or the scripted pool's default (acknowledged).
+function database(standing?: NoticeStanding) {
   return scriptedPool(statement => {
+    if (standing !== undefined && statement.text.startsWith('select x.person,')) {
+      return standingsOf(statement.values.find(Array.isArray) as string[], standing)
+    }
     if (statement.text.includes('public.session_by_token')) {
       return sha256(TOKEN).equals(statement.values[0] as Buffer)
         ? [
@@ -53,8 +58,18 @@ function database() {
   })
 }
 
-async function wired(options: { flags?: Parameters<typeof registerRealtime>[1]['flags'] } = {}) {
-  const pool = database()
+// The realtime role on a scripted pool. Admission is off ('none', C0.7's behaviour) unless a test
+// says otherwise, since these cases are about sessions, channels and flags (C-07); NTS-04 below runs
+// it on, as production always does. 'unset' leaves admissionForTests out.
+async function wired(
+  options: {
+    flags?: Parameters<typeof registerRealtime>[1]['flags']
+    admission?: RealtimeDeps['admissionForTests'] | 'unset'
+    standing?: NoticeStanding
+  } = {},
+) {
+  const pool = database(options.standing)
+  const admission = options.admission ?? 'none'
   const sub = fakeSubscriber()
   const subscriptions = new Subscriptions(sub.asRedis, pino({ level: 'silent' }))
   const { logger, events } = captureLogger('realtime')
@@ -69,6 +84,7 @@ async function wired(options: { flags?: Parameters<typeof registerRealtime>[1]['
     reader: streams.asReader,
     keyPrefix: 'it:unit:',
     ...(options.flags === undefined ? {} : { flags: options.flags }),
+    ...(admission === 'unset' ? {} : { admissionForTests: admission }),
   })
   await app.listen({ host: '127.0.0.1', port: 0 })
   const { port } = app.server.address() as AddressInfo
@@ -231,6 +247,8 @@ describe('C0.5 T5 ACC-05 C0.7 T19: the realtime role, wired', () => {
       db: database().db,
       subscriptions,
       keyPrefix: 'it:unit:',
+      // No socket opens here, so admission is never asked; off, as in wired() (C-07).
+      admissionForTests: 'none',
     })
     const signal = new AbortController().signal
     try {
@@ -272,5 +290,62 @@ describe('C0.5 T5 ACC-05 C0.7 T19: the realtime role, wired', () => {
     const local = await realtime.inject('/ready/local')
     expect(local.json()).toEqual({ status: 'not ready', checks: { gateway_local: 'failed' } })
     await Promise.all([plain.close(), realtime.close()])
+  })
+})
+
+describe('NTS-04 C0.9 PD-45 B-07 C-07 T22 item 30: the gateway’s admission is always wired', () => {
+  it('NTS-04: unset, admission is on: a socket whose person hasn’t acknowledged the latest notice, or of an org with none, closes 4403 at accept, after the standing is read read only', async () => {
+    for (const standing of ['required', 'unpublished'] as const) {
+      const { pool, socket, stop } = await wired({ admission: 'unset', standing })
+      try {
+        const { closed } = await socket()
+        expect(await closed, standing).toBe(4403)
+        const read = pool.statements.find(isStandingRead)
+        expect(read?.values, standing).toEqual([ORG, [session(1).userId], ORG])
+        const texts = pool.texts()
+        const begun = texts.lastIndexOf(
+          'start transaction isolation level read committed read only',
+          texts.indexOf(read?.text ?? ''),
+        )
+        expect(begun, standing).toBeGreaterThan(-1)
+      } finally {
+        await stop()
+      }
+    }
+  })
+
+  it('NTS-04: unset, someone who has acknowledged it is admitted and stays open', async () => {
+    const { pool, socket, stop } = await wired({ admission: 'unset', standing: 'acknowledged' })
+    try {
+      const { ws } = await socket()
+      for (let i = 0; i < 100 && !pool.statements.some(isStandingRead); i++) await delay(10)
+      expect(pool.statements.some(isStandingRead)).toBe(true)
+      await delay(50)
+      expect(ws.readyState).toBe(WebSocket.OPEN)
+    } finally {
+      await stop()
+    }
+  })
+
+  it('NTS-04: admissionForTests replaces the hook, and none turns admission off and reads nothing (C0.7)', async () => {
+    const admits = vi.fn(async () => new Set<string>())
+    const replaced = await wired({ admission: { admits }, standing: 'acknowledged' })
+    try {
+      const { closed } = await replaced.socket()
+      expect(await closed).toBe(4403)
+      expect(admits).toHaveBeenCalledWith(expect.anything(), ORG, [session(1).userId])
+      expect(replaced.pool.statements.some(isStandingRead)).toBe(false)
+    } finally {
+      await replaced.stop()
+    }
+    const none = await wired({ admission: 'none', standing: 'required' })
+    try {
+      const { ws } = await none.socket()
+      await delay(100)
+      expect(ws.readyState).toBe(WebSocket.OPEN)
+      expect(none.pool.statements.some(isStandingRead)).toBe(false)
+    } finally {
+      await none.stop()
+    }
   })
 })

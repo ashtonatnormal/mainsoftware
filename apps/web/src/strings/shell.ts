@@ -52,16 +52,27 @@ export const SHELL = {
   account: {
     menu: 'Account',
     trigger: (name: string) => `Account, ${name}`,
+    // Everyone's (C0.9 PD-47).
+    settings: 'Settings',
     signOut: 'Sign out',
     signOutFailed: "Couldn't sign out. Check your connection and try again.",
     // The DPO's entry (C0.9 PD-26), shown only when the session's capabilities say so.
     dataProtection: 'Data protection',
   },
-  // The DPO's pages' titles (C0.9 PD-26). Everything else they say is in strings/dpo.ts,
-  // dpo-purposes.ts and dpo-transfers.ts, which only their lazy chunks load (PD-31).
+  // The privacy notice's screen, outside the shell (C0.9 PD-46), and Settings with its sections
+  // (PD-47). What they say is in strings/notice.ts, which only their lazy chunks load.
+  notice: 'Privacy notice',
+  settings: {
+    title: 'Settings',
+    privacy: 'Privacy',
+  },
+  // The DPO's pages' titles (C0.9 PD-26, PD-48). Everything else they say is in strings/dpo.ts,
+  // dpo-purposes.ts, dpo-transfers.ts and dpo-notice.ts, which only their lazy chunks load (PD-31).
   dpo: {
     purposes: 'Processing register',
     transfers: 'Transfer register',
+    // Not /notice's title, so the move there after publishing and back reads as one (C0.9 PD-48).
+    notice: 'Publish the notice',
   },
   // The Search bar, built and not shown until C1.7 (OD-04). Never "Search & Ask".
   search: {

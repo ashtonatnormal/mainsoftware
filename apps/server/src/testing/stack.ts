@@ -17,7 +17,24 @@
 // on orgs (migration 0009), and bootstrapClearance() clears Twilio or AWS through the first-Owner
 // bootstrap's function as the plain superuser acting as Hearth (whose writes the sweep skips), from
 // fictional facts (CLEARING_FACTS). The worker instances judge work by the real purpose gate over
-// their flag read's copy of the registers (compliance/gate.ts), as startWorker() does by default. startWorker() runs a worker instance (worker/index.ts) on its own
+// their flag read's copy of the registers (compliance/gate.ts), as startWorker() does by default.
+//
+// From C0.9 PR 2 the api gates every request on the person's acknowledgement of the org's latest
+// privacy notice (PDPA-03; C0.9 PD-43). So that the suites before it keep testing what they test,
+// each org gets a stand-in notice v0 (no generator, listing nothing, as the seed's), unless
+// newOrg({ notice: 'none' }) says it has none, and person() acknowledges the latest version as the
+// superuser, unless person({ acknowledged: false }). A stand-in keeps the transfer gate's PR 1
+// answer (transfer_send_state() reads cleared), and the superuser's writes are the sweep's to skip.
+// acknowledge() acknowledges the latest version for someone, and publishNotice() publishes the
+// draft the org's registers make (recording a basis and retention for each active purpose that has
+// none first), as its DPO through set_register_purpose() and publish_notice(), the superuser acting
+// as them: a test that publishes uses an org of its own (B-08), since a publish sends everyone else
+// in the org back to /notice. The realtime apps' gateway admission (PD-45) is off ('none', C0.7's
+// behaviour) unless a suite asks for production's (admissionForTests: 'notice') or its own (C-07).
+// The api's routes are collected as Fastify adds them (routes), for the notice suite's sweep of
+// every route (NTI-01).
+//
+// startWorker() runs a worker instance (worker/index.ts) on its own
 // two pools as hearth_worker and its own Valkey subscriber, with the production kinds and consumers,
 // the test's own, and the production schedules only when a test asks for them (so the 03:17 and
 // 03:47 schedules can't fire mid-run), at the test policy's short intervals.
@@ -42,7 +59,7 @@ import { randomBytes, randomInt, randomUUID } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import { Writable } from 'node:stream'
 import { PIN_ROLES } from '@hearth/access'
-import { FLAGS, type FlagSpec, pinProblem } from '@hearth/shared'
+import { FLAGS, type FlagSpec, NOTICE_GENERATOR, pinProblem } from '@hearth/shared'
 import type { FastifyInstance } from 'fastify'
 import type { Redis } from 'ioredis'
 import { Client as PgClient } from 'pg'
@@ -53,7 +70,8 @@ import { type AuthKeys, deriveKeys, hashPin, newSecret, sha256 } from '#src/auth
 import { SOCKET_RECHECK_MS } from '#src/auth/policy.ts'
 import { FakeVerify } from '#src/auth/sms/fake.ts'
 import { type ValkeyKeys, valkeyKeys } from '#src/auth/valkey-keys.ts'
-import { createDatabase, type Database } from '#src/db/database.ts'
+import { noticeDraft } from '#src/compliance/notice.ts'
+import { createDatabase, type Database, withOrg } from '#src/db/database.ts'
 import { migrate } from '#src/db/migrations.ts'
 import { appRoleCheck, createPool } from '#src/db/pool.ts'
 import type { JobRole } from '#src/db/roles.ts'
@@ -64,7 +82,7 @@ import { JOB_POLICY, SCHEDULER_POLICY, WORKER_POLICY, type WorkerPolicy } from '
 import { createLogger } from '#src/logger.ts'
 import type { OutboxConsumer } from '#src/outbox/consumers.ts'
 import { Subscriptions } from '#src/pubsub.ts'
-import type { CheckOrg } from '#src/realtime/checks.ts'
+import type { Admission, CheckOrg } from '#src/realtime/checks.ts'
 import { type Gateway, registerRealtime } from '#src/realtime/index.ts'
 import { GATEWAY_POLICY, type GatewayPolicy } from '#src/realtime/policy.ts'
 import { TestClient } from '#src/testing/gateway.ts'
@@ -295,7 +313,16 @@ export interface RealtimeOptions {
   recheckTimeoutMs?: number
   // Wraps each org's check, so a test can hold a decision after its read.
   wrapCheck?: (check: CheckOrg) => CheckOrg
+  // The gateway's admission (C0.9 PD-45, B-07, C-07): 'none' (C0.7's behaviour: everyone admitted,
+  // nothing queried) unless given; 'notice' leaves registerRealtime's admissionForTests unset, so
+  // production's NOTICE_ADMISSION runs; or a test's own hook.
+  admissionForTests?: Admission | 'none' | 'notice'
 }
+
+// A stand-in version's words: never generated, so the generator's rules don't hold for it.
+const STAND_IN_BODY = 'Integration test stand-in for the privacy notice, version 0.'
+// What publishNotice() records for an active purpose with no retention yet: fictional.
+const HARNESS_RETENTION = 'Kept while you work here, then 90 days'
 
 // For a test that proves one path alone by its counter (counts().closedDurable, dropped.durable):
 // timings under which a realtime app's periodic re-check never runs during the test, its first tick
@@ -414,9 +441,27 @@ export interface Stack {
     pin?: string
     org?: 'second' | Org
     e164?: string
+    // false: the person hasn't acknowledged the org's latest notice version (PDPA-03).
+    acknowledged?: boolean
   }): Promise<Person>
-  // Another org with its system principal and the test flags, and nobody in it.
-  newOrg(): Promise<Org>
+  // Another org with its system principal and the test flags, and nobody in it; with a stand-in
+  // notice v0 unless notice is 'none'.
+  newOrg(options?: { notice?: 'none' }): Promise<Org>
+  // Acknowledges the org's latest notice version for the person, as the superuser (nothing when the
+  // org has none, or they already have).
+  acknowledge(person: Person): Promise<void>
+  // Publishes the draft the org's registers make, as its DPO (who must hold the role), through
+  // publish_notice(), the superuser acting as them, after recording a basis and a retention for
+  // each active purpose that has none (through set_register_purpose(), the same way). Then
+  // acknowledges the new version for each person in acknowledge. Answers the version's id and
+  // number. A test that publishes uses an org of its own (B-08).
+  publishNotice(
+    org: Org,
+    dpo: Person,
+    options?: { acknowledge?: readonly Person[] },
+  ): Promise<{ id: string; version: number }>
+  // Every route the stack's api app added while it got ready, every /api route among them (NTI-01).
+  routes: readonly { method: string; url: string }[]
   // A role row inserted (or revoked) as the superuser and nothing else: no session is ended, so it
   // models a grant that skipped C0.16's rule of ending the grantee's sessions first (D46 I3).
   // Answers the person as signIn() should now treat them.
@@ -538,7 +583,10 @@ function setCookiesOf(header: unknown): string[] {
 
 // passkeysForTests switches the dormant passkeys on for the stack's main api (D46; the dormant
 // suite only, scripts/guards/api-test-overrides.test.ts).
-export async function startStack(options: { recheckMs?: number; passkeysForTests?: boolean } = {}): Promise<Stack> {
+// admissionForTests sets the stack's realtime app's admission (RealtimeOptions; 'none' unless given).
+export async function startStack(
+  options: { recheckMs?: number; passkeysForTests?: boolean; admissionForTests?: Admission | 'none' | 'notice' } = {},
+): Promise<Stack> {
   const c = connection()
   if (!LOCAL_HOSTS.has(c.host)) {
     throw new Error(`Refusing to use Postgres on ${c.host}: the integration tests run on the local stack only.`)
@@ -621,7 +669,7 @@ export async function startStack(options: { recheckMs?: number; passkeysForTests
 
     // Every org of the run, by id; the stack's own has nobody in it but its Hearth system principal.
     const orgs = new Map<string, Org>()
-    async function newOrg(name = 'Another org'): Promise<Org> {
+    async function newOrg(name = 'Another org', o: { notice?: 'none' } = {}): Promise<Org> {
       const made: Org = { id: randomUUID(), system: randomUUID() }
       await query('insert into orgs (id, name) values ($1, $2)', [made.id, name])
       await query("insert into principals (id, org_id, kind, system_key) values ($1, $2, 'system', 'hearth')", [
@@ -632,6 +680,14 @@ export async function startStack(options: { recheckMs?: number; passkeysForTests
         `insert into feature_flags (org_id, key, enabled, locked) select $1, f.key, f.enabled, false from (${TEST_FLAG_ROWS}) f (key, enabled)`,
         [made.id],
       )
+      // A stand-in v0, published by Hearth, as the seed's (C0.9 PD-33).
+      if (o.notice !== 'none') {
+        await query('insert into notice_versions (org_id, version, body, published_by) values ($1, 0, $2, $3)', [
+          made.id,
+          STAND_IN_BODY,
+          made.system,
+        ])
+      }
       orgs.set(made.id, made)
       return made
     }
@@ -711,7 +767,7 @@ export async function startStack(options: { recheckMs?: number; passkeysForTests
       apiValkey: Redis,
       apiLogger: Logger,
       o: { publishRevoked?: boolean; sms?: FakeVerify; realTiming?: boolean; passkeysForTests?: boolean } = {},
-    ): Promise<{ app: FastifyInstance; flags: FlagCache }> {
+    ): Promise<{ app: FastifyInstance; flags: FlagCache; routes: readonly { method: string; url: string }[] }> {
       const afterResponse = new AfterResponse()
       const flags = flagCache({ logger: apiLogger })
       subscribed(apiValkey, flags, apiLogger)
@@ -736,9 +792,15 @@ export async function startStack(options: { recheckMs?: number; passkeysForTests
         },
       })
       closers.push(() => app.close())
+      // Every route, as Fastify adds it while the app gets ready (the hook reaches every plugin
+      // registered after it, so every /api route).
+      const routes: { method: string; url: string }[] = []
+      app.addHook('onRoute', route => {
+        for (const method of [route.method].flat()) routes.push({ method, url: route.url })
+      })
       await app.ready()
       queues.set(app, afterResponse)
-      return { app, flags }
+      return { app, flags, routes }
     }
 
     // A realtime app, built as main.ts builds the role: /ready with postgres, valkey and the gateway's
@@ -802,6 +864,10 @@ export async function startStack(options: { recheckMs?: number; passkeysForTests
         ...(o.revokeWithinMs === undefined ? {} : { revokeWithinMs: o.revokeWithinMs }),
         ...(o.recheckTimeoutMs === undefined ? {} : { recheckTimeoutMs: o.recheckTimeoutMs }),
         ...(o.wrapCheck === undefined ? {} : { wrapCheck: o.wrapCheck }),
+        // 'notice' leaves it unset: production's admission (realtime/index.ts).
+        ...((o.admissionForTests ?? 'none') === 'notice'
+          ? {}
+          : { admissionForTests: (o.admissionForTests ?? 'none') as Admission | 'none' }),
       })
       closers.push(() => app.close())
       await app.listen({ host: '127.0.0.1', port: 0 })
@@ -903,10 +969,18 @@ export async function startStack(options: { recheckMs?: number; passkeysForTests
       return instance
     }
 
-    const { app: api, flags: apiFlags } = await startApiOn(valkey, logger, {
+    const {
+      app: api,
+      flags: apiFlags,
+      routes,
+    } = await startApiOn(valkey, logger, {
       ...(options.passkeysForTests ? { passkeysForTests: true } : {}),
     })
-    const realtime = await startRealtimeApp({ recheckMs: options.recheckMs ?? SOCKET_RECHECK_MS, subscribe: true })
+    const realtime = await startRealtimeApp({
+      recheckMs: options.recheckMs ?? SOCKET_RECHECK_MS,
+      subscribe: true,
+      ...(options.admissionForTests === undefined ? {} : { admissionForTests: options.admissionForTests }),
+    })
     // The realtime app subscribes to both revocation channels in the background; a revocation
     // published before it has would be caught only by the re-check. Its full readiness says when it
     // listens on both (T19 item 12).
@@ -1094,7 +1168,14 @@ export async function startStack(options: { recheckMs?: number; passkeysForTests
     }
 
     async function person(
-      o: { roles?: PersonRole[]; left?: boolean; pin?: string; org?: 'second' | Org; e164?: string } = {},
+      o: {
+        roles?: PersonRole[]
+        left?: boolean
+        pin?: string
+        org?: 'second' | Org
+        e164?: string
+        acknowledged?: boolean
+      } = {},
     ): Promise<Person> {
       let inOrg = org
       if (o.org === 'second') {
@@ -1144,11 +1225,114 @@ export async function startStack(options: { recheckMs?: number; passkeysForTests
           keys.pinKeyId,
         ])
       }
+      const holdsPinRole = (o.roles ?? []).some(role => PIN_ROLES.includes(role))
+      const made = {
+        id,
+        orgId: inOrg.id,
+        e164,
+        local: e164.slice(3),
+        phoneNumberId: phone.id,
+        pin: o.pin,
+        holdsPinRole,
+      }
+      // Before the deactivation, as someone who acknowledged and then left would have.
+      if (o.acknowledged !== false) await acknowledge(made)
       if (o.left) {
         await query('update people set deactivated_at = now(), deactivated_by = $2 where id = $1', [id, inOrg.system])
       }
-      const holdsPinRole = (o.roles ?? []).some(role => PIN_ROLES.includes(role))
-      return { id, orgId: inOrg.id, e164, local: e164.slice(3), phoneNumberId: phone.id, pin: o.pin, holdsPinRole }
+      return made
+    }
+
+    // The org's latest version, acknowledged in the app with no device, as the seed's are.
+    async function acknowledge(who: Person): Promise<void> {
+      await query(
+        `insert into notice_acknowledgments (org_id, person_id, notice_version_id, method)
+         select v.org_id, $2, v.id, 'in_app' from notice_versions v
+         where v.org_id = $1 order by v.version desc limit 1
+         on conflict (org_id, person_id, notice_version_id) do nothing`,
+        [who.orgId, who.id],
+      )
+    }
+
+    // Work as the superuser acting as someone in the org, in a transaction of its own (as
+    // bootstrapClearance() acts as Hearth).
+    async function actingAs<T>(inOrg: Org, actor: string, work: () => Promise<T>): Promise<T> {
+      await query('begin')
+      try {
+        await query("select set_config('app.org_id', $1, true), set_config('app.user_id', $2, true)", [inOrg.id, actor])
+        const result = await work()
+        await query('commit')
+        return result
+      } catch (error) {
+        await query('rollback')
+        throw error
+      }
+    }
+
+    async function publishNotice(
+      inOrg: Org,
+      dpo: Person,
+      o: { acknowledge?: readonly Person[] } = {},
+    ): Promise<{ id: string; version: number }> {
+      // Every active purpose needs a basis and a retention before the notice can state it (PD-37):
+      // the defaults (the four active from the start, A-05) have neither.
+      const entries = await query<{
+        purpose: string
+        version: number
+        status: string
+        basis: string | null
+        basis_reference: string | null
+        opt_out_days: number | null
+        retention: string | null
+        providers: string[]
+      }>(
+        `select distinct on (purpose) purpose, version, status, basis, basis_reference, opt_out_days, retention, providers
+         from processing_register where org_id = $1 and not ai order by purpose, version desc`,
+        [inOrg.id],
+      )
+      for (const entry of entries.filter(
+        row => row.status === 'active' && (row.basis === null || row.retention === null),
+      )) {
+        await actingAs(inOrg, dpo.id, () =>
+          query(
+            `select public.set_register_purpose($1, $2::integer, 'active', $3, $4, $5::integer, $6, $7::text[], $8, null, null)`,
+            [
+              entry.purpose,
+              entry.version,
+              entry.basis ?? 'employment',
+              entry.basis === null ? null : entry.basis_reference,
+              entry.opt_out_days,
+              entry.retention ?? HARNESS_RETENTION,
+              entry.providers,
+              randomUUID(),
+            ],
+          ),
+        )
+      }
+      const draft = await withOrg(db, { orgId: inOrg.id, userId: dpo.id }, trx => noticeDraft(trx, inOrg.id), {
+        readOnly: true,
+      })
+      if (draft.body === null || draft.problems.length > 0) {
+        throw new Error(`publishNotice: the draft can't be published (${draft.problems.map(p => p.code).join(', ')})`)
+      }
+      const body = draft.body
+      const [published] = await actingAs(inOrg, dpo.id, () =>
+        query<{ notice: string; version: number }>(
+          `select notice, version from public.publish_notice($1::integer, $2, $3, $4::text[], $5::integer[], $6::uuid[], $7, null, null)`,
+          [
+            draft.latest?.version ?? null,
+            body,
+            NOTICE_GENERATOR,
+            draft.sources.purposes.map(purpose => purpose.key),
+            draft.sources.purposes.map(purpose => purpose.version),
+            draft.sources.clearances.map(clearance => clearance.id),
+            randomUUID(),
+          ],
+        ),
+      )
+      if (published === undefined) throw new Error('publish_notice() returned no row')
+      for (const who of o.acknowledge ?? []) await acknowledge(who)
+      return { id: published.notice, version: published.version }
     }
 
     // Whether the person holds a PIN role now, read from their unrevoked role rows.
@@ -1418,9 +1602,12 @@ export async function startStack(options: { recheckMs?: number; passkeysForTests
         return cache
       },
       person,
+      acknowledge,
+      publishNotice,
+      routes,
       grantRole,
       revokeRole,
-      newOrg: () => newOrg(),
+      newOrg: (o = {}) => newOrg('Another org', o),
       number,
       newPin,
       client,

@@ -8,7 +8,7 @@
 // 10 minutes (otp-n10m), 10 a day, 10 checks a number a day, and 30 code requests an IP in 10
 // minutes (otp-ip; every request here comes from 127.0.0.1). So:
 // - no number is asked for more than twice in a run;
-// - a run asks for at most 25 codes in all;
+// - a run asks for at most 25 codes in all (this table spends 23);
 // - no number is used by two projects that can run at the same time (chromium, webkit and firefox
 //   do; global setup runs before them and session-end after), because a second request for a number
 //   replaces its code (T14 item 4) and the first test's code would stop working.
@@ -18,9 +18,10 @@
 // Admin, so he signs in on the code alone, D46); Kelvin is live.spec's own; Priya and Wei Ling hold
 // PIN roles (Leadership; Wei Ling is also the Compliance Officer), for the PIN steps (AQ-02); Ashton
 // (Owner, DPO) holds PIN roles too, and dpo.spec.ts signs him in once through the api, setting his
-// PIN, for the DPO's registers (C0.9 PD-26); Nadia is on the roster with no account yet (ACC-03:
-// her first sign-in makes it); +65 8000 9999 and the +65 8000 90NN numbers are off the roster: they
-// get the same answer and never a text (PRD-53). Ashton keeps a second code, and Ahmad
+// PIN, for the DPO's registers and Notice tab (C0.9 PD-26, PD-48), and session-end.spec.ts once
+// more, after every other project, to publish the notice's version 1 (SE-05, PD-55); Nadia is on
+// the roster with no account yet (ACC-03: her first sign-in makes it); +65 8000 9999 and the +65
+// 8000 90NN numbers are off the roster: they get the same answer and never a text (PRD-53). Ahmad
 // (Leadership) and Arjun (Admin, AI Admin) are kept, for C0.16's re-authentication specs.
 
 export type Project = 'chromium' | 'webkit' | 'firefox' | 'chromium-session-end'
@@ -78,7 +79,8 @@ export const PERSONAS = {
     { what: 'SI-10 ACC-03', stage: 'chromium', requests: 1 },
   ]),
   ashton: person('Ashton', '+6580000001', { roster: true, account: true, pinRole: true }, [
-    { what: 'DPP-E1 to DPP-E3 PDPA-13 the DPO, the PIN set', stage: 'chromium', requests: 1 },
+    { what: 'DPP-E1 to DPP-E6 PDPA-13 the DPO, the PIN set', stage: 'chromium', requests: 1 },
+    { what: 'SE-05 PDPA-03 the DPO publishes the notice', stage: 'chromium-session-end', requests: 1 },
   ]),
   priya: person('Priya', '+6580000002', { roster: true, account: true, pinRole: true }, [
     { what: 'SI-09 AQ-02 set the PIN, sign out, enter it', stage: 'chromium', requests: 2 },

@@ -14,11 +14,19 @@
 // - PDPA-01's warnings, which never block, in a polite live region as the basis changes them;
 // - what blocks the save (purposeProblems), which holds Save with the reason.
 // Save sends the version the page read; a newer one is refused with register_changed and Reload
-// (PD-25). The router loads this module lazily (router/router.tsx).
+// (PD-25).
+//
+// The published notice (C0.9 PD-40, PD-48, PD-61; B-04): the Notice link's badge and a banner say
+// whether it still says what the register says; a card says when its purpose waits for the next
+// notice, or when a pinned purpose's change already applies to everyone; and once a generated
+// version is published, the dialog says that saving a notified purpose turns off what serves it
+// until the next publish, and asks before saving a pinned one (dpo/notice-markers.tsx). The router
+// loads this module lazily (router/router.tsx).
 import { PURPOSE_STATUSES, type PurposeKey, type PurposeRowForClient } from '@hearth/shared'
 import { Pencil } from 'lucide-react'
 import { useId, useState } from 'react'
 import { DPO, PROVIDER_NAMES } from '@/strings/dpo.ts'
+import { NOTICE_MARKERS } from '@/strings/dpo-notice.ts'
 import {
   BASIS_LABELS,
   PURPOSE_PROBLEM_COPY,
@@ -31,8 +39,23 @@ import { Dialog } from '@/ui/Dialog.tsx'
 import { Segmented } from '@/ui/Segmented.tsx'
 import { Select } from '@/ui/Select.tsx'
 import { SHOWN_PROVIDERS } from './model.ts'
+import {
+  NoticeBadge,
+  NoticeBanner,
+  noticeGenerated,
+  PurposeNoticeMarker,
+  purposeSaveEffect,
+  SaveStopsNote,
+} from './notice-markers.tsx'
 import { CheckRow, Facts, Note, Pill, TextField } from './parts.tsx'
-import { type PurposeForm, purposeBodyOf, purposeEditor, purposeFormOf, purposeView } from './purposes-model.ts'
+import {
+  type PurposeForm,
+  purposeBodyOf,
+  purposeEditor,
+  purposeEntryOf,
+  purposeFormOf,
+  purposeView,
+} from './purposes-model.ts'
 import { RegisterPage, useRegisterWrite, WriteRefusal } from './RegisterPage.tsx'
 
 const STATUS_TONE = { planned: 'muted', active: 'ok', retired: 'plain' } as const
@@ -46,6 +69,7 @@ function PurposeCard({ row, onEdit }: { row: PurposeRowForClient; onEdit(): void
         <Pill tone={STATUS_TONE[view.status]}>{view.statusLabel}</Pill>
       </div>
       <Facts facts={view.facts} />
+      <PurposeNoticeMarker row={row} />
       {view.pinned && <p className="text-small text-muted">{PURPOSES_COPY.pinned}</p>}
       <Button icon={Pencil} className="self-start" aria-label={DPO.edit(view.label)} onClick={onEdit}>
         {DPO.editButton}
@@ -54,19 +78,61 @@ function PurposeCard({ row, onEdit }: { row: PurposeRowForClient; onEdit(): void
   )
 }
 
-// Exported for its markup test (dpo/dpo.markup.test.tsx).
-export function PurposeDialog({ row, onClose }: { row: PurposeRowForClient; onClose(): void }) {
+// The entry a form would save differs from the saved one.
+const entryChanged = (row: PurposeRowForClient, form: PurposeForm): boolean =>
+  JSON.stringify(purposeEntryOf(form)) !== JSON.stringify(purposeEntryOf(purposeFormOf(row)))
+
+// Exported for its markup test (dpo/dpo.markup.test.tsx). generated: the latest published version
+// is a generated one (noticeGenerated), so a change here makes the notice out of date.
+export function PurposeDialog({
+  row,
+  generated = false,
+  onClose,
+}: {
+  row: PurposeRowForClient
+  generated?: boolean
+  onClose(): void
+}) {
   const [form, setForm] = useState<PurposeForm>(() => purposeFormOf(row))
+  // A pinned purpose's change is waiting for its confirmation (B-04).
+  const [confirming, setConfirming] = useState(false)
   const editor = purposeEditor(row.purpose, form)
+  const effect = purposeSaveEffect(row, entryChanged(row, form), generated)
   const writer = useRegisterWrite(onClose)
   const formId = useId()
   const label = purposeView(row).label
   const set = (change: Partial<PurposeForm>) => setForm(before => ({ ...before, ...change }))
   const held = writer.pending ? DPO.saving : editor.problems.length > 0 ? DPO.fixFirst : undefined
+  const save = () => writer.send({ kind: 'purpose', body: purposeBodyOf(row, form) })
   const submit = () => {
     if (held !== undefined) return
-    writer.send({ kind: 'purpose', body: purposeBodyOf(row, form) })
+    if (effect === 'confirm') setConfirming(true)
+    else save()
   }
+
+  if (confirming) {
+    return (
+      <Dialog
+        open
+        onClose={onClose}
+        title={NOTICE_MARKERS.pinnedConfirm.title}
+        footer={
+          <>
+            <Button onClick={() => setConfirming(false)}>{NOTICE_MARKERS.pinnedConfirm.back}</Button>
+            <Button variant="primary" disabledReason={writer.pending ? DPO.saving : undefined} onClick={save}>
+              {NOTICE_MARKERS.pinnedConfirm.confirm}
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <WriteRefusal writer={writer} />
+          <p>{NOTICE_MARKERS.pinnedConfirm.body}</p>
+        </div>
+      </Dialog>
+    )
+  }
+
   const basisOptions = [
     { value: '', label: DPO.notRecorded },
     ...editor.bases.map(basis => ({ value: basis, label: BASIS_LABELS[basis] })),
@@ -171,7 +237,7 @@ export function PurposeDialog({ row, onClose }: { row: PurposeRowForClient; onCl
               />
             ))}
           </fieldset>
-          <div role="status">
+          <div role="status" className="flex flex-col gap-4">
             {editor.warnings.length > 0 && (
               <Note
                 tone="warn"
@@ -179,6 +245,7 @@ export function PurposeDialog({ row, onClose }: { row: PurposeRowForClient; onCl
                 items={editor.warnings.map(warning => PURPOSE_WARNING_COPY[warning])}
               />
             )}
+            {effect === 'stops' && <SaveStopsNote text={NOTICE_MARKERS.purposeStops} />}
           </div>
           {editor.problems.length > 0 && (
             <Note
@@ -196,11 +263,12 @@ export function PurposeDialog({ row, onClose }: { row: PurposeRowForClient; onCl
 export function PurposesScreen() {
   const [editing, setEditing] = useState<PurposeKey | undefined>()
   return (
-    <RegisterPage current="purposes">
+    <RegisterPage current="purposes" noticeBadge={registers => <NoticeBadge status={registers.notice} />}>
       {registers => {
         const row = registers.purposes.find(each => each.purpose === editing)
         return (
           <>
+            <NoticeBanner registers={registers} />
             <p className="text-muted">{PURPOSES_COPY.intro}</p>
             <ul className="flex flex-col gap-3">
               {registers.purposes.map(each => (
@@ -211,7 +279,14 @@ export function PurposesScreen() {
               <p>{PURPOSES_COPY.startsWhenNotified}</p>
               <p>{PURPOSES_COPY.laterStages}</p>
             </div>
-            {row !== undefined && <PurposeDialog key={row.purpose} row={row} onClose={() => setEditing(undefined)} />}
+            {row !== undefined && (
+              <PurposeDialog
+                key={row.purpose}
+                row={row}
+                generated={noticeGenerated(registers)}
+                onClose={() => setEditing(undefined)}
+              />
+            )}
           </>
         )
       }}

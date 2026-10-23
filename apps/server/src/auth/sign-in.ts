@@ -36,12 +36,13 @@ import {
   type CodeSentSchema,
   type CodeVerifiedSchema,
   normalisePhone,
+  type ProviderKey,
   pinProblem,
   type SignedInSchema,
 } from '@hearth/shared'
 import { sql } from 'kysely'
 import type { z } from 'zod'
-import { holdsPinRoleNow } from '#src/access/world.ts'
+import { holdsPinRoleNow, holdsRoleNow } from '#src/access/world.ts'
 import type { Api } from '#src/api.ts'
 import {
   type Attempt,
@@ -69,6 +70,7 @@ import { pinState } from '#src/auth/pin-lock.ts'
 import { LIMITS, OTP, PASSKEY_CHALLENGE_TTL_MS } from '#src/auth/policy.ts'
 import { AttemptStale, type IssuedSession, issueSession, numberStillTheirs } from '#src/auth/sessions.ts'
 import { type SmsProvider, SmsProviderError, type Verdict } from '#src/auth/sms/provider.ts'
+import { codeHeldBack, type HeldBack, type SendState } from '#src/compliance/transfers.ts'
 import { type InOrg, withOrg } from '#src/db/database.ts'
 import { personByPhone } from '#src/db/pre-org.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
@@ -118,6 +120,53 @@ export async function giveBack(api: Api, info: ReqInfo, windows: readonly Window
   } catch (error) {
     info.log.warn({ err: error, event: 'limit_give_back_failed' }, 'a code check could not be given back')
   }
+}
+
+// Logs a code the transfer gate held back (PDPA-10; C0.9 PD-15, PD-59, TECH-SPEC T22 item 8), with
+// the provider's name and the person's id, never the number: an entry not cleared, and a published
+// notice that no longer states the clearance, at error, since codes have stopped for everyone but
+// the DPO (C0.13 alarms on both); no notice published yet at info, which is expected before v0.
+export function logHeldBack(
+  info: ReqInfo,
+  held: { state: SendState; send: HeldBack },
+  line: { provider: string; personId: string },
+  what: 'sign-in' | 're-authentication',
+): void {
+  if (held.send === 'skipped_no_notice') {
+    info.log.info(
+      { event: 'sms_provider_no_notice', ...line },
+      `a ${what} code was not sent: until the first notice is published, codes go to the Data Protection Officer alone`,
+    )
+  } else if (held.send === 'skipped_unstated') {
+    info.log.error(
+      { event: 'sms_provider_unstated', ...line },
+      `a ${what} code was not sent: sign-in codes stop for everyone but the DPO until a new notice is published`,
+    )
+  } else {
+    info.log.error(
+      { event: 'sms_provider_not_cleared', ...line },
+      `a ${what} code was not sent: the provider is not cleared in the transfer register`,
+    )
+  }
+}
+
+// Whether the transfer gate lets a code go to this person through the provider, asked in the
+// transaction that decides the send, after the person's row (FOR SHARE) and their number are read
+// (C0.9 PD-15, PD-59; B-03, C-01): whether they hold dpo, read with no lock on role_assignments,
+// then the provider's send state, whose clearance reads are FOR SHARE (transfer_send_state()). So the
+// locks go people FOR SHARE, then the open clearance (transfer_clearances) FOR SHARE, in the lock
+// order; the notice is read with no lock. Undefined when the code may go; otherwise what it is
+// audited and logged as.
+export async function transferHolds(
+  api: Api,
+  trx: InOrg,
+  provider: ProviderKey,
+  person: { orgId: string; personId: string; holdsDpo?: boolean },
+): Promise<{ state: SendState; send: HeldBack } | undefined> {
+  const holdsDpo = person.holdsDpo ?? (await holdsRoleNow(trx, person.orgId, person.personId, 'dpo'))
+  const state = await api.transfers.state(trx, provider)
+  const send = codeHeldBack(state, holdsDpo)
+  return send === undefined ? undefined : { state, send }
 }
 
 // The per-IP subject: an IPv4 address, or an IPv6 /64, as a keyed hash.
@@ -360,9 +409,7 @@ async function deliverCode(
   }
   const { orgId, personId, phoneNumberId } = match
   const send = await withOrg(api.db, { orgId, system: true }, async trx => {
-    const audit = (
-      send: 'attempted' | 'skipped_left' | 'skipped_number_removed' | 'skipped_not_cleared' | 'skipped_cap',
-    ) =>
+    const audit = (send: 'attempted' | 'skipped_left' | 'skipped_number_removed' | HeldBack | 'skipped_cap') =>
       writeAudit(trx, {
         orgId,
         actorId: null,
@@ -388,15 +435,17 @@ async function deliverCode(
     // open clearance is read FOR SHARE in this transaction (C0.9 PD-15, TECH-SPEC T22 item 8), so a
     // withdrawal in progress is waited for. The provider is called after the commit, so one that
     // commits in between can't stop this code; and only starting a code is gated, so checks and
-    // cancels of codes already sent go on for up to their lifetime. When it isn't cleared nothing
-    // is sent, and the reply stays the same as for any other request.
-    if (sms.transfer !== null && !(await api.transfers.cleared(trx, sms.transfer))) {
-      await audit('skipped_not_cleared')
-      info.log.error(
-        { event: 'sms_provider_not_cleared', provider: sms.name, personId },
-        'a sign-in code was not sent: the provider is not cleared in the transfer register',
-      )
-      return false
+    // cancels of codes already sent go on for up to their lifetime. From C0.9 PR 2 the code goes to
+    // everyone only while the published notice states the clearance, and to the DPO alone before
+    // the first version or once a stated fact has changed (PD-59, transferHolds). When it is held
+    // back nothing is sent, and the reply stays the same as for any other request.
+    if (sms.transfer !== null) {
+      const held = await transferHolds(api, trx, sms.transfer, { orgId, personId })
+      if (held !== undefined) {
+        await audit(held.send)
+        logHeldBack(info, held, { provider: sms.name, personId }, 'sign-in')
+        return false
+      }
     }
     let capped: 'sms_global_cap' | 'sms_cap_unavailable' | undefined
     try {

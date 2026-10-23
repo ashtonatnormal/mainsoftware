@@ -7,7 +7,9 @@
 //
 // The same holds for C0.9's defaults (C0.9 PD-01): every PD id that code cites in apps/,
 // packages/, scripts/ and db/ (the migration and the DB tests cite them too) is one TECH-SPEC T22
-// records; "PD-04/05" names both.
+// records; "PD-04/05" names both. T22 records every default from PD-01 to the last its index row
+// names (PD-62 from C0.9 PR 2: PD-32 to PD-57 and the amendments' PD-58 to PD-62), with no gap, so
+// the index row and the items agree.
 import { describe, expect, it } from 'vitest'
 import { readRepoFile, repoFiles } from './repo-files'
 
@@ -121,5 +123,29 @@ describe('C0.9 T22: the defaults code cites are recorded in TECH-SPEC T22', () =
     // Code does cite C0.9's defaults, so an empty match would mean the guard reads nothing.
     expect([...files.values()].some(text => pdIdsIn(text).size > 0)).toBe(true)
     expect(danglingPd(files, recorded)).toEqual([])
+  })
+})
+
+describe('C0.9 PR 2 T22: the defaults are recorded with no gap, up to the index row’s last', () => {
+  // The highest PD id the T22 index row names ("PD-01 to PD-62").
+  const lastNamed = (spec: string): number | undefined => {
+    const row = spec.split('\n').find(line => line.startsWith('| T22 |'))
+    const found = row?.match(/\bPD-01 to PD-(\d+)\b/)
+    return found?.[1] === undefined ? undefined : Number(found[1])
+  }
+  const missing = (recorded: ReadonlySet<string>, last: number): string[] =>
+    Array.from({ length: last }, (_, i) => `PD-${String(i + 1).padStart(2, '0')}`).filter(id => !recorded.has(id))
+
+  it('finds a gap on planted text, and the index row’s last id', () => {
+    expect(lastNamed('| T22 | x (PD-01 to PD-07) | y |\n| T23 | (PD-01 to PD-99) |')).toBe(7)
+    expect(lastNamed('| T21 | (PD-01 to PD-07) |')).toBeUndefined()
+    expect(missing(pdIdsIn('PD-01, PD-02/03 and PD-05'), 5)).toEqual(['PD-04'])
+  })
+
+  it('C0.9 PD-32 to PD-62: T22 records PD-01 to the last id its index row names, PD-62 or later', () => {
+    const spec = readRepoFile('docs/TECH-SPEC.md')
+    const last = lastNamed(spec)
+    expect(last).toBeGreaterThanOrEqual(62)
+    expect(missing(pdIdsIn(sectionOf(spec, 'T22')), last ?? 0)).toEqual([])
   })
 })

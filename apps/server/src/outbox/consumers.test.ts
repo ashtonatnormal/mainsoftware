@@ -303,6 +303,67 @@ describe('C0.6 T16 one round of an outbox consumer', () => {
     }
   })
 
+  it('PGT-15 C0.9 A-12 PD-51 T22 item 32: a register gone stale mid-round never withholds: the round rolls back, keeps its place and handles the event once the purpose is allowed again', async () => {
+    const batch = [eventRow(4, 'person.deactivated'), eventRow(5, 'person.deactivated', [OTHER])]
+    // Admitted on a register that allows the purpose; it goes stale once the round has read its
+    // batch, so the purpose and every subject's switch read as refused (FlagCache.register()
+    // answers undefined).
+    let stale = false
+    let goesStale = true
+    const gate: Gate = {
+      ...coreOnlyGate,
+      purposeAllowed: () => !stale,
+      processingAllowed: () => {
+        if (goesStale) {
+          goesStale = false
+          stale = true
+        }
+        return !stale
+      },
+    }
+    const { spec, handled } = consumer({ purpose: 'security_audit' })
+    const p = pool({ batch })
+    const { run, log } = runner(p, [spec], { gate })
+    expect(await run.round(spec, ORG)).toBe('refused')
+    expect(p.texts().at(-1)).toBe('rollback')
+    expect(p.texts().some(text => text.startsWith('update outbox_checkpoints'))).toBe(false)
+    expect(handled).toEqual([])
+    expect(log.events('outbox_event_withheld')).toEqual([])
+    expect(log.events('outbox_round_refused')).toEqual([
+      expect.objectContaining({ level: 30, consumer: 'it_projection', org: ORG, reason: 'register_unconfirmed' }),
+    ])
+    // While it stays stale, the next round isn't admitted at all.
+    expect(await run.round(spec, ORG)).toBe('refused')
+    expect(log.events('outbox_consumer_refused')).toEqual([expect.objectContaining({ reason: 'purpose_refused' })])
+    // Confirmed again: the same events are read and handled, and the checkpoint moves past them.
+    stale = false
+    expect(await run.round(spec, ORG)).toBe('idle')
+    expect(handled.map(events => events.map(event => event.id))).toEqual([['4', '5']])
+    expect(
+      p.statements
+        .filter(s => s.text.startsWith('update outbox_checkpoints'))
+        .at(-1)
+        ?.values.slice(0, 3),
+    ).toEqual(['1005', '5', 2])
+  })
+
+  it('PGT-15 C0.9 PD-51: a refusal while the purpose is still allowed is the subject’s own switch, and still withholds that event alone', async () => {
+    const batch = [eventRow(4, 'person.deactivated', [OTHER]), eventRow(5, 'person.deactivated')]
+    const gate: Gate = {
+      ...coreOnlyGate,
+      purposeAllowed: () => true,
+      processingAllowed: (_org, subject) => subject !== OTHER,
+    }
+    const { spec, handled } = consumer({ purpose: 'security_audit' })
+    const p = pool({ batch })
+    const { run, log } = runner(p, [spec], { gate })
+    expect(await run.round(spec, ORG)).toBe('idle')
+    expect(handled.map(events => events.map(event => event.id))).toEqual([['5']])
+    expect(log.events('outbox_event_withheld')).toEqual([expect.objectContaining({ eventId: '4' })])
+    expect(log.events('outbox_round_refused')).toEqual([])
+    expect(p.texts().at(-1)).toBe('commit')
+  })
+
   it('C0.7 m4: moves the checkpoint past a round whose handle() passed over every event', async () => {
     const p = pool({ batch: [eventRow(4, 'signin.ended'), eventRow(5, 'signin.ended')] })
     const { spec } = consumer({ handle: async () => {} })

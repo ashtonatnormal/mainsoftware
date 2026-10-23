@@ -13,7 +13,9 @@
 --   aa a former Admin (role revoked)
 --   ab an agent                     ac a8's assistant
 --   c1 department    d1 team    d2 archived team    e1 a8's device    e2 a8's session
---   e3 notice v1     e7 a8's passkey (added on e1)
+--   e3 notice v0, a stand-in (no generator, 0010) that lists accounts at version 1 and e5, which a8
+--      acknowledged on e1
+--   e7 a8's passkey (added on e1)
 --   b1 a review schedule      b2 its run, interrupted (a crash)
 --   b3 a queued job           b4 a running job, under lease token b5 (both on core.system)
 --   e4 a8's withdrawal (processing restriction) of presence_receipts, which a5 (the DPO) recorded
@@ -190,6 +192,14 @@ begin
   insert into public.transfer_clearances (id, org_id, entry_id, cleared_by, cleared_via)
   select pg_temp.id(o, 'e5'), org, t.id, pg_temp.id(o, 'a5'), 'app'
   from public.transfer_register t where t.org_id = org and t.provider = 'aws';
+
+  -- The notice's links (0010): e3 lists accounts at version 1 and aws's clearance e5, so both link
+  -- tables have a row in each org (020). e3 is still a stand-in, so the transfer gate answers as it
+  -- did before 0010 (155).
+  insert into public.notice_version_purposes (org_id, notice_version_id, purpose, register_version)
+    values (org, pg_temp.id(o, 'e3'), 'accounts', 1);
+  insert into public.notice_version_providers (org_id, notice_version_id, clearance_id)
+    values (org, pg_temp.id(o, 'e3'), pg_temp.id(o, 'e5'));
 end
 $$;
 

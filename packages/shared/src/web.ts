@@ -25,28 +25,44 @@ export const PersonName = z
   .min(1)
   .refine(name => codePoints(name) <= NAME_MAX, { message: `at most ${NAME_MAX} characters` })
 
+// Where someone stands with their org's privacy notice (PDPA-03, ACC-12; C0.9 PD-43, TECH-SPEC
+// T22 item 28), read from the latest published version and their acknowledgements of it:
+//   acknowledged  they acknowledged the latest version
+//   required      a version is published and they haven't acknowledged the latest
+//   unpublished   the org has published no version yet (OD-01)
+// packages/access's noticeAdmits() decides what each lets through. Defined here, beside the session
+// answer that carries it, so notice.ts can build on this file without a cycle.
+export const NOTICE_STANDINGS = ['acknowledged', 'required', 'unpublished'] as const
+export type NoticeStanding = (typeof NOTICE_STANDINGS)[number]
+
 // GET /api/session (T21 item 10): what the shell needs and nothing more. No phone number and no
 // roles: what the person may open is said by capability booleans decided by can(), never by roles.
 //   registers  can() allows register.read: the DPO pages and their avatar-menu entry (C0.9 PD-26).
-// C0.16 adds more as its screens need them.
+// C0.16 adds more as its screens need them. notice is the person's standing with the current
+// privacy notice (C0.9 PD-46): the shell starts the gateway only once it is acknowledged, and sends
+// the person to /notice otherwise.
 export const SessionResponse = z.strictObject({
   personId: LowerUuid,
   name: PersonName,
   // An IANA zone name, as is_iana_time_zone() admits it (migration 0001); none is near 64 characters.
   timeZone: z.string().min(1).max(64),
   capabilities: z.strictObject({ registers: z.boolean() }),
+  notice: z.enum(NOTICE_STANDINGS),
 })
 export type SessionJSON = z.infer<typeof SessionResponse>
 
 // The web app's reading of the same answer: an empty or missing zone falls back to the pilot's,
 // and extra fields are dropped, so neither stops the shell from starting. A capability reads true
 // only when the answer says true; missing, of another type or under an unreadable capabilities
-// field, it reads false, so the shell offers nothing the server didn't (P6).
+// field, it reads false, so the shell offers nothing the server didn't (P6). A standing it can't
+// read reads as required, so the shell sends the person to /notice, whose own answer decides
+// (C0.9 PD-46).
 export const SessionResponseForClient = z.object({
   personId: z.string().min(1),
   name: z.string().min(1),
   timeZone: z.string().min(1).catch(DEFAULT_TIME_ZONE),
   capabilities: z.object({ registers: z.boolean().catch(false) }).catch({ registers: false }),
+  notice: z.enum(NOTICE_STANDINGS).catch('required'),
 })
 export type SessionForClient = z.infer<typeof SessionResponseForClient>
 

@@ -176,6 +176,31 @@ from public.transfer_clearances where org_id = pg_temp.id('1', '00');
 select pg_temp.check(count(*) = 0, 'org 2''s changes wrote an audit row in org 1')
 from public.audit_events where org_id = pg_temp.id('1', '00') and action like 'register.%';
 
+-- The notice (0010, C0.9 PR 2). Its functions are SECURITY DEFINER too, and filter by the org the
+-- server set: org 1's DPO or member named in an org 2 transaction can neither publish nor
+-- acknowledge (42501), an org 1 version is no version of org 2's (22023), and the transfer gate's
+-- answer and the stated clearances are org 2's own.
+select set_config('app.org_id', pg_temp.id('2', '00')::text, true), set_config('app.user_id', pg_temp.id('1', 'a5')::text, true);
+set local role hearth_app;
+select pg_temp.expect_error($$select * from public.publish_notice(0, 'Body', 'c09.1', '{}', '{}', '{}', null, null, null)$$, '42501',
+                            'Only the Data Protection Officer can publish the notice.');
+select set_config('app.user_id', pg_temp.id('1', 'a8')::text, true);
+select pg_temp.expect_error($$select * from public.acknowledge_notice('f1000000-0000-4000-8000-0000000000e3', null,
+  'f1000000-0000-4000-8000-0000000000e1', null)$$, '42501', 'Only someone still at the organisation%');
+reset role;
+select pg_temp.act_as('2', 'a8');
+select pg_temp.expect_error($$select * from public.acknowledge_notice('f1000000-0000-4000-8000-0000000000e3', null,
+  'f2000000-0000-4000-8000-0000000000e1', null)$$, '22023', 'There is no such version of the notice.');
+select pg_temp.expect_error($$select * from public.acknowledge_notice('f2000000-0000-4000-8000-0000000000e3', null,
+  'f1000000-0000-4000-8000-0000000000e1', null)$$, '42501', 'That device has been signed out.');
+select pg_temp.check(count(*) = 0 and public.transfer_send_state('aws') = 'not_cleared', 'org 2 sees a stated clearance after its withdrawal')
+from public.notice_provider_states();
+reset role;
+select pg_temp.act_as('1', 'a8');
+select pg_temp.check(public.transfer_send_state('aws') = 'cleared' and array_agg(provider) = '{aws}', 'org 2''s withdrawal reached org 1''s notice states')
+from public.notice_provider_states();
+reset role;
+
 -- No register row can point at another org's: a clearance of org 1's entry recorded in org 2, or a
 -- withdrawal by org 1's person recorded in org 2 (as the superuser, so only the checks stand in the
 -- way).
@@ -190,3 +215,11 @@ select pg_temp.expect_error($$insert into public.processing_register (org_id, pu
   basis, retention, recorded_by)
   values ('f2000000-0000-4000-8000-000000000000', 'backups', false, false, false, 2, 'active', 'employment', '35 days',
           'f1000000-0000-4000-8000-0000000000a5')$$, '23503', '%processing_register_org_id_recorded_by_fkey%');
+-- Nor a notice's link: org 2's version listing org 1's register version or clearance, or org 1's
+-- version listed in org 2 (C0.9 PD-34).
+select pg_temp.expect_error($$insert into public.notice_version_purposes (org_id, notice_version_id, purpose, register_version)
+  values ('f2000000-0000-4000-8000-000000000000', 'f1000000-0000-4000-8000-0000000000e3', 'accounts', 1)$$, '23503',
+  '%notice_version_purposes_org_id_notice_version_id_fkey%');
+select pg_temp.expect_error($$insert into public.notice_version_providers (org_id, notice_version_id, clearance_id)
+  values ('f2000000-0000-4000-8000-000000000000', 'f2000000-0000-4000-8000-0000000000e3', 'f1000000-0000-4000-8000-0000000000e5')$$,
+  '23503', '%notice_version_providers_org_id_clearance_id_fkey%');

@@ -1,10 +1,17 @@
 // How the server asks packages/access (Principle 1: every access check goes through can()). An
 // action re-reads the acting session in its own transaction, loads the facts C0.5's requests need
-// into a World, and lets can() decide, with the session's re-authentication as context.
+// into a World, and lets can() decide, with the session's re-authentication as context. From C0.9
+// PR 2 the acknowledgement gate (packages/access noticeAdmits(), PDPA-03) is asked first: in
+// consider() for a request's action, and in account.ts's actingBy() for a re-authentication. Only
+// those two files call actingSession() (C0.9 PD-43, NTS-05).
 import {
   can,
   type Facts,
   holdsPinRole,
+  NOTICE_FREE,
+  type NoticeUse,
+  noticeAdmits,
+  type OrgRole,
   type ReauthFacts,
   type Request,
   type RoleFact,
@@ -17,6 +24,7 @@ import { sql } from 'kysely'
 import { ApiError, reauthRefusal } from '#src/auth/errors.ts'
 import { REAUTH, SESSION } from '#src/auth/policy.ts'
 import { signedOut } from '#src/auth/sessions.ts'
+import { noticeStanding } from '#src/compliance/notice-standing.ts'
 import type { InOrg } from '#src/db/database.ts'
 import type { SessionIds } from '#src/db/pre-org.ts'
 
@@ -129,7 +137,7 @@ export async function loadWorld(trx: InOrg, orgId: string, options: { credential
 // exact for each of them. Nothing else is loaded, and can() is asked only about those people, and
 // only topic requests (realtime/topics.ts). No row is locked: teams and memberships are never
 // locked, so the lock order (CLAUDE.md, Database) is unchanged, and a writing transaction may use it
-// too (holdsPinRoleNow and reauthMethodNow below).
+// too (holdsPinRoleNow and holdsRoleNow below, and account.ts's actingBy()).
 export async function loadTopicWorld(trx: InOrg, orgId: string, people: readonly string[]): Promise<World> {
   const ids = [...new Set(people)]
   const { rows: persons } = await sql<{ id: string; deactivated_at: Date | null }>`
@@ -162,10 +170,13 @@ export async function holdsPinRoleNow(trx: InOrg, orgId: string, personId: strin
   return holdsPinRole(await loadTopicWorld(trx, orgId, [personId]), personId)
 }
 
-// How the acting session re-authenticates now (D46, packages/access reauthMethodOf), from its facts
-// and its person's roles, read in the transaction that acts on it, with no lock on role_assignments.
-export async function reauthMethodNow(trx: InOrg, session: SessionIds, facts: ReauthFacts): Promise<ReauthMethod> {
-  return reauthMethodOf(await loadTopicWorld(trx, session.orgId, [session.userId]), session.userId, facts)
+// Whether the person holds this role now (C0.9 PD-59, C-01), read the same way: in the transaction
+// that acts on it, after the person's row was read FOR SHARE, as its own statements with no lock on
+// role_assignments (hearth_app holds only SELECT there, so FOR SHARE would fail). The person's row is
+// where a grant meets the reader: dpo is a PIN role, and its grants take that row FOR NO KEY UPDATE
+// (T20 item 14). Sign-in's code delivery asks it about dpo before the transfer state (sign-in.ts).
+export async function holdsRoleNow(trx: InOrg, orgId: string, personId: string, role: OrgRole): Promise<boolean> {
+  return (await loadTopicWorld(trx, orgId, [personId])).holds(personId, role)
 }
 
 // A World of these facts, every other one empty, and the settings the strictest, so a request the
@@ -233,8 +244,22 @@ export async function authorise(
   throw refusalFor(verdict, refusal, { method, person: session.userId })
 }
 
+// The acknowledgement gate (PDPA-03, ACC-12; C0.9 PD-43, PD-44, TECH-SPEC T22 items 28 and 29):
+// whether the person's standing with the current notice lets this use through, decided by
+// packages/access noticeAdmits() over the World already loaded (whether they hold dpo, for the
+// setup uses before any version is published). The standing is one plain read in the request's own
+// transaction (compliance/notice-standing.ts), skipped for the exempt uses (NOTICE_FREE: the shell's
+// two GETs, your devices and sign-out, the notice's own routes), so OD-14's flags poll reads nothing
+// more. A refusal is 403 notice_required. It is a rule, never a flag.
+export async function requireNotice(trx: InOrg, session: SessionIds, world: World, use: NoticeUse): Promise<void> {
+  if (NOTICE_FREE.has(use)) return
+  const standing = await noticeStanding(trx, session.orgId, session.userId)
+  if (!noticeAdmits(world, session.userId, use, standing)) throw new ApiError(403, 'notice_required')
+}
+
 // authorise() without the throw on a refusal, for a service that answers some refusals itself (a
-// second deactivation, admin/people.ts). Still throws when the acting session has ended.
+// second deactivation, admin/people.ts). Still throws when the acting session has ended, and when
+// the acknowledgement gate refuses (403 notice_required, before can() and before any target lock).
 export async function consider(
   trx: InOrg,
   session: SessionIds,
@@ -246,6 +271,8 @@ export async function consider(
   const me = session.userId
   // Every C0.5 request about devices or passkeys is about the session's own person.
   let world = await loadWorld(trx, session.orgId, { credentialsOf: me })
+  // The notice first (C0.9 PD-43): an unacknowledged session is refused whatever can() would say.
+  await requireNotice(trx, session, world, request.action)
   // A stamp counts only when it was made by the session's own method: never on a session that only
   // a new sign-in mends (D46, reauthenticated()).
   let fresh = reauthenticated(world, me, acting)

@@ -63,8 +63,9 @@
 //    Never rely on seeing a particular code: 1006 is the fallback for all of them. After 30 s of
 //    failed reconnects, at a random point in the next 5 s, GET /api/flags: a 401 means go to sign-in.
 //    While 4403 or 4426 has the client paused, no socket can hear a 4401, so it asks GET /api/flags
-//    at a random point in the first 30 s and every 30 s after until it resumes: a 401 means go to
-//    sign-in. So every tab one 4403 paused polls /api/flags until the notice is acknowledged.
+//    at a random point in the first 30 s and every 30 s after until the notice is acknowledged
+//    (4403) or the page reloads (4426): a 401 means go to sign-in. So every tab one 4403 paused
+//    polls /api/flags until the notice is acknowledged.
 import { z } from 'zod'
 import { CODE, CODE_MAX, IDS_KEY, IDS_LIST_MAX, IDS_NUMBER_MAX, LowerUuid, UUID_SOURCE } from './ids.ts'
 

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { APP_PATHS, NAV_PATHS } from '@/router/paths.ts'
 import type { SessionRuntime } from '@/session/runtime.ts'
 import { aiCopyIn } from '@/strings/ai-copy.ts'
-import { AVATAR_MENU, dpoItem, type MenuSession, menuItemsFor, signOutItem } from './avatar-menu.ts'
+import { AVATAR_MENU, dpoItem, type MenuSession, menuItemsFor, settingsItem, signOutItem } from './avatar-menu.ts'
 import { activeTab, currentOf, MORE_ENTRIES, NAV, RAIL, TABS } from './nav.ts'
 
 // The toast the sign-out item raises when the sign-out fails, without the app's store.
@@ -28,9 +28,10 @@ describe('T21 OD-02: the navigation (shell/nav.ts)', () => {
       expect(phone.has(path), path).toBe(true)
       if (path !== '/more') expect(rail.has(path), path).toBe(true)
     }
-    // The app paths no navigation lists are the DPO's pages, which the avatar menu opens.
+    // The app paths no navigation lists are Settings and the DPO's pages, which the avatar menu
+    // opens (C0.9 PD-47).
     const unlisted = APP_PATHS.filter(path => !phone.has(path) && !rail.has(path))
-    expect(unlisted).toEqual(['/dpo/purposes', '/dpo/transfers'])
+    expect(unlisted).toEqual(['/settings', '/settings/privacy', '/dpo/purposes', '/dpo/transfers', '/dpo/notice'])
   })
 
   it('NV-02 T21 item 5 PRD:128 Principle 3: no AI, Ask, assistant or agent entry or path', () => {
@@ -82,11 +83,12 @@ describe('T21 OD-02: the navigation (shell/nav.ts)', () => {
     expect(TABS.map(entry => currentOf(entry, '/xyz', 'phone')).filter(Boolean)).toEqual([])
   })
 
-  it('NV-04 OD-05 C0.9 PD-26: AVATAR_MENU is Data protection then Sign out; Data protection shows only when the session’s capabilities allow the registers and opens /dpo/purposes; Sign out asks the runtime to sign out and says so only when that failed', async () => {
-    expect(AVATAR_MENU.map(item => item.label)).toEqual(['Data protection', 'Sign out'])
-    expect(AVATAR_MENU).toEqual([dpoItem, signOutItem])
+  it('NV-04 OD-05 C0.9 PD-26 PD-47: AVATAR_MENU is Settings, Data protection, then Sign out; Settings shows to everyone and opens /settings; Data protection shows only when the session’s capabilities allow the registers and opens /dpo/purposes; Sign out asks the runtime to sign out and says so only when that failed', async () => {
+    expect(AVATAR_MENU.map(item => item.label)).toEqual(['Settings', 'Data protection', 'Sign out'])
+    expect(AVATAR_MENU).toEqual([settingsItem, dpoItem, signOutItem])
     expect(dpoItem.shown?.({ capabilities: { registers: true } })).toBe(true)
     expect(dpoItem.shown?.({ capabilities: { registers: false } })).toBe(false)
+    expect(settingsItem.shown).toBeUndefined()
     expect(signOutItem.shown).toBeUndefined()
 
     const context = (answer: 'ended' | 'failed') => ({
@@ -98,6 +100,10 @@ describe('T21 OD-02: the navigation (shell/nav.ts)', () => {
     await dpoItem.run(opened)
     expect(opened.navigate.mock.calls).toEqual([['/dpo/purposes']])
     expect(opened.runtime.signOut).not.toHaveBeenCalled()
+    const settings = context('ended')
+    await settingsItem.run(settings)
+    expect(settings.navigate.mock.calls).toEqual([['/settings']])
+    expect(settings.runtime.signOut).not.toHaveBeenCalled()
 
     const ended = context('ended')
     await signOutItem.run(ended)
@@ -110,19 +116,19 @@ describe('T21 OD-02: the navigation (shell/nav.ts)', () => {
     expect(toasts).toEqual([{ tone: 'error', text: "Couldn't sign out. Check your connection and try again." }])
   })
 
-  it('DPP-07 C0.9 PD-26 P6: the menu a person sees: the DPO gets Data protection and Sign out, everyone else Sign out only; a session answer with no readable capability (missing, not a boolean, an unparsed cache entry) reads as not allowed', () => {
+  it('DPP-07 C0.9 PD-26 PD-47 P6 B-09: the menu a person sees: the DPO gets Settings, Data protection and Sign out, everyone else Settings and Sign out; a session answer with no readable capability (missing, not a boolean, an unparsed cache entry) reads as not allowed', () => {
     const labels = (session: MenuSession) => menuItemsFor(session).map(item => item.label)
-    expect(labels({ capabilities: { registers: true } })).toEqual(['Data protection', 'Sign out'])
-    expect(labels({ capabilities: { registers: false } })).toEqual(['Sign out'])
-    expect(labels({})).toEqual(['Sign out'])
-    expect(labels({ capabilities: {} })).toEqual(['Sign out'])
+    expect(labels({ capabilities: { registers: true } })).toEqual(['Settings', 'Data protection', 'Sign out'])
+    expect(labels({ capabilities: { registers: false } })).toEqual(['Settings', 'Sign out'])
+    expect(labels({})).toEqual(['Settings', 'Sign out'])
+    expect(labels({ capabilities: {} })).toEqual(['Settings', 'Sign out'])
     // The lenient reading the boot and the session query use: only a literal true reads true.
     const person = { personId: 'b0000000-0000-4000-8000-000000000001', name: 'Ashton', timeZone: 'Asia/Singapore' }
     const read = (capabilities: unknown) => SessionResponseForClient.parse({ ...person, capabilities })
     expect(read({ registers: true }).capabilities).toEqual({ registers: true })
     for (const capabilities of [undefined, null, 'yes', { registers: 'true' }, { registers: 1 }, {}]) {
       expect(read(capabilities).capabilities, JSON.stringify(capabilities)).toEqual({ registers: false })
-      expect(labels(read(capabilities)), JSON.stringify(capabilities)).toEqual(['Sign out'])
+      expect(labels(read(capabilities)), JSON.stringify(capabilities)).toEqual(['Settings', 'Sign out'])
     }
     expect(SessionResponseForClient.parse(person).capabilities).toEqual({ registers: false })
   })

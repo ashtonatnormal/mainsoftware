@@ -38,6 +38,12 @@ export type ApiPath =
   | '/api/admin/registers/transfers/record'
   | '/api/admin/registers/transfers/clear'
   | '/api/admin/registers/transfers/withdraw'
+  // The privacy notice (C0.9 PD-46 to PD-48): yours and your acknowledgement (/notice, Settings),
+  // and the DPO's draft and publishing (/dpo/notice).
+  | '/api/notice'
+  | '/api/notice/acknowledge'
+  | '/api/admin/notice'
+  | '/api/admin/notice/publish'
 
 // The client's own codes, for failures the server didn't name.
 export type ClientFailureCode = 'network' | 'invalid_response' | 'halted'

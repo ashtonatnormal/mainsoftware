@@ -13,6 +13,7 @@ describe('T21: the QueryClient (session/query-client.ts)', () => {
         [400, 'invalid_request'],
         [401, 'signed_out'],
         [403, 'forbidden'],
+        [403, 'notice_required'],
         [404, 'Not Found'],
         [409, 'wrong_step'],
         [422, 'pin_too_easy'],
@@ -104,5 +105,36 @@ describe('T21: the QueryClient (session/query-client.ts)', () => {
         .execute({}),
     )
     expect(fromMutation).toHaveBeenCalledTimes(1)
+  })
+
+  it('NTW-03 C0.9 PD-43 PD-46: a 403 notice_required from any query or mutation calls onNoticeRequired each time, and never onSignedOut; another 403 calls neither', async () => {
+    const onSignedOut = vi.fn()
+    const onNoticeRequired = vi.fn()
+    const client = createQueryClient(onSignedOut, { onNoticeRequired })
+    const reject = (error: unknown) => async () => {
+      throw error
+    }
+    const settle = (promise: Promise<unknown>) => promise.catch(() => {})
+    const queryFn = vi.fn(reject(failure(403, 'notice_required')))
+
+    await settle(client.fetchQuery({ queryKey: ['a'], queryFn }))
+    // Never retried, as no other 403 is.
+    expect(queryFn).toHaveBeenCalledTimes(1)
+    await settle(
+      client
+        .getMutationCache()
+        .build(client, { mutationFn: reject(failure(403, 'notice_required')) })
+        .execute({}),
+    )
+    await settle(client.fetchQuery({ queryKey: ['b'], queryFn: reject(failure(403, 'forbidden')) }))
+    // The same code on another status is not the notice's.
+    await settle(client.fetchQuery({ queryKey: ['c'], queryFn: reject(failure(400, 'notice_required')) }))
+    expect(onNoticeRequired).toHaveBeenCalledTimes(2)
+    expect(onSignedOut).not.toHaveBeenCalled()
+
+    // Without the option, the hint goes nowhere and nothing breaks.
+    const plain = createQueryClient(onSignedOut)
+    await settle(plain.fetchQuery({ queryKey: ['a'], queryFn: reject(failure(403, 'notice_required')) }))
+    expect(onSignedOut).not.toHaveBeenCalled()
   })
 })

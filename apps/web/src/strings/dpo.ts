@@ -14,11 +14,12 @@ import type { AI_PROVIDERS, ProviderKey } from '@hearth/shared'
 export type NonAiProviderKey = Exclude<ProviderKey, (typeof AI_PROVIDERS)[number]>
 
 export const DPO = {
-  // The links between the two registers, at the top of each page.
+  // The links between the two registers and the notice (C0.9 PD-48), at the top of each page.
   tabs: {
     label: 'Registers',
     purposes: 'Purposes',
     transfers: 'Transfers',
+    notice: 'Notice',
   },
   loading: 'Loading the register…',
   // GET /api/admin/registers refused with forbidden: anyone but the DPO (PD-20).

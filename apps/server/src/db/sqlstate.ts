@@ -1,8 +1,8 @@
 // The Postgres error codes (SQLSTATE) the server acts on, Hearth's own among them, and what a
 // failure may write to the logs (TECH-SPEC T15, T16, T17).
 //
-// Hearth's own codes are raised by migration 0007's and 0009's functions, so the server can tell a
-// refusal it expects from a failure:
+// Hearth's own codes are raised by migration 0007's, 0009's and 0010's functions, so the server can
+// tell a refusal it expects from a failure:
 //   HF001  a fence refused: the feature is off, or its flags changed since the server checked them
 //          (feature_fence, job_fence, job_finish). The caller reloads the flags and decides again.
 //   HF002  a job's lease has gone to another worker or the sweeper (job_fence, job_finish).
@@ -12,6 +12,11 @@
 //          edited (409 register_changed, which the page answers with a Reload; C0.9 PD-25).
 //   HF006  a register's writer or the clearance trigger (0009): a rule refuses the entry, such as a
 //          fact missing before clearing (400 register_invalid; the page lists what it needs).
+//   HF007  publish_notice() or acknowledge_notice() (0010): the notice or its sources moved since
+//          the caller looked (a newer version, the registers changed since the preview, or an
+//          acknowledgement of a version no longer the latest): 409 notice_changed (C0.9 PD-52).
+//   HF008  publish_notice() (0010): a rule refuses publishing, such as an active purpose with no
+//          basis or retention (400 notice_invalid; the page lists what it needs, PD-52).
 import { z } from 'zod'
 
 export const FEATURE_OFF = 'HF001'
@@ -20,6 +25,8 @@ export const FLAG_LOCKED = 'HF003'
 export const INVALID_COHORT = 'HF004'
 export const REGISTER_CHANGED = 'HF005'
 export const REGISTER_INVALID = 'HF006'
+export const NOTICE_CHANGED = 'HF007'
+export const NOTICE_INVALID = 'HF008'
 // invalid_parameter_value: set_feature_flag()'s unknown flag, a register's unknown key, a clean-up
 // batch out of range.
 export const INVALID_PARAMETER = '22023'

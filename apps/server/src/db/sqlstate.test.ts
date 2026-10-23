@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { failureFields, retryable, sqlstateOf } from '#src/db/sqlstate.ts'
+import {
+  failureFields,
+  NOTICE_CHANGED,
+  NOTICE_INVALID,
+  REGISTER_CHANGED,
+  REGISTER_INVALID,
+  retryable,
+  sqlstateOf,
+} from '#src/db/sqlstate.ts'
 import { pgError } from '#src/testing/pool.ts'
 
 // What a person might type, or a row might hold: it must reach no log line.
@@ -64,12 +72,24 @@ describe('C0.6 T15 which failures are worth trying again', () => {
       'HF004',
       'HF005',
       'HF006',
+      'HF007',
+      'HF008',
     ]) {
       expect(retryable(pgError(code)), code).toBe(false)
     }
     expect(retryable(new TypeError('x is not a function'))).toBe(false)
     expect(retryable('a string')).toBe(false)
     expect(retryable(undefined)).toBe(false)
+  })
+
+  it('C0.9 PD-52: names 0010’s codes, HF007 notice_changed and HF008 notice_invalid, beside the registers’', () => {
+    expect([REGISTER_CHANGED, REGISTER_INVALID, NOTICE_CHANGED, NOTICE_INVALID]).toEqual([
+      'HF005',
+      'HF006',
+      'HF007',
+      'HF008',
+    ])
+    expect(sqlstateOf(pgError(NOTICE_CHANGED))).toBe('HF007')
   })
 
   it('reads a SQLSTATE only from a five-character code', () => {

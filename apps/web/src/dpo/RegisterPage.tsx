@@ -1,5 +1,7 @@
 // What both DPO pages share (C0.9 PD-20, PD-25, PD-26, OD-03): the frame, the links between the
-// two registers, the registers' answer with each way it can be refused, and the writes.
+// two registers and the Notice tab (PD-48), the registers' answer with each way it can be refused,
+// and the writes. The Notice link's badge is the screen's to pass in (noticeBadge), so this module
+// imports neither the notice markers nor their copy (B-12).
 //
 // The server decides who may read or change the registers (can(): the DPO alone, freshly
 // re-authenticated, PD-20 and PD-30); the page only says what it answered:
@@ -31,17 +33,20 @@ import { ReauthPin } from './ReauthPin.tsx'
 import { SignOutNotice } from './SignOutNotice.tsx'
 
 export type RegisterName = 'purposes' | 'transfers'
+// The DPO's pages: the two registers and the Notice tab.
+export type DpoPageName = RegisterName | 'notice'
 
-const REGISTER_PATHS = { purposes: '/dpo/purposes', transfers: '/dpo/transfers' } as const
+const REGISTER_PATHS = { purposes: '/dpo/purposes', transfers: '/dpo/transfers', notice: '/dpo/notice' } as const
 
-// The two registers as links in a segmented track (finance's large segmented control, as the kit's
-// Segmented draws it): each is a real URL, so Back and Forward move between them (X12), and the
-// current one is marked by aria-current, the ink fill and a check mark, never colour alone.
-function RegisterLinks({ current }: { current: RegisterName }) {
+// The two registers and the Notice tab as links in a segmented track (finance's large segmented
+// control, as the kit's Segmented draws it): each is a real URL, so Back and Forward move between
+// them (X12), and the current one is marked by aria-current, the ink fill and a check mark, never
+// colour alone. children: what the Notice link shows beside its name (the screen's badge, B-12).
+export function RegisterLinks({ current, children }: { current: DpoPageName; children?: ReactNode }) {
   return (
     <nav aria-label={DPO.tabs.label}>
       <div className="inline-flex max-w-full flex-wrap gap-2 rounded-2xl border border-line bg-surface p-1.5">
-        {(['purposes', 'transfers'] as const).map(name => {
+        {(['purposes', 'transfers', 'notice'] as const).map(name => {
           const here = name === current
           return (
             <Link
@@ -57,6 +62,7 @@ function RegisterLinks({ current }: { current: RegisterName }) {
             >
               {here && <Check aria-hidden size={16} className="shrink-0" />}
               {DPO.tabs[name]}
+              {name === 'notice' && children}
             </Link>
           )
         })}
@@ -88,17 +94,21 @@ export function ReadRefusal({ refusal, retry }: { refusal: Refusal; retry(): voi
 
 export interface RegisterPageProps {
   current: RegisterName
+  // The Notice link's badge, once the registers' answer says whether the notice is up to date.
+  noticeBadge?(registers: RegistersForClient): ReactNode
   children(registers: RegistersForClient): ReactNode
 }
 
-export function RegisterPage({ current, children }: RegisterPageProps) {
+export function RegisterPage({ current, noticeBadge, children }: RegisterPageProps) {
   const query = useQuery(registersQuery)
   const refusal = query.error === null ? undefined : refusalOfError(query.error)
   const retry = () => void query.refetch()
   return (
     <Page>
       <div className="flex flex-col gap-5">
-        {refusal?.kind !== 'forbidden' && <RegisterLinks current={current} />}
+        {refusal?.kind !== 'forbidden' && (
+          <RegisterLinks current={current}>{query.data !== undefined && noticeBadge?.(query.data)}</RegisterLinks>
+        )}
         {refusal !== undefined && <ReadRefusal refusal={refusal} retry={retry} />}
         {query.isPending && (
           <p role="status" className="text-muted">

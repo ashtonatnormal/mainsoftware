@@ -146,8 +146,12 @@ insert into public.users (id, org_id)
 select ('b0000000-0000-4000-8000-0000000000' || n)::uuid, 'a0000000-0000-4000-8000-000000000001'
 from unnest(array['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11']) as n;
 
--- A stand-in for notice v0 (C0.9 generates the real text from the processing register), and the
--- acknowledgments everyone who has signed in gave in the app.
+-- A stand-in for notice v0, and the acknowledgments everyone who has signed in gave in the app: all
+-- but Nadia, who joined today, so her first sign-in goes through /notice (SI-10). A stand-in has no
+-- generator (the column 0010 adds, which this seed can't name at 0005's schema) and lists nothing,
+-- so the transfer gate answers as it did before the notice (C0.9 PD-41). The text the generator
+-- writes from the registers is published by the DPO in the app, through publish_notice(), as v1 in
+-- this org (SE-05); production never has a stand-in (C0.9 PD-33, B-03).
 insert into public.notice_versions (id, org_id, version, body, published_by) values
   ('e0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000001', 0,
    'Local stand-in for the privacy and recording notice. C0.9 generates the real one from the processing register.',

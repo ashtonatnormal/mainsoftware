@@ -29,6 +29,7 @@ const MARCUS = {
   name: 'Marcus',
   timeZone: 'Asia/Singapore',
   capabilities: { registers: false },
+  notice: 'acknowledged' as const,
 }
 
 const json = (status: number, body: unknown) =>

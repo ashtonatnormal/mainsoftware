@@ -2,7 +2,7 @@ import type { FlagKey } from '@hearth/shared'
 import { environmentManager, focusManager, QueryObserver } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/session/query-client.ts'
-import { flagOn, flagsQuery, sessionQuery } from './queries.ts'
+import { flagOn, flagsQuery, noticeQuery, sessionQuery } from './queries.ts'
 
 // Whether Query took this test run for a server (no window) before a case changed it.
 const queryOnServer = environmentManager.isServer()
@@ -20,6 +20,7 @@ const WEI_LING = {
   name: 'Wei Ling',
   timeZone: '',
   capabilities: { registers: false },
+  notice: 'acknowledged' as const,
 }
 
 const json = (status: number, body: unknown) =>
@@ -134,5 +135,38 @@ describe('T21: the api answers as Query options (api/queries.ts)', () => {
     await fresh.fetchQuery(flagsQuery).catch(() => {})
     expect(fresh.getQueryData(flagsQuery.queryKey)).toBeUndefined()
     expect(flagOn(fresh.getQueryData(flagsQuery.queryKey), 'ai.ask')).toBe(false)
+  })
+
+  it('NTW-03 C0.9 PD-46 T22 item 31: noticeQuery reads GET /api/notice leniently, is never fresh, and polls every 30 s while the page is visible and on focus', async () => {
+    expect(noticeQuery.queryKey).toEqual(['notice'])
+    expect(noticeQuery).toMatchObject({
+      staleTime: 0,
+      refetchInterval: 30_000,
+      refetchIntervalInBackground: false,
+      refetchOnWindowFocus: true,
+    })
+    const answer = {
+      person: WEI_LING.personId,
+      standing: 'standing this build can’t read',
+      current: { id: 'e1', version: 2, publishedAt: '2026-10-23T01:00:00.000Z', body: '## About this notice' },
+      changes: { since: 'x' },
+      mine: [{ version: 1, acknowledgedAt: '2026-10-01T01:00:00.000Z', method: 'in_app' }, { version: 'x' }],
+      later: true,
+    }
+    const seen: string[] = []
+    vi.stubGlobal('fetch', async (url: RequestInfo | URL) => {
+      seen.push(String(url))
+      return json(200, answer)
+    })
+    const client = createQueryClient(() => {})
+    // An unreadable standing reads as required, and what else doesn't read is left out.
+    expect(await client.fetchQuery(noticeQuery)).toEqual({
+      person: WEI_LING.personId,
+      standing: 'required',
+      current: answer.current,
+      changes: null,
+      mine: [answer.mine[0]],
+    })
+    expect(seen).toEqual(['/api/notice'])
   })
 })
