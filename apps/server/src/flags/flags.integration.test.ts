@@ -479,17 +479,30 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
   it('T17 items 3 and 9: each change is audited and evented, a no-op is neither, and a narrowed cohort reaches the worker’s copy', async () => {
     const flag = await flagRow('it.essential')
     const before = Number(flag?.revision)
-    const audits = () =>
-      s.query<{
-        actor_id: string
-        target_id: string
-        device_id: string
-        ip: string
-        request_id: string
-        details: Record<string, unknown>
-      }>(
-        "select actor_id, target_id, device_id, host(ip) as ip, request_id, details from audit_events where action = 'flag.set' and target_id = 'it.essential' order by id",
-      )
+    // set_feature_flag() (0007) builds the added and removed lists with EXCEPT, whose order Postgres
+    // doesn't keep: it follows the hash table, whose size changes once the function's plan is cached
+    // as a generic one. So each list is compared as a set, sorted here.
+    const SET_LISTS = ['people_added', 'people_removed', 'roles_added', 'roles_removed']
+    const audits = async () =>
+      (
+        await s.query<{
+          actor_id: string
+          target_id: string
+          device_id: string
+          ip: string
+          request_id: string
+          details: Record<string, unknown>
+        }>(
+          "select actor_id, target_id, device_id, host(ip) as ip, request_id, details from audit_events where action = 'flag.set' and target_id = 'it.essential' order by id",
+        )
+      ).map(row => ({
+        ...row,
+        details: Object.fromEntries(
+          Object.entries(row.details).map(([key, value]) =>
+            SET_LISTS.includes(key) && Array.isArray(value) ? [key, value.toSorted()] : [key, value],
+          ),
+        ),
+      }))
     const events = () =>
       s.query<{
         actor_id: string
