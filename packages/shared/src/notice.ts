@@ -156,12 +156,17 @@ export interface NoticeProblem {
 //                        register version, or a provider cleared again on the same facts), so
 //                        everyone would acknowledge the same words again
 //   dpo_contact_pending  the notice can't give the DPO's contact yet (C0.9 PR 3 adds it)
+//   production_access_pending
+//                        the notice states the emergency production role, its log and the quarterly
+//                        review by a second person, which C0.11 and C0.19 put in place: the DPO
+//                        publishes once they are (C0.9 PD-57; C0.19 drops the warning)
 export const NOTICE_WARNINGS = [
   'provider_unlisted',
   'provider_review_due',
   'sends_waiting',
   'same_text',
   'dpo_contact_pending',
+  'production_access_pending',
 ] as const
 export type NoticeWarningCode = (typeof NOTICE_WARNINGS)[number]
 

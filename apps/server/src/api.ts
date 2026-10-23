@@ -1,7 +1,8 @@
 // The api role's routes under /api (C0.5): sign-in, your own devices (and passkeys, dormant: D46,
 // PASSKEYS_ON), the admin actions on a person, from C0.6 changing a feature flag, and from C0.8 the
 // web shell's own reads, who is signed in and the client flags evaluated for them (web/routes.ts,
-// T21 item 10), and the browsers' CSP violation reports (web/csp-report.ts, OD-12). Every response
+// T21 item 10), and the browsers' CSP violation reports (web/csp-report.ts, OD-12). From C0.9 PR 2,
+// your privacy notice and your acknowledgement of it (compliance/notice.ts, TECH-SPEC T22 item 26). Every response
 // in the scope carries Cache-Control: no-store, errors and the scope's own 404 included.
 // Every body a route reads is JSON of at most 16 KiB, parsed by a strict zod object (http.ts),
 // except a CSP report's: application/csp-report of at most 8 KiB, read leniently, in a child scope
@@ -22,6 +23,7 @@ import { OTP, PASSKEYS_ON } from '#src/auth/policy.ts'
 import { authRoutes } from '#src/auth/routes.ts'
 import type { SmsProvider } from '#src/auth/sms/provider.ts'
 import { type ValkeyKeys, valkeyKeys } from '#src/auth/valkey-keys.ts'
+import { noticeRoutes } from '#src/compliance/notice.ts'
 import { DB_TRANSFERS, type TransferCheck } from '#src/compliance/transfers.ts'
 import type { Database } from '#src/db/database.ts'
 import { deviceRoutes } from '#src/devices/routes.ts'
@@ -72,9 +74,10 @@ export interface Api extends ApiDeps {
   // Whether passkeys are switched on (D46): PASSKEYS_ON unless a test overrides it.
   passkeys: boolean
   // Whether an outside provider may receive a number for this send (PDPA-10's transfer register;
-  // C0.9 PD-15, TECH-SPEC T22 item 8): DB_TRANSFERS, which asks transfer_cleared() in the
-  // transaction that decides the send. Derived here, never a dep, so production can't run without
-  // it; only tests and testing/ assign another (scripts/guards/api-test-overrides.test.ts).
+  // C0.9 PD-15, PD-59, TECH-SPEC T22 item 8): DB_TRANSFERS, which asks transfer_send_state() in
+  // the transaction that decides the send (codeMaySend() then decides a code). Derived here, never
+  // a dep, so production can't run without it; only tests and testing/ assign another
+  // (scripts/guards/api-test-overrides.test.ts).
   transfers: TransferCheck
 }
 
@@ -133,6 +136,7 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps & { appOrigin: s
       await scope.register(deviceRoutes(api), { prefix: '/devices' })
       await scope.register(adminRoutes(api), { prefix: '/admin' })
       await scope.register(webRoutes(api))
+      await scope.register(noticeRoutes(api))
       await scope.register(cspReportRoute(api), { prefix: '/csp-report' })
     },
     { prefix: '/api' },

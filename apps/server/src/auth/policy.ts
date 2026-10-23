@@ -86,7 +86,8 @@ export const LIMITS = {
   authPerIp: { name: 'auth-ip', windowMs: 600_000, max: 100 },
   // Re-authentications per session (the PIN, and SMS code requests and checks alike).
   reauthPerSession: { name: 'reauth', windowMs: 600_000, max: 10 },
-  // SMS re-authentication code requests, and code checks, per person per rolling day (D46, AQ-09).
+  // SMS re-authentication code requests that pass the transfer gate and the SMS cap (C0.9 B-15),
+  // and code checks, per person per rolling day (D46, AQ-09).
   reauthCodePerPerson: { name: 'reauth-code-p24h', windowMs: 86_400_000, max: 20 },
   reauthCheckPerPerson: { name: 'reauth-check-p24h', windowMs: 86_400_000, max: 20 },
   // Code sends asked of the provider, across all numbers, sign-in and re-authentication alike: one

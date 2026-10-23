@@ -675,11 +675,23 @@ const aws = (change: Partial<ProviderRow> = {}): ProviderRow => ({
   ...change,
 })
 
+// The notice statement's row (registers.ts): no version unless a test sets one.
+interface NoticeRow {
+  id: string | null
+  generated: boolean | null
+  purposes: { purpose: string; version: number }[] | null
+  providers: { provider: string; clearance: string; stated: boolean }[] | null
+}
+const NO_NOTICE: NoticeRow = { id: null, generated: null, purposes: null, providers: null }
+const NOTICE_STATEMENT =
+  "select v.id, v.generator is not null as generated, (select json_agg(json_build_object('purpose', l.purpose, 'version', l.register_version)) from notice_version_purposes l where l.org_id = $1 and l.notice_version_id = v.id) as purposes, (select json_agg(json_build_object('provider', s.provider, 'clearance', s.clearance, 'stated', s.stated)) from public.notice_provider_states() s) as providers from (values (1)) as one (n) left join lateral ( select id, generator from notice_versions where org_id = $2 order by version desc limit 1) v on true"
+
 function registerDatabase() {
   const state = {
     purposes: [accounts(1)],
     providers: [aws()],
     restrictions: [] as { id: string; person_id: string; purpose: string; effective_at: Date }[],
+    notice: NO_NOTICE,
     failing: false,
   }
   const p = scriptedPool((statement: Statement) => {
@@ -691,6 +703,7 @@ function registerDatabase() {
     }
     if (text.startsWith('select r.provider')) return state.providers
     if (text.startsWith('select id, person_id, purpose')) return state.restrictions
+    if (text.startsWith('select v.id, v.generator')) return [state.notice]
     return []
   })
   return { ...p, state }
@@ -737,6 +750,8 @@ describe('PGT-07 C0.9 PD-16 T22 item 9 the worker’s cache keeps the registers 
       'select distinct on (purpose) purpose, version, status, basis, providers from processing_register where org_id = $1 order by purpose, version desc',
       'select r.provider, r.revision, r.review_on::text as review_on, c.id as clearance from transfer_register r left join transfer_clearances c on c.org_id = r.org_id and c.provider = r.provider and c.withdrawn_at is null where r.org_id = $1',
       'select id, person_id, purpose, effective_at from processing_restrictions where org_id = $1 and lifted_at is null',
+      // C0.9 PR 2: the notice, in the same transaction (T22 item 9).
+      NOTICE_STATEMENT,
       'commit',
     ])
     expect(flags.register(ORG)?.purposes.get('accounts')).toEqual({
@@ -745,9 +760,15 @@ describe('PGT-07 C0.9 PD-16 T22 item 9 the worker’s cache keeps the registers 
       basis: null,
       providers: [],
     })
-    expect(flags.register(ORG)?.providers.get('aws')).toEqual({ revision: 2, reviewOn: '2026-10-30', clearance: null })
+    expect(flags.register(ORG)?.providers.get('aws')).toEqual({
+      revision: 2,
+      reviewOn: '2026-10-30',
+      clearance: null,
+      stated: false,
+    })
     expect(flags.register(ORG)?.restrictions).toEqual(new Map())
     expect(flags.register(ORG)?.notified).toEqual(new Set())
+    expect(flags.register(ORG)?.notice).toBeNull()
     expect(flags.register(OTHER_ORG)).toBeUndefined()
     flags.stop()
   })
@@ -814,6 +835,11 @@ describe('PGT-07 C0.9 PD-16 T22 item 9 the worker’s cache keeps the registers 
         () => (db.state.providers = [aws({ revision: '3', clearance: 'c1000000-0000-4000-8000-000000000001' })]),
       ],
       ['a restriction', () => (db.state.restrictions = [restriction])],
+      // C0.9 PR 2: a publish (PGT-14).
+      [
+        'a publish',
+        () => (db.state.notice = { ...NO_NOTICE, id: 'd1000000-0000-4000-8000-000000000001', generated: true }),
+      ],
     ]
     for (const [what, change] of changes) {
       const before = log.events('register_changed').length
@@ -847,6 +873,54 @@ describe('PGT-07 C0.9 PD-16 T22 item 9 the worker’s cache keeps the registers 
     vi.setSystemTime(new Date('2026-10-23T00:00:01Z'))
     await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 2)
     expect(log.events('transfer_review_overdue').map(line => line.provider)).toEqual(['aws', 'aws', 'twilio'])
+    flags.stop()
+  })
+
+  it('PGT-16 C0.9 B-04 C-09 PD-61: logs pinned purposes the published notice no longer describes at warn, once a UTC day per org, at once when they change, and never with no version or a stand-in latest', async () => {
+    const db = registerDatabase()
+    db.state.purposes = [accounts(3), { ...accounts(2), purpose: 'service_operation' }]
+    const VERSION = 'd1000000-0000-4000-8000-000000000001'
+    const listing = (generated: boolean, links: { purpose: string; version: number }[]): NoticeRow => ({
+      ...NO_NOTICE,
+      id: VERSION,
+      generated,
+      purposes: links,
+    })
+    const { flags, log } = registerCache(db)
+    // No version, then a stand-in that lists neither: nothing is stale, nothing is logged.
+    await flags.track(ORG)
+    db.state.notice = listing(false, [])
+    await flags.reload(ORG)
+    expect(flags.register(ORG)?.stale).toEqual(new Set())
+    expect(log.events('notice_pinned_out_of_date')).toEqual([])
+    // A generated version listing accounts at an older version: accounts is stale.
+    db.state.notice = listing(true, [
+      { purpose: 'accounts', version: 2 },
+      { purpose: 'service_operation', version: 2 },
+    ])
+    await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 10)
+    expect(log.events('notice_pinned_out_of_date')).toEqual([
+      expect.objectContaining({ level: 40, org: ORG, purposes: ['accounts'] }),
+    ])
+    // The set changes: logged at once.
+    db.state.purposes = [accounts(3), { ...accounts(3), purpose: 'service_operation' }]
+    await flags.reload(ORG)
+    expect(log.events('notice_pinned_out_of_date').map(line => line.purposes)).toEqual([
+      ['accounts'],
+      ['accounts', 'service_operation'],
+    ])
+    // The next UTC day: again, once.
+    vi.setSystemTime(new Date('2026-10-23T00:00:01Z'))
+    await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 5)
+    expect(log.events('notice_pinned_out_of_date')).toHaveLength(3)
+    // A new notice describes both: no more lines.
+    db.state.notice = listing(true, [
+      { purpose: 'accounts', version: 3 },
+      { purpose: 'service_operation', version: 3 },
+    ])
+    await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 5)
+    expect(flags.register(ORG)?.stale).toEqual(new Set())
+    expect(log.events('notice_pinned_out_of_date')).toHaveLength(3)
     flags.stop()
   })
 })

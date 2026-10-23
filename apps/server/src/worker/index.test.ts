@@ -141,8 +141,9 @@ describe('C0.6 T18 the worker role', () => {
     expect(worker.gate.providerCleared(ORG, 'aws')).toBe(false)
     await vi.advanceTimersByTimeAsync(300)
     expect(worker.flags.register(ORG)).toBeDefined()
-    // Read: aws's open clearance counts, twilio has none; security_audit is active but no notice
-    // lists it until C0.9 PR 2, so it is still refused (PGT-04); an AI purpose never passes.
+    // Read: aws's open clearance counts, twilio has none; security_audit is active but the scripted
+    // org has no notice version, so none lists it and it is still refused (PGT-04, PD-40); an AI
+    // purpose never passes.
     expect(worker.gate.providerCleared(ORG, 'aws')).toBe(true)
     expect(worker.gate.providerCleared(ORG, 'twilio')).toBe(false)
     expect(worker.gate.purposeAllowed(ORG, 'security_audit')).toBe(false)

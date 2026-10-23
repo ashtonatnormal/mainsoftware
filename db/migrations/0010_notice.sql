@@ -7,10 +7,9 @@
 -- stores the exact words people acknowledge as plain text, the generator that wrote them, and links
 -- to the exact register versions and clearances it was made from (store the context), which
 -- publish_notice() derives itself from the rows it locks, never from what the caller sends (C0.9
--- PD-33, PD-34, PD-37). A
--- version never changes, for any writer. A version Hearth didn't generate (a stand-in: the seed's
--- v0, the DB fixtures', the integration harness's) can only come before the first generated one.
--- Production never gets one.
+-- PD-33, PD-34, PD-37). A version never changes, for any writer. A version Hearth didn't generate
+-- (a stand-in: the seed's v0, the DB fixtures', the integration harness's) can only come before the
+-- first generated one. Production never gets one.
 --
 -- Acknowledging goes only through acknowledge_notice(), for the latest version, on the session's own
 -- device (C0.9 PD-42), so hearth_app loses its INSERT on both notice tables. Who has acknowledged
@@ -36,9 +35,9 @@
 --
 -- The DPO's free text (a basis reference, a retention, a provider's facts) is held to Hearth's list
 -- of AI wording (AI_COPY, packages/shared) when publishing, by the publish route, which regenerates
--- and checks the draft before it calls publish_notice() and is its only caller (B-14, C0.9 PD-62).
--- That list is code that changes with the copy, which a migration can't follow, so SQL doesn't
--- repeat it.
+-- and checks the draft before it calls publish_notice() and is its only caller (B-14, C0.9 PD-62;
+-- scripts/guards/api-test-overrides.test.ts keeps it so). That list is code that changes with the
+-- copy, which a migration can't follow, so SQL doesn't repeat it.
 --
 -- The lock order (CLAUDE.md, Database; T22 item 13): ... role_assignments → processing_register →
 -- processing_restrictions → transfer_register → transfer_clearances → orgs (publishing only) →
@@ -214,7 +213,7 @@ declare
   actor uuid := nullif(pg_catalog.current_setting('app.user_id', true), '')::uuid;
   consent_types constant text[] := array['consent', 'deemed_consent_conduct', 'deemed_consent_notification'];
   -- Empty, or only JavaScript's whitespace (String.prototype.trim()'s set), as 0009 reads text.
-  blank constant text := '^[\t\n\v\f\r    -     　﻿]*$';
+  blank constant text := '^[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*$';
   k text;
   cur public.processing_register%rowtype;
   locked public.processing_register[] := '{}';

@@ -333,7 +333,8 @@ where org_id in (pg_temp.id('1', '00'), pg_temp.id('2', '00'), pg_temp.id('3', '
 -- cleared and twilio (never cleared) not_cleared, as PR 1 answered; in org 3, with no version,
 -- twilio is not_cleared and then, once its DPO clears it, no_notice, which transfer_cleared() reads
 -- as cleared (PR 1's meaning, OD-01); notice_provider_states() lists each open clearance with
--- whether the latest version states it (e3 lists e5).
+-- whether the latest version states it (e3 lists e5), and a clearance the stand-in doesn't link is
+-- cleared all the same.
 select pg_temp.act_as('1', 'a0');
 select pg_temp.check(public.transfer_send_state('aws') = 'cleared' and public.transfer_cleared('aws')
                      and public.transfer_send_state('twilio') = 'not_cleared' and not public.transfer_cleared('twilio')
@@ -343,6 +344,28 @@ select pg_temp.check(array_agg(format('%s %s %s', provider, clearance, stated)) 
                      format('org 1''s stated clearances are %s', array_agg(format('%s %s %s', provider, clearance, stated))))
 from public.notice_provider_states();
 reset role;
+-- Under the stand-in, a provider its links don't name is cleared all the same: the stand-in rule,
+-- not the linked facts, answers it (B-03). Org 1's DPO clears twilio, which e3 doesn't link: its
+-- sends go, and notice_provider_states() reports it unstated, since the reader applies the stand-in
+-- rule itself. Rolled back (HT001), so the cases below see org 1 as the fixture left it.
+do $$
+begin
+  perform pg_temp.act_as('1', 'a5');
+  perform pg_temp.check((select changed from pg_temp.record('twilio', pg_temp.full_facts(), false))
+                        and (select cleared from pg_temp.clear('twilio')), 'org 1''s DPO could not clear twilio');
+  perform pg_temp.act_as('1', 'a0');
+  perform pg_temp.check(public.transfer_send_state('twilio') = 'cleared' and public.transfer_cleared('twilio'),
+                        'twilio, cleared under a stand-in that doesn''t link it, is not cleared');
+  perform pg_temp.check(exists (select 1 from public.notice_provider_states() where provider = 'twilio' and not stated),
+                        'org 1''s twilio, which the stand-in doesn''t link, reads as stated');
+  raise exception 'roll the clearance back' using errcode = 'HT001';
+exception when sqlstate 'HT001' then
+  null;
+end
+$$;
+select pg_temp.check(not exists (select 1 from public.transfer_clearances c
+                                 where c.org_id = pg_temp.id('1', '00') and c.provider = 'twilio'),
+                     'org 1''s twilio clearance outlived its case');
 select pg_temp.act_as('3', 'a0');
 select pg_temp.check(public.transfer_send_state('twilio') = 'not_cleared' and not public.transfer_cleared('twilio')
                      and not exists (select 1 from public.notice_provider_states()),

@@ -411,42 +411,71 @@ describe('C0.5 ACC-03 PRD-53 a code request answers before anything touches Post
     ])
   })
 
-  it('XFR-03 C0.9 PD-15 T22 item 8: registerApi asks transfer_cleared() for the provider in the send’s own transaction, and sends only while it answers true', async () => {
-    for (const cleared of [false, true]) {
-      const pool = scriptedPool(statement => {
-        const { text } = statement
-        if (text.includes('public.person_by_phone'))
-          return [{ phone_number_id: PHONE_NUMBER, org_id: ORG, person_id: PERSON }]
-        if (text.includes("from principals where org_id = $1 and kind = 'system'")) return [{ id: SYSTEM }]
-        if (text.startsWith('select deactivated_at from people')) return [{ deactivated_at: null }]
-        if (text.startsWith('select 1 from phone_numbers')) return [{ '?column?': 1 }]
-        if (text.startsWith('select public.transfer_cleared(')) return [{ cleared }]
-        return []
-      })
-      // No dep can stand in for the check: registerApi sets it after spreading the deps, so a
-      // permissive one passed in is never asked.
-      const permissive = { transfers: { cleared: async () => true } }
-      const sms = new FakeVerify({ transfer: 'twilio' })
-      const { post, afterResponse } = setup({ db: pool.db, sms, valkey: fakeValkey(), ...permissive })
-      expect((await post('/api/auth/otp/request', { phone: '+65 8123 4567' })).statusCode).toBe(200)
-      await afterResponse.idle()
-      const texts = pool.texts()
-      const ask = pool.statements.find(statement => statement.text.startsWith('select public.transfer_cleared('))
-      expect(ask, String(cleared)).toEqual({
-        text: 'select public.transfer_cleared($1) as cleared',
-        values: ['twilio'],
-      })
-      // In the transaction that read the person and the number, before its commit.
-      const at = texts.indexOf(ask?.text ?? '')
-      const begun = texts.lastIndexOf('start transaction isolation level read committed', at)
-      expect(texts.slice(begun, at).some(text => text.startsWith('select 1 from phone_numbers'))).toBe(true)
-      expect(texts.slice(begun, at)).not.toContain('commit')
-      expect(
-        sms.sent.map(sent => sent.to),
-        String(cleared),
-      ).toEqual(cleared ? ['+6581234567'] : [])
-      const audit = pool.statements.find(statement => statement.text.startsWith('insert into "audit_events"'))
-      expect(audit?.values.at(-1), String(cleared)).toEqual({ send: cleared ? 'attempted' : 'skipped_not_cleared' })
+  it('XFR-03 C0.9 PD-15 PD-59 T22 item 8 C-02: registerApi asks transfer_send_state() for the provider in the send’s own transaction, after the dpo holding, and sends to everyone only while it answers cleared, to a holder of dpo also before any version or while it is unstated', async () => {
+    const expected: Record<string, [boolean, string][]> = {
+      not_cleared: [
+        [false, 'skipped_not_cleared'],
+        [false, 'skipped_not_cleared'],
+      ],
+      no_notice: [
+        [false, 'skipped_no_notice'],
+        [true, 'attempted'],
+      ],
+      cleared: [
+        [true, 'attempted'],
+        [true, 'attempted'],
+      ],
+      unstated: [
+        [false, 'skipped_unstated'],
+        [true, 'attempted'],
+      ],
+    }
+    for (const [state, outcomes] of Object.entries(expected)) {
+      for (const [n, dpo] of [false, true].entries()) {
+        const label = `${state} ${dpo ? 'dpo' : 'member'}`
+        const pool = scriptedPool(statement => {
+          const { text } = statement
+          if (text.includes('public.person_by_phone'))
+            return [{ phone_number_id: PHONE_NUMBER, org_id: ORG, person_id: PERSON }]
+          if (text.includes("from principals where org_id = $1 and kind = 'system'")) return [{ id: SYSTEM }]
+          if (text.startsWith('select deactivated_at from people')) return [{ deactivated_at: null }]
+          if (text.startsWith('select 1 from phone_numbers')) return [{ '?column?': 1 }]
+          if (text.startsWith('select id, deactivated_at from people')) return [{ id: PERSON, deactivated_at: null }]
+          if (text.startsWith('select person_id, role, team_id, revoked_at from role_assignments')) {
+            return dpo ? [{ person_id: PERSON, role: 'dpo', team_id: null, revoked_at: null }] : []
+          }
+          if (text.startsWith('select public.transfer_send_state(')) return [{ state }]
+          return []
+        })
+        // No dep can stand in for the check: registerApi sets it after spreading the deps, so a
+        // permissive one passed in is never asked.
+        const permissive = { transfers: { cleared: async () => true, state: async () => 'cleared' as const } }
+        const sms = new FakeVerify({ transfer: 'twilio' })
+        const { post, afterResponse } = setup({ db: pool.db, sms, valkey: fakeValkey(), ...permissive })
+        expect((await post('/api/auth/otp/request', { phone: '+65 8123 4567' })).statusCode).toBe(200)
+        await afterResponse.idle()
+        const texts = pool.texts()
+        const ask = pool.statements.find(statement => statement.text.startsWith('select public.transfer_send_state('))
+        expect(ask, label).toEqual({ text: 'select public.transfer_send_state($1) as state', values: ['twilio'] })
+        expect(
+          texts.some(text => text.startsWith('select public.transfer_cleared(')),
+          label,
+        ).toBe(false)
+        // In the transaction that read the person, the number and the person's roles, before its
+        // commit.
+        const at = texts.indexOf(ask?.text ?? '')
+        const begun = texts.lastIndexOf('start transaction isolation level read committed', at)
+        expect(texts.slice(begun, at).some(text => text.startsWith('select 1 from phone_numbers'))).toBe(true)
+        expect(texts.slice(begun, at).some(text => text.startsWith('select person_id, role'))).toBe(true)
+        expect(texts.slice(begun, at)).not.toContain('commit')
+        const [sends, send] = outcomes[n] ?? []
+        expect(
+          sms.sent.map(sent => sent.to),
+          label,
+        ).toEqual(sends ? ['+6581234567'] : [])
+        const audit = pool.statements.find(statement => statement.text.startsWith('insert into "audit_events"'))
+        expect(audit?.values.at(-1), label).toEqual({ send })
+      }
     }
   })
 

@@ -1,7 +1,9 @@
 // The realtime role writes nothing to Postgres (TECH-SPEC T19 item 14; BUILD-PLAN C0.7): it reads
 // sessions, people, teams and roles to decide who may hold a socket and its topics, and every change
 // it reacts to is made elsewhere (the api, the worker). This guard reads every runtime file under
-// apps/server/src/realtime/ from TypeScript's syntax tree (so comments never count), and fails on:
+// apps/server/src/realtime/, and the notice's standing read the gateway's admission shares with the
+// api (apps/server/src/compliance/notice-standing.ts, C0.9 PD-45), from TypeScript's syntax tree
+// (so comments never count), and fails on:
 //   - a Kysely write builder (insertInto, updateTable, deleteFrom, mergeInto, replaceInto);
 //   - a string or template, sql`…` and sql.raw() included, holding a write or a row lock (insert
 //     into, update …, delete from, merge into, truncate, for update, for no key update, for share,
@@ -19,6 +21,8 @@ import { readRepoFile, repoFiles } from './repo-files'
 import { TEST_ONLY } from './server-runtime'
 
 const REALTIME = 'apps/server/src/realtime/'
+// Outside realtime/, what its runtime files load to read the database.
+const SHARED_READS = ['apps/server/src/compliance/notice-standing.ts']
 
 const WRITE_BUILDERS = new Set(['insertInto', 'updateTable', 'deleteFrom', 'mergeInto', 'replaceInto'])
 const SQL_WRITES: [string, RegExp][] = [
@@ -90,7 +94,9 @@ function writeProblems(source: string, path = 'file.ts'): string[] {
 }
 
 const sources = repoFiles()
-  .filter(path => path.startsWith(REALTIME) && /\.ts$/.test(path) && !TEST_ONLY.test(path))
+  .filter(
+    path => (path.startsWith(REALTIME) || SHARED_READS.includes(path)) && /\.ts$/.test(path) && !TEST_ONLY.test(path),
+  )
   .map(path => ({ path, source: readRepoFile(path) }))
 
 describe('realtime read-only guard: the realtime role writes nothing to Postgres (T19 item 14, m5)', () => {
@@ -137,8 +143,12 @@ describe('realtime read-only guard: the realtime role writes nothing to Postgres
     }
   })
 
-  it('every runtime file under apps/server/src/realtime/ is read only', () => {
+  it('every runtime file under apps/server/src/realtime/, and the standing read its admission shares, is read only', () => {
     expect(sources.map(({ path }) => path)).toContain('apps/server/src/realtime/checks.ts')
+    // C0.9 PD-45: the admission and the read it makes.
+    expect(sources.map(({ path }) => path)).toEqual(
+      expect.arrayContaining(['apps/server/src/realtime/admission.ts', ...SHARED_READS]),
+    )
     for (const { path, source } of sources) expect(writeProblems(source, path), path).toEqual([])
   })
 

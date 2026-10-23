@@ -26,6 +26,7 @@ import {
   noticeDigestText,
   noticeDraftSources,
   noticeProblems,
+  noticeSaysTheSame,
   noticeWarnings,
 } from './notice-text.ts'
 import { type ProviderKey, PURPOSE_KEYS, PURPOSES, type PurposeKey } from './purposes.ts'
@@ -474,9 +475,15 @@ describe('NTG-06 C0.9 PD-33: free text never starts a line', () => {
 })
 
 describe('NTG-07 C0.9 PD-37 PD-38: what holds a draft back, and what it warns of', () => {
-  it('NTG-07: a draft the registers allow has no problem, and warns that the DPO’s contact isn’t in it yet', () => {
+  // The warnings every draft carries until PR 3 and C0.19 (C0.9 PD-57).
+  const STANDING = ['dpo_contact_pending', 'production_access_pending']
+
+  it('NTG-07 PD-57: a draft the registers allow has no problem, and warns that the DPO’s contact and production access aren’t in place yet', () => {
     expect(noticeProblems(input(), null)).toEqual([])
-    expect(noticeWarnings(input(), null, TODAY)).toEqual([{ code: 'dpo_contact_pending' }])
+    expect(noticeWarnings(input(), null, TODAY)).toEqual([
+      { code: 'dpo_contact_pending' },
+      { code: 'production_access_pending' },
+    ])
   })
 
   it('NTG-07 PD-37: every problem at once comes in publish_notice()’s order, then the registry’s', () => {
@@ -518,7 +525,7 @@ describe('NTG-07 C0.9 PD-37 PD-38: what holds a draft back, and what it warns of
     const body = generateNotice(input())
     const latest = noticeDraftSources(input(), body)
     expect(noticeProblems(input(), latest)).toEqual([{ code: 'unchanged' }])
-    expect(noticeWarnings(input(), latest, TODAY).map(w => w.code)).toEqual(['dpo_contact_pending'])
+    expect(noticeWarnings(input(), latest, TODAY).map(w => w.code)).toEqual(STANDING)
     // A new register version with the same entry, or a provider cleared again on the same facts.
     const bumped = withPurpose('backups', {
       basis: 'business_improvement',
@@ -532,15 +539,21 @@ describe('NTG-07 C0.9 PD-37 PD-38: what holds a draft back, and what it warns of
     for (const moved of [bumped, recleared]) {
       expect(generateNotice(moved)).toBe(body)
       expect(noticeProblems(moved, latest)).toEqual([])
-      expect(noticeWarnings(moved, latest, TODAY).map(w => w.code)).toEqual(['same_text', 'dpo_contact_pending'])
+      expect(noticeWarnings(moved, latest, TODAY).map(w => w.code)).toEqual(['same_text', ...STANDING])
     }
+    // PD-48: the notice still says what the re-cleared draft would, since the provider states the
+    // same facts; a purpose at a new register version it doesn't list yet (PD-40).
+    expect(noticeSaysTheSame(noticeDraftSources(input(), body), latest)).toBe(true)
+    expect(noticeSaysTheSame(noticeDraftSources(recleared, body), latest)).toBe(true)
+    expect(noticeSaysTheSame(noticeDraftSources(bumped, body), latest)).toBe(false)
     // Other words are neither: an edit that changes what the notice says.
     const edited = withPurpose('backups', { basis: 'business_improvement', retention: '30 days', providers: ['aws'] })
     expect(noticeProblems(edited, latest)).toEqual([])
-    expect(noticeWarnings(edited, latest, TODAY).map(w => w.code)).toEqual(['dpo_contact_pending'])
+    expect(noticeWarnings(edited, latest, TODAY).map(w => w.code)).toEqual(STANDING)
     // Against a stand-in, nothing is ever unchanged.
     const standIn: NoticeSources = { generator: null, body, purposes: [], clearances: [] }
     expect(noticeProblems(input(), standIn)).toEqual([])
+    expect(noticeSaysTheSame(noticeDraftSources(input(), body), { ...standIn, ...latest, generator: null })).toBe(false)
   })
 
   it('NTG-07 PD-37 PD-41: a provider no purpose lists, a review date due, and sends waiting for a version that states the facts', () => {
@@ -563,6 +576,7 @@ describe('NTG-07 C0.9 PD-37 PD-38: what holds a draft back, and what it warns of
       { code: 'sends_waiting', provider: 'livekit' },
       { code: 'sends_waiting', provider: 'apple_push' },
       { code: 'dpo_contact_pending' },
+      { code: 'production_access_pending' },
     ])
     // Before any generated version, a clearance alone lets sends go (C0.9 PD-41): nothing waits.
     for (const before of [null, { generator: null, body: 'Local stand-in', purposes: [], clearances: [] }]) {
@@ -576,7 +590,7 @@ describe('NTG-09 C0.9 PD-36: NOTICE_GENERATOR names these exact words', () => {
   // pin its digest here, so every version records which words wrote it, and the DPO's tab shows the
   // notice out of date. A fixture with countries whose names are stable, so an ICU update doesn't
   // move it (TECH-SPEC T22 item 36, ICU country names).
-  const PINNED: Readonly<Record<string, string>> = { 'c09.1': '75299b4fbe290fb0' }
+  const PINNED: Readonly<Record<string, string>> = { 'c09.1': '4c47a8c307f25504' }
 
   it('NTG-09: the output of a fixed draft has the digest pinned for this generator id, which 0010 admits', () => {
     expect(NOTICE_GENERATOR_PATTERN.test(NOTICE_GENERATOR)).toBe(true)
@@ -599,7 +613,7 @@ describe('NTG-10 NTG-11 decision 5 C0.9 PD-58: what Hearth doesn’t do', () => 
     expect(DOES_NOT.map(row => row.clause)).toEqual([
       'record calls, meetings or drop-in rooms',
       'transcribe anything',
-      'summarise, index or draft from what you write',
+      'summarise what you write or draft text from it',
     ])
     for (const row of DOES_NOT) expect(aiCopyIn(row.clause), row.clause).toBeUndefined()
   })
@@ -609,7 +623,7 @@ describe('NTG-10 NTG-11 decision 5 C0.9 PD-58: what Hearth doesn’t do', () => 
     expect(clauses(body)).toEqual([
       "Hearth doesn't record calls, meetings or drop-in rooms.",
       "Hearth doesn't transcribe anything.",
-      "Hearth doesn't summarise, index or draft from what you write.",
+      "Hearth doesn't summarise what you write or draft text from it.",
     ])
     expect(textOf(sectionOf(body, NOTICE_SECTIONS.doesNot))).toContain(
       'None of these happens unless a new version of this notice says so and you have acknowledged it.',
@@ -620,7 +634,7 @@ describe('NTG-10 NTG-11 decision 5 C0.9 PD-58: what Hearth doesn’t do', () => 
     for (const key of ['recording_meetings', 'recording_drop_in'] as const) {
       expect(clauses(generateNotice(withPurpose(key))), key).toEqual([
         "Hearth doesn't transcribe anything.",
-        "Hearth doesn't summarise, index or draft from what you write.",
+        "Hearth doesn't summarise what you write or draft text from it.",
       ])
     }
     // Sensitive-data detection is listed as a purpose, and the last clause still prints (C1.13).
@@ -639,7 +653,7 @@ describe('NTG-10 NTG-11 decision 5 C0.9 PD-58: what Hearth doesn’t do', () => 
       })
       const printed = clauses(body)
       expect(printed, active.join()).toContain("Hearth doesn't transcribe anything.")
-      expect(printed, active.join()).toContain("Hearth doesn't summarise, index or draft from what you write.")
+      expect(printed, active.join()).toContain("Hearth doesn't summarise what you write or draft text from it.")
       expect(printed.includes("Hearth doesn't record calls, meetings or drop-in rooms."), active.join()).toBe(
         !active.some(key => recording.has(key)),
       )

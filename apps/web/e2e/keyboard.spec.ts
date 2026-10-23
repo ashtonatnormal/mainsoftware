@@ -90,7 +90,7 @@ test('KB-03 WCAG 2.4.3: focus order is the skip link, the avatar, the screen, th
   ])
 })
 
-test('KB-04 X10: the avatar menu opens with Enter, Space and ArrowDown, moves with arrows, Home, End and typeahead; Escape returns focus; Tab closes it', async ({
+test('KB-04 X10 C0.9 PD-47 C-08: the avatar menu opens with Enter, Space and ArrowDown on its first item and with ArrowUp on its last, moves with arrows, Home, End and typeahead; Escape returns focus; Tab closes it', async ({
   open,
 }) => {
   const page = await open({ ...SIZES.w390, signedIn: true })
@@ -98,29 +98,47 @@ test('KB-04 X10: the avatar menu opens with Enter, Space and ArrowDown, moves wi
   await expect(h1(page)).toHaveText('Chats')
   const trigger = page.getByRole('button', { name: 'Account, Marcus' })
   const menu = page.getByRole('menu', { name: 'Account' })
+  // Marcus's menu: Settings, then Sign out (no Data protection: he isn't the DPO).
+  const settings = menu.getByRole('menuitem', { name: 'Settings' })
   const signOut = menu.getByRole('menuitem', { name: 'Sign out' })
 
-  for (const key of ['Enter', ' ', 'ArrowDown', 'ArrowUp']) {
+  for (const [key, first] of [
+    ['Enter', settings],
+    [' ', settings],
+    ['ArrowDown', settings],
+    ['ArrowUp', signOut],
+  ] as const) {
     await trigger.focus()
     await page.keyboard.press(key)
     await expect(menu, key).toBeVisible()
     await expect(trigger).toHaveAttribute('aria-expanded', 'true')
-    await expect(signOut, key).toBeFocused()
+    await expect(first, key).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(menu, key).toBeHidden()
     await expect(trigger, key).toBeFocused()
   }
 
-  // One item: the arrows wrap to it, Home and End stay on it, and its first letter finds it.
+  // From Settings: the arrows wrap both ways, Home and End go to the ends, and a first letter steps
+  // through the items that start with it ("s" is both).
   await trigger.focus()
   await page.keyboard.press('ArrowDown')
-  for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End', 's']) {
+  await expect(settings).toBeFocused()
+  for (const [key, next] of [
+    ['ArrowDown', signOut],
+    ['ArrowDown', settings],
+    ['ArrowUp', signOut],
+    ['Home', settings],
+    ['End', signOut],
+    ['s', settings],
+    ['s', signOut],
+  ] as const) {
     await page.keyboard.press(key)
-    await expect(signOut, key).toBeFocused()
+    await expect(next, key).toBeFocused()
     await expect(menu, key).toBeVisible()
   }
   // Only the active item is in the tab order, so Tab leaves the menu in one step, and it closes.
   await expect(signOut).toHaveAttribute('tabindex', '0')
+  await expect(settings).toHaveAttribute('tabindex', '-1')
   await page.keyboard.press('Tab')
   await expect(menu).toBeHidden()
   await expect(trigger).toHaveAttribute('aria-expanded', 'false')

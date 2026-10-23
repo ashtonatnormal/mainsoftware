@@ -1,15 +1,16 @@
 // The route tree, loaded in Node with a memory history (T21 item 1). Node runs the router's server
 // load, which doesn't follow a redirect, so a guard's redirect is read from the guard itself and its
 // effect (the return path) from storage; what each path matches is read from the loaded router.
-import { ROUTE_WORDS } from '@hearth/shared'
+import { type NoticeStanding, ROUTE_WORDS } from '@hearth/shared'
 import { createMemoryHistory, isRedirect } from '@tanstack/react-router'
 import { describe, expect, it } from 'vitest'
 import type { TabStorage } from '@/session/document.ts'
+import { createNoticeStore } from '@/session/notice.ts'
 import type { SessionRuntime } from '@/session/runtime.ts'
 import { NAV } from '@/shell/nav.ts'
 import { SHELL } from '@/strings/shell.ts'
-import { APP_PATHS, NAV_PATHS } from './paths.ts'
-import { createAppRouter, ROUTER_OPTIONS, type RouterContext } from './router.tsx'
+import { APP_PATHS, NAV_PATHS, noticeAllowsPath } from './paths.ts'
+import { createAppRouter, noticeMove, ROUTER_OPTIONS, type RouterContext } from './router.tsx'
 
 function memoryStorage(): TabStorage & { map: Map<string, string> } {
   const map = new Map<string, string>()
@@ -29,9 +30,35 @@ function memoryStorage(): TabStorage & { map: Map<string, string> } {
   }
 }
 
-// The router only checks that a runtime is there; nothing in a route's guard or component reads it
-// while loading.
-const RUNTIME = {} as SessionRuntime
+// What a route's guard reads of a runtime: the person's standing with the privacy notice (a real
+// store over stand-ins, C0.9 PD-46), and whether the latest session answer allows the DPO's pages
+// (registers). Nothing in a component reads it while loading.
+function runtimeWith(
+  standing: NoticeStanding,
+  options: { registers?: boolean; latest?: { capabilities: { registers: boolean } } } = {},
+): SessionRuntime {
+  const noop = () => {}
+  return {
+    info: {
+      personId: 'b0000000-0000-4000-8000-000000000003',
+      name: 'Marcus',
+      timeZone: 'Asia/Singapore',
+      capabilities: { registers: options.registers === true },
+      notice: standing,
+    },
+    queryClient: { getQueryData: () => options.latest },
+    notice: createNoticeStore({
+      initial: standing,
+      live: { start: noop, resume: noop },
+      refetchAll: noop,
+      resetNotice: noop,
+      fetchNotice: noop,
+      post: noop,
+    }),
+  } as unknown as SessionRuntime
+}
+
+const RUNTIME = runtimeWith('acknowledged')
 
 function routerAt(path: string, context: RouterContext) {
   return createAppRouter(context, createMemoryHistory({ initialEntries: [path] }))
@@ -64,7 +91,7 @@ function shellPaths(): string[] {
 }
 
 describe('T21 item 1: the route tree (router/router.tsx)', () => {
-  it('RO-01 X12 OD-02 OD-03 C0.9 PD-26: every NAV path is a route with its title; the DPO pages are routes with theirs and no nav entry; / goes to /chats; APP_PATHS (import-free, so main.ts may reach it) equals the paths registered in the shell, splat excluded, and NAV_PATHS the NAV entries', async () => {
+  it('RO-01 X12 OD-02 OD-03 C0.9 PD-26 PD-47 PD-48: every NAV path is a route with its title; Settings, its Privacy section and the DPO pages are routes with theirs and no nav entry; / goes to /chats; APP_PATHS (importing no module but a type, so main.ts may reach it) equals the paths registered in the shell, splat excluded, and NAV_PATHS the NAV entries', async () => {
     for (const entry of Object.values(NAV)) {
       const router = routerAt(entry.to, signedIn())
       await router.load()
@@ -74,8 +101,11 @@ describe('T21 item 1: the route tree (router/router.tsx)', () => {
       expect(leaf?.staticData.nav, entry.to).toBe(entry.id)
     }
     for (const [path, title] of [
+      ['/settings', SHELL.settings.title],
+      ['/settings/privacy', SHELL.settings.privacy],
       ['/dpo/purposes', SHELL.dpo.purposes],
       ['/dpo/transfers', SHELL.dpo.transfers],
+      ['/dpo/notice', SHELL.dpo.notice],
     ] as const) {
       const router = routerAt(path, signedIn())
       await router.load()
@@ -93,8 +123,11 @@ describe('T21 item 1: the route tree (router/router.tsx)', () => {
         .sort(),
     )
     expect(APP_PATHS.filter(path => !(NAV_PATHS as readonly string[]).includes(path))).toEqual([
+      '/settings',
+      '/settings/privacy',
       '/dpo/purposes',
       '/dpo/transfers',
+      '/dpo/notice',
     ])
   })
 
@@ -109,12 +142,24 @@ describe('T21 item 1: the route tree (router/router.tsx)', () => {
     expect(router.options.getScrollRestorationKey).toBe(ROUTER_OPTIONS.getScrollRestorationKey)
   })
 
-  it('RO-03 T21 item 5: /admin, /settings and /notice are not routes and not in APP_PATHS: signed in they are Page not found', async () => {
-    for (const path of ['/admin', '/admin/roles', '/settings', '/notice']) {
+  it('RO-03 T21 item 5 C0.9 PD-46: /admin is not a route and not in APP_PATHS: signed in it is Page not found; /notice is a route outside the shell, not an app path, titled Privacy notice', async () => {
+    for (const path of ['/admin', '/admin/roles', '/settings/devices']) {
       expect(APP_PATHS as readonly string[], path).not.toContain(path)
       const router = routerAt(path, signedIn())
       await router.load()
       expect(router.state.matches.at(-1)?.routeId, path).toBe('/_app/$')
+    }
+    expect(APP_PATHS as readonly string[]).not.toContain('/notice')
+    for (const standing of ['acknowledged', 'required', 'unpublished'] as const) {
+      const context = { runtime: runtimeWith(standing), storage: memoryStorage() }
+      expect(guard('/notice', '/notice', context), standing).toBeUndefined()
+      const router = routerAt('/notice', context)
+      await router.load()
+      expect(
+        router.state.matches.map(match => match.routeId),
+        standing,
+      ).toEqual(['__root__', '/notice'])
+      expect(router.state.matches.at(-1)?.staticData.title, standing).toBe('Privacy notice')
     }
   })
 
@@ -181,5 +226,73 @@ describe('T21 item 1: the route tree (router/router.tsx)', () => {
     )
     expect([...words].sort()).toEqual([...ROUTE_WORDS].sort())
     expect(new Set(ROUTE_WORDS).size).toBe(ROUTE_WORDS.length)
+  })
+
+  it('NTW-05 C0.9 PD-44 PD-46 T22 items 29 and 31: noticeAllowsPath lets an acknowledged person go anywhere, the DPO only their own pages before any version is published, and nobody anything else', () => {
+    const paths = ['/chats', '/settings/privacy', '/dpo/purposes', '/dpo/transfers', '/dpo/notice', '/xyz']
+    for (const path of paths) {
+      expect(noticeAllowsPath('acknowledged', false, path), path).toBe(true)
+      expect(noticeAllowsPath('acknowledged', true, path), path).toBe(true)
+      expect(noticeAllowsPath('required', true, path), path).toBe(false)
+      expect(noticeAllowsPath('required', false, path), path).toBe(false)
+      expect(noticeAllowsPath('unpublished', false, path), path).toBe(false)
+      expect(noticeAllowsPath('unpublished', true, path), path).toBe(path.startsWith('/dpo/'))
+    }
+    // By whole segment: a path that only begins with the letters is not the DPO's.
+    expect(noticeAllowsPath('unpublished', true, '/dpox')).toBe(false)
+    expect(noticeAllowsPath('unpublished', true, '/dpo')).toBe(false)
+  })
+
+  it('NTW-05 C0.9 PD-46 WS-01: signed in, the shell’s guard sends a person who hasn’t acknowledged to /notice, keeping an app path in the store’s memory and never in storage; acknowledged, nothing moves', () => {
+    const storage = memoryStorage()
+    const required = runtimeWith('required')
+    expect(guard('/_app', '/tasks', { runtime: required, storage })).toEqual({ to: '/notice', replace: true })
+    expect(required.notice.takeReturn()).toBe('/tasks')
+    expect(storage.map.size).toBe(0)
+    // An unknown path is never kept.
+    expect(guard('/_app', '/xyz', { runtime: required, storage })).toEqual({ to: '/notice', replace: true })
+    expect(required.notice.takeReturn()).toBeUndefined()
+    for (const path of ['/tasks', '/settings', '/dpo/notice', '/xyz'])
+      expect(guard('/_app', path, { runtime: runtimeWith('acknowledged'), storage }), path).toBeUndefined()
+
+    // Before v0 (OD-01): the DPO reaches their own pages, and only them.
+    const dpo = runtimeWith('unpublished', { registers: true })
+    expect(guard('/_app', '/dpo/purposes', { runtime: dpo, storage })).toBeUndefined()
+    expect(guard('/_app', '/dpo/notice', { runtime: dpo, storage })).toBeUndefined()
+    expect(guard('/_app', '/chats', { runtime: dpo, storage })).toEqual({ to: '/notice', replace: true })
+    const member = runtimeWith('unpublished')
+    expect(guard('/_app', '/dpo/purposes', { runtime: member, storage })).toEqual({ to: '/notice', replace: true })
+    // The latest session answer's capability counts, over the boot's.
+    const promoted = runtimeWith('unpublished', { latest: { capabilities: { registers: true } } })
+    expect(guard('/_app', '/dpo/purposes', { runtime: promoted, storage })).toBeUndefined()
+    expect(storage.map.size).toBe(0)
+  })
+
+  it('NTW-05 C0.9 PD-46: signed out, /notice goes to sign-in and forgets an older return path, as any path that isn’t an app path does', () => {
+    const storage = memoryStorage()
+    storage.map.set('hearth:return-to', '/rooms')
+    expect(guard('/notice', '/notice', { runtime: null, storage })).toEqual({ to: '/sign-in', replace: true })
+    expect(storage.map.has('hearth:return-to')).toBe(false)
+  })
+
+  it('NTW-05 C0.9 PD-46: noticeMove, NoticeWatcher’s decision on a change of standing: leaving /notice once acknowledged for the kept path, else Chats; to /notice from a path the standing doesn’t allow, keeping it; nothing else moves', () => {
+    const runtime = runtimeWith('required')
+    expect(noticeMove(runtime, '/notice')).toBeUndefined()
+    expect(noticeMove(runtime, '/settings/privacy')).toBe('/notice')
+    runtime.notice.acknowledged('elsewhere')
+    expect(noticeMove(runtime, '/notice')).toBe('/settings/privacy')
+    // Read once: the next leave goes to Chats.
+    expect(noticeMove(runtime, '/notice')).toBe('/chats')
+    expect(noticeMove(runtime, '/tasks')).toBeUndefined()
+
+    // A hint while on a page: the DPO who just published from /dpo/notice is taken to /notice.
+    const dpo = runtimeWith('unpublished', { registers: true })
+    expect(noticeMove(dpo, '/dpo/notice')).toBeUndefined()
+    dpo.notice.required()
+    expect(noticeMove(dpo, '/dpo/notice')).toBe('/notice')
+    dpo.notice.acknowledged('here')
+    expect(noticeMove(dpo, '/notice')).toBe('/dpo/notice')
+    // /sign-in is never a signed-in document's to keep.
+    expect(noticeMove(runtimeWith('required'), '/sign-in')).toBeUndefined()
   })
 })

@@ -5,9 +5,11 @@
 // for it. Each test uses its own number (support/personas.ts), within PRD-53's windows.
 import { MESSAGES } from '@hearth/shared'
 import type { Locator, Page, TestInfo } from '@playwright/test'
+import { NOTICE } from '../src/strings/notice.ts'
+import { SHELL } from '../src/strings/shell.ts'
 import { SIGN_IN } from '../src/strings/sign-in.ts'
 import { expectAxeClean } from './support/axe.ts'
-import { noAiCopy, recordAnnouncements } from './support/checks.ts'
+import { noAiCopy, noSidewaysScroll, recordAnnouncements, targets44 } from './support/checks.ts'
 import { logOffset, readCode } from './support/codes.ts'
 import { expect, type Guard, test } from './support/fixtures.ts'
 import { E2E_PIN, PERSONAS, type Persona, SIGN_IN_PERSONAS, shown, typed, WRONG_PIN } from './support/personas.ts'
@@ -260,16 +262,63 @@ test(
   },
 )
 
-test('SI-10 ACC-03: a roster number with no account yet (Nadia) signs in on its code, which makes the account, and reaches Chats', async ({
+test('SI-10 ACC-03 PDPA-03 ACC-12 C0.9 PD-45 PD-46 OD-04: a roster number with no account yet (Nadia) signs in on its code, which makes the account, and lands on /notice, the seed’s v0, which passes axe at 320, 390 and 1440 px in both schemes with no AI copy, nothing sideways and 44 px targets, and opens no socket; Acknowledge unticked asks for the box; ticked, it takes her to Chats and live', async ({
   page,
-}) => {
+}, testInfo) => {
   const nadia = PERSONAS.nadia
+  const sockets: Promise<boolean>[] = []
+  page.on('websocket', socket =>
+    sockets.push(
+      new Promise(resolve => {
+        socket.on('framereceived', frame => {
+          if ((JSON.parse(String(frame.payload)) as { t?: string }).t === 'welcome') resolve(true)
+        })
+        socket.on('close', () => resolve(false))
+      }),
+    ),
+  )
   await page.goto('/sign-in')
   const from = await sendCode(page, nadia)
   await enterCode(page, nadia, from)
+  // She hasn't acknowledged the current version, so the shell's guard sends Chats to /notice.
+  await expect(page).toHaveURL(/\/notice$/)
+  await expect(h1(page)).toHaveText(SHELL.notice)
+  await expect(page).toHaveTitle('Privacy notice – Hearth')
+  await expect(main(page).getByText(/^Version 0 · published /)).toBeVisible()
+  const region = page.getByRole('region', { name: NOTICE.bodyLabel('0') })
+  await expect(region).toBeVisible()
+  await expect(region).toHaveAttribute('tabindex', '0')
+  // Outside the shell: no navigation, no avatar menu, and no Skip.
+  await expect(page.getByRole('navigation')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /^Account, / })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /skip/i })).toHaveCount(0)
+  await axeStep(page, '/notice', testInfo)
+  for (const size of CHECK_SIZES) {
+    await page.setViewportSize(size)
+    expect(await noSidewaysScroll(page), `/notice at ${size.width}`).toEqual([])
+    expect(await targets44(page), `/notice at ${size.width}`).toEqual([])
+    expect(await noAiCopy(page), `/notice at ${size.width}`).toEqual([])
+  }
+  await page.setViewportSize(CHECK_SIZES[0] ?? { width: 320, height: 568 })
+  // The gateway admits nobody who hasn't acknowledged, so the page opens no socket (C0.9 PD-45).
+  expect(sockets).toEqual([])
+
+  const box = page.getByRole('checkbox', { name: NOTICE.confirm('0') })
+  const acknowledge = page.getByRole('button', { name: NOTICE.acknowledge, exact: true })
+  await acknowledge.click()
+  await expect(box).toBeFocused()
+  await expect(box).toHaveAttribute('aria-invalid', 'true')
+  await expect.poll(() => descriptionOf(box)).toBe(NOTICE.tickFirst)
+  await expect(page).toHaveURL(/\/notice$/)
+
+  await box.check()
+  await acknowledge.click()
   await expect(page).toHaveURL(/\/chats$/)
   await expect(h1(page)).toHaveText('Chats')
   await expect(page.getByRole('button', { name: 'Account, Nadia' })).toBeVisible()
+  // Live: the connection starts once she has acknowledged, and is welcomed.
+  await expect.poll(() => sockets.length).toBe(1)
+  expect(await sockets[0]).toBe(true)
 })
 
 test(

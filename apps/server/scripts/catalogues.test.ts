@@ -1,4 +1,12 @@
-import { ACTIVE_FROM_START, AI_PROVIDERS, FLAGS, PINNED_PURPOSES, PROVIDERS, PURPOSES } from '@hearth/shared'
+import {
+  ACTIVE_FROM_START,
+  AI_PROVIDERS,
+  FLAGS,
+  NOTICE_TRANSFER_FACTS,
+  PINNED_PURPOSES,
+  PROVIDERS,
+  PURPOSES,
+} from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import type { Coverage } from '#src/outbox/coverage.ts'
 import {
@@ -12,6 +20,8 @@ import {
   type Fn,
   flagProblems,
   matchProblems,
+  noticeFactProbe,
+  noticeFactProblems,
   type OrgRegisters,
   type ProviderDefault,
   type PurposeDefault,
@@ -665,5 +675,31 @@ describe('RGS-19 C0.9 T22 item 18 check 6: the registers’ starting rows equal 
     ).toEqual([
       `org ${ORG}'s version 2 of security_audit has other fixed columns (ai, pinned, needs_switch) than its version 1: every version copies them`,
     ])
+  })
+})
+
+describe('C0.9 PD-41 T22 item 18 check 6: NOTICE_TRANSFER_FACTS equals what notice_facts() states', () => {
+  // notice_facts() as 0010 writes it: the seven stated keys, each from the snapshot's own.
+  const stated = (keys: readonly string[], probe: Record<string, string>) =>
+    Object.fromEntries(keys.map(key => [key, probe[key] ?? null]))
+  const probe = noticeFactProbe([...NOTICE_TRANSFER_FACTS, 'review_on', 'safeguard', 'countries_confirmed'])
+
+  it('passes when notice_facts() states exactly NOTICE_TRANSFER_FACTS, each from its own key', () => {
+    expect(probe.services).toBe('v:services')
+    expect(noticeFactProblems(NOTICE_TRANSFER_FACTS, stated(NOTICE_TRANSFER_FACTS, probe))).toEqual([])
+  })
+
+  it('names a fact either side lacks, one read from another key, and no answer', () => {
+    expect(
+      noticeFactProblems(NOTICE_TRANSFER_FACTS, stated([...NOTICE_TRANSFER_FACTS.slice(1), 'review_on'], probe)),
+    ).toEqual([
+      "services is in packages/shared NOTICE_TRANSFER_FACTS but notice_facts() doesn't state it",
+      "notice_facts() states review_on, which packages/shared NOTICE_TRANSFER_FACTS doesn't list",
+    ])
+    expect(
+      noticeFactProblems(NOTICE_TRANSFER_FACTS, { ...stated(NOTICE_TRANSFER_FACTS, probe), training: 'v:safeguard' }),
+    ).toEqual(['notice_facts() states training from another fact of the snapshot'])
+    expect(noticeFactProblems(NOTICE_TRANSFER_FACTS, undefined)).toEqual(['notice_facts() returned no object'])
+    expect(noticeFactProblems(NOTICE_TRANSFER_FACTS, ['services'])).toEqual(['notice_facts() returned no object'])
   })
 })

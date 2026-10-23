@@ -1,13 +1,19 @@
 // A session is a document (T21 items 2 and 11, D-01; CHT-60, PRD-74, ACC-04, ACC-05, T19 item 10
 // (7)). These end the storage states' sessions, so they run in the chromium-session-end project,
-// after every other project has finished with them (T21 item 11), one at a time.
+// after every other project has finished with them (T21 item 11), one at a time. Last, SE-05
+// publishes a new version of the privacy notice in the seed's org, which every session then has to
+// acknowledge before going on (C0.9 PD-39, PD-55): the project runs after chromium, webkit and
+// firefox (playwright.config.ts), so no other project meets it.
 import type { Page } from '@playwright/test'
+import { NOTICE } from '../src/strings/notice.ts'
 import { SIGN_IN } from '../src/strings/sign-in.ts'
 import { recordAnnouncements } from './support/checks.ts'
 import { logOffset, readCode } from './support/codes.ts'
 import { E2E_ORIGIN, stateFile } from './support/env.ts'
 import { expect, SESSION_401, test } from './support/fixtures.ts'
-import { PERSONAS, typed } from './support/personas.ts'
+import { E2E_PIN, PERSONAS, typed } from './support/personas.ts'
+import { recordMissingEntries } from './support/registers-api.ts'
+import { signInWithPinViaApi } from './support/sign-in-api.ts'
 import { SIZES } from './support/viewports.ts'
 
 test.describe.configure({ mode: 'serial' })
@@ -124,4 +130,110 @@ test("SE-04 ACC-04 ACC-05 T19 item 10 (7): with Daniel's one session in two brow
   await expect.poll(said).toContain(SIGN_IN.signedOut)
   expect((await said()).filter(text => text === SIGN_IN.signedOut)).toHaveLength(1)
   expect(closed).toBe(true)
+})
+
+// --- SE-05: a new version of the notice forces everyone to acknowledge it -----------------------
+
+// Ashton, the seed's DPO, signed in afresh for SE-05 with his second code this run (personas.ts):
+// a new session counts as re-authenticated for its first 5 minutes (§9.4), which the register
+// writes and the publish need, and dpo.spec.ts's session is gone when this project runs alone
+// (--no-deps).
+const DPO_STATE = stateFile('session-end-ashton')
+// /notice itself: /dpo/notice ends the same way.
+const NOTICE_URL = new RegExp(`^${E2E_ORIGIN}/notice$`)
+
+// Counts the welcome frames a page's sockets receive: one each time the live connection starts.
+function countWelcomes(page: Page): () => number {
+  let welcomes = 0
+  page.on('websocket', socket => {
+    socket.on('framereceived', frame => {
+      if ((JSON.parse(String(frame.payload)) as { t?: string }).t === 'welcome') welcomes += 1
+    })
+  })
+  return () => welcomes
+}
+
+test.describe('the forced re-acknowledgement', () => {
+  // Before the timed part (B-13): the sign-in through the api, and the register writes that leave
+  // the draft nothing holding it back (the seed's active purposes have no basis or retention).
+  test.beforeAll(async () => {
+    await signInWithPinViaApi(PERSONAS.ashton, E2E_PIN, DPO_STATE)
+    await recordMissingEntries(DPO_STATE)
+  })
+
+  test('SE-05 PDPA-03 ACC-12 C0.9 PD-39 PD-45 PD-46 PD-55: the DPO publishes version 1 from the Notice tab at 390 px and lands on /notice; Kelvin’s two tabs both reach /notice within 30 s; the one he acknowledges in goes back to Chats and live, the other leaves /notice within 5 s; and the DPO, acknowledging, is back on the tab, which says the notice is up to date', async ({
+    open,
+    guard,
+  }) => {
+    // The budget: up to 30 s for Kelvin's tabs, each meeting its socket's periodic check (4403
+    // within one check, at most 25 s; both wait at once), 5 s for the second tab, and the rest for
+    // the pages, the publish and the acknowledgements, with room to spare on a slow runner.
+    test.setTimeout(150_000)
+    // After the publish, a request the DPO's pages make before he has acknowledged version 1 is
+    // refused (403 notice_required) and takes the tab to /notice. Kelvin's pages ask only for what
+    // the notice never holds back (the session, the flags, the notice itself), and his sockets are
+    // closed with 4403, which is no HTTP answer.
+    guard.expectResponses([
+      { path: '/api/admin/notice', status: 403 },
+      { path: '/api/admin/registers', status: 403 },
+    ])
+
+    // Kelvin, in two tabs of one browser, both live.
+    const kelvin = await open({ ...SIZES.w390, signedIn: stateFile('live') })
+    const kelvinLive = countWelcomes(kelvin)
+    await kelvin.goto('/chats')
+    await expect(h1(kelvin)).toHaveText('Chats')
+    await expect.poll(kelvinLive).toBeGreaterThan(0)
+    const other = await kelvin.context().newPage()
+    const otherLive = countWelcomes(other)
+    await other.goto('/rooms')
+    await expect(h1(other)).toHaveText('Rooms')
+    await expect.poll(otherLive).toBeGreaterThan(0)
+
+    // The DPO publishes version 1 (the seed's version 0 is a placeholder) from his phone.
+    const dpo = await open({ ...SIZES.w390, signedIn: DPO_STATE, phone: true })
+    await dpo.goto('/dpo/notice')
+    await expect(h1(dpo)).toHaveText('Publish the notice')
+    await expect(dpo.getByRole('heading', { level: 2, name: 'Preview of version 1' })).toBeVisible()
+    await dpo.getByRole('button', { name: 'Publish version 1', exact: true }).click()
+    const confirm = dpo.getByRole('dialog', { name: 'Publish version 1?' })
+    await expect(confirm).toContainText('Everyone, you included, acknowledges version 1')
+    const published = dpo.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/notice/publish')
+    await confirm.getByRole('button', { name: 'Publish version 1', exact: true }).click()
+    expect((await published).status()).toBe(200)
+    await expect(dpo).toHaveURL(NOTICE_URL)
+    await expect(h1(dpo)).toHaveText('Privacy notice')
+    await expect(dpo.getByText(/^Version 1 · published /)).toBeVisible()
+
+    // Both of Kelvin's tabs are taken to /notice: the gateway admits nobody who hasn't acknowledged
+    // the current version, and the next periodic check closes each socket with 4403 (PD-45).
+    await Promise.all([
+      expect(kelvin).toHaveURL(NOTICE_URL, { timeout: 30_000 }),
+      expect(other).toHaveURL(NOTICE_URL, { timeout: 30_000 }),
+    ])
+    await expect(kelvin.getByText(/^Version 1 · published /)).toBeVisible()
+
+    // He acknowledges in the first: back to Chats, and live again (a new connection, welcomed).
+    const welcomed = kelvinLive()
+    await kelvin.getByRole('checkbox', { name: NOTICE.confirm('1') }).check()
+    await kelvin.getByRole('button', { name: NOTICE.acknowledge, exact: true }).click()
+    await expect(kelvin).toHaveURL(/\/chats$/)
+    await expect(h1(kelvin)).toHaveText('Chats')
+    await expect.poll(kelvinLive).toBeGreaterThan(welcomed)
+    // The other tab hears of it on the identity channel, asks GET /api/notice, and goes back to
+    // Rooms (PD-46).
+    await expect(other).toHaveURL(/\/rooms$/, { timeout: 5_000 })
+    await expect(h1(other)).toHaveText('Rooms')
+
+    // The DPO acknowledges too, and /notice takes him back to the Notice tab, which now says the
+    // published notice is up to date.
+    await dpo.getByRole('checkbox', { name: NOTICE.confirm('1') }).check()
+    await dpo.getByRole('button', { name: NOTICE.acknowledge, exact: true }).click()
+    await expect(dpo).toHaveURL(/\/dpo\/notice$/)
+    await expect(dpo.getByRole('heading', { level: 2, name: 'The published notice' })).toBeVisible()
+    await expect(dpo.getByText('It says what the registers say.', { exact: true })).toBeVisible()
+    await expect(
+      dpo.getByText(/^\d+ of the \d+ people at the organisation have acknowledged version 1\.$/),
+    ).toBeVisible()
+  })
 })

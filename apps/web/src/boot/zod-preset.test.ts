@@ -29,6 +29,7 @@ const MARCUS = {
   name: 'Marcus',
   timeZone: 'Asia/Singapore',
   capabilities: { registers: false },
+  notice: 'acknowledged' as const,
 }
 
 describe('T21: zod without code made from strings (boot/pre-boot.ts presetZodJitless)', () => {

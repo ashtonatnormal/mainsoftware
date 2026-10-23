@@ -19,20 +19,29 @@
 //   PIN lock in Postgres still bounds guessing while the PIN slots bound the work. So PIN-role
 //   holders keep their admin powers through a Valkey or SMS provider outage.
 // - An SMS code fails closed instead (AQ-10): the same per-session window, and per person 20 code
-//   requests and 20 code checks a rolling day. The code lives in the number's one challenge record
-//   (codes.ts), owned by `r:<session id>`, so a re-authentication code replaces a pending sign-in
-//   code and the reverse; re-authentication codes don't count against sign-in's per-number windows.
+//   requests that pass the transfer gate and the SMS cap, and 20 code checks, a rolling day (AQ-09,
+//   B-15: a request held back spends nothing of the day's). The code lives in the number's one
+//   challenge record (codes.ts), owned by `r:<session id>`, so a re-authentication code replaces a
+//   pending sign-in code and the reverse; re-authentication codes don't count against sign-in's
+//   per-number windows.
 //   A session sends one code at a time: a code request that overlaps another from the same session
 //   answers 409 try_again before anything is opened or sent (sendLock). Its refusals carry no
 //   floor: the caller is signed in, and there's nothing to hide. An approved code is kept until its
 //   stamp commits (REAUTH.approvedMs), so a stamp that fails (409 try_again) is retried with no
 //   second code; the session's next code request ends it before it opens the record, so from then
 //   on only the new code stamps.
+// - Right after the per-session window, the acknowledgement gate (C0.9 PD-43, PD-44; packages/access
+//   noticeAdmits() with the use 'reauth'): a session whose person hasn't acknowledged the current
+//   notice is refused 403 notice_required before anything else is counted, checked or sent, so it
+//   can't make the provider send a code, and a code check it refuses gives the person's day back;
+//   before any version is published only the DPO re-authenticates, by PIN, to set up the registers
+//   and publish (OD-01).
 import { randomUUID } from 'node:crypto'
+import { reauthMethodOf, type World } from '@hearth/access'
 import type { CodeSentSchema, ReauthenticatedSchema, ReauthMethod } from '@hearth/shared'
 import { sql } from 'kysely'
 import type { z } from 'zod'
-import { actingSession, authorise, reauthMethodNow } from '#src/access/world.ts'
+import { actingSession, authorise, loadTopicWorld, requireNotice } from '#src/access/world.ts'
 import type { Api } from '#src/api.ts'
 import { writeAudit } from '#src/auth/audit.ts'
 import { openCode, reserveCode, settleCode } from '#src/auth/codes.ts'
@@ -58,14 +67,17 @@ import {
   fromValkey,
   giveBack,
   livePasskeys,
+  logHeldBack,
   pinRefusal,
   providerFailure,
   recordPasskeyUse,
   startCode,
   tooManyRequests,
+  transferHolds,
   windowOf,
 } from '#src/auth/sign-in.ts'
 import type { SmsProvider, Verdict } from '#src/auth/sms/provider.ts'
+import type { HeldBack } from '#src/compliance/transfers.ts'
 import type { InOrg } from '#src/db/database.ts'
 import { endDevices } from '#src/devices/routes.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
@@ -85,12 +97,20 @@ async function acting(trx: InOrg, session: SessionIds) {
   return facts
 }
 
-// The acting session, and 409 reauth_method {method} unless it re-authenticates by `own` (D46, I2).
-// Thrown before anything is checked, counted or sent, so nothing is written; the error handler logs
-// it as reauth_wrong_method at warn (api.ts, T20 item 6).
-async function actingBy(trx: InOrg, session: SessionIds, own: ReauthMethod): Promise<void> {
-  const method = await reauthMethodNow(trx, session, await acting(trx, session))
+// The acting session; then 403 notice_required unless the notice lets the person re-authenticate
+// (C0.9 PD-43, PD-44, packages/access noticeAdmits() with 'reauth'); then 409 reauth_method {method}
+// unless the session re-authenticates by `own` (D46, I2). Both are thrown before anything is
+// checked, counted or sent, so nothing is written; the error handler logs the second as
+// reauth_wrong_method at warn (api.ts, T20 item 6). The person's roles are read once, right after
+// the acting session, with no lock on role_assignments (loadTopicWorld, as holdsRoleNow reads
+// them), and that World answers the gate, the method and whether they hold dpo (sendReauthCode).
+async function actingBy(trx: InOrg, session: SessionIds, own: ReauthMethod): Promise<World> {
+  const facts = await acting(trx, session)
+  const world = await loadTopicWorld(trx, session.orgId, [session.userId])
+  await requireNotice(trx, session, world, 'reauth')
+  const method = reauthMethodOf(world, session.userId, facts)
   if (method !== own) throw reauthRefusal('reauth_method', method, session.userId)
+  return world
 }
 
 // At most 10 re-authentications per session per 10 minutes. A Valkey error lets it through.
@@ -222,10 +242,9 @@ export async function reauthCodeRequest(api: Api, session: SessionIds, info: Req
 async function sendReauthCode(api: Api, session: SessionIds, info: ReqInfo, sms: SmsProvider): Promise<Answer> {
   const owner = ownerOf(session)
   const opened = await inSession(api, info, session, async trx => {
-    await actingBy(trx, session, 'code')
+    const world = await actingBy(trx, session, 'code')
     const number = await currentNumber(trx, session)
-    await enforce(api, info, [windowOf(api, LIMITS.reauthCodePerPerson, session.userId)])
-    const requested = (send: 'attempted' | 'skipped_not_cleared' | 'skipped_cap') =>
+    const requested = (send: 'attempted' | HeldBack | 'skipped_cap') =>
       writeAudit(trx, {
         ...audit(session, info),
         action: 'auth.code_requested',
@@ -233,18 +252,26 @@ async function sendReauthCode(api: Api, session: SessionIds, info: ReqInfo, sms:
       })
     // An outside provider receives the number only while PDPA-10's transfer register clears it, read
     // FOR SHARE in this transaction; the provider is called after the commit (C0.9 PD-15, TECH-SPEC
-    // T22 item 8, as in sign-in.ts).
-    if (sms.transfer !== null && !(await api.transfers.cleared(trx, sms.transfer))) {
-      await requested('skipped_not_cleared')
-      info.log.error(
-        { event: 'sms_provider_not_cleared', provider: sms.name, personId: session.userId },
-        'a re-authentication code was not sent: the provider is not cleared in the transfer register',
-      )
-      return undefined
+    // T22 item 8, as in sign-in.ts). The same rule as sign-in's (PD-59): to everyone while the
+    // published notice states the clearance, to the DPO alone otherwise; a DPO re-authenticates by
+    // PIN, so in practice this skips as skipped_no_notice or skipped_unstated then.
+    if (sms.transfer !== null) {
+      const held = await transferHolds(api, trx, sms.transfer, {
+        orgId: session.orgId,
+        personId: session.userId,
+        holdsDpo: world.holds(session.userId, 'dpo'),
+      })
+      if (held !== undefined) {
+        await requested(held.send)
+        logHeldBack(info, held, { provider: sms.name, personId: session.userId }, 're-authentication')
+        return undefined
+      }
     }
+    const cap = windowOf(api, LIMITS.smsGlobal, 'all')
+    const capHit = randomUUID()
     let capped: 'sms_global_cap' | 'sms_cap_unavailable' | undefined
     try {
-      const result = await hit(api.valkey, [windowOf(api, LIMITS.smsGlobal, 'all')])
+      const result = await hit(api.valkey, [cap], capHit)
       if (!result.allowed) capped = 'sms_global_cap'
     } catch {
       capped = 'sms_cap_unavailable'
@@ -253,6 +280,15 @@ async function sendReauthCode(api: Api, session: SessionIds, info: ReqInfo, sms:
       await requested('skipped_cap')
       info.log.error({ event: capped, personId: session.userId }, 'a re-authentication code was not sent: the SMS cap')
       return undefined
+    }
+    // The person's day (AQ-09) counts only a request the transfer gate and the cap let through
+    // (B-15), so one held back above spends none of it. Full, it answers 429 and gives the cap's hit
+    // back, since nothing is sent.
+    try {
+      await enforce(api, info, [windowOf(api, LIMITS.reauthCodePerPerson, session.userId)])
+    } catch (error) {
+      await giveBack(api, info, [cap], capHit)
+      throw error
     }
     const numberTag = tag(api.keys, number.e164)
     // A new code ends any approval this session still holds from a stamp that failed, before the
@@ -307,10 +343,15 @@ export async function reauthCodeVerify(
   const day = windowOf(api, LIMITS.reauthCheckPerPerson, session.userId)
   const member = await enforce(api, info, [windowOf(api, LIMITS.reauthPerSession, session.sessionId), day])
   const owner = ownerOf(session)
-  // Transaction A writes nothing: the method is decided before any provider check is spent.
+  // Transaction A writes nothing: the gate and the method are decided before any provider check is
+  // spent. A refusal here (notice_required, reauth_method, a session that ended) asked no provider,
+  // so it gives the day's check back too (B-15's aim); the per-session window still counts it.
   const number = await inSession(api, info, session, async trx => {
     await actingBy(trx, session, 'code')
     return currentNumber(trx, session)
+  }).catch(async (error: unknown) => {
+    await giveBack(api, info, [day], member)
+    throw error
   })
   // The provider approved this session's code for this number, and the stamp failed before it
   // committed (409 try_again, Postgres lost): any 6 digits stamp it now with no second check, as

@@ -28,6 +28,7 @@ import { sql } from 'kysely'
 import { Client as PgClient } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { purposeAllowed } from '#src/compliance/registers.ts'
 import { withOrg } from '#src/db/database.ts'
 import { migrate } from '#src/db/migrations.ts'
 import type { FlagCache } from '#src/flags/cache.ts'
@@ -364,10 +365,20 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
     expect([asked.status, asked.error]).toEqual([403, 'forbidden'])
   })
 
-  it('PGT-I1 C0.9 PD-08 PD-19 T22 items 6 and 11: a purpose that isn’t pinned can’t be turned on until a notice lists it, but its flag can always be narrowed or turned off', async () => {
-    // security_audit starts active (PD-06), and the DPO records its basis: still refused, since no
-    // published notice lists it until C0.9 PR 2.
-    const recorded = await dpoClient.post('/api/admin/registers/purposes/set', {
+  it('PGT-I1 C0.9 PD-08 PD-19 PD-40 B-08 T22 items 6, 11 and 27: a purpose that isn’t pinned turns on only while the published notice lists it at its current version, and its flag can always be narrowed or turned off', async () => {
+    // An org of its own (B-08): publishing sends everyone in an org back to /notice, so it never
+    // happens in the suite's shared one. Its own Admin and DPO; the api's copy and the worker's
+    // track it from their first read.
+    const org = await s.newOrg()
+    const orgAdmin = await s.person({ org, roles: ['admin'], pin: s.newPin() })
+    const orgMember = await s.person({ org })
+    const orgDpo = await s.person({ org, roles: ['dpo'] })
+    const orgAdminClient = await s.signIn(orgAdmin)
+    const orgDpoClient = await s.signIn(orgDpo)
+    const allowedInWorker = () => purposeAllowed(workerFlags.register(org.id), 'security_audit')
+    // security_audit starts active (PD-06), and the DPO records its basis: still refused, since the
+    // org's latest version is a stand-in that lists nothing.
+    const recorded = await orgDpoClient.post('/api/admin/registers/purposes/set', {
       purpose: 'security_audit',
       seen: 1,
       status: 'active',
@@ -379,7 +390,35 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
     })
     expect([recorded.status, recorded.json<{ version: number }>().version]).toEqual([200, 2])
     await unchanged('it.unnotified', async () => {
-      const refused = await set(adminClient, { key: 'it.unnotified', enabled: true })
+      const refused = await set(orgAdminClient, { key: 'it.unnotified', enabled: true })
+      expect([refused.status, refused.error]).toEqual([409, 'purpose_refused'])
+    })
+    // Published, listing security_audit at version 2: the flag turns on, and the worker's copy
+    // agrees within a poll (T22 item 9).
+    await s.publishNotice(org, orgDpo, { acknowledge: [orgAdmin, orgMember, orgDpo] })
+    const on = await set(orgAdminClient, { key: 'it.unnotified', enabled: true })
+    expect(on.status).toBe(200)
+    expect((await flagRow('it.unnotified', org.id))?.enabled).toBe(true)
+    await within(5000, allowedInWorker)
+    // Any edit after publishing takes it out until the next publish (PD-40): turning it on again,
+    // or widening it, is refused.
+    const off = await set(orgAdminClient, { key: 'it.unnotified', enabled: false })
+    expect(off.status).toBe(200)
+    await s.reauth(orgDpoClient, orgDpo)
+    const edited = await orgDpoClient.post('/api/admin/registers/purposes/set', {
+      purpose: 'security_audit',
+      seen: 2,
+      status: 'active',
+      basis: 'legitimate_interests',
+      basisReference: 'Fictional assessment, row 1',
+      optOutDays: null,
+      retention: '2 years',
+      providers: [],
+    })
+    expect([edited.status, edited.json<{ version: number }>().version]).toEqual([200, 3])
+    await within(5000, () => !allowedInWorker())
+    await unchanged('it.unnotified', async () => {
+      const refused = await set(orgAdminClient, { key: 'it.unnotified', enabled: true })
       expect([refused.status, refused.error]).toEqual([409, 'purpose_refused'])
     })
     // A flag already on for a cohort (as a release might leave it; written here as the superuser):
@@ -388,33 +427,33 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
       `update feature_flags set enabled = true, audience = 'cohort', cohort_people = $2::uuid[], revision = revision + 1,
          updated_at = now(), updated_by = $3
        where org_id = $1 and key = 'it.unnotified'`,
-      [s.org.id, [admin.id, member.id], s.org.system],
+      [org.id, [orgAdmin.id, orgMember.id], org.system],
     )
     for (const body of [
       { key: 'it.unnotified', enabled: true },
-      { key: 'it.unnotified', enabled: true, audience: 'cohort', people: [admin.id, member.id, dpo.id] },
-      { key: 'it.unnotified', enabled: true, audience: 'cohort', people: [admin.id], roles: ['dpo'] },
+      { key: 'it.unnotified', enabled: true, audience: 'cohort', people: [orgAdmin.id, orgMember.id, orgDpo.id] },
+      { key: 'it.unnotified', enabled: true, audience: 'cohort', people: [orgAdmin.id], roles: ['dpo'] },
     ]) {
       await unchanged('it.unnotified', async () => {
-        const refused = await set(adminClient, body)
+        const refused = await set(orgAdminClient, body)
         expect([refused.status, refused.error], JSON.stringify(body)).toEqual([409, 'purpose_refused'])
       })
     }
-    const narrowed = await set(adminClient, {
+    const narrowed = await set(orgAdminClient, {
       key: 'it.unnotified',
       enabled: true,
       audience: 'cohort',
-      people: [admin.id],
+      people: [orgAdmin.id],
     })
     expect(narrowed.status).toBe(200)
-    expect((await flagRow('it.unnotified'))?.cohort_people).toEqual([admin.id])
-    const off = await set(adminClient, { key: 'it.unnotified', enabled: false })
-    expect(off.status).toBe(200)
-    expect((await flagRow('it.unnotified'))?.enabled).toBe(false)
+    expect((await flagRow('it.unnotified', org.id))?.cohort_people).toEqual([orgAdmin.id])
+    const turnedOff = await set(orgAdminClient, { key: 'it.unnotified', enabled: false })
+    expect(turnedOff.status).toBe(200)
+    expect((await flagRow('it.unnotified', org.id))?.enabled).toBe(false)
     // A pinned purpose is allowed in every state of the register: it.optional (service_operation)
     // turns off and on again.
     for (const enabled of [false, true]) {
-      const changed = await set(adminClient, { key: 'it.optional', enabled })
+      const changed = await set(orgAdminClient, { key: 'it.optional', enabled })
       expect(changed.status, String(enabled)).toBe(200)
     }
   })

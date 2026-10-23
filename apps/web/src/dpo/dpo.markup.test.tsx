@@ -12,19 +12,23 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { App } from '@/app/App.tsx'
 import { RuntimeContext } from '@/app/runtime-context.ts'
+import { formattersFor } from '@/lib/time.ts'
 import { createLiveStore } from '@/live/live-status.ts'
 import { createAppRouter } from '@/router/router.tsx'
+import { createNoticeStore } from '@/session/notice.ts'
 import { createQueryClient } from '@/session/query-client.ts'
 import type { SessionRuntime } from '@/session/runtime.ts'
 import { aiCopyIn } from '@/strings/ai-copy.ts'
 import { DPO } from '@/strings/dpo.ts'
+import { NOTICE_MARKERS, NOTICE_TAB } from '@/strings/dpo-notice.ts'
 import { PURPOSES_COPY } from '@/strings/dpo-purposes.ts'
 import { PROVIDER_CHECKS, TRANSFERS_COPY } from '@/strings/dpo-transfers.ts'
+import { SHELL } from '@/strings/shell.ts'
 import { PurposeDialog } from './PurposesScreen.tsx'
-import { registersQuery } from './queries.ts'
+import { noticeAdminQuery, registersQuery } from './queries.ts'
 import { ReadRefusal } from './RegisterPage.tsx'
 import { ClearDialog, TransferDialog, WithdrawDialog } from './TransfersScreen.tsx'
-import { COMPLETE_FACTS, registersForClient, TODAY } from './testing/registers.ts'
+import { COMPLETE_FACTS, noticeAdminForClient, registersForClient, TODAY } from './testing/registers.ts'
 
 // Ashton, the Tembusu seed's Owner and DPO (db/seed/tembusu.sql).
 const ASHTON = {
@@ -32,6 +36,7 @@ const ASHTON = {
   name: 'Ashton Teo',
   timeZone: 'Asia/Singapore',
   capabilities: { registers: true },
+  notice: 'acknowledged' as const,
 }
 
 const CLEARED = {
@@ -60,21 +65,39 @@ const transfer = (key: string) => {
   return row
 }
 
-function runtime(registers?: typeof REGISTERS): SessionRuntime {
+type NoticeAdmin = ReturnType<typeof noticeAdminForClient>
+
+function runtime(registers?: typeof REGISTERS, notice?: NoticeAdmin): SessionRuntime {
   const queryClient = createQueryClient(() => {})
   queryClient.setQueryData(['session'], ASHTON)
   if (registers !== undefined) queryClient.setQueryData(registersQuery.queryKey, registers)
+  if (notice !== undefined) queryClient.setQueryData(noticeAdminQuery.queryKey, notice)
+  const noop = () => {}
   return {
     info: ASHTON,
     queryClient,
+    formatters: formattersFor(ASHTON.timeZone),
     live: createLiveStore('live'),
+    // Ashton has acknowledged the current notice, so the shell's guard lets every path through.
+    notice: createNoticeStore({
+      initial: ASHTON.notice,
+      live: { start: noop, resume: noop },
+      refetchAll: noop,
+      resetNotice: noop,
+      fetchNotice: noop,
+      post: noop,
+    }),
     signOut: async () => 'ended',
     end: () => {},
   } as unknown as SessionRuntime
 }
 
-async function appAt(path: string, registers: typeof REGISTERS | null = REGISTERS): Promise<string> {
-  const session = runtime(registers ?? undefined)
+async function appAt(
+  path: string,
+  registers: typeof REGISTERS | null = REGISTERS,
+  notice?: NoticeAdmin,
+): Promise<string> {
+  const session = runtime(registers ?? undefined, notice)
   const router = createAppRouter(
     { runtime: session, storage: undefined },
     createMemoryHistory({ initialEntries: [path] }),
@@ -150,9 +173,13 @@ describe('C0.9 PD-26: the DPO pages (dpo/)', () => {
     const links = [...markup.matchAll(/<a\b([^>]*)>(.*?)<\/a>/gs)]
       .filter(match => /href="\/dpo\//.test(match[1] ?? ''))
       .map(match => [match[1]?.match(/href="([^"]*)"/)?.[1], match[1]?.match(/aria-current="([^"]*)"/)?.[1]])
+    // The Registers links (C0.9 PD-48 adds the Notice tab's), then the banner's link to the Notice
+    // tab: on its first day the org has published no notice.
     expect(links).toEqual([
       ['/dpo/purposes', 'page'],
       ['/dpo/transfers', undefined],
+      ['/dpo/notice', undefined],
+      ['/dpo/notice', undefined],
     ])
     const cards = textsOf(markup, 'h2')
     expect(cards).toHaveLength(13)
@@ -301,5 +328,152 @@ describe('C0.9 PD-26: the DPO pages (dpo/)', () => {
 
     const forbidden = alone(<ReadRefusal refusal={{ kind: 'forbidden', text: DPO.forbidden }} retry={() => {}} />)
     expect(textsOf(forbidden, 'h2')).toEqual(['This page is for the Data Protection Officer.'])
+  })
+})
+
+// The Registers links' targets, with which is current.
+const registerLinks = (markup: string) => {
+  const start = markup.indexOf('<nav aria-label="Registers"')
+  const nav = markup.slice(start, markup.indexOf('</nav>', start))
+  return [...nav.matchAll(/<a\b([^>]*)>(.*?)<\/a>/gs)].map(match => ({
+    href: match[1]?.match(/href="([^"]*)"/)?.[1],
+    current: match[1]?.match(/aria-current="([^"]*)"/)?.[1],
+    text: decoded(
+      (match[2] ?? '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    ),
+  }))
+}
+
+describe('C0.9 PD-48 B-12: the Notice tab and the register pages’ notice markers (dpo/)', () => {
+  it('NTW-09 PD-48 PDPA-03: /dpo/notice is the shell’s page titled Publish the notice (not /notice’s title) under the Registers links (Notice current): the published version with its status and a count of acknowledgements, what the next version changes and warns of, Publish acting, the words under h3s as text, and the versions published', async () => {
+    const markup = await appAt('/dpo/notice', REGISTERS, noticeAdminForClient())
+    expect(textsOf(markup, 'h1')).toEqual(['Publish the notice'])
+    expect(SHELL.dpo.notice).not.toBe(SHELL.notice)
+    expect(registerLinks(markup)).toEqual([
+      { href: '/dpo/purposes', current: undefined, text: 'Purposes' },
+      { href: '/dpo/transfers', current: undefined, text: 'Transfers' },
+      { href: '/dpo/notice', current: 'page', text: 'Notice' },
+    ])
+    expect(textsOf(markup, 'h2')).toEqual([
+      'The published notice',
+      'Publishing version 1',
+      'Preview of version 1',
+      'Published versions',
+    ])
+    const text = readable(markup)
+    expect(text).toEqual(
+      expect.arrayContaining([
+        'Out of date',
+        'Version 0, published Wed 21 Oct 2026 by Ashton Teo.',
+        '9 of the 12 people at the organisation have acknowledged version 0.',
+        NOTICE_TAB.draft.changes,
+        'Backups',
+        NOTICE_TAB.draft.warnings,
+      ]),
+    )
+    expect(buttons(markup).find(button => button.name === 'Publish version 1')).toMatchObject({ held: false })
+    // The words, drawn by /notice's reader one level down, as text: no markup of their own.
+    expect(textsOf(markup, 'h3')).toEqual(['About this notice', 'Why your data is processed'])
+    expect(textsOf(markup, 'h4')).toEqual(['Accounts and sign-in'])
+    expect(tags(markup, 'section').some(section => section.get('aria-label') === NOTICE_TAB.preview.label('1'))).toBe(
+      true,
+    )
+    expect(text.filter(line => aiCopyIn(line) !== undefined)).toEqual([])
+  })
+
+  it('NTW-09 PD-37 C-05: with problems, the tab lists them under their purposes with a link to each register page that fixes them, holds Publish with the reason, and shows no words', async () => {
+    const answer = noticeAdminForClient({
+      draft: {
+        version: 1,
+        body: null,
+        digest: null,
+        problems: [
+          { code: 'purpose_basis_missing', purpose: 'backups' },
+          { code: 'free_text_ai_copy', provider: 'twilio', field: 'onward_recipients' },
+        ],
+        warnings: [],
+        changes: null,
+        upToDate: false,
+      },
+    })
+    const markup = await appAt('/dpo/notice', REGISTERS, answer)
+    expect(readable(markup)).toEqual(
+      expect.arrayContaining([
+        NOTICE_TAB.draft.problems,
+        'Backups',
+        'Record its legal basis.',
+        'Twilio Verify',
+        '“Who it passes the data on to” uses wording Hearth keeps off its screens. Reword it.',
+        NOTICE_TAB.preview.hidden,
+      ]),
+    )
+    const fixes = [...markup.matchAll(/<a\b([^>]*)>(.*?)<\/a>/gs)]
+      .filter(match => /Open the/.test(match[2] ?? ''))
+      .map(match => [match[1]?.match(/href="([^"]*)"/)?.[1], decoded(match[2] ?? '')])
+    expect(fixes).toEqual([
+      ['/dpo/purposes', NOTICE_TAB.draft.toPurposes],
+      ['/dpo/transfers', NOTICE_TAB.draft.toTransfers],
+    ])
+    expect(buttons(markup).find(button => button.name === 'Publish version 1')).toMatchObject({ held: true })
+    expect(markup).toContain(DPO.fixFirst)
+    expect(textsOf(markup, 'h3')).toEqual([])
+    expect(readable(markup).filter(line => aiCopyIn(line) !== undefined)).toEqual([])
+  })
+
+  it('NTW-09 T21 item 5: before the answer, the Notice tab says it is loading, in a status, under the Registers links', async () => {
+    const markup = await appAt('/dpo/notice', null)
+    expect(markup).toMatch(/<p role="status"[^>]*>Loading the notice…<\/p>/)
+    expect(registerLinks(markup).map(link => link.href)).toEqual(['/dpo/purposes', '/dpo/transfers', '/dpo/notice'])
+    expect(textsOf(markup, 'h2')).toEqual([])
+  })
+
+  it('NTW-09 PD-40 PD-41 PD-48 PD-59 PD-61 B-04 B-12: the register pages badge the Notice link while the notice is out of date, show the banner (a stale pinned purpose listed by name), and mark the cards that wait for the next notice', async () => {
+    const CLEARED = {
+      clearedOn: '2026-10-02',
+      clearedBy: 'Ashton Teo',
+      clearedVia: 'app',
+      revision: 2,
+      withdrawnOn: null,
+      withdrawnBy: null,
+      withdrawReason: null,
+    } as const
+    const registers = registersForClient(
+      { accounts: { version: 2, stale: true }, service_operation: { notified: true }, backups: { notified: true } },
+      { twilio: { ...COMPLETE_FACTS, revision: 2, clearance: CLEARED, sendsWait: true } },
+      'out_of_date',
+    )
+    const purposes = await appAt('/dpo/purposes', registers)
+    expect(registerLinks(purposes).at(-1)).toEqual({
+      href: '/dpo/notice',
+      current: undefined,
+      text: 'Notice Out of date',
+    })
+    expect(readable(purposes)).toEqual(
+      expect.arrayContaining([
+        NOTICE_MARKERS.banner.stale,
+        'Accounts and sign-in: the roster, phone numbers and one-time codes, devices, profiles',
+        NOTICE_MARKERS.banner.toNotice,
+        NOTICE_MARKERS.pinnedStale,
+      ]),
+    )
+    // security_audit is active, not pinned and not notified; backups is notified.
+    expect(purposes.split(NOTICE_MARKERS.waitingForNotice).length - 1).toBe(1)
+    expect(textsOf(purposes, 'h2')).toHaveLength(13)
+
+    const transfers = await appAt('/dpo/transfers', registers)
+    expect(registerLinks(transfers).at(-1)?.text).toBe('Notice Out of date')
+    expect(transfers.split(NOTICE_MARKERS.sendsWaitTwilio).length - 1).toBe(1)
+    expect(transfers).not.toContain(NOTICE_MARKERS.sendsWait)
+
+    // Up to date: no badge and no banner.
+    const upToDate = await appAt('/dpo/purposes', registersForClient({}, {}, 'up_to_date'))
+    expect(registerLinks(upToDate).at(-1)?.text).toBe('Notice')
+    expect(upToDate).not.toContain(NOTICE_MARKERS.banner.toNotice)
+    for (const markup of [purposes, transfers, upToDate]) {
+      expect(readable(markup).filter(line => aiCopyIn(line) !== undefined)).toEqual([])
+    }
   })
 })

@@ -22,6 +22,16 @@
 // version; a DPO being deactivated, or losing the role, while changing a register; and a
 // restriction (PDPA-04a) against a basis leaving consent, each order.
 //
+// C0.9 PR 2 (0010, TECH-SPEC T22 items 25 to 27 and 33) adds the notice, in an org of its own
+// (NOTICE_FIXTURE), so publishing changes nothing the earlier cases read: two publishes from one
+// seen, the first two included, and one after another from a stale seen (NTR-04, B-02); an
+// acknowledgement against a publish, each order (NTR-01); a publish against a purpose change,
+// each order (NTR-02); against "save and keep cleared", a withdrawal and a clearance (NTR-03); an
+// acknowledgement against a deactivation and a device sign-out (NTR-05); a publish by a DPO being
+// deactivated or losing the role (NTR-06); and a send against a publish, which never waits for it
+// and never reads a stated clearance as not stated (NTR-07). The cases run in that order, each
+// from the versions the one before left.
+//
 // Each case opens two connections to a throwaway database (concurrency_check, built from
 // db/migrations/ with the migrator, owned by hearth_owner), starts the change in one, starts the
 // dependent write in the other, waits until Postgres reports that write waiting on a lock, commits
@@ -146,6 +156,47 @@ const C09_FIXTURE = `
     on b.purpose = r.purpose
   where r.org_id = '${ORG}' and r.version = 1;
 `
+// C0.9 PR 2 (0010): the notice's org, NOTICE_ORG, as the owner, with no version yet. Its Hearth
+// principal n(a0); DPOs n(61) (who publishes), n(62) (who publishes alongside), n(63)
+// (deactivated in a case) and n(64) (whose role is revoked in one); members n(71) to n(75), each
+// with an account and a device n(e1) to n(e5). The four purposes active from the start (A-05) have a basis and a
+// retention at version 2, so a draft can be published; twilio, aws, livekit and apple_push have
+// every clearing fact recorded (revision 2), and twilio and aws are cleared.
+const n = (suffix: string) => `c0000000-0000-4000-8000-0000000001${suffix}`
+const NOTICE_ORG = n('00')
+const nids = (suffixes: string[]) => suffixes.map(s => `'${n(s)}'`).join(', ')
+const NOTICE_PEOPLE = ['61', '62', '63', '64', '71', '72', '73', '74', '75']
+const NOTICE_FIXTURE = `
+  set local role hearth_owner;
+  insert into public.orgs (id, name) values ('${NOTICE_ORG}', 'Concurrency check notice');
+  insert into public.principals (id, org_id, kind, system_key) values ('${n('a0')}', '${NOTICE_ORG}', 'system', 'hearth');
+  insert into public.principals (id, org_id, kind)
+  select s.id, '${NOTICE_ORG}', 'human' from unnest(array[${nids(NOTICE_PEOPLE)}]::uuid[]) as s (id);
+  insert into public.people (id, org_id, full_name, created_by)
+  select s.id, '${NOTICE_ORG}', 'Person ' || s.id, '${n('a0')}' from unnest(array[${nids(NOTICE_PEOPLE)}]::uuid[]) as s (id);
+  insert into public.role_assignments (org_id, person_id, role, created_by)
+  select '${NOTICE_ORG}', s.id, 'dpo', '${n('a0')}' from unnest(array[${nids(['61', '62', '63', '64'])}]::uuid[]) as s (id);
+  insert into public.users (id, org_id)
+  select s.id, '${NOTICE_ORG}' from unnest(array[${nids(['71', '72', '73', '74', '75'])}]::uuid[]) as s (id);
+  insert into public.devices (id, org_id, user_id, label)
+  select ('c0000000-0000-4000-8000-0000000001e' || d.k)::uuid, '${NOTICE_ORG}',
+         ('c0000000-0000-4000-8000-00000000017' || d.k)::uuid, 'Phone'
+  from unnest(array['1', '2', '3', '4', '5']) as d (k);
+  insert into public.processing_register (org_id, purpose, ai, pinned, needs_switch, version, status, basis, retention,
+                                          recorded_by)
+  select r.org_id, r.purpose, r.ai, r.pinned, r.needs_switch, 2, 'active', 'employment', '1 year', '${n('61')}'
+  from public.processing_register r
+  where r.org_id = '${NOTICE_ORG}' and r.version = 1 and r.status = 'active';
+  update public.transfer_register set services = 'Test service', data_types = 'A number', processing_countries = '{US}',
+    storage_countries = '{US}', countries_confirmed = 'Test DPA', safeguard = 'dpa', safeguard_reference = 'Test DPA',
+    dpa_terms_confirmed = true, training = 'not_applicable', zero_retention = 'not_applicable',
+    provider_retention = '30 days', retention_confirmed = 'Test DPA', onward_recipients = 'None',
+    review_on = current_date + 365, revision = 2, updated_at = now(), updated_by = '${n('61')}'
+  where org_id = '${NOTICE_ORG}' and provider in ('twilio', 'aws', 'livekit', 'apple_push');
+  insert into public.transfer_clearances (org_id, entry_id, cleared_by, cleared_via)
+  select '${NOTICE_ORG}', t.id, '${n('61')}', 'app' from public.transfer_register t
+  where t.org_id = '${NOTICE_ORG}' and t.provider in ('twilio', 'aws');
+`
 // A PIN hash in the one shape the server issues (0006; DB test 100 uses the same).
 const PIN_HASH = "'$argon2id$v=19$m=19456,t=2,p=1$' || repeat('A', 22) || '$' || repeat('B', 43)"
 const FIXTURE = `
@@ -184,7 +235,7 @@ const FIXTURE = `
     ('${ORG}', '${id('ba')}', 'leadership', '${ADMIN}'), ('${ORG}', '${id('c5')}', 'admin', '${ADMIN}');
   insert into public.audit_log_readers (org_id, role, created_by) values
     ('${ORG}', 'dpo', '${ADMIN}'), ('${ORG}', 'compliance_officer', '${ADMIN}'), ('${ORG}', 'leadership', '${ADMIN}');
-${C06_FIXTURE}${C09_FIXTURE}`
+${C06_FIXTURE}${C09_FIXTURE}${NOTICE_FIXTURE}`
 
 function url(database: string): string {
   const result = new URL(`postgres://${connection.host.includes(':') ? `[${connection.host}]` : connection.host}`)
@@ -213,6 +264,8 @@ interface Step {
   as: Actor
   sql: string
   user?: string
+  // The org the transaction acts in: ORG unless a case names the notice's (C0.9 PR 2).
+  org?: string
 }
 const JOB_ROLES = { queue: 'hearth_queue', offboarding: 'hearth_job_offboarding', purge: 'hearth_job_purge' } as const
 
@@ -221,14 +274,17 @@ async function begin(client: Client, step: Step): Promise<void> {
   await client.query("set local lock_timeout = '10s'")
   if (step.as === 'app') {
     await client.query("select set_config('app.org_id', $1, true), set_config('app.user_id', $2, true)", [
-      ORG,
+      step.org ?? ORG,
       step.user ?? ADMIN,
     ])
     await client.query('set local role hearth_app')
   } else if (step.as === 'owner') {
     await client.query('set local role hearth_owner')
   } else {
-    await client.query("select set_config('app.org_id', $1, true), set_config('app.user_id', $2, true)", [ORG, SYSTEM])
+    await client.query("select set_config('app.org_id', $1, true), set_config('app.user_id', $2, true)", [
+      step.org ?? ORG,
+      SYSTEM,
+    ])
     await client.query(`set local role ${JOB_ROLES[step.as]}`)
   }
 }
@@ -533,6 +589,104 @@ const restrict = (person: string, purpose: string): Step => ({
 })
 const REGISTER_DPO_REFUSED = 'Only the Data Protection Officer can change the registers.'
 const REGISTER_CHANGED = 'This entry changed since you opened it. Reload it and try again.'
+
+// C0.9 PR 2 (0010): the statements the notice's routes and a send make in NOTICE_ORG, each as
+// hearth_app acting as the person the server would set. A publish names the sources its draft
+// was made from as the route does, read in its own statement before publish_notice() locks
+// anything, and (unless the case gives one) the latest version it saw: so one that waits sees,
+// once its locks are granted, whatever committed meanwhile.
+const LATEST_VERSION = `(select max(v.version) from public.notice_versions v where v.org_id = '${NOTICE_ORG}')`
+const LATEST_ID = `(select v.id from public.notice_versions v where v.org_id = '${NOTICE_ORG}' order by v.version desc limit 1)`
+const SOURCES = `(select distinct on (r.purpose) r.purpose, r.version, r.status from public.processing_register r
+                  where r.org_id = '${NOTICE_ORG}' and not r.ai order by r.purpose, r.version desc)`
+const publish = (body: string, options: { dpo?: string; seen?: number | null } = {}): Step => ({
+  as: 'app',
+  org: NOTICE_ORG,
+  user: n(options.dpo ?? '61'),
+  sql: `select * from public.publish_notice(
+          ${options.seen === undefined ? LATEST_VERSION : options.seen === null ? 'null' : options.seen}::integer,
+          '${body}', 'c09.1',
+          array(select x.purpose from ${SOURCES} x where x.status <> 'planned' order by x.purpose),
+          array(select x.version from ${SOURCES} x where x.status <> 'planned' order by x.purpose),
+          array(select c.id from public.transfer_clearances c
+                join public.transfer_register t on t.org_id = c.org_id and t.id = c.entry_id
+                where c.org_id = '${NOTICE_ORG}' and c.withdrawn_at is null and not t.ai),
+          'race', null, null)`,
+})
+// Member n(7k) acknowledges the version their screen showed: the latest when the statement starts.
+const acknowledge = (k: string): Step => ({
+  as: 'app',
+  org: NOTICE_ORG,
+  user: n(`7${k}`),
+  sql: `select * from public.acknowledge_notice(${LATEST_ID}, 'race', '${n(`e${k}`)}', null)`,
+})
+// A send's question in NOTICE_ORG (sign-in.ts deliverCode, as Hearth): anything but cleared refuses
+// it, naming what it read.
+const sendState = (provider: string): Step => ({
+  as: 'app',
+  org: NOTICE_ORG,
+  user: n('a0'),
+  sql: `do $$ declare state text := public.transfer_send_state('${provider}'); begin
+          if state <> 'cleared' then raise exception 'the send read ${provider} %', state; end if;
+        end $$`,
+})
+const noticePurpose = (purpose: string, seen: number): Step => ({
+  as: 'app',
+  org: NOTICE_ORG,
+  user: n('61'),
+  sql: `select * from public.set_register_purpose('${purpose}', ${seen}, 'active', 'employment', null, null, '1 year',
+          '{}'::text[], 'race', null, null)`,
+})
+const noticeRecordFacts = (provider: string, seen: number, retention: string): Step => ({
+  as: 'app',
+  org: NOTICE_ORG,
+  user: n('62'),
+  sql: `select * from public.record_transfer_entry('${provider}', ${seen}, 'Test service', 'A number', '{US}', '{US}',
+          'Test DPA', 'dpa', 'Test DPA', null, true, 'not_applicable', 'not_applicable', '${retention}', 'Test DPA', 'None',
+          current_date + 365, true, 'race', null, null)`,
+})
+const noticeWithdraw = (provider: string): Step => ({
+  as: 'app',
+  org: NOTICE_ORG,
+  user: n('62'),
+  sql: `select * from public.withdraw_transfer_clearance('${provider}', 'race', null, null)`,
+})
+const noticeClear = (provider: string, seen: number): Step => ({
+  as: 'app',
+  org: NOTICE_ORG,
+  user: n('62'),
+  sql: `select * from public.clear_transfer_entry('${provider}', ${seen}, 'race', null, null)`,
+})
+const NOTICE_NEWER = 'A newer version was published since you looked. Check the preview again.'
+const NOTICE_SOURCES_MOVED =
+  'The registers changed since this notice was prepared. Check the preview again, then publish.'
+const NOTICE_ACK_NEWER = 'A newer version of the notice was published. Read it, then acknowledge it.'
+const NOTICE_DPO_REFUSED = 'Only the Data Protection Officer can publish the notice.'
+
+// One step alone, in a transaction of its own: the error it ended with, if any (committed if none).
+async function alone(step: Step): Promise<string | undefined> {
+  const a = await connect(DB)
+  try {
+    await begin(a, step)
+    const error = await a.query(step.sql).then(
+      () => undefined,
+      (failure: unknown) => message(failure),
+    )
+    await a.query(error === undefined ? 'commit' : 'rollback')
+    return error
+  } finally {
+    await a.end()
+  }
+}
+
+// The notice org's versions, as "number:generator".
+const noticeVersions = (watcher: Client) =>
+  scalar(
+    watcher,
+    `select string_agg(version || ':' || coalesce(generator, 'stand-in'), ',' order by version) as v
+     from public.notice_versions where org_id = $1`,
+    [NOTICE_ORG],
+  )
 
 // A job's last transaction: its effect (one more job, queued by a key the case names), then
 // job_finish with the lineage revisions the job was admitted under.
@@ -1509,6 +1663,165 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
         second.error?.includes('applies only to a purpose the register records as resting on consent') === true,
         `expected the restriction refused, got ${second.error ?? 'success'}`,
       )
+    },
+  ],
+  [
+    // B-02: the org's own row is what two publishes take turns on, so two first publishes (no
+    // version to lock yet) serialise like any two, and the second is refused as stale (HF007),
+    // never by the numbering's checks (23505 or 23514).
+    'NTR-04 PDPA-03 C0.9 B-02: of two publishes from one seen, the first two included, the second waits and is refused (HF007); one after another from a stale seen is refused at once',
+    async watcher => {
+      const first = await race(watcher, publish('Race v0'), publish('Race v0 again', { dpo: '62' }))
+      expect(first.waited, 'the second first publish did not wait for the first')
+      expect(first.error?.includes(NOTICE_NEWER) === true, `expected HF007, got ${first.error ?? 'success'}`)
+      const second = await race(
+        watcher,
+        publish('Race v1', { seen: 0 }),
+        publish('Race v1 again', { dpo: '62', seen: 0 }),
+      )
+      expect(second.waited, 'the second publish from one seen did not wait for the first')
+      expect(second.error?.includes(NOTICE_NEWER) === true, `expected HF007, got ${second.error ?? 'success'}`)
+      // P1 committed before P2 starts: P2's seen is a version that is no longer the latest.
+      const stale = await alone(publish('Race v1 late', { seen: 0 }))
+      expect(stale?.includes(NOTICE_NEWER) === true, `expected HF007, got ${stale ?? 'success'}`)
+      const versions = await noticeVersions(watcher)
+      expect(versions === '0:c09.1,1:c09.1', `the org has versions ${versions ?? 'none'}`)
+    },
+  ],
+  [
+    'NTR-01 PDPA-03 C0.9 PD-42: an acknowledgement waits for a publish in progress and is refused (HF007); a publish waits for an acknowledgement in progress, which stays the older version’s',
+    async watcher => {
+      const first = await race(watcher, publish('Race v2'), acknowledge('1'))
+      expect(first.waited, 'the acknowledgement did not wait for the publish in progress')
+      expect(first.error?.includes(NOTICE_ACK_NEWER) === true, `expected HF007, got ${first.error ?? 'success'}`)
+      const second = await race(watcher, acknowledge('1'), publish('Race v3'))
+      expect(second.waited, 'the publish did not wait for the acknowledgement in progress')
+      expect(second.error === undefined, `the publish failed: ${second.error}`)
+      const acknowledged = await scalar(
+        watcher,
+        `select string_agg(v.version::text, ',' order by v.version) as v from public.notice_acknowledgments a
+         join public.notice_versions v on v.org_id = a.org_id and v.id = a.notice_version_id
+         where a.org_id = $1 and a.person_id = $2`,
+        [NOTICE_ORG, n('71')],
+      )
+      expect(acknowledged === '2', `n(71) acknowledged versions ${acknowledged ?? 'none'}, not 2 alone`)
+      const versions = await noticeVersions(watcher)
+      expect(versions?.endsWith(',2:c09.1,3:c09.1') === true, `the org has versions ${versions ?? 'none'}`)
+    },
+  ],
+  [
+    'NTR-02 PDPA-01 C0.9 PD-34 PD-40: a publish waits for a purpose change in progress and is refused as made from older sources (HF007); a purpose change waits for a publish in progress, which lists the version it locked',
+    async watcher => {
+      const first = await race(watcher, noticePurpose('presence_receipts', 1), publish('Race v4'))
+      expect(first.waited, 'the publish did not wait for the purpose change in progress')
+      expect(first.error?.includes(NOTICE_SOURCES_MOVED) === true, `expected HF007, got ${first.error ?? 'success'}`)
+      const second = await race(watcher, publish('Race v4'), noticePurpose('presence_receipts', 2))
+      expect(second.waited, 'the purpose change did not wait for the publish in progress')
+      expect(second.error === undefined, `the purpose change failed: ${second.error}`)
+      const listed = await scalar(
+        watcher,
+        `select l.register_version::text as v from public.notice_version_purposes l
+         join public.notice_versions v on v.org_id = l.org_id and v.id = l.notice_version_id
+         where l.org_id = $1 and v.version = 4 and l.purpose = 'presence_receipts'`,
+        [NOTICE_ORG],
+      )
+      expect(listed === '2', `version 4 lists presence_receipts at ${listed ?? 'none'}, not the version 2 it locked`)
+    },
+  ],
+  [
+    'NTR-03 PDPA-10 C0.9 PD-34 PD-41: a publish waits for "save and keep cleared" or a clearance in progress and is refused (HF007); a withdrawal waits for a publish in progress, which lists the clearance then open',
+    async watcher => {
+      const kept = await race(watcher, noticeRecordFacts('twilio', 2, '60 days'), publish('Race v5'))
+      expect(kept.waited, 'the publish did not wait for "save and keep cleared" in progress')
+      expect(kept.error?.includes(NOTICE_SOURCES_MOVED) === true, `expected HF007, got ${kept.error ?? 'success'}`)
+      const withdrawn = await race(watcher, publish('Race v5'), noticeWithdraw('aws'))
+      expect(withdrawn.waited, 'the withdrawal did not wait for the publish in progress')
+      expect(withdrawn.error === undefined, `the withdrawal failed: ${withdrawn.error}`)
+      const listed = await scalar(
+        watcher,
+        `select (c.withdrawn_at is not null)::text as v from public.notice_version_providers l
+         join public.notice_versions v on v.org_id = l.org_id and v.id = l.notice_version_id
+         join public.transfer_clearances c on c.org_id = l.org_id and c.id = l.clearance_id
+         where l.org_id = $1 and v.version = 5 and c.provider = 'aws'`,
+        [NOTICE_ORG],
+      )
+      expect(
+        listed === 'true',
+        `version 5 lists aws's clearance as ${listed ?? 'missing'}, not the one since withdrawn`,
+      )
+      const cleared = await race(watcher, noticeClear('apple_push', 2), publish('Race v6'))
+      expect(cleared.waited, 'the publish did not wait for the clearance in progress')
+      expect(
+        cleared.error?.includes(NOTICE_SOURCES_MOVED) === true,
+        `expected HF007, got ${cleared.error ?? 'success'}`,
+      )
+    },
+  ],
+  [
+    'NTR-07 PDPA-10 C0.9 PD-15 PD-41: a send never waits for a publish, nor a publish for a send, and a clearance the notice states never reads as anything but cleared',
+    async watcher => {
+      // A version that states the clearances open now (twilio's "kept cleared" one among them).
+      const stated = await alone(publish('Race v6'))
+      expect(stated === undefined, `the publish failed: ${stated}`)
+      const during = await alongside(publish('Race v7'), sendState('twilio'))
+      expect(during === undefined, `a send during a publish read: ${during}`)
+      const before = await alongside(sendState('twilio'), publish('Race v8'))
+      expect(before === undefined, `a publish during a send failed: ${before}`)
+      const after = await alone(sendState('twilio'))
+      expect(after === undefined, `a send after the publishes read: ${after}`)
+      const versions = await noticeVersions(watcher)
+      expect(versions?.endsWith(',6:c09.1,7:c09.1,8:c09.1') === true, `the org has versions ${versions ?? 'none'}`)
+    },
+  ],
+  [
+    'NTR-05 ACC-12 C0.9 PD-42: an acknowledgement waits for its person’s deactivation, or its device’s sign-out, in progress, and is refused',
+    async watcher => {
+      await refused(
+        {
+          as: 'app',
+          org: NOTICE_ORG,
+          user: n('61'),
+          sql: `update public.people set deactivated_at = now(), deactivated_by = '${n('61')}' where id = '${n('72')}'`,
+        },
+        acknowledge('2'),
+        'Only someone still at the organisation can acknowledge its notice.',
+      )(watcher)
+      await refused(
+        {
+          as: 'app',
+          org: NOTICE_ORG,
+          user: n('73'),
+          sql: `update public.devices set signed_out_at = now(), signed_out_by = '${n('73')}' where id = '${n('e3')}'`,
+        },
+        acknowledge('3'),
+        'That device has been signed out.',
+      )(watcher)
+      // Someone else's acknowledgement waits for nothing.
+      expect((await alone(acknowledge('4'))) === undefined, 'n(74) could not acknowledge')
+    },
+  ],
+  [
+    'NTR-06 PDPA-13 C0.9 PD-49: a DPO being deactivated, or whose role is being revoked, can’t publish at the same moment',
+    async watcher => {
+      await refused(
+        {
+          as: 'app',
+          org: NOTICE_ORG,
+          user: n('61'),
+          sql: `update public.people set deactivated_at = now(), deactivated_by = '${n('61')}' where id = '${n('63')}'`,
+        },
+        publish('Race v9', { dpo: '63' }),
+        NOTICE_DPO_REFUSED,
+      )(watcher)
+      await refused(
+        {
+          as: 'owner',
+          sql: `update public.role_assignments set revoked_at = now(), revoked_by = '${n('61')}'
+                where org_id = '${NOTICE_ORG}' and person_id = '${n('64')}' and role = 'dpo'`,
+        },
+        publish('Race v9', { dpo: '64' }),
+        NOTICE_DPO_REFUSED,
+      )(watcher)
     },
   ],
 ]

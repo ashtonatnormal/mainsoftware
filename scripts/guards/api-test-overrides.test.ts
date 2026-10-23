@@ -6,14 +6,27 @@
 // comments stripped.
 //
 // The api's transfer gate (C0.9 PD-15, TECH-SPEC T22 item 8) is the same kind of seam: registerApi
-// sets Api.transfers to DB_TRANSFERS, which asks transfer_cleared() in each send's transaction, and
-// unit tests assign their own (testing/transfers.ts). So in the server's code, outside api.ts,
-// testing/ and tests, nothing assigns a transfers property (api.transfers = …, ['transfers'] = …,
-// Object.assign, Object.defineProperty, Reflect.set) or keys one in an object literal shaped like an
-// Api (one that spreads another object or sets an Api's own field: keyPrefix, afterResponse,
-// appOrigin, names, rp, otp, passkeys, publishRevoked); and main.ts never names it, so a permissive
-// check can't stand in for the register in production. The registers' own answer, whose
-// transfers are rows, is no Api and passes. Read from the syntax tree, so comments don't count.
+// sets Api.transfers to DB_TRANSFERS, which asks transfer_send_state() in each send's transaction
+// (C0.9 PD-59), and unit tests assign their own (testing/transfers.ts). So in the server's code,
+// outside api.ts, testing/ and tests, nothing assigns a transfers property (api.transfers = …,
+// ['transfers'] = …, Object.assign, Object.defineProperty, Reflect.set) or keys one in an object
+// literal shaped like an Api (one that spreads another object or sets an Api's own field:
+// keyPrefix, afterResponse, appOrigin, names, rp, otp, passkeys, publishRevoked); and main.ts never
+// names it, so a permissive check can't stand in for the register in production. The registers' own
+// answer, whose transfers are rows, is no Api and passes. Read from the syntax tree, so comments
+// don't count.
+//
+// The gateway's admission is the third (C0.9 PD-45, B-07, C-07): registerRealtime always wires
+// NOTICE_ADMISSION unless RealtimeDeps.admissionForTests says otherwise, so only realtime/index.ts
+// (which defines it), apps/server/src/testing/ and *.test.ts files may name admissionForTests;
+// main.ts never does. Read with comments stripped.
+//
+// And publishing (C0.9 PD-62, B-14): publish_notice() re-derives a version's sources but takes its
+// words as given, so the publish route, which regenerates the draft and holds the DPO's free text
+// to AI_COPY first, is its only caller. Outside a comment, only compliance/notice.ts, the server's
+// testing/ folder, *.test.ts files and CI's checks against throwaway databases
+// (apps/server/scripts/) name it, apart from its signature as a catalogue key (coverage.ts). Read
+// with comments stripped.
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 import { withoutComments } from './imports'
@@ -27,6 +40,14 @@ const isTest = (path: string) => /\.test\.tsx?$/.test(path)
 const OVERRIDE = /\b(?:otpForTests|passkeysForTests|PASSKEYS_ON)\b/
 const POLICY = `${SERVER}auth/policy.ts`
 const SELF = 'scripts/guards/api-test-overrides.test.ts'
+const REALTIME = `${SERVER}realtime/index.ts`
+const ADMISSION = /\badmissionForTests\b/
+const PUBLISHER = `${SERVER}compliance/notice.ts`
+const CI_CHECKS = 'apps/server/scripts/'
+// A mention of the function, other than its signature as a catalogue key ('publish_notice(integer,
+// text, …)'): a call in any form (public.publish_notice(…), from publish_notice(…), a name passed
+// to a query builder).
+const PUBLISH_NOTICE = /\bpublish_notice\b(?!\s*\(\s*integer\s*,)/
 // An assignment or declaration of the switch: `PASSKEYS_ON =`, `PASSKEYS_ON:` (an object key) or a
 // `let`/`var`/`const` naming it. A comparison (`===`) isn't one.
 const ASSIGNED = /\bPASSKEYS_ON\s*(?:=(?!=)|:)|\b(?:let|var|const)\s+(?:\{[^}]*\b)?PASSKEYS_ON\b/
@@ -123,6 +144,47 @@ describe('T20 D46 the api test overrides never reach production', () => {
 
   it('main.ts names no override', () => {
     expect(OVERRIDE.test(readRepoFile(MAIN))).toBe(false)
+  })
+
+  it('C0.9 PD-45 B-07 C-07: only realtime/index.ts (which defines it), testing/ and *.test.ts files name admissionForTests; main.ts never does', () => {
+    const found = scripts.filter(
+      path =>
+        path !== REALTIME &&
+        !path.startsWith(TESTING) &&
+        !isTest(path) &&
+        path !== SELF &&
+        ADMISSION.test(withoutComments(path, readRepoFile(path))),
+    )
+    expect(found).toEqual([])
+    expect(ADMISSION.test(readRepoFile(MAIN))).toBe(false)
+    // registerRealtime falls back to production's hook when a test sets nothing.
+    expect(withoutComments(REALTIME, readRepoFile(REALTIME))).toMatch(/deps\.admissionForTests \?\? NOTICE_ADMISSION/)
+    expect(ADMISSION.test('registerRealtime(app, { ...deps, admissionForTests: "none" })')).toBe(true)
+    expect(ADMISSION.test('const admissionForTestsish = 1')).toBe(false)
+  })
+
+  it('C0.9 PD-62 B-14: only the publish route (compliance/notice.ts) calls publish_notice(), outside testing/, tests and CI’s checks', () => {
+    const found = scripts.filter(
+      path =>
+        path !== PUBLISHER &&
+        path !== SELF &&
+        !path.startsWith(TESTING) &&
+        !path.startsWith(CI_CHECKS) &&
+        !isTest(path) &&
+        PUBLISH_NOTICE.test(withoutComments(path, readRepoFile(path))),
+    )
+    expect(found).toEqual([])
+    expect(withoutComments(PUBLISHER, readRepoFile(PUBLISHER))).toMatch(/from public\.publish_notice\(/)
+    for (const call of [
+      "pool.query('select * from public.publish_notice($1, $2)', [seen, body])",
+      'sql`select notice from publish_notice ($1, $2)`',
+      "db.selectFrom(eb => eb.fn('publish_notice', [seen]).as('v'))",
+    ]) {
+      expect(PUBLISH_NOTICE.test(call), call).toBe(true)
+    }
+    expect(
+      PUBLISH_NOTICE.test("'publish_notice(integer, text, text, text[], integer[], uuid[], text, uuid, inet)'"),
+    ).toBe(false)
   })
 
   it('C0.9 PD-15 T22 item 8: sets Api.transfers only in api.ts, testing/ and tests, and main.ts never names it', () => {

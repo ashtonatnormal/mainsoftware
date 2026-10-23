@@ -110,9 +110,8 @@ export const WRITES: Readonly<Record<string, Coverage>> = {
   // Working hours are replaced whole: the old rows deleted, the new inserted, one profile.updated.
   'hearth_app working_hours:DELETE': profile,
 
-  // The privacy notice (C0.9 writes these first).
-  'hearth_app notice_versions:INSERT': { events: ['notice.published'] },
-  'hearth_app notice_acknowledgments:INSERT': { events: ['notice.acknowledged'] },
+  // The privacy notice: hearth_app writes neither table itself from 0010; publish_notice() and
+  // acknowledge_notice() below are their only writers (C0.9 PD-42).
 
   // Accounts and PINs. W3 and W4: setting a PIN at a PIN-role holder's first sign-in, or a code-only
   // sign-in making the account beside its signin.started (D46); W16: an admin's reset.
@@ -254,8 +253,31 @@ export const WRITES: Readonly<Record<string, Coverage>> = {
   },
   'withdraw_transfer_clearance(text, text, uuid, inet)': { events: [transferChanged], writes: [...CLEARANCE_ENDED] },
   // An outbound client's question in the transaction that decides a send (PD-15): it reads the open
-  // clearance FOR SHARE and writes nothing.
+  // clearance FOR SHARE and writes nothing. From 0010 it wraps transfer_send_state(), which answers
+  // why a code may or may not go too (PD-59, B-03, C-02).
   'transfer_cleared(text)': { exempt: CHECK, writes: [] },
+  'transfer_send_state(text)': { exempt: CHECK, writes: [] },
+  // The privacy notice (C0.9 PD-37, PD-42, PD-50; TECH-SPEC T22 item 33): the notice tables' only
+  // writers. The api calls each after can() allows it (notice.publish, notice.acknowledge_own) and
+  // appends the event in the same transaction: notice.published naming the new version's row, whose
+  // id its links carry, and notice.acknowledged naming the person, only when something was recorded.
+  // Their audit rows are covered by hearth_app's audit grant, as for set_feature_flag().
+  'publish_notice(integer, text, text, text[], integer[], uuid[], text, uuid, inet)': {
+    events: ['notice.published'],
+    writes: ['notice_versions:INSERT', 'notice_version_purposes:INSERT', 'notice_version_providers:INSERT'],
+  },
+  'acknowledge_notice(uuid, text, uuid, inet)': {
+    events: ['notice.acknowledged'],
+    writes: ['notice_acknowledgments:INSERT'],
+  },
+  // Whether the latest version states each open clearance, for the registers' copy (B-06): a read.
+  'notice_provider_states()': {
+    exempt: 'a read: whether the latest notice states each open clearance, and nothing written',
+    writes: [],
+  },
+  // A published version never changes, and a stand-in never follows a generated one (PD-33).
+  'notice_unchanged()': { exempt: CHECK, writes: [] },
+  'notice_versions_generated()': { exempt: CHECK, writes: [] },
   'orgs_add_registers()': {
     exempt: 'gives a new org its register entries; it runs only when the owner makes an org, never at run time',
     writes: ['processing_register:INSERT', 'transfer_register:INSERT'],
@@ -373,6 +395,9 @@ export const MATCH: Readonly<Record<string, string>> = {
   teams: 'id',
   departments: 'id',
   notice_versions: 'id',
+  // A version's links name it (notice.published's entity, PD-34).
+  notice_version_purposes: 'notice_version_id',
+  notice_version_providers: 'notice_version_id',
   notice_acknowledgments: 'person_id',
   feature_flags: 'id',
   // A purpose's change names the new version's row; a provider's, its transfer entry (PD-22).
@@ -384,9 +409,10 @@ export const MATCH: Readonly<Record<string, string>> = {
 // The integration suite that must append each emitted type at least once (testing/writes.ts): each
 // suite has its own database and module state, so a union across files can't be taken, and each
 // checks its own share instead. The passkey events belong to the dormant passkey suite, the only one
-// that switches passkeys on (D46). The register events belong to the registers suite (C0.9 PD-22).
+// that switches passkeys on (D46). The register events belong to the registers suite (C0.9 PD-22),
+// and the notice's to the notice suite (C0.9 PD-50).
 export const EMITTED_BY: Readonly<
-  Record<EmittedEventType, 'sign-in' | 'passkeys' | 'flags' | 'outbox' | 'jobs' | 'registers'>
+  Record<EmittedEventType, 'sign-in' | 'passkeys' | 'flags' | 'outbox' | 'jobs' | 'registers' | 'notice'>
 > = {
   'signin.started': 'sign-in',
   'signin.ended': 'sign-in',
@@ -399,6 +425,8 @@ export const EMITTED_BY: Readonly<
   'flag.changed': 'flags',
   'register.purpose_changed': 'registers',
   'register.transfer_changed': 'registers',
+  'notice.published': 'notice',
+  'notice.acknowledged': 'notice',
 }
 
 export type WriteOp = 'INSERT' | 'UPDATE' | 'DELETE'

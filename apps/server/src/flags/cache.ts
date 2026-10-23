@@ -29,8 +29,13 @@
 // together, and register() answers undefined, so the purpose gate allows only the pinned purposes
 // (compliance/gate.ts, PD-07). A change reaches the worker within one poll (there is no channel for
 // it) and is logged register_changed; it calls no onChange listener, since no flag's revision moved.
-// An open clearance whose review date has passed is logged transfer_review_overdue at warn, once a
-// day per org and provider (PD-13). The api and realtime keep no register (T22 items 8 and 11).
+// From C0.9 PR 2 the copy also holds the published notice (registers.ts), so a publish is such a
+// change too. An open clearance whose review date has passed is logged transfer_review_overdue at
+// warn, once a day per org and provider (PD-13); a pinned purpose the published notice no longer
+// describes (B-04, C-09: it runs on, and everyone is affected) is logged notice_pinned_out_of_date
+// at warn, once a day per org until a new notice is published, and at once whenever that set of
+// purposes changes (PD-61; C0.13 alarms on both). The api and realtime keep no register (T22 items 8
+// and 11).
 import { performance } from 'node:perf_hooks'
 import { FLAGS, type FlagSpec, flagLineage, isLockedOn } from '@hearth/shared'
 import { sql } from 'kysely'
@@ -140,6 +145,8 @@ export class FlagCache {
   readonly #unregistered = new Set<string>()
   // org:provider of each overdue review, with the UTC day it was last logged (PD-13).
   readonly #overdue = new Map<string, string>()
+  // Per org, the stale pinned purposes last logged (sorted, joined) and the UTC day (B-04, C-09).
+  readonly #pinnedStale = new Map<string, { day: string; purposes: string }>()
   // Reads started and not yet settled (a read the cache stopped waiting for counts until it ends),
   // and the polls deferred while FLAG_READS_IN_FLIGHT are, in the order they were due.
   #inFlight = 0
@@ -199,6 +206,7 @@ export class FlagCache {
     this.#orgs.delete(orgId)
     this.#deferred.delete(orgId)
     for (const key of this.#overdue.keys()) if (key.startsWith(`${orgId}:`)) this.#overdue.delete(key)
+    this.#pinnedStale.delete(orgId)
     clearTimeout(entry.timer)
     entry.timer = undefined
     for (const waiter of entry.waiters.splice(0)) waiter()
@@ -483,9 +491,12 @@ export class FlagCache {
     for (const listener of this.#listeners) listener(orgId, changed)
   }
 
-  // A change of the registers since the last read (never on the first), and each open clearance
-  // whose review date is before today, as a UTC day: logged at most once a day for each (PD-13).
-  // The page judges review dates in the org's zone; a day's slack is enough for a log line.
+  // A change of the registers since the last read (never on the first), each open clearance whose
+  // review date is before today, as a UTC day: logged at most once a day for each (PD-13), and the
+  // pinned purposes the published notice no longer describes, at most once a day per org while there
+  // are any and at once when they change (B-04, C-09). The page judges review dates in the org's
+  // zone; a day's slack is enough for a log line, and judging these by the org's own date (B-16)
+  // waits for C0.13's alarms, since hearth_queue reads no org row (TECH-SPEC T22 item 37).
   #noteRegister(orgId: string, previous: string | undefined, current: { state: RegisterState; digest: string }): void {
     if (previous !== undefined && previous !== current.digest) {
       this.#logger.info({ event: 'register_changed', org: orgId }, 'the registers changed')
@@ -501,6 +512,19 @@ export class FlagCache {
         'a cleared provider is past its review date',
       )
     }
+    const stale = [...current.state.stale].sort()
+    if (stale.length === 0) {
+      this.#pinnedStale.delete(orgId)
+      return
+    }
+    const purposes = stale.join(',')
+    const last = this.#pinnedStale.get(orgId)
+    if (last?.day === today && last.purposes === purposes) return
+    this.#pinnedStale.set(orgId, { day: today, purposes })
+    this.#logger.warn(
+      { event: 'notice_pinned_out_of_date', org: orgId, purposes: stale },
+      'the published notice no longer describes how a pinned purpose is handled: publish a new notice',
+    )
   }
 
   #failed(orgId: string, entry: OrgFlags, error: unknown): void {

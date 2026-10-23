@@ -8,7 +8,8 @@
 // (compliance/gate.ts) over the register copy its flag cache keeps (TECH-SPEC T22 items 6, 7 and 9).
 // A0 fills the fourth with spend caps. The flags route asks the same predicates of the register it
 // reads in its own transaction before a change lets a feature reach anyone new (T22 item 11), and
-// the api's sends ask transfer_cleared() instead (compliance/transfers.ts, T22 item 8).
+// the api's code sends ask transfer_send_state() instead, and any other sender transfer_cleared()
+// (compliance/transfers.ts, T22 item 8, C0.9 PD-59).
 import type { ProviderKey, PurposeKey } from '@hearth/shared'
 import type { FlagCache } from '#src/flags/cache.ts'
 import type { FlagSubject } from '#src/flags/evaluate.ts'

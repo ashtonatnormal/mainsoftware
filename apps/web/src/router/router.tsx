@@ -1,15 +1,31 @@
 // The app's routes (T21 items 1 and 5, OD-02, OD-03, X12, D-02). Code-based, so
 // the tree is plain TypeScript that tests load in Node, with no generated file.
 //
-// __root__            RouteFocus, then the matched route; PlainNotFound and ErrorScreen as defaults
+// __root__            RouteFocus and NoticeWatcher, then the matched route; PlainNotFound and
+// │                   ErrorScreen as defaults
 // ├── /sign-in        outside the shell; a signed-in document goes to /chats instead
-// └── _app (pathless) the shell; a signed-out document goes to /sign-in, keeping the path asked for
+// ├── /notice         outside the shell: the privacy notice to read and acknowledge (C0.9 PD-46); a
+// │                   signed-out document goes to /sign-in
+// └── _app (pathless) the shell; a signed-out document goes to /sign-in, keeping the path asked for,
+//     │               and a person who hasn't acknowledged the current notice goes to /notice
 //     ├── /           → /chats (OD-03: the app lands on Chats)
 //     ├── /today /chats /rooms /tasks /calendar /drive   each tab's screen
 //     ├── /more       the phone's More page
-//     ├── /dpo/purposes /dpo/transfers   the DPO's registers (C0.9 PD-26): no nav entry; the avatar
-//     │                                  menu opens them, and the server decides who may read them
+//     ├── /settings /settings/privacy   Settings and its sections (C0.9 PD-47): no nav entry; the
+//     │                                 avatar menu opens them
+//     ├── /dpo/purposes /dpo/transfers /dpo/notice   the DPO's registers and notice (C0.9 PD-26,
+//     │                                  PD-48): no nav entry; the avatar menu opens them, and the
+//     │                                  server decides who may read them
 //     └── $           every other path: "Page not found" inside the shell
+//
+// The notice (C0.9 PD-44, PD-46; TECH-SPEC T22 items 29 and 31): _app's guard lets a path through
+// only when noticeAllowsPath() (router/paths.ts) does for the runtime's standing (session/notice.ts):
+// everywhere once the current version is acknowledged; before any is published, the DPO's own
+// pages to the DPO; otherwise nowhere, and the guard keeps the path (an app path only, in the
+// store's memory) and sends the visit to /notice. NoticeWatcher does the same whenever the standing
+// changes (a hint, an answer, another tab), and when it becomes acknowledged while the tab is on
+// /notice it opens the kept path, else Chats. The server refuses every request itself (403
+// notice_required); this only keeps a screen from opening that it would refuse.
 //
 // The splat route sits under _app, so an unknown path (/xyz, /chats/abc, /sign-in/foo) runs _app's
 // beforeLoad first: signed out, it goes to sign-in like any other path, and an unknown path is never
@@ -19,12 +35,11 @@
 // failed to load; every screen is a lazy chunk of its own.
 //
 // Rules the router tests hold (router/router.test.ts):
-// - APP_PATHS (router/paths.ts, import-free) lists exactly the paths registered under _app, and
-//   NAV_PATHS those of them the navigation reaches;
+// - APP_PATHS (router/paths.ts, importing no module but a type) lists exactly the paths
+//   registered under _app, and NAV_PATHS those of them the navigation reaches;
 // - no route declares a search param, so no URL carries state (T21 item 5), and the scroll cache is
 //   keyed by pathname alone (D-02);
-// - reserved for later steps and deliberately not routes yet (T21 item 5): /admin/* (C0.16),
-//   /settings/* (the settings registry, C0.9 onwards) and /notice (C0.9 PR 2).
+// - reserved for a later step and deliberately not a route yet (T21 item 5): /admin/* (C0.16).
 //
 // No route has a loader in C0.8. From C1 a loader fills Query's cache through the runtime in its
 // context (context.runtime.queryClient.ensureQueryData(...)) and returns nothing: Query is the cache.
@@ -37,7 +52,10 @@ import {
   type ParsedLocation,
   type RouterHistory,
   redirect,
+  useRouter,
 } from '@tanstack/react-router'
+import { useEffect } from 'react'
+import { sessionQuery } from '@/api/queries.ts'
 import { ErrorScreen } from '@/screens/ErrorScreen.tsx'
 import { PlainNotFound } from '@/screens/PlainNotFound.tsx'
 import { rememberReturnTo, type TabStorage } from '@/session/document.ts'
@@ -45,6 +63,7 @@ import type { SessionRuntime } from '@/session/runtime.ts'
 import type { NavId } from '@/shell/nav.ts'
 import { SHELL } from '@/strings/shell.ts'
 import { SIGN_IN } from '@/strings/sign-in.ts'
+import { type AppPath, NOTICE_PATH, noticeAllowsPath } from './paths.ts'
 import { RouteFocus } from './RouteFocus.tsx'
 
 export interface RouterContext {
@@ -54,10 +73,47 @@ export interface RouterContext {
   readonly storage: TabStorage | undefined
 }
 
+// Whether the person holds the DPO's pages, as the latest session answer says (the capability
+// can() decided, never a role; C0.9 PD-26).
+function registersOf(runtime: Pick<SessionRuntime, 'info' | 'queryClient'>): boolean {
+  const latest = runtime.queryClient.getQueryData(sessionQuery.queryKey) ?? runtime.info
+  return latest.capabilities.registers === true
+}
+
+// Where the notice sends a signed-in tab on path when the standing changes, or undefined to leave
+// it (NoticeWatcher; C0.9 PD-46): from /notice, once acknowledged, to the kept path (read once),
+// else Chats; from a path the standing doesn't allow, to /notice, keeping the path. /sign-in is no
+// signed-in document's (its guard sends it to Chats), so it is left alone.
+export function noticeMove(
+  runtime: Pick<SessionRuntime, 'info' | 'queryClient' | 'notice'>,
+  path: string,
+): AppPath | typeof NOTICE_PATH | undefined {
+  const standing = runtime.notice.standing()
+  if (path === NOTICE_PATH) return standing === 'acknowledged' ? (runtime.notice.takeReturn() ?? '/chats') : undefined
+  if (path === '/sign-in' || noticeAllowsPath(standing, registersOf(runtime), path)) return undefined
+  runtime.notice.rememberReturn(path)
+  return NOTICE_PATH
+}
+
+// Moves the tab when the person's standing with the notice changes (see the header).
+function NoticeWatcher(): null {
+  const router = useRouter()
+  const { runtime } = rootRoute.useRouteContext()
+  useEffect(() => {
+    if (runtime === null) return
+    return runtime.notice.subscribe(() => {
+      const to = noticeMove(runtime, router.state.location.pathname)
+      if (to !== undefined) void router.navigate({ to, replace: true })
+    })
+  }, [router, runtime])
+  return null
+}
+
 function Root() {
   return (
     <>
       <RouteFocus />
+      <NoticeWatcher />
       <Outlet />
     </>
   )
@@ -75,15 +131,36 @@ const signInRoute = createRoute({
   component: lazyRouteComponent(() => import('@/sign-in/SignInScreen.tsx'), 'SignInScreen'),
 })
 
+// The privacy notice (C0.9 PD-46): outside the shell, so nothing of the app is reachable from it but
+// Sign out. Signed out, the visit goes to sign-in, and /notice, which is no app path, forgets an
+// older return path, as any such path does; after sign-in the shell's guard brings the person back
+// here if they still need to acknowledge.
+const noticeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: NOTICE_PATH,
+  staticData: { title: SHELL.notice },
+  beforeLoad: ({ context, location }) => {
+    if (context.runtime !== null) return
+    rememberReturnTo(location.pathname, context.storage)
+    throw redirect({ to: '/sign-in', replace: true })
+  },
+  component: lazyRouteComponent(() => import('@/notice/NoticeScreen.tsx'), 'NoticeScreen'),
+})
+
 const notFoundScreen = lazyRouteComponent(() => import('@/screens/NotFoundScreen.tsx'), 'NotFoundScreen')
 
 const appRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: '_app',
   beforeLoad: ({ context, location }) => {
-    if (context.runtime !== null) return
-    rememberReturnTo(location.pathname, context.storage)
-    throw redirect({ to: '/sign-in', replace: true })
+    const { runtime } = context
+    if (runtime === null) {
+      rememberReturnTo(location.pathname, context.storage)
+      throw redirect({ to: '/sign-in', replace: true })
+    }
+    if (noticeAllowsPath(runtime.notice.standing(), registersOf(runtime), location.pathname)) return
+    runtime.notice.rememberReturn(location.pathname)
+    throw redirect({ to: NOTICE_PATH, replace: true })
   },
   component: lazyRouteComponent(() => import('@/shell/Shell.tsx'), 'Shell'),
   // A notFound() a C1 loader throws inside the shell.
@@ -128,9 +205,26 @@ const moreRoute = createRoute({
   component: lazyRouteComponent(() => import('@/screens/MoreScreen.tsx'), 'MoreScreen'),
 })
 
-// The DPO's registers (C0.9 PD-26, OD-03): each its own lazy chunk, with its title and no nav entry.
-// Their titles come from strings/shell.ts, which the boot loads anyway; the pages' own copy
-// (strings/dpo*.ts) loads only with their chunks, so the boot's bundle doesn't grow by it (C0.9 PD-31).
+// Settings and its sections (C0.9 PD-47; settings/sections.ts): each its own lazy chunk, with its
+// title and no nav entry. What they say (strings/notice.ts) loads only with their chunks.
+const settingsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/settings',
+  staticData: { title: SHELL.settings.title },
+  component: lazyRouteComponent(() => import('@/settings/SettingsScreen.tsx'), 'SettingsScreen'),
+})
+
+const privacyRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/settings/privacy',
+  staticData: { title: SHELL.settings.privacy },
+  component: lazyRouteComponent(() => import('@/settings/PrivacySettings.tsx'), 'PrivacySettings'),
+})
+
+// The DPO's registers and notice (C0.9 PD-26, PD-48, OD-03): each its own lazy chunk, with its title
+// and no nav entry. Their titles come from strings/shell.ts, which the boot loads anyway; the pages'
+// own copy (strings/dpo*.ts) loads only with their chunks, so the boot's bundle doesn't grow by it
+// (C0.9 PD-31).
 const purposesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/dpo/purposes',
@@ -145,6 +239,13 @@ const transfersRoute = createRoute({
   component: lazyRouteComponent(() => import('@/dpo/TransfersScreen.tsx'), 'TransfersScreen'),
 })
 
+const dpoNoticeRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/dpo/notice',
+  staticData: { title: SHELL.dpo.notice },
+  component: lazyRouteComponent(() => import('@/dpo/NoticeTab.tsx'), 'NoticeTab'),
+})
+
 const notFoundRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '$',
@@ -154,6 +255,7 @@ const notFoundRoute = createRoute({
 
 export const routeTree = rootRoute.addChildren([
   signInRoute,
+  noticeRoute,
   appRoute.addChildren([
     indexRoute,
     todayRoute,
@@ -163,8 +265,11 @@ export const routeTree = rootRoute.addChildren([
     calendarRoute,
     driveRoute,
     moreRoute,
+    settingsRoute,
+    privacyRoute,
     purposesRoute,
     transfersRoute,
+    dpoNoticeRoute,
     notFoundRoute,
   ]),
 ])

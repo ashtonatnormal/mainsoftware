@@ -3,7 +3,12 @@
 // booleans decided by can(), never roles. No phone number. The first capability is registers
 // (C0.9 PD-26, TECH-SPEC T22 item 14): whether can() allows the person register.read once they
 // re-authenticate (the DPO alone), so the shell shows the "Data protection" entry; the server still
-// decides every request to the registers. C0.16 adds more as screens need them.
+// decides every request to the registers. C0.16 adds more as screens need them. notice is the
+// person's standing with the current privacy notice (C0.9 PD-46, TECH-SPEC T22 item 31), read
+// plainly in the same transaction (compliance/notice-standing.ts): the shell starts the gateway only
+// once it is acknowledged, and otherwise sends the person to /notice, whose own answer decides.
+// capabilities.registers stays decide()'s, which no notice gates, so "Data protection" still shows
+// while the DPO is on /notice (T22 item 28).
 //
 // The acting session is re-read and can() asked about session.read_own in a read-only
 // transaction. Unlike GET /api/flags, the request counts as use of the session, so its last-use
@@ -17,6 +22,7 @@ import { consider, decide } from '#src/access/world.ts'
 import type { Api } from '#src/api.ts'
 import { ApiError } from '#src/auth/errors.ts'
 import { inSession, type SessionIds } from '#src/auth/sessions.ts'
+import { noticeStanding } from '#src/compliance/notice-standing.ts'
 import type { InOrg } from '#src/db/database.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
 
@@ -52,7 +58,8 @@ export async function readSession(api: Api, session: SessionIds, info: ReqInfo):
         left join profiles pr on pr.org_id = p.org_id and pr.person_id = p.id
         where p.org_id = ${session.orgId} and p.id = ${session.userId}`.execute(trx)
       const row = rows[0]
-      return row === undefined ? undefined : { ...row, registers }
+      if (row === undefined) return undefined
+      return { ...row, registers, notice: await noticeStanding(trx, session.orgId, session.userId) }
     },
     { readOnly: true },
   )
@@ -64,6 +71,7 @@ export async function readSession(api: Api, session: SessionIds, info: ReqInfo):
     name: found.name,
     timeZone: found.time_zone,
     capabilities: { registers: found.registers },
+    notice: found.notice,
   }
   return { body }
 }

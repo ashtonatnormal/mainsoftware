@@ -6,10 +6,12 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvid
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { App } from '@/app/App.tsx'
+import { formattersFor } from '@/lib/time.ts'
 import { createLiveStore } from '@/live/live-status.ts'
 import { createAppRouter } from '@/router/router.tsx'
 import { BootErrorScreen } from '@/screens/BootErrorScreen.tsx'
 import { ErrorScreen } from '@/screens/ErrorScreen.tsx'
+import { createNoticeStore } from '@/session/notice.ts'
 import { createQueryClient } from '@/session/query-client.ts'
 import type { SessionRuntime } from '@/session/runtime.ts'
 import { aiCopyIn } from '@/strings/ai-copy.ts'
@@ -22,6 +24,7 @@ const MARCUS = {
   name: 'Marcus Lim',
   timeZone: 'Asia/Singapore',
   capabilities: { registers: false },
+  notice: 'acknowledged' as const,
 }
 
 // Ashton, the seed's Owner and DPO, whose session answer allows the registers (C0.9 PD-26).
@@ -30,15 +33,27 @@ const ASHTON = {
   name: 'Ashton Teo',
   timeZone: 'Asia/Singapore',
   capabilities: { registers: true },
+  notice: 'acknowledged' as const,
 }
 
 function runtime(person: typeof MARCUS = MARCUS): SessionRuntime {
   const queryClient = createQueryClient(() => {})
   queryClient.setQueryData(['session'], person)
+  const noop = () => {}
   return {
     info: person,
     queryClient,
+    formatters: formattersFor(person.timeZone),
     live: createLiveStore('live'),
+    // The person has acknowledged the current notice, so the shell's guard lets every path through.
+    notice: createNoticeStore({
+      initial: person.notice,
+      live: { start: noop, resume: noop },
+      refetchAll: noop,
+      resetNotice: noop,
+      fetchNotice: noop,
+      post: noop,
+    }),
     signOut: async () => 'ended',
     end: () => {},
   } as unknown as SessionRuntime
@@ -160,7 +175,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     expect(navLinks(await appAt('/more'), 'rail:hidden').filter(([, on]) => on)).toEqual([['More', 'page']])
   })
 
-  it('SHM-03 OD-05 X10 SHL-41 C0.9 PD-26: the avatar button is named "Account, {name}" and opens a menu labelled Account holding Sign out (and Data protection first for the DPO), with the name above it hidden from assistive technology; one per layout', async () => {
+  it('SHM-03 OD-05 X10 SHL-41 C0.9 PD-26 PD-47 B-09: the avatar button is named "Account, {name}" and opens a menu labelled Account holding Settings and Sign out (and Data protection between them for the DPO), with the name above it hidden from assistive technology; one per layout', async () => {
     const markup = await appAt('/today')
     const triggers = tags(markup, 'button').filter(button => button.get('aria-haspopup') === 'menu')
     expect(triggers.map(button => button.get('aria-label'))).toEqual(['Account, Marcus Lim', 'Account, Marcus Lim'])
@@ -173,16 +188,16 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     // The phone's sits in the header row and opens downward; the rail's in the rail's foot, upward.
     expect(markup).toMatch(/class="rail:hidden"><div class="relative">/)
     expect(markup).toMatch(/bottom-full left-0/)
-    // Marcus's session doesn't allow the registers, so his menu holds Sign out alone; the DPO's
-    // holds Data protection first (C0.9 PD-26).
+    // Marcus's session doesn't allow the registers, so his menu holds Settings and Sign out; the
+    // DPO's holds Data protection between them (C0.9 PD-26, PD-47).
     expect(textsOf(markup, 'button').filter(text => text === 'Data protection')).toEqual([])
     const dpo = await appAt('/today', true, ASHTON)
     const items = (menu: string) =>
       [...menu.matchAll(/<button\b[^>]*role="menuitem"[^>]*>(.*?)<\/button>/gs)].map(match =>
         (match[1] ?? '').replace(/<[^>]+>/g, ''),
       )
-    expect(items(dpo)).toEqual(['Data protection', 'Sign out', 'Data protection', 'Sign out'])
-    expect(items(markup)).toEqual(['Sign out', 'Sign out'])
+    expect(items(dpo)).toEqual(['Settings', 'Data protection', 'Sign out', 'Settings', 'Data protection', 'Sign out'])
+    expect(items(markup)).toEqual(['Settings', 'Sign out', 'Settings', 'Sign out'])
   })
 
   it('SHM-04 OD-04 decision 8: no searchbox anywhere in the shell, and no AI copy on any screen', async () => {
@@ -194,8 +209,12 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
       '/calendar',
       '/drive',
       '/more',
+      '/settings',
+      '/settings/privacy',
       '/dpo/purposes',
       '/dpo/transfers',
+      '/dpo/notice',
+      '/notice',
       '/xyz',
     ]) {
       const markup = await appAt(path)

@@ -1,7 +1,7 @@
 // The api's answers as Query options (T21 items 3 and 10, T17 item 11). Every screen reads server
 // data through Query, under one QueryClient per signed-in document (session/query-client.ts), so
 // the cache can't outlive the person (D-01).
-import { type FlagKey, readFlagsAnswer, SessionResponseForClient } from '@hearth/shared'
+import { type FlagKey, type NoticeForClient, readFlagsAnswer, SessionResponseForClient } from '@hearth/shared'
 import { queryOptions, useQuery } from '@tanstack/react-query'
 import { z } from 'zod'
 import { apiGet } from '@/api/http.ts'
@@ -77,3 +77,27 @@ export function useFlags(): ClientFlags | undefined {
 export function useFlag(key: FlagKey): boolean {
   return flagOn(useFlags(), key)
 }
+
+// GET /api/notice (C0.9 PD-46, TECH-SPEC T22 items 26 and 31): whose answer it is, their standing
+// with the privacy notice, the current version, what changed since the last one they acknowledged,
+// and their own acknowledgements, read leniently (NoticeResponseForClient). /notice polls it every
+// 30 s while the page is visible, and on focus, so a person who acknowledged on another device
+// moves on here too; the server reads it without renewing the session (touch: false), as it does
+// the flags poll (OD-14). Settings reads it without the poll. The session runtime reads every
+// answer (session/runtime.ts): one naming someone else ends the document, and its standing moves
+// the runtime's notice store (session/notice.ts). A 401 ends the session like any other. The
+// schema loads with the first fetch (notice/notice-answer.ts), so the boot's bundle doesn't carry
+// it.
+export const NOTICE_POLL_MS = 30_000
+
+export const noticeQuery = queryOptions({
+  queryKey: ['notice'] as const,
+  queryFn: async ({ signal }): Promise<NoticeForClient> => {
+    const { NoticeResponseForClient } = await import('@/notice/notice-answer.ts')
+    return apiGet('/api/notice', NoticeResponseForClient, { signal })
+  },
+  staleTime: 0,
+  refetchInterval: NOTICE_POLL_MS,
+  refetchIntervalInBackground: false,
+  refetchOnWindowFocus: true,
+})

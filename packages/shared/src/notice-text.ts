@@ -114,7 +114,7 @@ export const DOES_NOT = [
     purposes: ['transcription', 'voice_message_transcription', 'transcription_test_set'],
   },
   {
-    clause: 'summarise, index or draft from what you write',
+    clause: 'summarise what you write or draft text from it',
     purposes: ['meeting_notes', 'org_brain', 'ai_writing', 'people_inference', 'assistant', 'agents'],
   },
 ] as const satisfies readonly { clause: string; purposes: readonly PurposeKey[] }[]
@@ -434,25 +434,45 @@ export function noticeDigestText(sources: NoticeSources): string {
   })
 }
 
-// Whether a draft is the latest version again: the same words, generator, purposes at the same
-// versions and clearances.
-function sameVersion(draft: NoticeSources, latest: NoticeSources): boolean {
+// The same words from the same generator, listing the same purposes at the same versions.
+function sameWords(draft: NoticeSources, latest: NoticeSources): boolean {
   const pairs = (sources: NoticeSources) =>
     sources.purposes
       .map(purpose => `${purpose.key}:${purpose.version}`)
-      .sort(codeUnits)
-      .join(',')
-  const ids = (sources: NoticeSources) =>
-    sources.clearances
-      .map(clearance => clearance.id)
       .sort(codeUnits)
       .join(',')
   return (
     draft.body !== null &&
     draft.body === latest.body &&
     draft.generator === latest.generator &&
-    pairs(draft) === pairs(latest) &&
-    ids(draft) === ids(latest)
+    pairs(draft) === pairs(latest)
+  )
+}
+
+// Whether a draft is the latest version again: the same words and purposes, and the same clearances.
+function sameVersion(draft: NoticeSources, latest: NoticeSources): boolean {
+  const ids = (sources: NoticeSources) =>
+    sources.clearances
+      .map(clearance => clearance.id)
+      .sort(codeUnits)
+      .join(',')
+  return sameWords(draft, latest) && ids(draft) === ids(latest)
+}
+
+// Whether the latest version still says what the draft would (C0.9 PD-48): the same words and
+// purposes, and each provider stating the same facts, whichever clearance they rest on. A provider
+// cleared again on the same facts (a new review date alone) leaves the notice up to date: its sends
+// go on (PD-59), and publishing would only have everyone acknowledge the same words again
+// (same_text). A stand-in never says what a draft would.
+export function noticeSaysTheSame(draft: NoticeSources, latest: NoticeSources): boolean {
+  if (!sameWords(draft, latest)) return false
+  const stated = new Map(latest.clearances.map(clearance => [clearance.provider, clearance.facts]))
+  return (
+    draft.clearances.length === stated.size &&
+    draft.clearances.every(clearance => {
+      const was = stated.get(clearance.provider)
+      return was !== undefined && sameNoticeFacts(was, clearance.facts)
+    })
   )
 }
 
@@ -550,6 +570,8 @@ export function noticeWarnings(input: NoticeInput, latest: NoticeSources | null,
     const draft = noticeDraftSources(input, generateNotice(input))
     if (draft.body === latest.body && !sameVersion(draft, latest)) found.push({ code: 'same_text' })
   }
-  found.push({ code: 'dpo_contact_pending' })
+  // Standing warnings: what the notice says of the DPO's contact and of production access isn't in
+  // place yet (C0.9 PD-57), so the DPO is told each time.
+  found.push({ code: 'dpo_contact_pending' }, { code: 'production_access_pending' })
   return sortedBy(NOTICE_WARNINGS, found)
 }

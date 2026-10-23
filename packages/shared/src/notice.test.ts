@@ -141,6 +141,7 @@ describe('C0.9 PD-37 PD-38 PD-62: what holds publishing back and what it warns o
       'sends_waiting',
       'same_text',
       'dpo_contact_pending',
+      'production_access_pending',
     ])
   })
 

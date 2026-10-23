@@ -475,9 +475,10 @@ const NonAiProvider = z.enum(PROVIDERS).refine(key => !isAiProvider(key), { mess
 
 // Whether the published notice says what the registers say (C0.9 PD-48), which the register pages
 // show as a banner and the Notice link's badge:
-//   up_to_date   publishing now would write the latest version again (the draft is unchanged)
-//   out_of_date  a version is published, and publishing now would write another one; a stand-in
-//                as the latest always is
+//   up_to_date   the latest version says what the draft would: the same words and purposes, and
+//                every provider's stated facts (one cleared again on the same facts included)
+//   out_of_date  a version is published, and the draft would say something else or list a purpose
+//                at another register version; a stand-in as the latest always is
 //   none         no version is published yet
 export const NOTICE_STATUSES = ['up_to_date', 'out_of_date', 'none'] as const
 export type NoticeStatus = (typeof NOTICE_STATUSES)[number]

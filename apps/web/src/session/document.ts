@@ -25,6 +25,11 @@
 // (app/boot.tsx), so another tab's sign-out doesn't cost a sign-in step in progress. A document
 // opens at most one channel object, so its own posts never come back to it.
 //
+// The same channel carries { t: 'notice' } (C0.9 PD-46, TECH-SPEC T22 item 31): the person here
+// acknowledged the privacy notice. It too names nobody and carries nothing: a signed-in tab that
+// hears it asks GET /api/notice itself (session/notice.ts check()), and only that answer moves it
+// on. A signed-out tab, and a tab from before C0.9, hears only identity messages, so it ignores it.
+//
 // main.ts loads this file statically, before preBoot() runs, so it imports nothing but import-free
 // modules (boot/pre-boot.ts, router/paths.ts) and types (WS-10).
 import { type ScrollCacheStorage, safeSessionStorage, wipeScrollCache } from '@/boot/pre-boot.ts'
@@ -48,6 +53,7 @@ export const RELOAD_MIN_MS = 60_000
 
 export const IDENTITY_CHANNEL = 'hearth:identity'
 const IDENTITY_MESSAGE = Object.freeze({ t: 'identity' })
+export const NOTICE_MESSAGE = Object.freeze({ t: 'notice' })
 
 export type TabStorage = ScrollCacheStorage & Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 
@@ -108,14 +114,21 @@ function remove(storage: TabStorage | undefined, key: string): void {
 
 export interface IdentityChannel {
   post(): void
+  // Tells the other tabs the person here acknowledged the notice (C0.9 PD-46).
+  postNotice(): void
   close(): void
 }
 
-// The document's one channel object, shared by everything that listens in it.
-let identity: { channel: ChannelLike | undefined; listeners: Set<() => void> } | undefined
+// The document's one channel object, shared by everything that listens in it: what hears identity
+// messages, and what hears notice messages.
+let identity:
+  | { channel: ChannelLike | undefined; listeners: Set<() => void>; noticeListeners: Set<() => void> }
+  | undefined
 
-const isIdentity = (data: unknown) =>
-  typeof data === 'object' && data !== null && (data as { t?: unknown }).t === 'identity'
+const messageOf = (data: unknown) =>
+  typeof data === 'object' && data !== null ? (data as { t?: unknown }).t : undefined
+const isIdentity = (data: unknown) => messageOf(data) === 'identity'
+const isNotice = (data: unknown) => messageOf(data) === 'notice'
 
 function newChannel(env: Pick<DocumentEnv, 'BroadcastChannel'>): ChannelLike | undefined {
   try {
@@ -128,13 +141,14 @@ function newChannel(env: Pick<DocumentEnv, 'BroadcastChannel'>): ChannelLike | u
 // Tells the other tabs: through this document's channel when one is open (so it doesn't come back
 // here), else through one opened for the post and closed at once (a closed sender's message is
 // still delivered).
-function postIdentity(env: Pick<DocumentEnv, 'BroadcastChannel'>): void {
+function postIdentity(env: Pick<DocumentEnv, 'BroadcastChannel'>, message: object = IDENTITY_MESSAGE): void {
   const open = identity?.channel
   const channel = open ?? newChannel(env)
   try {
-    channel?.postMessage(IDENTITY_MESSAGE)
+    channel?.postMessage(message)
   } catch {
-    // A tab that can't post leaves the others to notice at their next session answer or 4401.
+    // A tab that can't post leaves the others to notice at their next session answer or 4401, or,
+    // for the notice, at /notice's next poll.
   }
   if (open === undefined) {
     try {
@@ -145,27 +159,33 @@ function postIdentity(env: Pick<DocumentEnv, 'BroadcastChannel'>): void {
   }
 }
 
-// Calls onIdentity when another tab of this browser says its person changed.
+// Calls onIdentity when another tab of this browser says its person changed, and onNotice, when
+// given, when another tab says its person acknowledged the notice.
 export function openIdentityChannel(
   env: Pick<DocumentEnv, 'BroadcastChannel'>,
   onIdentity: () => void,
+  onNotice?: () => void,
 ): IdentityChannel {
   if (identity === undefined) {
     const listeners = new Set<() => void>()
+    const noticeListeners = new Set<() => void>()
     const channel = newChannel(env)
     if (channel)
       channel.onmessage = event => {
-        if (!isIdentity(event.data)) return
-        for (const listener of [...listeners]) listener()
+        const heard = isIdentity(event.data) ? listeners : isNotice(event.data) ? noticeListeners : undefined
+        for (const listener of [...(heard ?? [])]) listener()
       }
-    identity = { channel, listeners }
+    identity = { channel, listeners, noticeListeners }
   }
   const current = identity
   current.listeners.add(onIdentity)
+  if (onNotice !== undefined) current.noticeListeners.add(onNotice)
   return {
     post: () => postIdentity(env),
+    postNotice: () => postIdentity(env, NOTICE_MESSAGE),
     close: () => {
       current.listeners.delete(onIdentity)
+      if (onNotice !== undefined) current.noticeListeners.delete(onNotice)
       if (current.listeners.size > 0) return
       try {
         current.channel?.close()

@@ -30,6 +30,7 @@ import { MESSAGES } from '#src/auth/errors.ts'
 import { limitSubject } from '#src/auth/limiter.ts'
 import { LIMITS, OTP } from '#src/auth/policy.ts'
 import { FakeVerify } from '#src/auth/sms/fake.ts'
+import { NOTICE_ERRORS } from '#src/compliance/notice.ts'
 import { REGISTER_ERRORS } from '#src/compliance/routes.ts'
 import { withOrg } from '#src/db/database.ts'
 import { FLAG_ERRORS } from '#src/flags/set.ts'
@@ -352,6 +353,7 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
           'internal',
           ...FLAG_ERRORS,
           ...REGISTER_ERRORS,
+          ...NOTICE_ERRORS,
           ...DORMANT_ERRORS,
         ])
         const missing = Object.keys(MESSAGES).filter(code => !elsewhere.has(code) && !answered.has(code))
@@ -1268,6 +1270,83 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
       { register_revision: '2', withdraw_reason: 'facts_changed' },
       { register_revision: '3', withdraw_reason: null },
     ])
+  })
+
+  // The notice's part of the gate (C0.9 PD-41, PD-59; B-03, C-01): in an org with Twilio cleared,
+  // whether the latest version states Twilio's facts decides who gets a code. Before any version,
+  // and once a generated one no longer states them, only a holder of dpo does, read in the deciding
+  // transaction against the real database (role_assignments with no lock, C-01). Each case has an
+  // org of its own (B-08), with no stand-in, and publishes through the harness as its DPO.
+  async function noticeOrg(): Promise<{
+    org: Org
+    dpo: Person
+    owner: Person
+    twilioLike: FakeVerify
+    app: FastifyInstance
+  }> {
+    const org = await s.newOrg({ notice: 'none' })
+    const dpo = await s.person({ org, roles: ['dpo'] })
+    const owner = await s.person({ org, roles: ['owner'] })
+    await s.bootstrapClearance({ org, provider: 'twilio', dpo })
+    const twilioLike = new FakeVerify({ transfer: 'twilio' })
+    return { org, dpo, owner, twilioLike, app: await s.startApi({ sms: twilioLike }) }
+  }
+
+  // The DPO, signed in on the stack's own api (whose fake names no entry), records Twilio's facts
+  // again, kept cleared: a new clearance whose snapshot holds them.
+  async function recordTwilio(dpo: Person, change: Record<string, unknown>): Promise<void> {
+    const dpoClient = await s.signIn(dpo)
+    const read = await dpoClient.get('/api/admin/registers')
+    const twilio = RegistersResponse.parse(read.body).transfers.find(entry => entry.provider === 'twilio')
+    if (twilio === undefined) throw new Error('no twilio entry')
+    const kept = await dpoClient.post('/api/admin/registers/transfers/record', {
+      provider: 'twilio',
+      seen: twilio.revision,
+      ...CLEARING_FACTS,
+      ...change,
+      keepCleared: true,
+    })
+    expect([kept.status, kept.body]).toMatchObject([200, { cleared: true, changed: true }])
+  }
+
+  it('XFR-I4 PDPA-10 C0.9 PD-59 B-03 OD-01: before any notice version, Twilio cleared, the DPO gets a code and an Owner doesn’t (skipped_no_notice, logged at info), with the same reply', async () => {
+    // Budgets: the DPO 1 code request, the Owner 1, on the org's own api.
+    const { dpo, owner, twilioLike, app } = await noticeOrg()
+    expect(await codeOn(app, twilioLike, dpo)).toEqual({ status: 200, sent: 1, send: { send: 'attempted' } })
+    expect(await codeOn(app, twilioLike, owner)).toEqual({ status: 200, sent: 0, send: { send: 'skipped_no_notice' } })
+    const line = s.logs.find(entry => entry.event === 'sms_provider_no_notice' && entry.personId === owner.id)
+    expect(line?.level).toBe(30)
+    expect(s.logs.some(entry => entry.event === 'sms_provider_no_notice' && entry.personId === dpo.id)).toBe(false)
+  })
+
+  it('XFR-I5 PDPA-10 C0.9 PD-41 PD-59 B-03: once a published version states Twilio’s facts, everyone gets a code', async () => {
+    // Budgets: the Owner 1 code request, on the org's own api.
+    const { org, dpo, owner, twilioLike, app } = await noticeOrg()
+    await s.publishNotice(org, dpo, { acknowledge: [dpo, owner] })
+    expect(await codeOn(app, twilioLike, owner)).toEqual({ status: 200, sent: 1, send: { send: 'attempted' } })
+  })
+
+  it('XFR-I6 PDPA-10 C0.9 PD-41 PD-59 B-03: a stated Twilio fact changed after publishing stops codes for everyone but the DPO (skipped_unstated, logged at error) until a new version states it', async () => {
+    // Budgets: the DPO 1 sign-in on the stack's api and 1 code request on the org's; the Owner 2.
+    const { org, dpo, owner, twilioLike, app } = await noticeOrg()
+    await s.publishNotice(org, dpo, { acknowledge: [dpo, owner] })
+    await recordTwilio(dpo, { providerRetention: '60 days' })
+    expect(await codeOn(app, twilioLike, owner)).toEqual({ status: 200, sent: 0, send: { send: 'skipped_unstated' } })
+    const line = s.logs.find(entry => entry.event === 'sms_provider_unstated' && entry.personId === owner.id)
+    expect(line?.level).toBe(50)
+    // The DPO can still sign in, and publish (I-5's lockout closed).
+    expect(await codeOn(app, twilioLike, dpo)).toEqual({ status: 200, sent: 1, send: { send: 'attempted' } })
+    await s.publishNotice(org, dpo, { acknowledge: [dpo, owner] })
+    expect(await codeOn(app, twilioLike, owner)).toEqual({ status: 200, sent: 1, send: { send: 'attempted' } })
+  })
+
+  it('XFR-I7 PDPA-10 C0.9 PD-41 B-03: a change of Twilio’s review date alone, kept cleared, never stops a code', async () => {
+    // Budgets: the DPO 1 sign-in on the stack's api; the Owner 1 code request on the org's.
+    const { org, dpo, owner, twilioLike, app } = await noticeOrg()
+    await s.publishNotice(org, dpo, { acknowledge: [dpo, owner] })
+    const later = new Date(Date.now() + 2 * 365 * 86_400_000).toISOString().slice(0, 10)
+    await recordTwilio(dpo, { reviewOn: later })
+    expect(await codeOn(app, twilioLike, owner)).toEqual({ status: 200, sent: 1, send: { send: 'attempted' } })
   })
 
   it('T20 item 2: a foreign verification whose cancel fails gets no second start and nothing attached: sign-in answers as for any number, re-authentication 503, and a later request works (Qodo)', async () => {
