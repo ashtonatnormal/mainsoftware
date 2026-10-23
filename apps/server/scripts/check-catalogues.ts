@@ -20,7 +20,13 @@
 //      is bound in outbox_checkpoints_own_row() to exactly the role it runs as, and every name bound
 //      there is one of them (0008, T16 item 3): read from the function's body, and tried in a
 //      transaction it rolls back (a scratch org's checkpoint naming another job role must be
-//      refused, one naming the consumer's own role accepted).
+//      refused, one naming the consumer's own role accepted);
+//   6. packages/shared PURPOSES, PINNED_PURPOSES and ACTIVE_FROM_START equal
+//      processing_register_defaults() (keys, ai, pinned, needs_switch and the starting status), and
+//      PROVIDERS and AI_PROVIDERS equal transfer_register_defaults() (keys and ai), both ways; every
+//      org has exactly those rows (one this makes too, in a transaction it rolls back, whose rows
+//      come from the trigger on orgs), and every later version keeps its version 1's fixed columns
+//      (C0.9, TECH-SPEC T22 item 18).
 // The runtime roles are found as scripts/check-migrations.sh finds them: every role granted
 // something in the database (the owner aside), and every role that can use one of them by SET or
 // INHERIT. The integration suites' sweep (apps/server/src/testing/writes.ts) checks the writes the
@@ -30,7 +36,15 @@
 //
 // CI's migrations job runs it after the DB tests. Connects with the PG* variables as a superuser
 // (default: the local stack) and refuses any host but this machine. Exits 1 on any problem.
-import { EVENT_TYPES, FLAGS } from '@hearth/shared'
+import {
+  ACTIVE_FROM_START,
+  AI_PROVIDERS,
+  EVENT_TYPES,
+  FLAGS,
+  PINNED_PURPOSES,
+  PROVIDERS,
+  PURPOSES,
+} from '@hearth/shared'
 import { Client } from 'pg'
 import { JOB_ROLES } from '#src/db/roles.ts'
 import { MATCH, WRITES } from '#src/outbox/coverage.ts'
@@ -47,6 +61,10 @@ import {
   flagProblems,
   type Grant,
   matchProblems,
+  type OrgRegisters,
+  type ProviderDefault,
+  type PurposeDefault,
+  registerProblems,
   roleProblems,
 } from './catalogues.ts'
 
@@ -181,6 +199,15 @@ try {
   ).rows
   const bound = ownRow.length === 1 ? checkpointBindings(ownRow[0]?.source ?? '') : undefined
   const probes = await probeBindings()
+  const purposeDefaults = (
+    await client.query<PurposeDefault>(
+      'select purpose, ai, pinned, needs_switch, status from public.processing_register_defaults()',
+    )
+  ).rows
+  const providerDefaults = (
+    await client.query<ProviderDefault>('select provider, ai from public.transfer_register_defaults()')
+  ).rows
+  const orgs = await readOrgRegisters()
 
   const problems = [
     ...coverageProblems(WRITES, grants, functions),
@@ -191,13 +218,25 @@ try {
     ...flagProblems(FLAGS, defaults),
     ...roleProblems(JOB_ROLES, settable),
     ...bindingProblems(consumers, bound, probes),
+    ...registerProblems(
+      {
+        purposes: PURPOSES,
+        pinned: PINNED_PURPOSES,
+        activeFromStart: ACTIVE_FROM_START,
+        providers: PROVIDERS,
+        aiProviders: AI_PROVIDERS,
+      },
+      purposeDefaults,
+      providerDefaults,
+      orgs,
+    ),
   ]
   if (problems.length > 0) {
     process.stderr.write(`The catalogues and the database disagree:\n${problems.map(p => `  - ${p}`).join('\n')}\n`)
     process.exitCode = 1
   } else {
     process.stdout.write(
-      `OK: ${grants.length} write grants and ${functions.length} functions covered; ${types.length} event types, ${defaults.length} flags, ${settable.length} job roles and ${consumers.length} consumers' checkpoint bindings match.\n`,
+      `OK: ${grants.length} write grants and ${functions.length} functions covered; ${types.length} event types, ${defaults.length} flags, ${settable.length} job roles, ${consumers.length} consumers' checkpoint bindings, and ${purposeDefaults.length} purposes and ${providerDefaults.length} providers in ${orgs.length} orgs' registers match.\n`,
     )
   }
 } finally {
@@ -241,4 +280,39 @@ async function probeBindings(): Promise<BindingProbe[]> {
     await client.query('rollback')
   }
   return probes
+}
+
+// Every org's register rows, as this superuser (who skips row level security), with one more org
+// made in the same transaction, which it rolls back: its rows come from orgs_add_registers(), so a
+// new org is checked too, whatever orgs the database already holds.
+async function readOrgRegisters(): Promise<OrgRegisters[]> {
+  await client.query('begin')
+  try {
+    await client.query(`insert into public.orgs (name) values ('check-catalogues registers')`)
+    const purposes = (
+      await client.query<PurposeDefault & { org: string }>(`
+        select org_id::text as org, purpose, ai, pinned, needs_switch, status
+        from public.processing_register where version = 1`)
+    ).rows
+    const providers = (
+      await client.query<ProviderDefault & { org: string }>(
+        'select org_id::text as org, provider, ai from public.transfer_register',
+      )
+    ).rows
+    const drifted = (
+      await client.query<{ org: string; purpose: string; version: number }>(`
+        select r.org_id::text as org, r.purpose, r.version from public.processing_register r
+        join public.processing_register f on f.org_id = r.org_id and f.purpose = r.purpose and f.version = 1
+        where r.version > 1 and (r.ai, r.pinned, r.needs_switch) is distinct from (f.ai, f.pinned, f.needs_switch)`)
+    ).rows
+    const ids = (await client.query<{ id: string }>('select id::text as id from public.orgs order by id')).rows
+    return ids.map(({ id }) => ({
+      org: id,
+      purposes: purposes.filter(row => row.org === id).map(({ org: _, ...row }) => row),
+      providers: providers.filter(row => row.org === id).map(({ org: _, ...row }) => row),
+      drifted: drifted.filter(row => row.org === id).map(({ org: _, ...row }) => row),
+    }))
+  } finally {
+    await client.query('rollback')
+  }
 }

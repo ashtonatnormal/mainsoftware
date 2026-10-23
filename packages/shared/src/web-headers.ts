@@ -17,7 +17,20 @@ export const CSP_REPORT_PATH = '/api/csp-report'
 // or a name typed or pasted into a URL never reaches the log. apps/web's router test RO-06 holds
 // this list equal to the words of the paths the router registers, so a new route adds its words
 // here in the same PR.
-export const ROUTE_WORDS = ['today', 'chats', 'rooms', 'tasks', 'calendar', 'drive', 'more', 'sign-in'] as const
+export const ROUTE_WORDS = [
+  'today',
+  'chats',
+  'rooms',
+  'tasks',
+  'calendar',
+  'drive',
+  'more',
+  // The DPO pages, /dpo/purposes and /dpo/transfers (C0.9 PD-26).
+  'dpo',
+  'purposes',
+  'transfers',
+  'sign-in',
+] as const
 
 // CloudFront's limit on the Content-Security-Policy value of a response-headers policy (OD-11).
 export const CLOUDFRONT_CSP_MAX = 1783

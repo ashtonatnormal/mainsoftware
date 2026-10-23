@@ -179,7 +179,7 @@ export async function sweepWrites(superuser: Pick<PgClient, 'query'>): Promise<S
 // reads (C0.8) own no event type.
 export async function expectEveryWriteCovered(
   superuser: Pick<PgClient, 'query'>,
-  suite: 'sign-in' | 'passkeys' | 'flags' | 'outbox' | 'jobs' | 'gateway' | 'web',
+  suite: 'sign-in' | 'passkeys' | 'flags' | 'outbox' | 'jobs' | 'registers' | 'gateway' | 'web',
   options: { allPassed: boolean },
 ): Promise<Sweep> {
   const sweep = await sweepWrites(superuser)

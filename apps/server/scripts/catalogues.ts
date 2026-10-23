@@ -1,7 +1,7 @@
 // What check-catalogues.ts compares, as pure functions over what it reads from the database, so
 // catalogues.test.ts can prove each check fails when it should (TECH-SPEC T16 item 7, T17 item 1,
-// T18). Each problem names the gap and how to close it.
-import { CONTENT_TABLES, EVENTS, type EventType, type FlagSpec, isAiFlag } from '@hearth/shared'
+// T18, T22 item 18). Each problem names the gap and how to close it.
+import { CONTENT_TABLES, EVENTS, type EventType, type FlagSpec, isAiFlag, type PurposeSpec } from '@hearth/shared'
 import { type Coverage, grantKey } from '#src/outbox/coverage.ts'
 
 // A write a runtime role may make through a grant: a row operation by table, an update by column.
@@ -519,6 +519,143 @@ export function bindingProblems(
         problems.push(`a checkpoint of ${consumer.name} naming a role other than ${consumer.role} was accepted`)
       }
       if (!probe.ownAccepted) problems.push(`a checkpoint of ${consumer.name} naming ${consumer.role} was refused`)
+    }
+  }
+  return problems
+}
+
+// 6. The registers' starting rows equal the code that judges them (C0.9 PD-03, PD-04, PD-06, PD-07;
+// TECH-SPEC T22 items 4 and 18), both ways: processing_register_defaults() lists exactly PURPOSES,
+// each with ai and needs_switch as PURPOSES has them, pinned exactly for PINNED_PURPOSES and a
+// starting status of active exactly for ACTIVE_FROM_START (planned otherwise);
+// transfer_register_defaults() lists exactly PROVIDERS, with ai exactly for AI_PROVIDERS. Every org
+// in the database (and one the check makes, whose rows come from the trigger on orgs) has exactly
+// those version-1 purpose rows and provider rows, and every later version keeps its version 1's
+// fixed columns, which nothing but a migration may change.
+export interface RegisterCode {
+  purposes: Readonly<Record<string, PurposeSpec>>
+  pinned: readonly string[]
+  activeFromStart: readonly string[]
+  providers: readonly string[]
+  aiProviders: readonly string[]
+}
+
+export interface PurposeDefault {
+  purpose: string
+  ai: boolean
+  pinned: boolean
+  needs_switch: boolean
+  status: string
+}
+
+export interface ProviderDefault {
+  provider: string
+  ai: boolean
+}
+
+// One org's rows: its purposes' version 1, its providers, and the later versions (purpose and
+// version) whose fixed columns differ from their version 1's.
+export interface OrgRegisters {
+  org: string
+  purposes: readonly PurposeDefault[]
+  providers: readonly ProviderDefault[]
+  drifted: readonly { purpose: string; version: number }[]
+}
+
+const fixed = (row: PurposeDefault) =>
+  `ai ${row.ai}, pinned ${row.pinned}, needs_switch ${row.needs_switch}, status ${row.status}`
+
+export function registerProblems(
+  code: RegisterCode,
+  purposeDefaults: readonly PurposeDefault[],
+  providerDefaults: readonly ProviderDefault[],
+  orgs: readonly OrgRegisters[],
+): string[] {
+  const problems: string[] = []
+  // What code says each purpose starts as.
+  const expected = Object.entries(code.purposes).map(
+    ([purpose, spec]): PurposeDefault => ({
+      purpose,
+      ai: spec.ai,
+      pinned: code.pinned.includes(purpose),
+      needs_switch: spec.needsSwitch,
+      status: code.activeFromStart.includes(purpose) ? 'active' : 'planned',
+    }),
+  )
+  const byPurpose = new Map(purposeDefaults.map(row => [row.purpose, row]))
+  for (const want of expected) {
+    const row = byPurpose.get(want.purpose)
+    if (row === undefined) {
+      problems.push(
+        `${want.purpose} is in packages/shared PURPOSES but not in processing_register_defaults(): a migration adds it, with rows for the orgs already there`,
+      )
+    } else if (fixed(row) !== fixed(want)) {
+      problems.push(
+        `${want.purpose}: packages/shared says ${fixed(want)} (PURPOSES, PINNED_PURPOSES, ACTIVE_FROM_START); processing_register_defaults() says ${fixed(row)}`,
+      )
+    }
+  }
+  for (const row of purposeDefaults) {
+    if (!Object.hasOwn(code.purposes, row.purpose)) {
+      problems.push(`${row.purpose} is in processing_register_defaults() but not in packages/shared PURPOSES: add it`)
+    }
+  }
+  const byProvider = new Map(providerDefaults.map(row => [row.provider, row]))
+  for (const provider of code.providers) {
+    const row = byProvider.get(provider)
+    const ai = code.aiProviders.includes(provider)
+    if (row === undefined) {
+      problems.push(
+        `${provider} is in packages/shared PROVIDERS but not in transfer_register_defaults(): a migration adds it, with rows for the orgs already there`,
+      )
+    } else if (row.ai !== ai) {
+      problems.push(
+        `${provider}: packages/shared says ai ${ai} (AI_PROVIDERS); transfer_register_defaults() says ai ${row.ai}`,
+      )
+    }
+  }
+  for (const row of providerDefaults) {
+    if (!code.providers.includes(row.provider)) {
+      problems.push(`${row.provider} is in transfer_register_defaults() but not in packages/shared PROVIDERS: add it`)
+    }
+  }
+  const purposesWanted = new Map(purposeDefaults.map(row => [row.purpose, fixed(row)]))
+  const providersWanted = new Map(providerDefaults.map(row => [row.provider, row.ai]))
+  for (const { org, purposes, providers, drifted } of orgs) {
+    const has = new Map(purposes.map(row => [row.purpose, fixed(row)]))
+    for (const [purpose, want] of purposesWanted) {
+      const got = has.get(purpose)
+      if (got === undefined) problems.push(`org ${org} has no version 1 of ${purpose} in processing_register`)
+      else if (got !== want) {
+        problems.push(`org ${org}'s version 1 of ${purpose} says ${got}; processing_register_defaults() says ${want}`)
+      }
+    }
+    for (const purpose of has.keys()) {
+      if (!purposesWanted.has(purpose)) {
+        problems.push(
+          `org ${org} has ${purpose} in processing_register, which processing_register_defaults() doesn't list`,
+        )
+      }
+    }
+    const holds = new Map(providers.map(row => [row.provider, row.ai]))
+    for (const [provider, ai] of providersWanted) {
+      const got = holds.get(provider)
+      if (got === undefined) problems.push(`org ${org} has no ${provider} entry in transfer_register`)
+      else if (got !== ai) {
+        problems.push(`org ${org}'s ${provider} entry says ai ${got}; transfer_register_defaults() says ai ${ai}`)
+      }
+    }
+    for (const provider of holds.keys()) {
+      if (!providersWanted.has(provider)) {
+        problems.push(
+          `org ${org} has ${provider} in transfer_register, which transfer_register_defaults() doesn't list`,
+        )
+      }
+    }
+    for (const { purpose, version } of drifted) {
+      problems.push(
+        `org ${org}'s version ${version} of ${purpose} has other fixed columns (ai, pinned, needs_switch) than its version 1: every version copies them`,
+      )
     }
   }
   return problems

@@ -16,6 +16,12 @@
 // during a round; the outbox's horizon; and a flag change by someone losing their right to it. A
 // case that must not wait runs its second step with a 2 s lock timeout (alongside()).
 //
+// C0.9 (0009, TECH-SPEC T22) adds the registers: a code check (transfer_cleared(), as a send's
+// transaction asks it) against a withdrawal, each order, and against "save and keep cleared"; a
+// clearance against a change of its facts, each order; two changes to one purpose from one
+// version; a DPO being deactivated, or losing the role, while changing a register; and a
+// restriction (PDPA-04a) against a basis leaving consent, each order.
+//
 // Each case opens two connections to a throwaway database (concurrency_check, built from
 // db/migrations/ with the migrator, owned by hearth_owner), starts the change in one, starts the
 // dependent write in the other, waits until Postgres reports that write waiting on a lock, commits
@@ -109,6 +115,37 @@ const C06_FIXTURE = `
   insert into public.outbox_checkpoints (org_id, consumer, role_name, last_tx, last_id)
   select '${ORG}', 'race13b', 'hearth_job_offboarding', e.tx_id, e.id from public.outbox_events e order by e.id limit 1;
 `
+// C0.9 (0009), after the rest, as the owner. The org's register entries come from the trigger on
+// orgs. DPOs 61, 62, 64 (deactivated in a case) and 66 (whose role is revoked in one), and 65, whom
+// a restriction names. twilio, aws, livekit, apple_push and google_fcm have every clearing fact
+// recorded by 61 (revision 2), and the first three are cleared by 61. session_sharing rests on
+// deemed consent by conduct and content_delivery on consent (version 2, by 61), for the
+// restriction cases; no restriction is live yet.
+const C09_FIXTURE = `
+  set local role hearth_owner;
+  insert into public.principals (id, org_id, kind)
+  select s.id, '${ORG}', 'human' from unnest(array[${ids(['61', '62', '64', '65', '66'])}]::uuid[]) as s (id);
+  insert into public.people (id, org_id, full_name, created_by)
+  select s.id, '${ORG}', 'Person ' || s.id, '${SYSTEM}' from unnest(array[${ids(['61', '62', '64', '65', '66'])}]::uuid[]) as s (id);
+  insert into public.role_assignments (org_id, person_id, role, created_by)
+  select '${ORG}', s.id, 'dpo', '${ADMIN}' from unnest(array[${ids(['61', '62', '64', '66'])}]::uuid[]) as s (id);
+  update public.transfer_register set services = 'Test service', data_types = 'A number', processing_countries = '{US}',
+    storage_countries = '{US}', countries_confirmed = 'Test DPA', safeguard = 'dpa', safeguard_reference = 'Test DPA',
+    dpa_terms_confirmed = true, training = 'not_applicable', zero_retention = 'not_applicable',
+    provider_retention = '30 days', retention_confirmed = 'Test DPA', onward_recipients = 'None',
+    review_on = current_date + 365, revision = 2, updated_at = now(), updated_by = '${id('61')}'
+  where org_id = '${ORG}' and provider in ('twilio', 'aws', 'livekit', 'apple_push', 'google_fcm');
+  insert into public.transfer_clearances (org_id, entry_id, cleared_by, cleared_via)
+  select '${ORG}', t.id, '${id('61')}', 'app' from public.transfer_register t
+  where t.org_id = '${ORG}' and t.provider in ('twilio', 'aws', 'livekit');
+  insert into public.processing_register (org_id, purpose, ai, pinned, needs_switch, version, status, basis, retention,
+                                          recorded_by)
+  select r.org_id, r.purpose, r.ai, r.pinned, r.needs_switch, 2, 'active', b.basis, '1 year', '${id('61')}'
+  from public.processing_register r
+  join (values ('session_sharing', 'deemed_consent_conduct'), ('content_delivery', 'consent')) as b (purpose, basis)
+    on b.purpose = r.purpose
+  where r.org_id = '${ORG}' and r.version = 1;
+`
 // A PIN hash in the one shape the server issues (0006; DB test 100 uses the same).
 const PIN_HASH = "'$argon2id$v=19$m=19456,t=2,p=1$' || repeat('A', 22) || '$' || repeat('B', 43)"
 const FIXTURE = `
@@ -147,7 +184,7 @@ const FIXTURE = `
     ('${ORG}', '${id('ba')}', 'leadership', '${ADMIN}'), ('${ORG}', '${id('c5')}', 'admin', '${ADMIN}');
   insert into public.audit_log_readers (org_id, role, created_by) values
     ('${ORG}', 'dpo', '${ADMIN}'), ('${ORG}', 'compliance_officer', '${ADMIN}'), ('${ORG}', 'leadership', '${ADMIN}');
-${C06_FIXTURE}`
+${C06_FIXTURE}${C09_FIXTURE}`
 
 function url(database: string): string {
   const result = new URL(`postgres://${connection.host.includes(':') ? `[${connection.host}]` : connection.host}`)
@@ -450,6 +487,53 @@ const setFlag = (key: string, enabled: boolean, options: { user?: string; people
   sql: `select public.set_feature_flag('${key}', ${enabled}, '${options.people === undefined ? 'org' : 'cohort'}',
           array[${ids(options.people ?? [])}]::uuid[], '{}', 'race', null, null)`,
 })
+// C0.9 (0009): the statements the DPO's routes and a send's transaction make (TECH-SPEC T22 items 8
+// and 13), each as hearth_app acting as the person the server would set.
+
+// A send's question (sign-in.ts deliverCode, as Hearth): a provider not cleared refuses it, so a
+// case can tell what it read.
+const codeCheck = (provider: string): Step => ({
+  as: 'app',
+  user: SYSTEM,
+  sql: `do $$ begin
+          if not public.transfer_cleared('${provider}') then raise exception 'the code check found ${provider} not cleared'; end if;
+        end $$`,
+})
+const withdrawClearance = (provider: string, dpo = '61'): Step => ({
+  as: 'app',
+  user: id(dpo),
+  sql: `select * from public.withdraw_transfer_clearance('${provider}', 'race', null, null)`,
+})
+const clearEntry = (provider: string, seen: number, dpo = '61'): Step => ({
+  as: 'app',
+  user: id(dpo),
+  sql: `select * from public.clear_transfer_entry('${provider}', ${seen}, 'race', null, null)`,
+})
+// The fixture's facts with the provider's retention changed: "Save" or, with keepCleared, "Save and
+// keep cleared".
+const recordFacts = (provider: string, seen: number, retention: string, keepCleared: boolean, dpo = '61'): Step => ({
+  as: 'app',
+  user: id(dpo),
+  sql: `select * from public.record_transfer_entry('${provider}', ${seen}, 'Test service', 'A number', '{US}', '{US}',
+          'Test DPA', 'dpa', 'Test DPA', null, true, 'not_applicable', 'not_applicable', '${retention}', 'Test DPA', 'None',
+          current_date + 365, ${keepCleared}, 'race', null, null)`,
+})
+// A purpose's next version, on a basis that isn't consent-type.
+const setPurpose = (purpose: string, seen: number, status: string, dpo = '61'): Step => ({
+  as: 'app',
+  user: id(dpo),
+  sql: `select * from public.set_register_purpose('${purpose}', ${seen}, '${status}', 'employment', null, null, '1 year',
+          '{}'::text[], 'race', null, null)`,
+})
+// A person's withdrawal of a purpose (PDPA-04a). Nothing writes one until C2.11, so the owner plays it.
+const restrict = (person: string, purpose: string): Step => ({
+  as: 'owner',
+  sql: `insert into public.processing_restrictions (org_id, person_id, purpose, effective_at, created_by)
+        values ('${ORG}', '${id(person)}', '${purpose}', now(), '${id('61')}')`,
+})
+const REGISTER_DPO_REFUSED = 'Only the Data Protection Officer can change the registers.'
+const REGISTER_CHANGED = 'This entry changed since you opened it. Reload it and try again.'
+
 // A job's last transaction: its effect (one more job, queued by a key the case names), then
 // job_finish with the lineage revisions the job was admitted under.
 const finishJob = (job: string, lease: string, seen: number[], effect: string): Step => ({
@@ -1305,6 +1389,127 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
       setFlag('k16', true, { people: ['b5'] }),
       'This flag changed at the same moment. Try again.',
     ),
+  ],
+  [
+    // The send's FOR SHARE on the open clearance waits for the withdrawal's update, then sees it
+    // ended (T22 item 8; PD-15's bound covers only a withdrawal committing after this decision).
+    'PDPA-10 T22: a code check waits for a withdrawal in progress, then finds Twilio not cleared',
+    refused(withdrawClearance('twilio'), codeCheck('twilio'), 'the code check found twilio not cleared'),
+  ],
+  [
+    'PDPA-10 T22: a withdrawal waits for a code check that has read the clearance',
+    async watcher => {
+      const { waited, error } = await race(watcher, codeCheck('aws'), withdrawClearance('aws'))
+      expect(waited, 'the withdrawal did not wait for the code check holding the clearance')
+      expect(error === undefined, `the withdrawal failed: ${error}`)
+      const reason = await scalar(
+        watcher,
+        `select withdraw_reason as v from public.transfer_clearances where org_id = $1 and provider = 'aws'`,
+        [ORG],
+      )
+      expect(reason === 'dpo_decision', `the clearance ended with ${reason ?? 'nothing'}`)
+    },
+  ],
+  [
+    // The clearance the check waited on ends, and the next is granted, in one commit: the
+    // function's second read finds the new one (T22 item 8).
+    'PDPA-10 T22: saving new facts and keeping the clearance never leaves a code check reading not cleared',
+    async watcher => {
+      const { waited, error } = await race(watcher, recordFacts('livekit', 2, '60 days', true), codeCheck('livekit'))
+      expect(waited, 'the code check did not wait for the save in progress')
+      expect(error === undefined, `the code check read: ${error}`)
+      const open = await scalar(
+        watcher,
+        `select register_revision::text as v from public.transfer_clearances
+         where org_id = $1 and provider = 'livekit' and withdrawn_at is null`,
+        [ORG],
+      )
+      expect(open === '3', `the open clearance rests on revision ${open ?? 'none'}, not the new facts' 3`)
+    },
+  ],
+  [
+    'PDPA-10 T22: a clearance and a change to its facts never pass each other',
+    async watcher => {
+      // A change of facts that waits for a clearance in progress sees it, and ends it.
+      const first = await race(
+        watcher,
+        clearEntry('apple_push', 2),
+        recordFacts('apple_push', 2, '60 days', false, '62'),
+      )
+      expect(first.waited, 'the change of facts did not wait for the clearance in progress')
+      expect(first.error === undefined, `the change of facts failed: ${first.error}`)
+      const ended = await scalar(
+        watcher,
+        `select withdraw_reason || ' ' || register_revision as v from public.transfer_clearances
+         where org_id = $1 and provider = 'apple_push'`,
+        [ORG],
+      )
+      expect(ended === 'facts_changed 2', `the clearance on the old facts ended as ${ended ?? 'nothing'}`)
+      // A clearance that waits for a change of facts in progress is refused as made from the old
+      // revision (HF005), never granted on facts the DPO hasn't seen.
+      const second = await race(
+        watcher,
+        recordFacts('apple_push', 3, '90 days', false),
+        clearEntry('apple_push', 3, '62'),
+      )
+      expect(second.waited, 'the clearance did not wait for the change of facts in progress')
+      expect(second.error?.includes(REGISTER_CHANGED) === true, `expected HF005, got ${second.error ?? 'success'}`)
+      const open = await scalar(
+        watcher,
+        `select count(*)::text as v from public.transfer_clearances where org_id = $1 and provider = 'apple_push'
+         and withdrawn_at is null`,
+        [ORG],
+      )
+      expect(open === '0', `${open} clearance(s) of apple_push are open`)
+    },
+  ],
+  [
+    'PDPA-01 T22: of two changes to one purpose from one version, the second waits and is refused (HF005)',
+    refused(
+      setPurpose('presence_receipts', 1, 'active'),
+      setPurpose('presence_receipts', 1, 'retired', '62'),
+      REGISTER_CHANGED,
+    ),
+  ],
+  [
+    'PDPA-13 T22: a DPO being deactivated can’t change a register at the same moment',
+    refused(deactivate('64'), setPurpose('access_logs', 1, 'active', '64'), REGISTER_DPO_REFUSED),
+  ],
+  [
+    'PDPA-13 T22: a DPO whose role is being revoked can’t change a register at the same moment',
+    refused(
+      {
+        as: 'owner',
+        sql: `update public.role_assignments set revoked_at = now(), revoked_by = '${ADMIN}'
+              where org_id = '${ORG}' and person_id = '${id('66')}' and role = 'dpo'`,
+      },
+      withdrawClearance('aws', '66'),
+      REGISTER_DPO_REFUSED,
+    ),
+  ],
+  [
+    'PDPA-04a T22: a restriction and a basis leaving consent never pass each other',
+    async watcher => {
+      // A basis leaving consent waits for a restriction in progress, then keeps to consent (HF006).
+      const first = await race(watcher, restrict('65', 'session_sharing'), setPurpose('session_sharing', 2, 'active'))
+      expect(first.waited, 'the change of basis did not wait for the restriction in progress')
+      expect(
+        first.error?.includes('Withdrawals are recorded against this purpose') === true,
+        `expected the change of basis refused, got ${first.error ?? 'success'}`,
+      )
+      // A restriction waits for a basis leaving consent in progress, then finds the purpose no longer
+      // rests on consent.
+      const second = await race(
+        watcher,
+        setPurpose('content_delivery', 2, 'active'),
+        restrict('65', 'content_delivery'),
+      )
+      expect(second.waited, 'the restriction did not wait for the change of basis in progress')
+      expect(
+        second.error?.includes('applies only to a purpose the register records as resting on consent') === true,
+        `expected the restriction refused, got ${second.error ?? 'success'}`,
+      )
+    },
   ],
 ]
 

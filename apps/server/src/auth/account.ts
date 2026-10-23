@@ -69,7 +69,6 @@ import type { SmsProvider, Verdict } from '#src/auth/sms/provider.ts'
 import type { InOrg } from '#src/db/database.ts'
 import { endDevices } from '#src/devices/routes.ts'
 import type { Answer, ReqInfo } from '#src/http.ts'
-import { C06_GATE } from '#src/jobs/gate.ts'
 import { appendOutbox } from '#src/outbox/append.ts'
 import { publishRevoked } from '#src/revocation/channels.ts'
 
@@ -232,8 +231,10 @@ async function sendReauthCode(api: Api, session: SessionIds, info: ReqInfo, sms:
         action: 'auth.code_requested',
         details: { during: 'reauth', send },
       })
-    // An outside provider receives the number only once PDPA-10's transfer register clears it (C0.9).
-    if (sms.transfer !== null && !(api.gate ?? C06_GATE).providerCleared(session.orgId, sms.transfer)) {
+    // An outside provider receives the number only while PDPA-10's transfer register clears it, read
+    // FOR SHARE in this transaction; the provider is called after the commit (C0.9 PD-15, TECH-SPEC
+    // T22 item 8, as in sign-in.ts).
+    if (sms.transfer !== null && !(await api.transfers.cleared(trx, sms.transfer))) {
       await requested('skipped_not_cleared')
       info.log.error(
         { event: 'sms_provider_not_cleared', provider: sms.name, personId: session.userId },

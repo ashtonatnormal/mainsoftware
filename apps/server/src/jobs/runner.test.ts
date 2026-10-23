@@ -6,10 +6,11 @@ import type { FlagVerdict } from '#src/flags/cache.ts'
 import { evaluate, type FlagState, type FlagSubject } from '#src/flags/evaluate.ts'
 import type { JobContext } from '#src/jobs/context.ts'
 import { JobRefused, PermanentJobError } from '#src/jobs/errors.ts'
-import { C06_GATE, type Gate } from '#src/jobs/gate.ts'
+import type { Gate } from '#src/jobs/gate.ts'
 import { defineJob, type JobKind } from '#src/jobs/kinds.ts'
 import { JOB_POLICY } from '#src/jobs/policy.ts'
 import { type ClaimedJob, JobRunner } from '#src/jobs/runner.ts'
+import { coreOnlyGate } from '#src/testing/gates.ts'
 import { captureLogger } from '#src/testing/logs.ts'
 import { pgError, type Statement, scriptedPool } from '#src/testing/pool.ts'
 
@@ -184,7 +185,7 @@ function start(
     work: p.db,
     kinds: new Map(options.kinds.map(k => [k.kind, k])),
     flags,
-    gate: options.gate ?? C06_GATE,
+    gate: options.gate ?? coreOnlyGate,
     logger: log.logger,
     concurrency: options.concurrency ?? 4,
     workerId: 'it-worker',

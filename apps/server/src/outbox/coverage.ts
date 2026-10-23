@@ -7,8 +7,8 @@
 //     packages/shared CONTENT_TABLES or one whose events carry a snapshot, by its grant or through
 //     a function: check-catalogues.ts refuses one);
 //   - other writes append their catalogue event where a consumer may act on them (sign-ins,
-//     credentials, deactivation, flags), including the grants a later step will use first, which
-//     name that step's reserved events (C0.9, C0.15, C0.16);
+//     credentials, deactivation, flags, the registers), including the grants a later step will use
+//     first, which name that step's reserved events (C0.9, C0.15, C0.16);
 //   - bookkeeping (last-seen stamps), security counters, the logs themselves and the queue's and
 //     outbox's own machinery are exempt, each saying why.
 //
@@ -43,6 +43,14 @@ const CHECK = 'a check or a lock: it refuses or waits, and writes nothing'
 const STAMP = 'stamps the row being written with the database clock; that write is covered by its own entry'
 
 const deactivation: Coverage = { events: ['person.deactivated'] }
+// The registers (C0.9, TECH-SPEC T22 item 13): their functions are their only writers.
+const transferChanged = 'register.transfer_changed' as const
+// What ending an open clearance writes, by the DPO's decision or because new facts were recorded.
+const CLEARANCE_ENDED = [
+  'transfer_clearances.withdrawn_at:UPDATE',
+  'transfer_clearances.withdrawn_by:UPDATE',
+  'transfer_clearances.withdraw_reason:UPDATE',
+] as const
 const signinEnded: Coverage = { events: ['signin.ended'] }
 const signinStarted: Coverage = { events: ['signin.started'] }
 const pinSetOrReset: Coverage = { events: ['account.pin_set', 'account.pin_reset'] }
@@ -204,6 +212,61 @@ export const WRITES: Readonly<Record<string, Coverage>> = {
       'feature_flags.updated_by:UPDATE',
     ],
   },
+  // The registers (C0.9 PD-21, PD-22; TECH-SPEC T22 item 13): the DPO's routes call these after
+  // can() allows the change and append the event in the same transaction, naming the new version's
+  // row or the transfer entry. Their audit rows are covered by hearth_app's audit grant, as for
+  // set_feature_flag(). The first-Owner bootstrap's function (bootstrap_transfer_clearance()) is no
+  // runtime role's and appends its own event (PD-23).
+  'set_register_purpose(text, integer, text, text, text, integer, text, text[], text, uuid, inet)': {
+    events: ['register.purpose_changed'],
+    writes: ['processing_register:INSERT'],
+  },
+  'record_transfer_entry(text, bigint, text, text, text[], text[], text, text, text, date, boolean, text, text, text, text, text, date, boolean, text, uuid, inet)':
+    {
+      events: [transferChanged],
+      writes: [
+        ...CLEARANCE_ENDED,
+        'transfer_register.services:UPDATE',
+        'transfer_register.data_types:UPDATE',
+        'transfer_register.processing_countries:UPDATE',
+        'transfer_register.storage_countries:UPDATE',
+        'transfer_register.countries_confirmed:UPDATE',
+        'transfer_register.safeguard:UPDATE',
+        'transfer_register.safeguard_reference:UPDATE',
+        'transfer_register.certificate_verified_on:UPDATE',
+        'transfer_register.dpa_terms_confirmed:UPDATE',
+        'transfer_register.training:UPDATE',
+        'transfer_register.zero_retention:UPDATE',
+        'transfer_register.provider_retention:UPDATE',
+        'transfer_register.retention_confirmed:UPDATE',
+        'transfer_register.onward_recipients:UPDATE',
+        'transfer_register.review_on:UPDATE',
+        'transfer_register.revision:UPDATE',
+        'transfer_register.updated_at:UPDATE',
+        'transfer_register.updated_by:UPDATE',
+        // "Save and keep cleared": the new facts' clearance (PD-05).
+        'transfer_clearances:INSERT',
+      ],
+    },
+  'clear_transfer_entry(text, bigint, text, uuid, inet)': {
+    events: [transferChanged],
+    writes: ['transfer_clearances:INSERT'],
+  },
+  'withdraw_transfer_clearance(text, text, uuid, inet)': { events: [transferChanged], writes: [...CLEARANCE_ENDED] },
+  // An outbound client's question in the transaction that decides a send (PD-15): it reads the open
+  // clearance FOR SHARE and writes nothing.
+  'transfer_cleared(text)': { exempt: CHECK, writes: [] },
+  'orgs_add_registers()': {
+    exempt: 'gives a new org its register entries; it runs only when the owner makes an org, never at run time',
+    writes: ['processing_register:INSERT', 'transfer_register:INSERT'],
+  },
+  'transfer_clearances_check()': {
+    exempt:
+      "checks a clearance's facts and stamps the row being written with the revision and facts it rests on; that write is covered by its own entry",
+    writes: [],
+  },
+  'transfer_register_check()': { exempt: CHECK, writes: [] },
+  'processing_restrictions_check()': { exempt: CHECK, writes: [] },
   // D2: a deactivation ends the person's sessions and signs out their devices, as part of the one
   // business event (T16 item 8).
   'people_end_sessions()': {
@@ -312,13 +375,19 @@ export const MATCH: Readonly<Record<string, string>> = {
   notice_versions: 'id',
   notice_acknowledgments: 'person_id',
   feature_flags: 'id',
+  // A purpose's change names the new version's row; a provider's, its transfer entry (PD-22).
+  processing_register: 'id',
+  transfer_register: 'id',
+  transfer_clearances: 'entry_id',
 }
 
 // The integration suite that must append each emitted type at least once (testing/writes.ts): each
 // suite has its own database and module state, so a union across files can't be taken, and each
 // checks its own share instead. The passkey events belong to the dormant passkey suite, the only one
-// that switches passkeys on (D46).
-export const EMITTED_BY: Readonly<Record<EmittedEventType, 'sign-in' | 'passkeys' | 'flags' | 'outbox' | 'jobs'>> = {
+// that switches passkeys on (D46). The register events belong to the registers suite (C0.9 PD-22).
+export const EMITTED_BY: Readonly<
+  Record<EmittedEventType, 'sign-in' | 'passkeys' | 'flags' | 'outbox' | 'jobs' | 'registers'>
+> = {
   'signin.started': 'sign-in',
   'signin.ended': 'sign-in',
   'account.pin_set': 'sign-in',
@@ -328,6 +397,8 @@ export const EMITTED_BY: Readonly<Record<EmittedEventType, 'sign-in' | 'passkeys
   'person.deactivated': 'sign-in',
   'acl.changed': 'sign-in',
   'flag.changed': 'flags',
+  'register.purpose_changed': 'registers',
+  'register.transfer_changed': 'registers',
 }
 
 export type WriteOp = 'INSERT' | 'UPDATE' | 'DELETE'

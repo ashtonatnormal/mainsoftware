@@ -10,7 +10,18 @@ import { productionRegistries } from '#src/worker/index.ts'
 
 const registry: Readonly<Record<string, FlagSpec>> = {
   ...FLAGS,
-  'it.optional': { ...FLAGS['core.system'], class: 'optional', locked: false, purposes: ['service_operation'] },
+  'it.optional': {
+    ...FLAGS['core.system'],
+    class: 'optional',
+    locked: false,
+    purposes: ['service_operation', 'presence_receipts'],
+  },
+  'it.essential': {
+    ...FLAGS['core.system'],
+    class: 'essential',
+    locked: false,
+    purposes: ['service_operation', 'presence_receipts'],
+  },
 }
 
 const kind = (change: Partial<JobKind> = {}): JobKind =>
@@ -210,6 +221,48 @@ describe('C0.6 T15 the job registries', () => {
         consumers: [consumer({ protective: true, feature: 'it.optional', purpose: 'service_operation' })],
       }),
     ).toMatch(/only a consumer under core.system with purpose accounts may be protective/)
+  })
+
+  it('PGT-08 C0.9 PD-18 G3 T22 item 10: refuses work that waits while its flag is off unless its purpose is pinned, and a provider named by waiting work or under a locked-on or essential flag', () => {
+    const waits =
+      /work that waits while its flag is off serves only a pinned purpose \(accounts, service_operation\), until the runner waits on a gate refusal \(TECH-SPEC T22 item 10\)/
+    const names =
+      /work that waits while its flag is off, or runs under a locked-on or essential flag, names no provider, until the runner waits on a gate refusal \(TECH-SPEC T22 item 10\)/
+    // Waiting work: requeued when its flag is off, or by default under an essential flag.
+    expect(problemsOf({ ...valid(), kinds: [kind({ purpose: 'presence_receipts', onFlagOff: 'requeue' })] })).toMatch(
+      waits,
+    )
+    expect(
+      problemsOf({ ...valid(), kinds: [kind({ feature: 'it.essential', purpose: 'presence_receipts' })] }),
+    ).toMatch(waits)
+    // Pinned, or cancelled when its flag is off: the gate's cancel is its own rule (T15 item 9).
+    expect(problemsOf({ ...valid(), kinds: [kind({ feature: 'it.essential' })] })).toBe('')
+    expect(problemsOf({ ...valid(), kinds: [kind({ purpose: 'presence_receipts' })] })).toBe('')
+    expect(
+      problemsOf({
+        ...valid(),
+        kinds: [kind({ feature: 'it.essential', purpose: 'presence_receipts', onFlagOff: 'cancel' })],
+      }),
+    ).toBe('')
+    // A provider named by waiting work, or under an essential or a locked-on flag whatever its
+    // onFlagOff: a withdrawal or a stale register would cancel work that must not be lost.
+    for (const onFlagOff of [undefined, 'requeue', 'cancel'] as const) {
+      expect(
+        problemsOf({ ...valid(), kinds: [kind({ feature: 'it.essential', providers: ['aws'], onFlagOff })] }),
+        `essential, ${onFlagOff}`,
+      ).toMatch(names)
+      expect(
+        problemsOf({
+          ...valid(),
+          kinds: [kind({ feature: 'core.system', role: 'hearth_job_purge', providers: ['aws'], onFlagOff })],
+        }),
+        `core.system, ${onFlagOff}`,
+      ).toMatch(names)
+    }
+    expect(problemsOf({ ...valid(), kinds: [kind({ providers: ['aws'], onFlagOff: 'requeue' })] })).toMatch(names)
+    // An optional flag's work that is cancelled when off may name one: dropped when refused, as when
+    // off.
+    expect(problemsOf({ ...valid(), kinds: [kind({ providers: ['aws'] })] })).toBe('')
   })
 
   it('C0.7 T19: hearth_job_revocation (0008) may run jobs and move a checkpoint, as its grants allow', () => {

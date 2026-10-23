@@ -15,29 +15,38 @@ export const DEFAULT_TIME_ZONE = 'Asia/Singapore'
 
 // people.full_name holds 1 to 200 characters (migration 0002), and Postgres counts code points,
 // where a JavaScript string's length counts UTF-16 units: a name of 200 emoji is 400 units long.
-// So the name's bound is checked in code points, as the database checked it.
+// So the name's bound is checked in code points, as the database checked it. Every answer that
+// carries a person's name reads it with this (the session's, the registers' recorded and cleared
+// by).
 const NAME_MAX = 200
 const codePoints = (text: string) => [...text].length
+export const PersonName = z
+  .string()
+  .min(1)
+  .refine(name => codePoints(name) <= NAME_MAX, { message: `at most ${NAME_MAX} characters` })
 
-// GET /api/session (T21 item 10): what the shell needs and nothing more. No phone number,
-// no roles: C0.16 adds capability booleans decided by can() when a screen needs one.
+// GET /api/session (T21 item 10): what the shell needs and nothing more. No phone number and no
+// roles: what the person may open is said by capability booleans decided by can(), never by roles.
+//   registers  can() allows register.read: the DPO pages and their avatar-menu entry (C0.9 PD-26).
+// C0.16 adds more as its screens need them.
 export const SessionResponse = z.strictObject({
   personId: LowerUuid,
-  name: z
-    .string()
-    .min(1)
-    .refine(name => codePoints(name) <= NAME_MAX, { message: `at most ${NAME_MAX} characters` }),
+  name: PersonName,
   // An IANA zone name, as is_iana_time_zone() admits it (migration 0001); none is near 64 characters.
   timeZone: z.string().min(1).max(64),
+  capabilities: z.strictObject({ registers: z.boolean() }),
 })
 export type SessionJSON = z.infer<typeof SessionResponse>
 
 // The web app's reading of the same answer: an empty or missing zone falls back to the pilot's,
-// and extra fields are dropped, so neither stops the shell from starting.
+// and extra fields are dropped, so neither stops the shell from starting. A capability reads true
+// only when the answer says true; missing, of another type or under an unreadable capabilities
+// field, it reads false, so the shell offers nothing the server didn't (P6).
 export const SessionResponseForClient = z.object({
   personId: z.string().min(1),
   name: z.string().min(1),
   timeZone: z.string().min(1).catch(DEFAULT_TIME_ZONE),
+  capabilities: z.object({ registers: z.boolean().catch(false) }).catch({ registers: false }),
 })
 export type SessionForClient = z.infer<typeof SessionResponseForClient>
 

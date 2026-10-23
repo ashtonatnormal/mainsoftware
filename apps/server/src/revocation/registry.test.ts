@@ -1,4 +1,4 @@
-import { FLAGS, idsProblems, PURPOSES } from '@hearth/shared'
+import { FLAGS, idsProblems, PINNED_PURPOSES } from '@hearth/shared'
 import { describe, expect, it, vi } from 'vitest'
 import { type InOrg, withOrg } from '#src/db/database.ts'
 import type { JobContext } from '#src/jobs/context.ts'
@@ -24,9 +24,10 @@ import {
   socketsHandler,
   topicsHandler,
 } from '#src/revocation/registry.ts'
+import { coreOnlyGate } from '#src/testing/gates.ts'
 import { captureLogger } from '#src/testing/logs.ts'
 import { type Statement, scriptedPool, systemPrincipal } from '#src/testing/pool.ts'
-import { productionRegistries, WORKER_GATE } from '#src/worker/index.ts'
+import { productionRegistries } from '#src/worker/index.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const PERSON = 'b0000000-0000-4000-8000-000000000001'
@@ -474,13 +475,15 @@ describe('C0.7 T19 items 4 and 5 the topics handler', () => {
 })
 
 describe('C0.7 OD-39 S8 PDPA-04: no processing switch holds back a revocation', () => {
-  it('the consumer is protective; core.system is locked on by default; accounts needs no consent; the worker’s default gate allows it', () => {
+  it('C0.9 PD-07: the consumer is protective; core.system is locked on by default; accounts is pinned, so the worker’s gate allows it before the registers are ever read', () => {
     const registry = new RevocationRegistry()
     expect(revocationConsumer(registry, revocationJob(registry)).protective).toBe(true)
     expect(FLAGS['core.system']).toMatchObject({ default: true, locked: true, class: 'essential' })
     expect(FLAGS['core.system'].purposes).toContain('accounts')
-    expect(PURPOSES.accounts.consent).toBe(false)
-    expect(WORKER_GATE.purposeAllowed(ORG, 'accounts')).toBe(true)
+    // Pinned: never on a consent-type basis (migration 0009) and allowed in every register state.
+    expect(PINNED_PURPOSES).toContain('accounts')
+    expect(coreOnlyGate.purposeAllowed(ORG, 'accounts')).toBe(true)
+    expect(coreOnlyGate.processingAllowed(ORG, PERSON, 'accounts')).toBe(true)
   })
 
   it('a gate that refuses every subject’s switch withholds none of its events: the round still queues the jobs', async () => {
@@ -524,7 +527,7 @@ describe('C0.7 OD-39 S8 PDPA-04: no processing switch holds back a revocation', 
       }
       return []
     })
-    const refusing: Gate = { ...WORKER_GATE, processingAllowed: () => false }
+    const refusing: Gate = { ...coreOnlyGate, processingAllowed: () => false }
     const log = captureLogger()
     const runner = new ConsumerRunner({
       db: p.db,

@@ -16,9 +16,12 @@
 --   e3 notice v1     e7 a8's passkey (added on e1)
 --   b1 a review schedule      b2 its run, interrupted (a crash)
 --   b3 a queued job           b4 a running job, under lease token b5 (both on core.system)
+--   e4 a8's withdrawal (processing restriction) of presence_receipts, which a5 (the DPO) recorded
+--      as resting on consent in its version 2
+--   e5 aws's clearance, by a5 in the app, on the facts a5 recorded (its revision 2)
 -- Each org also has every feature flag (the orgs trigger, 0007), one outbox event (flag.changed for
--- core.system, Hearth acting), the offboarding consumer's checkpoint (at the start) and a floor
--- (nothing purged yet).
+-- core.system, Hearth acting), the offboarding consumer's checkpoint (at the start), a floor
+-- (nothing purged yet), and every purpose's and provider's register entry (the orgs trigger, 0009).
 
 -- pg_temp.id('1', 'a1') is org 1's Owner.
 create function pg_temp.id(org text, suffix text) returns uuid language sql immutable as $$
@@ -167,6 +170,26 @@ begin
     values (pg_temp.id(o, 'b4'), org, 'fixture.running', 'core.system', 'service_operation', 'running', 1,
             pg_temp.id(o, 'b5'), now() + interval '30 seconds', 'fixture', now());
   perform set_config('app.user_id', '', true);
+
+  -- The registers (0009), written as the DPO's functions write them: presence_receipts' version 2
+  -- rests on consent, so a8's withdrawal of it can be recorded; aws's facts are recorded and cleared.
+  insert into public.processing_register (org_id, purpose, ai, pinned, needs_switch, version, status, basis, retention,
+                                          recorded_by)
+  select org, r.purpose, r.ai, r.pinned, r.needs_switch, 2, 'active', 'consent', 'Until the person withdraws it',
+         pg_temp.id(o, 'a5')
+  from public.processing_register r where r.org_id = org and r.purpose = 'presence_receipts' and r.version = 1;
+  insert into public.processing_restrictions (id, org_id, person_id, purpose, effective_at, created_by)
+    values (pg_temp.id(o, 'e4'), org, pg_temp.id(o, 'a8'), 'presence_receipts', now(), pg_temp.id(o, 'a5'));
+  update public.transfer_register
+  set services = 'Hosting, CloudWatch logs', data_types = 'Everything Hearth stores', processing_countries = '{SG}',
+      storage_countries = '{SG}', countries_confirmed = 'Test agreement, schedule 1', safeguard = 'dpa',
+      safeguard_reference = 'Test agreement', dpa_terms_confirmed = true, training = 'not_applicable',
+      zero_retention = 'not_applicable', provider_retention = 'Until deleted', retention_confirmed = 'Test agreement, clause 9',
+      onward_recipients = 'None', review_on = current_date + 365, revision = 2, updated_at = now(), updated_by = pg_temp.id(o, 'a5')
+  where org_id = org and provider = 'aws';
+  insert into public.transfer_clearances (id, org_id, entry_id, cleared_by, cleared_via)
+  select pg_temp.id(o, 'e5'), org, t.id, pg_temp.id(o, 'a5'), 'app'
+  from public.transfer_register t where t.org_id = org and t.provider = 'aws';
 end
 $$;
 

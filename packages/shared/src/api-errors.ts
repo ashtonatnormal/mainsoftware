@@ -39,6 +39,11 @@ export const MESSAGES = {
   purpose_refused: "That feature isn't cleared for use yet.",
   invalid_cohort:
     "That cohort can't be used. Name 1 to 1,000 people still at this organisation and roles, or none for everyone.",
+  // The registers' routes (C0.9, TECH-SPEC T22 item 13): an edit made from an older version or
+  // revision (HF005), and an entry a rule refuses (HF006), whose page lists the problems the shared
+  // rules compute (packages/shared registers.ts).
+  register_changed: 'This entry changed since you opened it. Reload it and try again.',
+  register_invalid: "This entry can't be saved as it is. The page lists what it needs.",
   // Read at sign-in too, where nothing the person sees has changed (T21 item 13).
   try_again: 'Something else happened at the same moment. Try again.',
   internal: 'Something went wrong on our side. Try again.',

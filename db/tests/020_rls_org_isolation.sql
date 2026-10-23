@@ -147,3 +147,46 @@ insert into public.principals (id, org_id, kind) values ('f1000000-0000-4000-800
 select pg_temp.expect_error($$insert into public.people (id, org_id, full_name, created_by)
   values ('f1000000-0000-4000-8000-0000000000ad', 'f2000000-0000-4000-8000-000000000000', 'Borrowed id', 'f2000000-0000-4000-8000-0000000000a1')$$,
   '23503', '%people_org_id_id_principal_kind_fkey%');
+
+-- The registers (0009, C0.9 PR 1). Their functions are SECURITY DEFINER, so row level security
+-- doesn't hold them; each filters by the org the server set itself. Acting in org 2 as its DPO, a
+-- purpose change, a withdrawal and the transfer gate reach only org 2's rows, and org 1's DPO
+-- named in an org 2 transaction is refused (42501).
+select pg_temp.act_as('2', 'a5');
+select pg_temp.check(changed and version = 2, 'org 2''s DPO could not record security_audit')
+from public.set_register_purpose('security_audit', 1, 'active', 'legitimate_interests', 'Assessment file 7', null,
+                                 '12 months', '{aws}', 'req-isolation', null, null);
+select pg_temp.check(changed and not cleared, 'org 2''s DPO could not withdraw aws')
+from public.withdraw_transfer_clearance('aws', 'req-isolation', null, null);
+select pg_temp.check(not public.transfer_cleared('aws'), 'org 2 still reads aws as cleared');
+reset role;
+select set_config('app.org_id', pg_temp.id('2', '00')::text, true), set_config('app.user_id', pg_temp.id('1', 'a5')::text, true);
+set local role hearth_app;
+select pg_temp.expect_error($$select * from public.withdraw_transfer_clearance('aws', null, null, null)$$, '42501');
+select pg_temp.expect_error($$select * from public.set_register_purpose('backups', 1, 'planned', null, null, null, null, '{}',
+  null, null, null)$$, '42501');
+reset role;
+select pg_temp.act_as('1', 'a1');
+select pg_temp.check(public.transfer_cleared('aws'), 'org 2''s withdrawal reached org 1''s aws');
+reset role;
+select pg_temp.check(count(*) = 1, 'org 2''s purpose change reached org 1')
+from public.processing_register where org_id = pg_temp.id('1', '00') and purpose = 'security_audit';
+select pg_temp.check(count(*) = 1 and bool_and(withdrawn_at is null), 'org 2''s withdrawal reached org 1''s clearance')
+from public.transfer_clearances where org_id = pg_temp.id('1', '00');
+select pg_temp.check(count(*) = 0, 'org 2''s changes wrote an audit row in org 1')
+from public.audit_events where org_id = pg_temp.id('1', '00') and action like 'register.%';
+
+-- No register row can point at another org's: a clearance of org 1's entry recorded in org 2, or a
+-- withdrawal by org 1's person recorded in org 2 (as the superuser, so only the checks stand in the
+-- way).
+select pg_temp.expect_error($$insert into public.transfer_clearances (org_id, entry_id, cleared_by, cleared_via)
+  select 'f2000000-0000-4000-8000-000000000000', t.id, 'f2000000-0000-4000-8000-0000000000a5', 'app'
+  from public.transfer_register t where t.org_id = 'f1000000-0000-4000-8000-000000000000' and t.provider = 'twilio'$$,
+  '23503');
+select pg_temp.expect_error($$insert into public.processing_restrictions (org_id, person_id, purpose, effective_at, created_by)
+  values ('f2000000-0000-4000-8000-000000000000', 'f1000000-0000-4000-8000-0000000000a7', 'presence_receipts', now(),
+          'f2000000-0000-4000-8000-0000000000a5')$$, '23503', '%processing_restrictions_org_id_person_id_fkey%');
+select pg_temp.expect_error($$insert into public.processing_register (org_id, purpose, ai, pinned, needs_switch, version, status,
+  basis, retention, recorded_by)
+  values ('f2000000-0000-4000-8000-000000000000', 'backups', false, false, false, 2, 'active', 'employment', '35 days',
+          'f1000000-0000-4000-8000-0000000000a5')$$, '23503', '%processing_register_org_id_recorded_by_fkey%');

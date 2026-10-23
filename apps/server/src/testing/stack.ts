@@ -13,7 +13,11 @@
 //
 // From C0.6 every write a runtime role commits is recorded for the outbox's contract sweep
 // (testing/writes.ts), and each org also has the test flags (TEST_FLAGS: it.*), which every flag
-// cache in the run knows (A5). startWorker() runs a worker instance (worker/index.ts) on its own
+// cache in the run knows (A5). From C0.9 each org also has its register entries, from the trigger
+// on orgs (migration 0009), and bootstrapClearance() clears Twilio or AWS through the first-Owner
+// bootstrap's function as the plain superuser acting as Hearth (whose writes the sweep skips), from
+// fictional facts (CLEARING_FACTS). The worker instances judge work by the real purpose gate over
+// their flag read's copy of the registers (compliance/gate.ts), as startWorker() does by default. startWorker() runs a worker instance (worker/index.ts) on its own
 // two pools as hearth_worker and its own Valkey subscriber, with the production kinds and consumers,
 // the test's own, and the production schedules only when a test asks for them (so the 03:17 and
 // 03:47 schedules can't fire mid-run), at the test policy's short intervals.
@@ -82,10 +86,13 @@ const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
 const APP_PASSWORD = 'hearth-local'
 
 // The flags only tests have (A5): the harness inserts each org's rows at these defaults (it.optional,
-// it.essential and it.client on, it.ai off, none locked), and every flag cache in the run knows them,
-// the flags route included. it.ai names an AI purpose outside ai.*, which only a test registry can:
-// the purpose gate refuses to turn it on. it.client is the one the browser may see (client: true), so
-// a change to it nudges the gateway's sockets (C0.7, T19 item 10); no production flag is one yet.
+// it.essential and it.client on, it.ai and it.unnotified off, none locked), and every flag cache in
+// the run knows them, the flags route included. it.ai names an AI purpose outside ai.*, which only a
+// test registry can: the purpose gate refuses to turn it on. it.unnotified names security_audit,
+// which isn't pinned, so the purpose gate refuses to turn it on until a published notice lists the
+// purpose (C0.9 PD-08, PR 2), however the register records it. it.client is the one the browser may
+// see (client: true), so a change to it nudges the gateway's sockets (C0.7, T19 item 10); no
+// production flag is one yet.
 const testFlag = (
   description: string,
   flagClass: FlagSpec['class'],
@@ -122,11 +129,38 @@ export const TEST_FLAGS: Readonly<Record<string, FlagSpec>> = {
     true,
     true,
   ),
+  'it.unnotified': testFlag(
+    'A test feature for a purpose that isn’t pinned, which the purpose gate refuses until a notice lists it',
+    'optional',
+    ['security_audit'],
+    false,
+  ),
 }
 export const TEST_REGISTRY: Readonly<Record<string, FlagSpec>> = { ...FLAGS, ...TEST_FLAGS }
 const TEST_FLAG_ROWS = `values ${Object.entries(TEST_FLAGS)
   .map(([key, spec]) => `('${key}', ${spec.default})`)
   .join(', ')}`
+
+// A provider's facts, complete enough to clear (PDPA-10, D46; C0.9 PD-12) and all fictional, as
+// the registers' routes take them (RecordTransferBody's facts). The review date is a year ahead,
+// after today in any zone.
+export const CLEARING_FACTS = {
+  services: 'Fictional test service',
+  dataTypes: 'A fictional mobile number',
+  processingCountries: ['US'],
+  storageCountries: ['US'],
+  countriesConfirmed: 'Test agreement, annex 1',
+  safeguard: 'dpa',
+  safeguardReference: 'Test agreement',
+  certificateVerifiedOn: null,
+  dpaTermsConfirmed: true,
+  training: 'not_applicable',
+  zeroRetention: 'not_applicable',
+  providerRetention: '30 days',
+  retentionConfirmed: 'Test agreement, annex 2',
+  onwardRecipients: 'None',
+  reviewOn: new Date(Date.now() + 365 * 86_400_000).toISOString().slice(0, 10),
+} as const
 
 // The worker's intervals in the integration tests: leases of 2 s renewed every 0.5 s,
 // the lease sweep (the scheduler's tick) every 0.5 s, polls every 100 ms, metrics every 200 ms and a
@@ -421,6 +455,12 @@ export interface Stack {
   team(options?: { org?: Org }): Promise<string>
   addMember(team: string, person: Person): Promise<void>
   removeMember(team: string, person: Person): Promise<void>
+  // Clears Twilio Verify or AWS once in an org through bootstrap_transfer_clearance() (C0.9 OD-01,
+  // PD-23), as the first-Owner bootstrap does: the plain superuser (never hearth_owner, whose writes
+  // the sweep would count as a runtime role's), acting as the org's Hearth principal, in a
+  // transaction of its own, with CLEARING_FACTS, the DPO named and a reason. Answers the clearance's
+  // id. A clearance after a withdrawal is the DPO's, through the routes.
+  bootstrapClearance(options: { org: Org; provider: 'twilio' | 'aws'; dpo: Person; reason?: string }): Promise<string>
   // Appends an outbox event as the superuser, Hearth acting, about the first subject (or entity).
   appendEvent(
     type: string,
@@ -1288,6 +1328,52 @@ export async function startStack(options: { recheckMs?: number; passkeysForTests
       }
     }
 
+    async function bootstrapClearance(o: {
+      org: Org
+      provider: 'twilio' | 'aws'
+      dpo: Person
+      reason?: string
+    }): Promise<string> {
+      const f = CLEARING_FACTS
+      await query('begin')
+      try {
+        await query("select set_config('app.org_id', $1, true), set_config('app.user_id', $2, true)", [
+          o.org.id,
+          o.org.system,
+        ])
+        const [cleared] = await query<{ id: string }>(
+          `select public.bootstrap_transfer_clearance($1, $2::uuid, $3, $4, $5::text[], $6::text[], $7, $8, $9, $10::date,
+             $11::boolean, $12, $13, $14, $15, $16, $17::date, $18) as id`,
+          [
+            o.provider,
+            o.dpo.id,
+            f.services,
+            f.dataTypes,
+            f.processingCountries,
+            f.storageCountries,
+            f.countriesConfirmed,
+            f.safeguard,
+            f.safeguardReference,
+            f.certificateVerifiedOn,
+            f.dpaTermsConfirmed,
+            f.training,
+            f.zeroRetention,
+            f.providerRetention,
+            f.retentionConfirmed,
+            f.onwardRecipients,
+            f.reviewOn,
+            o.reason ?? 'Integration test set-up',
+          ],
+        )
+        if (cleared === undefined) throw new Error('bootstrap_transfer_clearance() returned no row')
+        await query('commit')
+        return cleared.id
+      } catch (error) {
+        await query('rollback')
+        throw error
+      }
+    }
+
     async function proxy(to: 'postgres' | 'valkey'): Promise<{ proxy: TcpProxy; url: string }> {
       if (to === 'postgres') {
         const made = await startProxy({ host: c.host, port: c.port })
@@ -1351,6 +1437,7 @@ export async function startStack(options: { recheckMs?: number; passkeysForTests
       addMember,
       removeMember,
       appendEvent,
+      bootstrapClearance,
       proxy,
       startApi: async ({ valkeyUrl, publishRevoked, sms: otherSms, realTiming }) => {
         let apiValkey = valkey

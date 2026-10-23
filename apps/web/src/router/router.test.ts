@@ -7,7 +7,8 @@ import { describe, expect, it } from 'vitest'
 import type { TabStorage } from '@/session/document.ts'
 import type { SessionRuntime } from '@/session/runtime.ts'
 import { NAV } from '@/shell/nav.ts'
-import { APP_PATHS } from './paths.ts'
+import { SHELL } from '@/strings/shell.ts'
+import { APP_PATHS, NAV_PATHS } from './paths.ts'
 import { createAppRouter, ROUTER_OPTIONS, type RouterContext } from './router.tsx'
 
 function memoryStorage(): TabStorage & { map: Map<string, string> } {
@@ -63,7 +64,7 @@ function shellPaths(): string[] {
 }
 
 describe('T21 item 1: the route tree (router/router.tsx)', () => {
-  it('RO-01 X12 OD-02 OD-03: every NAV path is a route with its title; / goes to /chats; APP_PATHS (import-free, so main.ts may reach it) equals the paths registered in the shell, splat excluded', async () => {
+  it('RO-01 X12 OD-02 OD-03 C0.9 PD-26: every NAV path is a route with its title; the DPO pages are routes with theirs and no nav entry; / goes to /chats; APP_PATHS (import-free, so main.ts may reach it) equals the paths registered in the shell, splat excluded, and NAV_PATHS the NAV entries', async () => {
     for (const entry of Object.values(NAV)) {
       const router = routerAt(entry.to, signedIn())
       await router.load()
@@ -72,9 +73,29 @@ describe('T21 item 1: the route tree (router/router.tsx)', () => {
       expect(leaf?.staticData.title, entry.to).toBe(entry.label)
       expect(leaf?.staticData.nav, entry.to).toBe(entry.id)
     }
+    for (const [path, title] of [
+      ['/dpo/purposes', SHELL.dpo.purposes],
+      ['/dpo/transfers', SHELL.dpo.transfers],
+    ] as const) {
+      const router = routerAt(path, signedIn())
+      await router.load()
+      const leaf = router.state.matches.at(-1)
+      expect(leaf?.routeId, path).toBe(`/_app${path}`)
+      expect(leaf?.staticData.title, path).toBe(title)
+      expect(leaf?.staticData.nav, path).toBeUndefined()
+    }
     expect(guard('/_app/', '/', signedIn())).toEqual({ to: '/chats', replace: true })
     expect([...shellPaths()].sort()).toEqual([...APP_PATHS].sort())
-    expect(shellPaths()).toHaveLength(Object.keys(NAV).length)
+    expect(new Set(APP_PATHS).size).toBe(APP_PATHS.length)
+    expect([...NAV_PATHS].sort()).toEqual(
+      Object.values(NAV)
+        .map(entry => entry.to as string)
+        .sort(),
+    )
+    expect(APP_PATHS.filter(path => !(NAV_PATHS as readonly string[]).includes(path))).toEqual([
+      '/dpo/purposes',
+      '/dpo/transfers',
+    ])
   })
 
   it('RO-02 D-02: getScrollRestorationKey is the pathname only; #screen is the scroll container', () => {
@@ -136,10 +157,13 @@ describe('T21 item 1: the route tree (router/router.tsx)', () => {
     }
   })
 
-  it('T21 item 5 OD-03: signed out, an app path is kept as the return path and the guard sends the visit to sign-in; signed in, /sign-in goes to /chats; signed out, /sign-in is the sign-in screen', async () => {
+  it('T21 item 5 OD-03 C0.9 PD-26: signed out, an app path (a DPO page included) is kept as the return path and the guard sends the visit to sign-in; signed in, /sign-in goes to /chats; signed out, /sign-in is the sign-in screen', async () => {
     const storage = memoryStorage()
     expect(guard('/_app', '/tasks', { runtime: null, storage })).toEqual({ to: '/sign-in', replace: true })
     expect(storage.map.get('hearth:return-to')).toBe('/tasks')
+    // A DPO page is an app path too, so a deep link to it survives the sign-in (C0.9 PD-26).
+    expect(guard('/_app', '/dpo/transfers', { runtime: null, storage })).toEqual({ to: '/sign-in', replace: true })
+    expect(storage.map.get('hearth:return-to')).toBe('/dpo/transfers')
     expect(guard('/sign-in', '/sign-in', signedIn())).toEqual({ to: '/chats', replace: true })
     expect(guard('/sign-in', '/sign-in', { runtime: null, storage: memoryStorage() })).toBeUndefined()
     const router = routerAt('/sign-in', { runtime: null, storage: memoryStorage() })

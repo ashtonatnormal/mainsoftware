@@ -24,7 +24,12 @@ function spyOnFunction() {
 }
 
 // Marcus, from the Tembusu seed (db/seed/tembusu.sql).
-const MARCUS = { personId: 'b0000000-0000-4000-8000-000000000003', name: 'Marcus', timeZone: 'Asia/Singapore' }
+const MARCUS = {
+  personId: 'b0000000-0000-4000-8000-000000000003',
+  name: 'Marcus',
+  timeZone: 'Asia/Singapore',
+  capabilities: { registers: false },
+}
 
 describe('T21: zod without code made from strings (boot/pre-boot.ts presetZodJitless)', () => {
   it('ZJ-02: the preset keeps any other setting already there, and makes the object when there is none', () => {

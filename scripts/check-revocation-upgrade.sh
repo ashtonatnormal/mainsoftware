@@ -20,6 +20,15 @@
 #   0008 doesn't bind, but can't start a `revocation` one or move the purge role's; the revocation
 #   role can start its own, and neither role can start one in the other's name;
 # - the upgraded schema matches a fresh build (BASE_DB, scripts/schema-digest.sql).
+# The migrate applies every migration after 0007, so it applies 0009 (C0.9 PR 1) over the same data,
+# which has no step of its own (TECH-SPEC T22 item 18, C0.9 PD-29): 0009 changes no row, replaces
+# outbox_events_type with a superset, validated in place, and gives every org its register entries.
+# So this also writes one outbox event of a type 0007 lists before the migrate, so the new check is
+# validated over a real row, and checks afterwards that:
+# - that event is still there, unchanged, and the new check is validated;
+# - every org, the seed's and the second (which has no principals), has exactly the defaults' version
+#   1 of each purpose and the defaults' entry for each provider, naming nobody, recording nothing,
+#   and nothing cleared (the digest compares no rows).
 # The data is made up; none of it is anyone's.
 #
 # Usage, after a full scratch build (BASE_DB, default hearth_check):
@@ -76,6 +85,19 @@ sql -d "$db" -c "insert into public.outbox_checkpoints (org_id, consumer, role_n
   values ('$org', 'purge_side', 'hearth_job_purge', '9', 2, 1)"
 kept=$(sql -d "$db" -Atc "$checkpoints")
 
+# One outbox event of a type 0007 lists, as C0.6's worker writes one (Hearth's system principal
+# acting), so 0009 validates its new outbox_events_type over a row rather than an empty table.
+events="select string_agg(format('%s %s %s %s %s %s %s', id, org_id, type, entity_type, entity_id, actor_id, ids), E'\n'
+  order by id) from public.outbox_events"
+sql -d "$db" --single-transaction -o /dev/null \
+  -c "select set_config('app.user_id', 'b0000000-0000-4000-8000-000000000000', true)" \
+  -c "insert into public.outbox_events (org_id, type, entity_type, entity_id, actor_id, actor_kind, purpose, ids)
+      select f.org_id, 'flag.changed', 'feature_flag', f.id, 'b0000000-0000-4000-8000-000000000000', 'system',
+             'service_operation', jsonb_build_object('key', f.key, 'enabled', f.enabled)
+      from public.feature_flags f where f.org_id = '$org' and f.key = 'core.system'"
+kept_events=$(sql -d "$db" -Atc "$events")
+[ -n "$kept_events" ] || { echo "The outbox event to upgrade over wasn't written" >&2; exit 1; }
+
 # The rows the binding refuses, which 0007 allowed: the offboarding role starts the revocation
 # consumer's checkpoint in its own name, and the superuser starts the second org's offboarding one
 # for the purge role.
@@ -122,7 +144,7 @@ grep -qF 'A checkpoint names a role other than the one its consumer runs as' <<<
 # With them removed, 0008 applies, and every other checkpoint is as it was.
 sql -d "$db" -c "delete from public.outbox_checkpoints
   where (org_id, consumer) in (('$org', 'revocation'), ('$org2', 'offboarding'))"
-migrate >&2 || { echo "0008 failed over checkpoints 0007 allows that keep its binding: see the migrate: lines above." >&2; exit 1; }
+migrate >&2 || { echo "0008 (or a later migration) failed over checkpoints 0007 allows that keep its binding: see the migrate: lines above." >&2; exit 1; }
 [ "$(sql -d "$db" -Atc "select count(*) from public.kysely_migration where name = '0008_revocation_role'")" = 1 ] ||
   { echo "0008_revocation_role was not applied" >&2; exit 1; }
 now=$(sql -d "$db" -Atc "$checkpoints")
@@ -131,6 +153,49 @@ if [ "$now" != "$kept" ]; then
   diff <(printf '%s\n' "$kept") <(printf '%s\n' "$now") | sed 's/^/  /' >&2 || true
   exit 1
 fi
+
+# 0009 (C0.9 PR 1): the outbox event is as it was, under a validated check, and every org got
+# exactly its register entries from the backfill.
+[ "$(sql -d "$db" -Atc "select count(*) from public.kysely_migration where name = '0009_registers'")" = 1 ] ||
+  { echo "0009_registers was not applied" >&2; exit 1; }
+now_events=$(sql -d "$db" -Atc "$events")
+if [ "$now_events" != "$kept_events" ]; then
+  echo "The migrations changed the outbox events already there:" >&2
+  diff <(printf '%s\n' "$kept_events") <(printf '%s\n' "$now_events") | sed 's/^/  /' >&2 || true
+  exit 1
+fi
+[ "$(sql -d "$db" -Atc "select convalidated from pg_constraint
+       where conrelid = 'public.outbox_events'::regclass and conname = 'outbox_events_type'")" = t ] ||
+  { echo "0009 left outbox_events_type NOT VALID" >&2; exit 1; }
+[ "$(sql -d "$db" -Atc "select string_agg(id::text, ' ' order by id) from public.orgs")" = "$org $org2" ] ||
+  { echo "The upgrade check expects exactly the seed's org and the second org" >&2; exit 1; }
+backfill=$(sql -d "$db" -At <<'SQL'
+-- Each org whose register entries aren't exactly the defaults', untouched.
+with want as (
+  select (select string_agg(format('%s %s %s %s %s', d.purpose, d.ai, d.pinned, d.needs_switch, d.status), ',' order by d.purpose)
+          from public.processing_register_defaults() d) as purposes,
+         (select string_agg(format('%s %s', d.provider, d.ai), ',' order by d.provider)
+          from public.transfer_register_defaults() d) as providers
+)
+select coalesce(string_agg(o.id::text, ', ' order by o.id), '')
+from public.orgs o cross join want w
+where (select string_agg(format('%s %s %s %s %s', r.purpose, r.ai, r.pinned, r.needs_switch, r.status), ',' order by r.purpose)
+       from public.processing_register r where r.org_id = o.id) is distinct from w.purposes
+   or exists (select 1 from public.processing_register r
+              where r.org_id = o.id and (r.version <> 1 or r.recorded_by is not null or r.basis is not null
+                                         or r.basis_reference is not null or r.opt_out_days is not null
+                                         or r.retention is not null or r.providers <> '{}'))
+   or (select string_agg(format('%s %s', t.provider, t.ai), ',' order by t.provider)
+       from public.transfer_register t where t.org_id = o.id) is distinct from w.providers
+   or exists (select 1 from public.transfer_register t
+              where t.org_id = o.id and (t.revision <> 1 or t.updated_by is not null
+                                         or pg_catalog.jsonb_strip_nulls(public.transfer_register_facts(t))
+                                            <> '{"processing_countries": [], "storage_countries": [], "dpa_terms_confirmed": false}'))
+   or exists (select 1 from public.transfer_clearances c where c.org_id = o.id)
+SQL
+)
+[ -z "$backfill" ] ||
+  { echo "0009's backfill didn't give these orgs exactly the defaults' register entries: $backfill" >&2; exit 1; }
 
 # The binding holds from here, for checkpoints old and new. Each refusal is named.
 refused() { # what is refused, then the statement
@@ -167,4 +232,4 @@ if [ "$upgraded" != "$fresh" ]; then
   exit 1
 fi
 
-echo "OK: 0008 refused checkpoints that break its binding, then upgraded $db over the ones 0007 allows; the rows, the binding and the schema check out."
+echo "OK: 0008 refused checkpoints that break its binding, then upgraded $db over the ones 0007 allows; the rows, the binding and the schema check out, and 0009 kept the outbox event and gave each org its register entries."

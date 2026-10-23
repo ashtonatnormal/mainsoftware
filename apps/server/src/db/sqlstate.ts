@@ -1,22 +1,30 @@
 // The Postgres error codes (SQLSTATE) the server acts on, Hearth's own among them, and what a
 // failure may write to the logs (TECH-SPEC T15, T16, T17).
 //
-// Hearth's own codes are raised by migration 0007's functions, so the server can tell a refusal it
-// expects from a failure:
+// Hearth's own codes are raised by migration 0007's and 0009's functions, so the server can tell a
+// refusal it expects from a failure:
 //   HF001  a fence refused: the feature is off, or its flags changed since the server checked them
 //          (feature_fence, job_fence, job_finish). The caller reloads the flags and decides again.
 //   HF002  a job's lease has gone to another worker or the sweeper (job_fence, job_finish).
 //   HF003  set_feature_flag(): the flag is locked; only a migration changes it.
 //   HF004  set_feature_flag(): the change adds someone who isn't a person still at this org (A8).
+//   HF005  a register's writer (0009): the entry changed since the version or revision the DPO
+//          edited (409 register_changed, which the page answers with a Reload; C0.9 PD-25).
+//   HF006  a register's writer or the clearance trigger (0009): a rule refuses the entry, such as a
+//          fact missing before clearing (400 register_invalid; the page lists what it needs).
 import { z } from 'zod'
 
 export const FEATURE_OFF = 'HF001'
 export const LEASE_LOST = 'HF002'
 export const FLAG_LOCKED = 'HF003'
 export const INVALID_COHORT = 'HF004'
-// invalid_parameter_value: set_feature_flag()'s unknown flag, a clean-up batch out of range.
+export const REGISTER_CHANGED = 'HF005'
+export const REGISTER_INVALID = 'HF006'
+// invalid_parameter_value: set_feature_flag()'s unknown flag, a register's unknown key, a clean-up
+// batch out of range.
 export const INVALID_PARAMETER = '22023'
-// insufficient_privilege: a refused person or role, and a fence or clean-up with no org set.
+// insufficient_privilege: a refused person or role, and a fence, clean-up or register check with no
+// org set.
 export const INSUFFICIENT_PRIVILEGE = '42501'
 
 // The SQLSTATE of a Postgres error (pg's DatabaseError carries it as code), or undefined for

@@ -18,7 +18,7 @@
 //            names one of them.
 //   client   whether its value, evaluated for the person, may reach their browser (C0.8).
 //   stage    the BUILD-PLAN step that builds what it gates.
-import type { PurposeKey } from './purposes.ts'
+import { PURPOSE_KEYS, type PurposeKey } from './purposes.ts'
 
 export type FlagClass = 'essential' | 'optional'
 
@@ -117,6 +117,35 @@ export function flagLineage(key: string): string[] {
 // keeps each off and locked until A0.
 export function isAiFlag(key: string): boolean {
   return key === 'ai' || key.startsWith('ai.')
+}
+
+// Whether a flag is locked on: it and every flag above it is locked and on by default, so only a
+// migration could switch it off (core.system). A level that isn't a flag ('core' above
+// 'core.system') doesn't count, but the key itself must be one. The worker's FlagCache serves such
+// a flag on before it has read the org's rows (apps/server/src/flags/cache.ts), and the same rule
+// picks the pinned purposes below.
+export function isLockedOn(key: string, registry: Readonly<Record<string, FlagSpec>> = FLAGS): boolean {
+  return flagLineage(key).every(level => {
+    const spec = Object.hasOwn(registry, level) ? registry[level] : undefined
+    if (spec === undefined) return level !== key
+    return spec.locked && spec.default
+  })
+}
+
+// The pinned purposes (C0.9 PD-07, TECH-SPEC T22 item 5): those of every flag locked on, which
+// today are core.system's accounts and service_operation, the purposes revocation, offboarding and
+// maintenance carry. The purpose gate allows them whatever the register says and whether or not it
+// has been read; the register keeps them active and never on a consent-type basis (migration 0009);
+// and the providers their entries list are informational, since each outbound client checks its
+// own provider's clearance at each send. In PURPOSES order.
+export const PINNED_PURPOSES: readonly PurposeKey[] = PURPOSE_KEYS.filter(purpose =>
+  Object.entries(FLAGS).some(
+    ([key, spec]) => isLockedOn(key) && (spec.purposes as readonly string[]).includes(purpose),
+  ),
+)
+
+export function isPinnedPurpose(key: string): boolean {
+  return (PINNED_PURPOSES as readonly string[]).includes(key)
 }
 
 // Who a flag is on for while it's enabled (T17 item 3): the whole org, or a cohort of people and

@@ -16,11 +16,12 @@
 //
 // The personas (T21 item 11): Marcus is the Chromium projects' signed-in state (a Team
 // Admin, so he signs in on the code alone, D46); Kelvin is live.spec's own; Priya and Wei Ling hold
-// PIN roles (Leadership; Wei Ling is also the Compliance Officer), for the PIN steps (AQ-02); Nadia
-// is on the roster with no account yet (ACC-03: her first sign-in makes it); +65 8000 9999 and the
-// +65 8000 90NN numbers are off the roster: they get the same answer and never a text (PRD-53).
-// Ashton (Owner, DPO), Ahmad (Leadership) and Arjun (Admin, AI Admin) are kept for C0.16's
-// re-authentication specs.
+// PIN roles (Leadership; Wei Ling is also the Compliance Officer), for the PIN steps (AQ-02); Ashton
+// (Owner, DPO) holds PIN roles too, and dpo.spec.ts signs him in once through the api, setting his
+// PIN, for the DPO's registers (C0.9 PD-26); Nadia is on the roster with no account yet (ACC-03:
+// her first sign-in makes it); +65 8000 9999 and the +65 8000 90NN numbers are off the roster: they
+// get the same answer and never a text (PRD-53). Ashton keeps a second code, and Ahmad
+// (Leadership) and Arjun (Admin, AI Admin) are kept, for C0.16's re-authentication specs.
 
 export type Project = 'chromium' | 'webkit' | 'firefox' | 'chromium-session-end'
 // Where a code is asked for: global setup (before every project), or a project's tests.
@@ -75,6 +76,9 @@ export const PERSONAS = {
   huiMin: person('Hui Min', '+6580000009', member, [{ what: 'SI-02 webkit', stage: 'webkit', requests: 1 }]),
   nadia: person('Nadia', '+6580000012', { roster: true, account: false, pinRole: false }, [
     { what: 'SI-10 ACC-03', stage: 'chromium', requests: 1 },
+  ]),
+  ashton: person('Ashton', '+6580000001', { roster: true, account: true, pinRole: true }, [
+    { what: 'DPP-E1 to DPP-E3 PDPA-13 the DPO, the PIN set', stage: 'chromium', requests: 1 },
   ]),
   priya: person('Priya', '+6580000002', { roster: true, account: true, pinRole: true }, [
     { what: 'SI-09 AQ-02 set the PIN, sign out, enter it', stage: 'chromium', requests: 2 },

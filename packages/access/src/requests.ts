@@ -80,6 +80,13 @@ export type AdminRequest =
   // Turn a feature flag on or off, or change its cohort (T17 item 9). The key is the registry's
   // (packages/shared FLAGS); whether the flag is locked is the database's to say.
   | { action: 'flag.set'; key: string }
+  // The processing and transfer registers (PDPA-01, PDPA-10, PDPA-13; C0.9 PD-20): reading both,
+  // recording a new version of a purpose's entry, and recording a provider's facts, clearing them
+  // or withdrawing the clearance. The keys are the registries' (packages/shared PURPOSES and
+  // PROVIDERS); whether an entry may be saved as it is is the database's to say.
+  | { action: 'register.read' }
+  | { action: 'register.purpose.set'; purpose: string }
+  | { action: 'register.transfer.set'; provider: string; op: 'record' | 'clear' | 'withdraw' }
 
 // Your own session, devices and passkeys (ACC-02, ACC-04, T21), for any active person. Reading your
 // own session, listing and signing out devices need no re-authentication and are never refused,
@@ -142,6 +149,9 @@ export const ADMIN_ACTIONS = new Set<string>([
   'channel.transfer_ownership',
   'privileged_console.open',
   'flag.set',
+  'register.read',
+  'register.purpose.set',
+  'register.transfer.set',
 ])
 
 export function isAdminRequest(request: Request): request is AdminRequest {

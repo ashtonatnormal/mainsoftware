@@ -1,39 +1,17 @@
-import { FLAGS, PROVIDERS, PURPOSE_KEYS, PURPOSES } from '@hearth/shared'
+import { FLAGS } from '@hearth/shared'
 import { describe, expect, it, vi } from 'vitest'
 import type { FlagVerdict } from '#src/flags/cache.ts'
 import type { FlagSubject } from '#src/flags/evaluate.ts'
 import { JobAborted, type JobRefused } from '#src/jobs/errors.ts'
-import { admit, C06_GATE, type Gate } from '#src/jobs/gate.ts'
+import { admit, type Gate } from '#src/jobs/gate.ts'
+import { coreOnlyGate } from '#src/testing/gates.ts'
 
 const ORG = 'a0000000-0000-4000-8000-000000000001'
 const PERSON = 'b0000000-0000-4000-8000-000000000001'
 
-describe('C0.6 T15 item 10 the gate’s stand-ins fail closed until C0.9 and A0', () => {
-  it('refuses every AI purpose and allows every other (D41)', () => {
-    for (const purpose of PURPOSE_KEYS) {
-      expect(C06_GATE.purposeAllowed(ORG, purpose), purpose).toBe(!PURPOSES[purpose].ai)
-    }
-    expect(C06_GATE.purposeAllowed(ORG, 'org_brain')).toBe(false)
-    expect(C06_GATE.purposeAllowed(ORG, 'accounts')).toBe(true)
-  })
-
-  it('clears no provider (PDPA-10) until C0.9’s transfer register', () => {
-    for (const provider of PROVIDERS) expect(C06_GATE.providerCleared(ORG, provider), provider).toBe(false)
-  })
-
-  it('allows processing only for purposes that rest on no consent (PDPA-04)', () => {
-    for (const purpose of PURPOSE_KEYS) {
-      expect(C06_GATE.processingAllowed(ORG, PERSON, purpose), purpose).toBe(!PURPOSES[purpose].consent)
-    }
-    expect(C06_GATE.processingAllowed(ORG, PERSON, 'accounts')).toBe(true)
-    expect(C06_GATE.processingAllowed(ORG, PERSON, 'presence_receipts')).toBe(false)
-  })
-
-  it('puts nothing over a spend cap until A0', () => {
-    expect(C06_GATE.overCap(ORG, 'ai.ask')).toBe(false)
-  })
-})
-
+// The gate itself, over each state of the registers, is compliance/gate.test.ts's (C0.9). Here it
+// is coreOnlyGate (a register never read: only the pinned purposes pass, no provider is cleared),
+// and failing() replaces one check at a time.
 // A flag cache that answers what the test says, and the registry the cap check reads.
 function flagsSaying(verdict: FlagVerdict, flagClass: 'essential' | 'optional' = 'optional') {
   return {
@@ -44,7 +22,7 @@ function flagsSaying(verdict: FlagVerdict, flagClass: 'essential' | 'optional' =
 const kind = { feature: 'it.feature', purpose: 'service_operation', providers: [] } as const
 const job = { orgId: ORG, subjectId: PERSON }
 const subject = { personId: PERSON, active: true, roles: [] }
-const failing = (overrides: Partial<Gate>): Gate => ({ ...C06_GATE, ...overrides })
+const failing = (overrides: Partial<Gate>): Gate => ({ ...coreOnlyGate, ...overrides })
 
 function refusalOf(run: () => void): unknown {
   try {
@@ -58,7 +36,7 @@ function refusalOf(run: () => void): unknown {
 describe('C0.6 T15 item 10 admit(): the checks in order, from the kind’s registry entry', () => {
   it('admits a job whose feature is on for its person and whose purpose the gate allows', () => {
     const flags = flagsSaying('on')
-    expect(() => admit(C06_GATE, flags, kind, job, subject)).not.toThrow()
+    expect(() => admit(coreOnlyGate, flags, kind, job, subject)).not.toThrow()
     expect(flags.verdict).toHaveBeenCalledWith(ORG, 'it.feature', subject)
   })
 
@@ -68,7 +46,7 @@ describe('C0.6 T15 item 10 admit(): the checks in order, from the kind’s regis
       ['not_in_cohort', 'not_in_cohort'],
       ['unconfirmed', 'unconfirmed'],
     ] as const) {
-      const error = refusalOf(() => admit(C06_GATE, flagsSaying(verdict), kind, job, subject))
+      const error = refusalOf(() => admit(coreOnlyGate, flagsSaying(verdict), kind, job, subject))
       expect(error, verdict).toBeInstanceOf(JobAborted)
       expect((error as JobAborted).reason).toBe(reason)
     }
@@ -78,11 +56,11 @@ describe('C0.6 T15 item 10 admit(): the checks in order, from the kind’s regis
     const controller = new AbortController()
     const stopped = new JobAborted('lease_lost')
     controller.abort(stopped)
-    expect(refusalOf(() => admit(C06_GATE, flagsSaying('on'), kind, job, subject, controller.signal))).toBe(stopped)
+    expect(refusalOf(() => admit(coreOnlyGate, flagsSaying('on'), kind, job, subject, controller.signal))).toBe(stopped)
     // An abort without a JobAborted (it can't be the runner's) still stops it.
     const other = new AbortController()
     other.abort()
-    expect(refusalOf(() => admit(C06_GATE, flagsSaying('on'), kind, job, subject, other.signal))).toBeInstanceOf(
+    expect(refusalOf(() => admit(coreOnlyGate, flagsSaying('on'), kind, job, subject, other.signal))).toBeInstanceOf(
       JobAborted,
     )
   })
@@ -90,11 +68,13 @@ describe('C0.6 T15 item 10 admit(): the checks in order, from the kind’s regis
   it('refuses an AI purpose, a provider not cleared, a refused processing switch and a cap, in that order', () => {
     const reasonOf = (gate: Gate, k = kind as Parameters<typeof admit>[2], flagClass?: 'essential' | 'optional') =>
       (refusalOf(() => admit(gate, flagsSaying('on', flagClass), k, job, subject)) as JobRefused | undefined)?.reason
-    // An AI purpose, even with its flag on in a test cache: the C0.6 half of the C0 exit's "any ai.*
-    // flag is refused by the purpose gate".
-    expect(reasonOf(C06_GATE, { ...kind, purpose: 'org_brain' })).toBe('purpose_refused')
-    expect(reasonOf(C06_GATE, { ...kind, providers: ['openai'] })).toBe('provider_not_cleared')
-    expect(reasonOf(C06_GATE, { ...kind, purpose: 'presence_receipts' })).toBe('processing_not_allowed')
+    // An AI purpose, even with its flag on in a test cache: the C0 exit's "any ai.* flag is refused
+    // by the purpose gate". And a purpose not pinned, while the register is unread (C0.9 PD-07).
+    expect(reasonOf(coreOnlyGate, { ...kind, purpose: 'org_brain' })).toBe('purpose_refused')
+    expect(reasonOf(coreOnlyGate, { ...kind, purpose: 'presence_receipts' })).toBe('purpose_refused')
+    expect(reasonOf(coreOnlyGate, { ...kind, providers: ['openai'] })).toBe('provider_not_cleared')
+    expect(reasonOf(coreOnlyGate, { ...kind, providers: ['aws'] })).toBe('provider_not_cleared')
+    expect(reasonOf(failing({ processingAllowed: () => false }))).toBe('processing_not_allowed')
     expect(reasonOf(failing({ overCap: () => true }))).toBe('over_cap')
     // The order: everything refuses, and the purpose comes first.
     const everything = failing({

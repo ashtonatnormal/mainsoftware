@@ -13,8 +13,10 @@
 // each case prints what it measured. Waits poll every 20 ms up to a deadline. The cancellation cases
 // hold one of the job's posts open across the change, so "no post after it" is measured from the
 // flag's commit, not the reply (acrossChange()).
-// The test flags (it.optional, it.essential, it.ai) are the harness's (testing/stack.ts), which
-// the route takes through its injectable registry (A5); the production flags are all locked.
+// The test flags (it.optional, it.essential, it.ai, it.unnotified) are the harness's
+// (testing/stack.ts), which the route takes through its injectable registry (A5); the production
+// flags are all locked. From C0.9 the route judges a change that widens a flag against the real
+// registers (migration 0009), and a DPO records a purpose through the registers' route.
 //
 // afterAll checks the outbox's contract for the run (every committed write covered; flag.changed
 // appended), and, when every test passed, that each of the route's own error codes was answered.
@@ -43,6 +45,9 @@ let admin: Person
 let member: Person
 let adminClient: Client
 let memberClient: Client
+// The DPO, signed in on a PIN-rule session: the registers' routes are theirs alone (C0.9 PD-20).
+let dpo: Person
+let dpoClient: Client
 // The worker instance, and its copy of the flags.
 let worker: WorkerInstance
 let workerFlags: FlagCache
@@ -181,6 +186,8 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
     // A sign-in counts as a re-authentication, which the route needs from the last 5 minutes.
     adminClient = await s.signIn(admin)
     memberClient = await s.signIn(member)
+    dpo = await s.person({ roles: ['dpo'] })
+    dpoClient = await s.signIn(dpo)
     await installJobTables(s)
     worker = await s.startWorker({ kinds: [postsOptional, postsEssential] })
     await worker.ready()
@@ -314,12 +321,102 @@ describe('C0.6 T17 changing a flag and its reach to every process (PRD-65, BUILD
     })
   })
 
-  it('T17 item 9: refuses to turn on a feature whose purpose the gate refuses (409 purpose_refused)', async () => {
-    // it.ai names an AI purpose, which C0.6's purpose gate refuses (D41); C0.9's register fills it.
+  it('C0.9 Done: ai.* flags refused: can() refuses every ai.* key, the purpose gate an AI purpose, and the register keeps every AI purpose planned (D41)', async () => {
+    for (const key of ['ai', 'ai.ask']) {
+      await unchanged(key, async () => {
+        const refused = await set(adminClient, { key, enabled: true })
+        expect([refused.status, refused.error], key).toEqual([403, 'forbidden'])
+      })
+    }
+    // it.ai names an AI purpose outside ai.*, which only a test registry can: the real register's
+    // gate refuses it (T22 item 6).
     await unchanged('it.ai', async () => {
       const refused = await set(adminClient, { key: 'it.ai', enabled: true })
       expect([refused.status, refused.error]).toEqual([409, 'purpose_refused'])
     })
+    // The second lock (T22 item 2): every AI purpose's entry is planned with nothing recorded, and
+    // stays so even for the DPO's own function, which refuses it (HF006) after can() would have.
+    const ai = await s.query<{ purpose: string; status: string; basis: string | null; versions: number }>(
+      `select purpose, max(status) as status, max(basis) as basis, count(*)::int as versions from processing_register
+       where org_id = $1 and ai group by purpose order by purpose`,
+      [s.org.id],
+    )
+    expect(ai).toHaveLength(10)
+    for (const row of ai) expect(row, row.purpose).toMatchObject({ status: 'planned', basis: null, versions: 1 })
+    const refusal = await withOrg(s.db, { orgId: s.org.id, userId: dpo.id }, trx =>
+      sql`select * from public.set_register_purpose('org_brain', 1, 'active', 'employment', null, null, '1 year',
+        '{}'::text[], 'it', null, null)`.execute(trx),
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(refusal).toMatchObject({ code: 'HF006' })
+    const asked = await dpoClient.post('/api/admin/registers/purposes/set', {
+      purpose: 'org_brain',
+      seen: 1,
+      status: 'planned',
+      basis: null,
+      basisReference: null,
+      optOutDays: null,
+      retention: null,
+      providers: [],
+    })
+    expect([asked.status, asked.error]).toEqual([403, 'forbidden'])
+  })
+
+  it('PGT-I1 C0.9 PD-08 PD-19 T22 items 6 and 11: a purpose that isn’t pinned can’t be turned on until a notice lists it, but its flag can always be narrowed or turned off', async () => {
+    // security_audit starts active (PD-06), and the DPO records its basis: still refused, since no
+    // published notice lists it until C0.9 PR 2.
+    const recorded = await dpoClient.post('/api/admin/registers/purposes/set', {
+      purpose: 'security_audit',
+      seen: 1,
+      status: 'active',
+      basis: 'legitimate_interests',
+      basisReference: 'Fictional assessment, row 1',
+      optOutDays: null,
+      retention: '1 year',
+      providers: [],
+    })
+    expect([recorded.status, recorded.json<{ version: number }>().version]).toEqual([200, 2])
+    await unchanged('it.unnotified', async () => {
+      const refused = await set(adminClient, { key: 'it.unnotified', enabled: true })
+      expect([refused.status, refused.error]).toEqual([409, 'purpose_refused'])
+    })
+    // A flag already on for a cohort (as a release might leave it; written here as the superuser):
+    // widening it is refused, narrowing it and turning it off never are (A-11's rule, PD-19).
+    await s.query(
+      `update feature_flags set enabled = true, audience = 'cohort', cohort_people = $2::uuid[], revision = revision + 1,
+         updated_at = now(), updated_by = $3
+       where org_id = $1 and key = 'it.unnotified'`,
+      [s.org.id, [admin.id, member.id], s.org.system],
+    )
+    for (const body of [
+      { key: 'it.unnotified', enabled: true },
+      { key: 'it.unnotified', enabled: true, audience: 'cohort', people: [admin.id, member.id, dpo.id] },
+      { key: 'it.unnotified', enabled: true, audience: 'cohort', people: [admin.id], roles: ['dpo'] },
+    ]) {
+      await unchanged('it.unnotified', async () => {
+        const refused = await set(adminClient, body)
+        expect([refused.status, refused.error], JSON.stringify(body)).toEqual([409, 'purpose_refused'])
+      })
+    }
+    const narrowed = await set(adminClient, {
+      key: 'it.unnotified',
+      enabled: true,
+      audience: 'cohort',
+      people: [admin.id],
+    })
+    expect(narrowed.status).toBe(200)
+    expect((await flagRow('it.unnotified'))?.cohort_people).toEqual([admin.id])
+    const off = await set(adminClient, { key: 'it.unnotified', enabled: false })
+    expect(off.status).toBe(200)
+    expect((await flagRow('it.unnotified'))?.enabled).toBe(false)
+    // A pinned purpose is allowed in every state of the register: it.optional (service_operation)
+    // turns off and on again.
+    for (const enabled of [false, true]) {
+      const changed = await set(adminClient, { key: 'it.optional', enabled })
+      expect(changed.status, String(enabled)).toBe(200)
+    }
   })
 
   it('A8: refuses a cohort the table would refuse, or naming anyone outside the org, with 400 invalid_cohort', async () => {

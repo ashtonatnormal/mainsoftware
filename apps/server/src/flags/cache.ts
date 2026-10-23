@@ -20,10 +20,22 @@
 // every org it lists (as hearth_queue, T18), forgetting one that leaves the list (untrack()). A
 // caller that serves values to someone (C0.8's GET /api/flags, web/flags.ts) waits for the org's
 // first load (track()), for at most FLAG_READ_WAIT_MS.
+//
+// The worker's cache also keeps each org's registers (C0.9, TECH-SPEC T22 item 9; the `registers`
+// option): each purpose's current entry, each provider's revision, review date and open clearance,
+// and the live processing restrictions, read in the same read-only transaction as the flags, so one
+// confirmedAt, the same 8 s, the same 2 s bound and the same 3 reads in flight cover both. A
+// register statement that fails fails the whole read: the org goes unconfirmed, flags and registers
+// together, and register() answers undefined, so the purpose gate allows only the pinned purposes
+// (compliance/gate.ts, PD-07). A change reaches the worker within one poll (there is no channel for
+// it) and is logged register_changed; it calls no onChange listener, since no flag's revision moved.
+// An open clearance whose review date has passed is logged transfer_review_overdue at warn, once a
+// day per org and provider (PD-13). The api and realtime keep no register (T22 items 8 and 11).
 import { performance } from 'node:perf_hooks'
-import { FLAGS, type FlagSpec, flagLineage } from '@hearth/shared'
+import { FLAGS, type FlagSpec, flagLineage, isLockedOn } from '@hearth/shared'
 import { sql } from 'kysely'
 import type { Logger } from 'pino'
+import { type RegisterState, readRegisterState, registerDigest } from '#src/compliance/registers.ts'
 import { type Database, withOrg } from '#src/db/database.ts'
 import type { JobRole } from '#src/db/roles.ts'
 import { failureFields } from '#src/db/sqlstate.ts'
@@ -56,6 +68,9 @@ export interface FlagCacheOptions {
   // The flags this process knows (FLAGS unless a test adds its own, A5): a row with no entry here
   // is kept, logged once, and evaluates off.
   registry?: Readonly<Record<string, FlagSpec>>
+  // The worker's alone: also keep each org's registers, with its live processing restrictions when
+  // asked (hearth_queue's grants; T22 item 9).
+  registers?: { restrictions: boolean }
   logger: Pick<Logger, 'info' | 'warn' | 'error'>
   pollMs?: number
   staleMs?: number
@@ -65,8 +80,10 @@ export interface FlagCacheOptions {
 }
 
 interface OrgFlags {
-  // What the last successful read found, and when (monotonic).
+  // What the last successful read found, and when (monotonic): the flags, and the registers when
+  // the cache keeps them, with the registers' digest.
   states: Map<string, FlagState> | undefined
+  register: { state: RegisterState; digest: string } | undefined
   confirmedAt: number | undefined
   // The read in progress; a reload asked for meanwhile runs once more after it (coalesced).
   loading: boolean
@@ -93,6 +110,12 @@ type Row = {
   revision: unknown
 }
 
+// One read of an org: its flags' rows, and its registers when the cache keeps them.
+interface OrgRead {
+  rows: Row[]
+  register: RegisterState | undefined
+}
+
 // A read of the flags that didn't end within FLAG_READ_WAIT_MS.
 export class FlagReadTimeout extends Error {
   override name = 'FlagReadTimeout'
@@ -105,6 +128,7 @@ export class FlagCache {
   readonly registry: Readonly<Record<string, FlagSpec>>
   readonly #db: Database
   readonly #as: JobRole | undefined
+  readonly #registers: { restrictions: boolean } | undefined
   readonly #logger: Pick<Logger, 'info' | 'warn' | 'error'>
   readonly #pollMs: number
   readonly #staleMs: number
@@ -114,6 +138,8 @@ export class FlagCache {
   readonly #listeners = new Set<(orgId: string, keys: readonly string[]) => void>()
   // org:key of each unregistered row already logged.
   readonly #unregistered = new Set<string>()
+  // org:provider of each overdue review, with the UTC day it was last logged (PD-13).
+  readonly #overdue = new Map<string, string>()
   // Reads started and not yet settled (a read the cache stopped waiting for counts until it ends),
   // and the polls deferred while FLAG_READS_IN_FLIGHT are, in the order they were due.
   #inFlight = 0
@@ -126,6 +152,7 @@ export class FlagCache {
   constructor(options: FlagCacheOptions) {
     this.#db = options.db
     this.#as = options.as
+    this.#registers = options.registers
     this.registry = options.registry ?? FLAGS
     this.#logger = options.logger
     this.#pollMs = options.pollMs ?? FLAG_POLL_MS
@@ -145,6 +172,7 @@ export class FlagCache {
       })
       entry = {
         states: undefined,
+        register: undefined,
         confirmedAt: undefined,
         loading: false,
         again: false,
@@ -170,6 +198,7 @@ export class FlagCache {
     if (entry === undefined) return
     this.#orgs.delete(orgId)
     this.#deferred.delete(orgId)
+    for (const key of this.#overdue.keys()) if (key.startsWith(`${orgId}:`)) this.#overdue.delete(key)
     clearTimeout(entry.timer)
     entry.timer = undefined
     for (const waiter of entry.waiters.splice(0)) waiter()
@@ -219,7 +248,7 @@ export class FlagCache {
   verdict(orgId: string, key: string, subject: FlagSubject | null): FlagVerdict {
     if (!Object.hasOwn(this.registry, key)) return 'off'
     const entry = this.#orgs.get(orgId)
-    if (entry?.states === undefined || !this.#fresh(entry)) return this.#lockedOn(key) ? 'on' : 'unconfirmed'
+    if (entry?.states === undefined || !this.#fresh(entry)) return isLockedOn(key, this.registry) ? 'on' : 'unconfirmed'
     const registered = (level: string) => Object.hasOwn(this.registry, level)
     if (evaluate(entry.states, key, subject, registered) === 'on') return 'on'
     return lineageEnabled(entry.states, key, registered) ? 'not_in_cohort' : 'off'
@@ -249,6 +278,14 @@ export class FlagCache {
     return this.#orgs.get(orgId)?.confirmedAt
   }
 
+  // The org's registers as last read, only while that read is confirmed (within 8 s), else
+  // undefined: never read, not read lately, not kept, or a cache that keeps no registers. The
+  // worker's purpose gate reads it (compliance/gate.ts).
+  register(orgId: string): RegisterState | undefined {
+    const entry = this.#orgs.get(orgId)
+    return entry !== undefined && this.#fresh(entry) ? entry.register?.state : undefined
+  }
+
   // Called with an org and the keys whose revision changed (added and removed rows included) after
   // each read that found a change. Not called for an org's first read. Returns a function that
   // stops it.
@@ -272,15 +309,6 @@ export class FlagCache {
     return entry.confirmedAt !== undefined && this.#now() - entry.confirmedAt <= this.#staleMs
   }
 
-  #lockedOn(key: string): boolean {
-    return flagLineage(key).every(level => {
-      const spec = Object.hasOwn(this.registry, level) ? this.registry[level] : undefined
-      // A level that isn't a flag ('core' above 'core.system') doesn't count.
-      if (spec === undefined) return level !== key
-      return spec.locked && spec.default
-    })
-  }
-
   async #load(orgId: string, entry: OrgFlags): Promise<void> {
     clearTimeout(entry.timer)
     entry.timer = undefined
@@ -301,8 +329,8 @@ export class FlagCache {
     }
     read.then(settled, settled)
     try {
-      const rows = await this.#bounded(read)
-      if (kept()) this.#confirm(orgId, entry, rows)
+      const found = await this.#bounded(read)
+      if (kept()) this.#confirm(orgId, entry, found)
     } catch (error) {
       if (kept()) this.#failed(orgId, entry, error)
     } finally {
@@ -386,27 +414,30 @@ export class FlagCache {
     }
   }
 
-  // One read of the org's flags, read only, each statement bounded, as the org's system principal
-  // (and the worker's hearth_queue).
-  #read(orgId: string): Promise<Row[]> {
+  // One read of the org's flags, and its registers when the cache keeps them, read only, each
+  // statement bounded, as the org's system principal (and the worker's hearth_queue).
+  #read(orgId: string): Promise<OrgRead> {
     const acting =
       this.#as === undefined ? { orgId, system: true as const } : { orgId, system: true as const, as: this.#as }
+    const registers = this.#registers
     return withOrg(
       this.#db,
       acting,
       async trx => {
         await sql`set local statement_timeout = ${sql.lit(FLAG_READ_TIMEOUT)}`.execute(trx)
-        return trx
+        const rows = await trx
           .selectFrom('feature_flags')
           .select(['key', 'enabled', 'locked', 'audience', 'cohort_people', 'cohort_roles', 'revision'])
           .where('org_id', '=', orgId)
           .execute()
+        const register = registers === undefined ? undefined : await readRegisterState(trx, orgId, registers)
+        return { rows, register }
       },
       { readOnly: true },
     )
   }
 
-  #confirm(orgId: string, entry: OrgFlags, rows: readonly Row[]): void {
+  #confirm(orgId: string, entry: OrgFlags, { rows, register }: OrgRead): void {
     const states = new Map<string, FlagState>()
     for (const row of rows) {
       states.set(row.key, {
@@ -427,7 +458,9 @@ export class FlagCache {
       }
     }
     const previous = entry.states
+    const previousRegister = entry.register
     entry.states = states
+    entry.register = register === undefined ? undefined : { state: register, digest: registerDigest(register) }
     entry.confirmedAt = this.#now()
     entry.failures = 0
     if (entry.unconfirmed) {
@@ -435,6 +468,7 @@ export class FlagCache {
       this.#logger.info({ event: 'flags_confirmed', org: orgId }, 'the flags can be read again')
     }
     entry.confirm()
+    if (entry.register !== undefined) this.#noteRegister(orgId, previousRegister?.digest, entry.register)
     if (previous === undefined) return
     const changed = [...new Set([...previous.keys(), ...states.keys()])].filter(
       key => previous.get(key)?.revision !== states.get(key)?.revision,
@@ -447,6 +481,26 @@ export class FlagCache {
       )
     }
     for (const listener of this.#listeners) listener(orgId, changed)
+  }
+
+  // A change of the registers since the last read (never on the first), and each open clearance
+  // whose review date is before today, as a UTC day: logged at most once a day for each (PD-13).
+  // The page judges review dates in the org's zone; a day's slack is enough for a log line.
+  #noteRegister(orgId: string, previous: string | undefined, current: { state: RegisterState; digest: string }): void {
+    if (previous !== undefined && previous !== current.digest) {
+      this.#logger.info({ event: 'register_changed', org: orgId }, 'the registers changed')
+    }
+    const today = new Date().toISOString().slice(0, 10)
+    for (const [provider, entry] of current.state.providers) {
+      if (entry.clearance === null || entry.reviewOn === null || entry.reviewOn >= today) continue
+      const key = `${orgId}:${provider}`
+      if (this.#overdue.get(key) === today) continue
+      this.#overdue.set(key, today)
+      this.#logger.warn(
+        { event: 'transfer_review_overdue', org: orgId, provider, reviewOn: entry.reviewOn },
+        'a cleared provider is past its review date',
+      )
+    }
   }
 
   #failed(orgId: string, entry: OrgFlags, error: unknown): void {

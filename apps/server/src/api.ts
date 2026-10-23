@@ -22,11 +22,11 @@ import { OTP, PASSKEYS_ON } from '#src/auth/policy.ts'
 import { authRoutes } from '#src/auth/routes.ts'
 import type { SmsProvider } from '#src/auth/sms/provider.ts'
 import { type ValkeyKeys, valkeyKeys } from '#src/auth/valkey-keys.ts'
+import { DB_TRANSFERS, type TransferCheck } from '#src/compliance/transfers.ts'
 import type { Database } from '#src/db/database.ts'
 import { deviceRoutes } from '#src/devices/routes.ts'
 import type { FlagCache } from '#src/flags/cache.ts'
 import { AfterResponse, BODY_LIMIT } from '#src/http.ts'
-import type { Gate } from '#src/jobs/gate.ts'
 import { cspReportRoute } from '#src/web/csp-report.ts'
 import { webRoutes } from '#src/web/routes.ts'
 
@@ -36,9 +36,6 @@ export interface ApiDeps {
   keys: AuthKeys
   // undefined: no code can be sent, so code requests answer 503 unavailable.
   sms: SmsProvider | undefined
-  // Whether the provider may receive a number at all (PDPA-10's transfer register). C06_GATE when
-  // unset, which clears no provider, so nothing reaches one until C0.9 passes the real gate.
-  gate?: Pick<Gate, 'providerCleared'>
   keyPrefix: string
   // The flags this process keeps (flags/cache.ts; T17): every signed-in request keeps its org's;
   // the flags route takes the keys it accepts and their purposes from the cache's registry, FLAGS
@@ -74,6 +71,11 @@ export interface Api extends ApiDeps {
   otp: { verifyFloorMs: number; breaker: Breaker }
   // Whether passkeys are switched on (D46): PASSKEYS_ON unless a test overrides it.
   passkeys: boolean
+  // Whether an outside provider may receive a number for this send (PDPA-10's transfer register;
+  // C0.9 PD-15, TECH-SPEC T22 item 8): DB_TRANSFERS, which asks transfer_cleared() in the
+  // transaction that decides the send. Derived here, never a dep, so production can't run without
+  // it; only tests and testing/ assign another (scripts/guards/api-test-overrides.test.ts).
+  transfers: TransferCheck
 }
 
 // A pending text or audit row gets this long to finish when the server stops.
@@ -87,6 +89,7 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps & { appOrigin: s
     rp: relyingParty(deps.appOrigin),
     otp: otpChecks(deps),
     passkeys: deps.passkeysForTests ?? PASSKEYS_ON,
+    transfers: DB_TRANSFERS,
   }
   app.register(
     async scope => {

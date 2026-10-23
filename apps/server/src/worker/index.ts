@@ -9,7 +9,10 @@
 //   orgs       worker_org_ids(), at start and every 60 s (listOrgs); each org's flags are kept from
 //              the moment it is listed.
 //   flags      every listed org's flags, read as hearth_queue, polled every 2 s and reloaded at once
-//              when the flags channel says one changed (T17).
+//              when the flags channel says one changed (T17), with its registers and live
+//              processing restrictions in the same read (C0.9, T22 item 9).
+//   gate       the purpose gate the runner and the consumers ask, over those registers
+//              (compliance/gate.ts): pinned purposes always, the rest as the registers say (T22).
 //   runner     jobs/runner.ts; scheduler: jobs/scheduler.ts; consumers: outbox/consumers.ts.
 //   metrics    every 30 s, per org: outbox_lag per consumer and queue_depth (outbox/lag.ts), until
 //              C0.13 turns them into CloudWatch metrics.
@@ -26,10 +29,11 @@ import { performance } from 'node:perf_hooks'
 import { FLAGS, type FlagSpec } from '@hearth/shared'
 import type { Logger } from 'pino'
 import { valkeyKeys } from '#src/auth/valkey-keys.ts'
+import { registerGate } from '#src/compliance/gate.ts'
 import { type Database, listOrgs } from '#src/db/database.ts'
 import { failureFields } from '#src/db/sqlstate.ts'
 import { FlagCache } from '#src/flags/cache.ts'
-import { C06_GATE, type Gate } from '#src/jobs/gate.ts'
+import type { Gate } from '#src/jobs/gate.ts'
 import { type Registries, validateRegistries } from '#src/jobs/kinds.ts'
 import { MAINTENANCE_KINDS, SCHEDULES } from '#src/jobs/maintenance.ts'
 import { WORKER_POLICY, type WorkerPolicy } from '#src/jobs/policy.ts'
@@ -62,11 +66,6 @@ const ORGS_RETRY_MS = 1000
 // A loop that has failed this many times in a row logs at error level.
 const FAILURES_BEFORE_ERROR = 3
 
-// The gate the worker runs with unless told otherwise: C0.6's stand-ins until C0.9's registers.
-// C0.9's must keep accounts non-consent and active from notice v0, because the revocation
-// consumer's purpose gate still applies (TECH-SPEC T19 item 4; revocation/registry.test.ts pins it).
-export const WORKER_GATE: Gate = C06_GATE
-
 // What this version of the worker runs: Hearth's maintenance (partitions and the clean-up), durable
 // offboarding (its consumer and handler jobs, with no handler from C0.7) and durable revocation
 // (C0.7: its protective consumer and handler jobs, which publish on the access channel).
@@ -95,6 +94,7 @@ export interface WorkerOptions {
   registries: Registries
   // The flags this process knows (FLAGS unless a test adds its own).
   flagRegistry?: Readonly<Record<string, FlagSpec>>
+  // The purpose gate: registerGate() over the flag cache's registers unless a test gives its own.
   gate?: Gate
   policy?: WorkerPolicy
   // The flag cache's poll and staleness, for tests.
@@ -106,6 +106,10 @@ export interface WorkerOptions {
 
 export interface Worker {
   readonly flags: FlagCache
+  // The purpose gate the runner and the consumers ask (T22 items 6 and 9). It allows the pinned
+  // purposes, accounts and service_operation, in every state of the registers, so revocation and
+  // offboarding never wait on them (T19 item 4, C0.9 PD-07).
+  readonly gate: Gate
   readonly runner: JobRunner
   readonly scheduler: Scheduler
   readonly consumers: ConsumerRunner
@@ -125,17 +129,18 @@ export function startWorker(options: WorkerOptions): Worker {
   const policy = options.policy ?? WORKER_POLICY
   const now = options.now ?? (() => performance.now())
   const { control, work, logger } = options
-  const gate = options.gate ?? WORKER_GATE
 
   const flags = new FlagCache({
     db: control,
     as: 'hearth_queue',
     registry: flagRegistry,
+    registers: { restrictions: true },
     logger,
     now,
     ...(options.flags?.pollMs === undefined ? {} : { pollMs: options.flags.pollMs }),
     ...(options.flags?.staleMs === undefined ? {} : { staleMs: options.flags.staleMs }),
   })
+  const gate = options.gate ?? registerGate(flags)
   void flags.listen(options.subscriptions, valkeyKeys(options.keyPrefix).flags)
 
   const kinds = new Map(options.registries.kinds.map(kind => [kind.kind, kind]))
@@ -306,6 +311,7 @@ export function startWorker(options: WorkerOptions): Worker {
 
   return {
     flags,
+    gate,
     runner,
     scheduler,
     consumers,

@@ -94,3 +94,33 @@ select pg_temp.expect_error($$insert into public.outbox_checkpoints (org_id, con
 select pg_temp.expect_error($$insert into public.jobs (org_id, kind, feature_key, purpose)
   values ('f1000000-0000-4000-8000-000000000000', 'revocation.handler', 'core.system', 'accounts')$$, '42501');
 select pg_temp.expect_rows($$update public.outbox_checkpoints set processed = processed + 1 where consumer = 'revocation'$$, 0);
+reset role;
+-- The registers (0009, C0.9 PR 1): with no org set, the DPO's functions and the transfer gate refuse
+-- (42501) rather than act on every org or none silently, and a register row can't be written
+-- directly by any runtime role (no grant; the functions are the only writers).
+select set_config('app.org_id', '', true), set_config('app.user_id', pg_temp.id('1', 'a5')::text, true);
+set local role hearth_app;
+select pg_temp.expect_error($$select * from public.set_register_purpose('security_audit', 1, 'planned', null, null, null,
+  null, '{}', null, null, null)$$, '42501');
+select pg_temp.expect_error($$select * from public.record_transfer_entry('twilio', 1, 'Codes', null, '{}', '{}', null, null,
+  null, null, false, null, null, null, null, null, null, false, null, null, null)$$, '42501');
+select pg_temp.expect_error($$select * from public.clear_transfer_entry('aws', 2, null, null, null)$$, '42501');
+select pg_temp.expect_error($$select * from public.withdraw_transfer_clearance('aws', null, null, null)$$, '42501');
+select pg_temp.expect_error($$select public.transfer_cleared('aws')$$, '42501');
+select pg_temp.expect_error($$insert into public.processing_register (org_id, purpose, ai, pinned, needs_switch, version, status)
+  values ('f1000000-0000-4000-8000-000000000000', 'accounts', false, true, false, 9, 'active')$$, '42501');
+select pg_temp.expect_error($$update public.transfer_register set review_on = current_date$$, '42501');
+reset role;
+select set_config('app.user_id', pg_temp.id('1', 'a0')::text, true);
+set local role hearth_queue;
+select pg_temp.expect_error($$update public.transfer_register set review_on = current_date$$, '42501');
+select pg_temp.expect_error($$insert into public.processing_restrictions (org_id, person_id, purpose, effective_at, created_by)
+  values ('f1000000-0000-4000-8000-000000000000', 'f1000000-0000-4000-8000-0000000000a8', 'presence_receipts', now(),
+          'f1000000-0000-4000-8000-0000000000a5')$$, '42501');
+reset role;
+-- Nothing changed in either fixture org (CI loads the seed's org beside them).
+select pg_temp.check(count(*) = 2 * (select count(*) from public.processing_register_defaults()) + 2,
+                     format('the registers changed with no org set (%s purpose versions)', count(*)))
+from public.processing_register where org_id in (pg_temp.id('1', '00'), pg_temp.id('2', '00'));
+select pg_temp.check(count(*) = 2 and bool_and(withdrawn_at is null), 'a clearance changed with no org set')
+from public.transfer_clearances where org_id in (pg_temp.id('1', '00'), pg_temp.id('2', '00'));

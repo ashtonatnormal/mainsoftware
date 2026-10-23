@@ -23,7 +23,6 @@ import { ConfigError, loadConfig } from '#src/config.ts'
 import { createDatabase } from '#src/db/database.ts'
 import { appRoleCheck, createPool, workerRoleCheck, workerRolesCheck } from '#src/db/pool.ts'
 import { FlagCache } from '#src/flags/cache.ts'
-import { C06_GATE } from '#src/jobs/gate.ts'
 import { createLogger } from '#src/logger.ts'
 import { Subscriptions } from '#src/pubsub.ts'
 import type { RealtimeDeps } from '#src/realtime/index.ts'
@@ -114,9 +113,6 @@ if (config.role === 'api' && flags !== undefined) {
     valkey,
     keys: deriveKeys(config.auth.secret),
     sms: smsProvider(config.auth),
-    // No provider is cleared in the transfer register until C0.9 passes the real gate here
-    // (PDPA-10), so Twilio sends nothing before then.
-    gate: C06_GATE,
     keyPrefix,
     flags,
   }

@@ -11,7 +11,12 @@ const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
 // Ahmad, from the Tembusu seed (db/seed/tembusu.sql), with his profile's zone.
-const AHMAD = { personId: 'b0000000-0000-4000-8000-000000000006', name: 'Ahmad', timeZone: 'Asia/Kuala_Lumpur' }
+const AHMAD = {
+  personId: 'b0000000-0000-4000-8000-000000000006',
+  name: 'Ahmad',
+  timeZone: 'Asia/Kuala_Lumpur',
+  capabilities: { registers: false },
+}
 
 describe('T21 D-01: who the document belongs to (boot/load-session.ts)', () => {
   it('BT-01 T21 item 10: 200 → signed_in; 401 → signed_out; network or 5xx → unavailable', async () => {

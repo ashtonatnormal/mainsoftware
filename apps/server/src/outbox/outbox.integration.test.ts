@@ -13,11 +13,11 @@ import { sql } from 'kysely'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type InOrg, withOrg } from '#src/db/database.ts'
 import type { FlagCache } from '#src/flags/cache.ts'
-import { C06_GATE } from '#src/jobs/gate.ts'
 import { appendOutbox } from '#src/outbox/append.ts'
 import { BelowFloor, ConsumerRunner, type OutboxConsumer, type RoundResult } from '#src/outbox/consumers.ts'
 import { readOutboxLag, readQueueDepth } from '#src/outbox/lag.ts'
 import { lockConsumer, type OutboxRow } from '#src/outbox/positions.ts'
+import { coreOnlyGate } from '#src/testing/gates.ts'
 import { installJobTables } from '#src/testing/jobs.ts'
 import { captureLogger } from '#src/testing/logs.ts'
 import type { Person, Stack } from '#src/testing/stack.ts'
@@ -62,7 +62,7 @@ function consumer(name: string, change: Partial<OutboxConsumer> = {}): OutboxCon
 }
 
 const runner = (consumers: OutboxConsumer[]) =>
-  new ConsumerRunner({ db: s.worker, consumers, flags, gate: C06_GATE, logger: log.logger, pollMs: 100 })
+  new ConsumerRunner({ db: s.worker, consumers, flags, gate: coreOnlyGate, logger: log.logger, pollMs: 100 })
 
 // Runs rounds until one finds nothing more to read.
 async function drain(run: ConsumerRunner, spec: OutboxConsumer): Promise<RoundResult[]> {

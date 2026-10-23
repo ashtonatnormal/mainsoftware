@@ -17,13 +17,26 @@ import { documentTitle, SHELL } from '@/strings/shell.ts'
 import { InShell } from './in-shell.ts'
 
 // Marcus, from the Tembusu seed (db/seed/tembusu.sql).
-const MARCUS = { personId: 'b0000000-0000-4000-8000-000000000003', name: 'Marcus Lim', timeZone: 'Asia/Singapore' }
+const MARCUS = {
+  personId: 'b0000000-0000-4000-8000-000000000003',
+  name: 'Marcus Lim',
+  timeZone: 'Asia/Singapore',
+  capabilities: { registers: false },
+}
 
-function runtime(): SessionRuntime {
+// Ashton, the seed's Owner and DPO, whose session answer allows the registers (C0.9 PD-26).
+const ASHTON = {
+  personId: 'b0000000-0000-4000-8000-000000000001',
+  name: 'Ashton Teo',
+  timeZone: 'Asia/Singapore',
+  capabilities: { registers: true },
+}
+
+function runtime(person: typeof MARCUS = MARCUS): SessionRuntime {
   const queryClient = createQueryClient(() => {})
-  queryClient.setQueryData(['session'], MARCUS)
+  queryClient.setQueryData(['session'], person)
   return {
-    info: MARCUS,
+    info: person,
     queryClient,
     live: createLiveStore('live'),
     signOut: async () => 'ended',
@@ -32,8 +45,8 @@ function runtime(): SessionRuntime {
 }
 
 // The app at a path, as a signed-in (or signed-out) document's first render.
-async function appAt(path: string, signedIn = true): Promise<string> {
-  const session = signedIn ? runtime() : null
+async function appAt(path: string, signedIn = true, person: typeof MARCUS = MARCUS): Promise<string> {
+  const session = signedIn ? runtime(person) : null
   const router = createAppRouter(
     { runtime: session, storage: undefined },
     createMemoryHistory({ initialEntries: [path] }),
@@ -147,7 +160,7 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     expect(navLinks(await appAt('/more'), 'rail:hidden').filter(([, on]) => on)).toEqual([['More', 'page']])
   })
 
-  it('SHM-03 OD-05 X10 SHL-41: the avatar button is named "Account, {name}" and opens a menu labelled Account holding Sign out, with the name above it hidden from assistive technology; one per layout', async () => {
+  it('SHM-03 OD-05 X10 SHL-41 C0.9 PD-26: the avatar button is named "Account, {name}" and opens a menu labelled Account holding Sign out (and Data protection first for the DPO), with the name above it hidden from assistive technology; one per layout', async () => {
     const markup = await appAt('/today')
     const triggers = tags(markup, 'button').filter(button => button.get('aria-haspopup') === 'menu')
     expect(triggers.map(button => button.get('aria-label'))).toEqual(['Account, Marcus Lim', 'Account, Marcus Lim'])
@@ -160,10 +173,31 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     // The phone's sits in the header row and opens downward; the rail's in the rail's foot, upward.
     expect(markup).toMatch(/class="rail:hidden"><div class="relative">/)
     expect(markup).toMatch(/bottom-full left-0/)
+    // Marcus's session doesn't allow the registers, so his menu holds Sign out alone; the DPO's
+    // holds Data protection first (C0.9 PD-26).
+    expect(textsOf(markup, 'button').filter(text => text === 'Data protection')).toEqual([])
+    const dpo = await appAt('/today', true, ASHTON)
+    const items = (menu: string) =>
+      [...menu.matchAll(/<button\b[^>]*role="menuitem"[^>]*>(.*?)<\/button>/gs)].map(match =>
+        (match[1] ?? '').replace(/<[^>]+>/g, ''),
+      )
+    expect(items(dpo)).toEqual(['Data protection', 'Sign out', 'Data protection', 'Sign out'])
+    expect(items(markup)).toEqual(['Sign out', 'Sign out'])
   })
 
   it('SHM-04 OD-04 decision 8: no searchbox anywhere in the shell, and no AI copy on any screen', async () => {
-    for (const path of ['/today', '/chats', '/rooms', '/tasks', '/calendar', '/drive', '/more', '/xyz']) {
+    for (const path of [
+      '/today',
+      '/chats',
+      '/rooms',
+      '/tasks',
+      '/calendar',
+      '/drive',
+      '/more',
+      '/dpo/purposes',
+      '/dpo/transfers',
+      '/xyz',
+    ]) {
       const markup = await appAt(path)
       expect(markup, path).not.toMatch(/type="search"|role="search"/)
       expect(

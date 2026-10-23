@@ -4,8 +4,9 @@
 // that asked for it, PRD-53's windows) live in the challenge record (auth/codes.ts), so the same
 // sign-in code is tested whatever sits behind this interface. The implementations: twilio.ts
 // (Twilio Verify, the primary), fake.ts (the local fake) and hearth-codes.ts over a TextSender (the
-// shape the AWS End User Messaging fallback takes). Each outside provider sends only once C0.9 has
-// cleared it in the transfer register (PDPA-10).
+// shape the AWS End User Messaging fallback takes). Each outside provider is asked to send only
+// while its entry in the org's transfer register is cleared (PDPA-10; compliance/transfers.ts,
+// TECH-SPEC T22 item 8).
 // An implementation never puts the number, the code or a provider's message (which can quote the
 // number) in an error it throws or logs, because errors are logged.
 import type { ProviderKey } from '@hearth/shared'

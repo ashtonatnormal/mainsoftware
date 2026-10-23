@@ -1,7 +1,8 @@
 // C0.6's registries (TECH-SPEC T15-T17): the outbox catalogue, the flag registry and the purpose
-// keys, and the ids-only rule their schemas follow. That the catalogue's names and the registry's
-// defaults equal migration 0007's lists is checked against the database by
-// apps/server/scripts/check-catalogues.ts.
+// keys, and the ids-only rule their schemas follow; from C0.9, the provider keys, the pinned
+// purposes and the tripwires G1 and G2 (T22). That the catalogue's names, the registry's defaults
+// and the registers' defaults equal the database's lists (migrations 0007 and 0009) is checked
+// against the database by apps/server/scripts/check-catalogues.ts.
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { EVENTS, type EventSpec, isEmitted, RESERVED_NAMESPACES } from './events.ts'
@@ -14,9 +15,23 @@ import {
   flagLineage,
   isAiFlag,
   isFlagKey,
+  isLockedOn,
+  isPinnedPurpose,
+  PINNED_PURPOSES,
 } from './flags.ts'
 import { idsLeaves, idsProblems, LowerUuid, UUID_PATTERN } from './ids.ts'
-import { isAiPurpose, isPurposeKey, PURPOSES } from './purposes.ts'
+import {
+  AI_PROVIDERS,
+  isAiProvider,
+  isAiPurpose,
+  isProviderKey,
+  isPurposeKey,
+  PROVIDERS,
+  PURPOSE_KEYS,
+  PURPOSES,
+  type PurposeKey,
+} from './purposes.ts'
+import { ACTIVE_FROM_START } from './registers.ts'
 
 // BUILD-PLAN's order: every C stage, then every A stage.
 function stageRank(stage: string): number {
@@ -51,6 +66,31 @@ function aiPurposeProblems(flags: Readonly<Record<string, Pick<FlagSpec, 'purpos
     .map(([key]) => key)
 }
 
+// G1 (C0.9 PD-18, TECH-SPEC T22 item 11): a flag outside ai.* that names a purpose that isn't
+// pinned. FlagCache.verdict() and GET /api/flags read a flag alone, never the purpose gate, which
+// is safe only while every such flag's purposes are allowed in every register state.
+const G1 =
+  'before a flag outside ai.* names a purpose that isn’t pinned, make FlagCache.verdict() and GET /api/flags ask the purpose gate (TECH-SPEC T22 item 11)'
+function unpinnedPurposeProblems(
+  flags: Readonly<Record<string, Pick<FlagSpec, 'purposes'>>>,
+  pinned: readonly string[],
+): string[] {
+  return Object.entries(flags)
+    .filter(([key]) => !isAiFlag(key))
+    .flatMap(([key, spec]) => spec.purposes.filter(p => !pinned.includes(p)).map(p => `${key}: ${p}`))
+}
+
+// G2 (C0.9 PD-18, TECH-SPEC T22 item 11): a flag outside ai.* with a flag under it. The flags route
+// checks the purposes of the key it turns on, never those of the flags under it.
+const G2 =
+  'before a flag outside ai.* has a flag under it, make POST /api/admin/flags/set check the purposes of the flags under it too (TECH-SPEC T22 item 11)'
+function nestedFlagProblems(flags: Readonly<Record<string, unknown>>): string[] {
+  const keys = Object.keys(flags)
+  return keys
+    .filter(key => !isAiFlag(key))
+    .flatMap(key => keys.filter(below => below.startsWith(`${key}.`)).map(below => `${key} has ${below} under it`))
+}
+
 describe('T16 the outbox catalogue', () => {
   const entries = Object.entries(EVENTS) as [string, EventSpec][]
 
@@ -76,9 +116,11 @@ describe('T16 the outbox catalogue', () => {
     expect(emitted.some(name => name.startsWith('signin.'))).toBe(true)
   })
 
-  it('T16: every emitted type is C0.6’s, has ids only and allowed purposes, and carries no snapshot yet', () => {
+  it('T16 T22: every emitted type names the C step that emits it, has ids only and allowed purposes, and carries no snapshot yet', () => {
     for (const [name, spec] of entries.filter(([, s]) => s.status === 'emitted')) {
-      expect(spec.stage, name).toBe('C0.6')
+      // From C0.6, and never the AI layer's before A0 (D41).
+      expect(stageRank(spec.stage), name).toBeGreaterThanOrEqual(stageRank('C0.6'))
+      expect(spec.stage, name).toMatch(/^C/)
       expect(spec.ids, name).toBeDefined()
       if (spec.ids) expect(idsProblems(spec.ids), name).toEqual([])
       expect(spec.purposes.length, name).toBeGreaterThan(0)
@@ -120,6 +162,21 @@ describe('T16 the outbox catalogue', () => {
   it('A9: flag.changed names the flag’s row as its entity and carries no key or revision', () => {
     expect(EVENTS['flag.changed'].entity).toBe('feature_flag')
     expect(Object.keys(EVENTS['flag.changed'].ids.shape)).toEqual(['enabled'])
+  })
+
+  it('C0.9 PD-22 T22 item 13: the register events are C0.9’s, carry service_operation, and hold a key and a state only', () => {
+    const purpose = EVENTS['register.purpose_changed']
+    const transfer = EVENTS['register.transfer_changed']
+    expect(purpose).toMatchObject({ status: 'emitted', stage: 'C0.9', entity: 'processing_purpose' })
+    expect(transfer).toMatchObject({ status: 'emitted', stage: 'C0.9', entity: 'transfer_entry' })
+    for (const spec of [purpose, transfer]) expect(spec.purposes).toEqual(['service_operation'])
+    expect(purpose.ids.safeParse({ purpose: 'security_audit', status: 'active' }).success).toBe(true)
+    expect(purpose.ids.safeParse({ purpose: 'security_audit', status: 'on' }).success).toBe(false)
+    expect(purpose.ids.safeParse({ purpose: 'no_such_purpose', status: 'active' }).success).toBe(false)
+    expect(purpose.ids.safeParse({ purpose: 'backups', status: 'active', basis: 'consent' }).success).toBe(false)
+    expect(transfer.ids.safeParse({ provider: 'twilio', cleared: true }).success).toBe(true)
+    expect(transfer.ids.safeParse({ provider: 'sendgrid', cleared: true }).success).toBe(false)
+    expect(transfer.ids.safeParse({ provider: 'twilio', cleared: true, countries: ['US'] }).success).toBe(false)
   })
 })
 
@@ -287,15 +344,126 @@ describe('T17 the flag registry', () => {
 })
 
 describe('PDPA-01 T16 item 16: the purpose keys', () => {
-  it('marks the AI layer’s purposes, which rest on consent until C0.9 says otherwise', () => {
+  it('C0.9 PD-28: each key marks only the AI layer and the switch it needs; the register’s basis says whether it rests on consent', () => {
     for (const [key, spec] of Object.entries(PURPOSES)) {
       expect(/^[a-z][a-z0-9_]{0,62}$/.test(key), key).toBe(true)
-      if (spec.ai) expect(spec.consent, key).toBe(true)
+      expect(Object.keys(spec).sort(), key).toEqual(['ai', 'needsSwitch', 'register'])
     }
     expect(isAiPurpose('accounts')).toBe(false)
     expect(isAiPurpose('org_brain')).toBe(true)
     // An unknown key is treated as AI, so a mistyped purpose is refused rather than let through.
     expect(isAiPurpose('acounts')).toBe(true)
-    expect(PURPOSES.service_operation.consent).toBe(false)
+  })
+
+  it('RGS-15 PDPA-04 C0.9 PD-11: a purpose needs a per-person switch exactly when PDPA-04 lists it (recording, transcription, notes, voice-message transcription, Org Brain or AI use), the test set apart', () => {
+    const needing = PURPOSE_KEYS.filter(key => PURPOSES[key].needsSwitch)
+    expect(needing).toEqual([
+      'recording_meetings',
+      'recording_drop_in',
+      'transcription',
+      'voice_message_transcription',
+      'meeting_notes',
+      'org_brain',
+      'ai_writing',
+      'people_inference',
+      'assistant',
+      'agents',
+      'ai_cost_figures',
+    ])
+    // Every AI purpose but the transcription test set, whose withdrawal is carried out by deleting
+    // the person's clips (§9.5).
+    for (const key of PURPOSE_KEYS.filter(k => PURPOSES[k].ai)) {
+      expect(PURPOSES[key].needsSwitch, key).toBe(key !== 'transcription_test_set')
+    }
+  })
+})
+
+describe('PDPA-10 C0.9 PD-14: the provider keys', () => {
+  it('RGS-15 D41: the AI providers are OpenAI and Bedrock, both registered; an unknown key counts as AI', () => {
+    expect([...AI_PROVIDERS]).toEqual(['openai', 'bedrock'])
+    for (const key of AI_PROVIDERS) expect(isProviderKey(key), key).toBe(true)
+    expect(PROVIDERS.filter(key => isAiProvider(key))).toEqual(['openai', 'bedrock'])
+    for (const key of PROVIDERS) expect(/^[a-z][a-z0-9_]{0,62}$/.test(key), key).toBe(true)
+    expect(new Set(PROVIDERS).size).toBe(PROVIDERS.length)
+    expect(isProviderKey('twilio')).toBe(true)
+    expect(isAiProvider('twilio')).toBe(false)
+    // A mistyped or unknown provider is refused rather than cleared.
+    expect(isProviderKey('sendgrid')).toBe(false)
+    expect(isAiProvider('sendgrid')).toBe(true)
+    expect(isProviderKey('constructor')).toBe(false)
+  })
+})
+
+describe('C0.9 PD-07 PD-18: the pinned purposes, and the tripwires that keep PR 1’s runtime safe', () => {
+  // The flags locked on, read from the registry here rather than through isLockedOn, so the test
+  // doesn't take the rule it checks on trust.
+  const lockedOnHere = (Object.entries(FLAGS) as [string, FlagSpec][]).filter(([key]) =>
+    flagLineage(key).every(level => {
+      const spec = (FLAGS as Readonly<Record<string, FlagSpec>>)[level]
+      return spec === undefined ? level !== key : spec.locked && spec.default
+    }),
+  )
+
+  it('RGS-15 T22 item 5: PINNED_PURPOSES are the purposes of every flag locked on, today core.system’s accounts and service_operation', () => {
+    expect(lockedOnHere.map(([key]) => key)).toEqual(['core.system'])
+    const purposes = new Set(lockedOnHere.flatMap(([, spec]) => spec.purposes))
+    expect([...PINNED_PURPOSES].sort()).toEqual([...purposes].sort())
+    expect([...PINNED_PURPOSES]).toEqual(['accounts', 'service_operation'])
+    for (const key of PURPOSE_KEYS) expect(isPinnedPurpose(key), key).toBe(PINNED_PURPOSES.includes(key))
+    expect(isPinnedPurpose('acounts')).toBe(false)
+    // Hearth runs on them, so none is AI or could rest on consent through a switch it needs.
+    for (const key of PINNED_PURPOSES) expect(PURPOSES[key]).toMatchObject({ ai: false, needsSwitch: false })
+  })
+
+  it('T17 item 2: a flag is locked on when it and every flag above it is locked and on; a level that isn’t a flag doesn’t count', () => {
+    const on = { locked: true, default: true }
+    const registry = {
+      'core.a': { ...FLAGS['core.system'], ...on },
+      'core.a.b': { ...FLAGS['core.system'], ...on },
+      'core.c': { ...FLAGS['core.system'], locked: false },
+      'core.c.d': { ...FLAGS['core.system'], ...on },
+      'core.e': { ...FLAGS['core.system'], default: false },
+    } satisfies Record<string, FlagSpec>
+    expect(isLockedOn('core.system')).toBe(true)
+    expect(isLockedOn('ai')).toBe(false)
+    expect(isLockedOn('ai.notes')).toBe(false)
+    expect(isLockedOn('core.a', registry)).toBe(true)
+    expect(isLockedOn('core.a.b', registry)).toBe(true)
+    expect(isLockedOn('core.c', registry)).toBe(false)
+    expect(isLockedOn('core.c.d', registry)).toBe(false)
+    expect(isLockedOn('core.e', registry)).toBe(false)
+    // A key that isn't a flag is never locked on, though nothing above it is a flag either.
+    expect(isLockedOn('core.missing', registry)).toBe(false)
+  })
+
+  it('RGS-15 C0.9 PD-06 T22 item 4: a new org starts with the pinned purposes, security_audit and backups active, and nothing AI', () => {
+    expect([...ACTIVE_FROM_START]).toEqual(['accounts', 'service_operation', 'security_audit', 'backups'])
+    for (const key of PINNED_PURPOSES) expect(ACTIVE_FROM_START, key).toContain(key)
+    for (const key of ACTIVE_FROM_START) expect(isAiPurpose(key), key).toBe(false)
+    // security_audit and backups start active without being pinned: the gate passes them only once
+    // a published notice lists them (PR 2).
+    expect(isPinnedPurpose('security_audit')).toBe(false)
+    expect(isPinnedPurpose('backups')).toBe(false)
+  })
+
+  it(`PGT-01 G1 C0.9 PD-18: every flag outside ai.* names only pinned purposes, so a flag can't read on while its purpose is refused`, () => {
+    expect(unpinnedPurposeProblems(FLAGS, PINNED_PURPOSES), G1).toEqual([])
+    // The rule itself: a core flag naming presence_receipts trips it; an ai.* flag doesn't, since
+    // its own lock keeps it off until A0.
+    const planted: Record<string, { purposes: readonly PurposeKey[] }> = {
+      'core.system': { purposes: ['service_operation', 'accounts'] },
+      'core.receipts': { purposes: ['presence_receipts', 'accounts'] },
+      'ai.notes': { purposes: ['meeting_notes'] },
+    }
+    expect(unpinnedPurposeProblems(planted, PINNED_PURPOSES)).toEqual(['core.receipts: presence_receipts'])
+  })
+
+  it(`PGT-02 G2 C0.9 PD-18: no flag outside ai.* has a flag under it, so a flag's own purposes are the whole check`, () => {
+    expect(nestedFlagProblems(FLAGS), G2).toEqual([])
+    expect(nestedFlagProblems({ 'core.chat': {}, 'core.chat.wave_2': {}, ai: {}, 'ai.agents': {} })).toEqual([
+      'core.chat has core.chat.wave_2 under it',
+    ])
+    // core.system's parent, core, is no flag, so it has nothing under it.
+    expect(nestedFlagProblems({ 'core.system': {}, 'core.chat': {} })).toEqual([])
   })
 })

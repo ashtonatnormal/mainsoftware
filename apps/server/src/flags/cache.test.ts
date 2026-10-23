@@ -644,3 +644,209 @@ describe('C0.6 T17 items 6 and 7 the flags a process keeps', () => {
     flags.stop()
   })
 })
+
+// The worker's cache with its registers (C0.9): a database whose register rows can change, whose
+// register statements can fail on their own, and whose reads are counted.
+interface PurposeRow {
+  purpose: string
+  version: number
+  status: string
+  basis: string | null
+  providers: string[]
+}
+interface ProviderRow {
+  provider: string
+  revision: string
+  review_on: string | null
+  clearance: string | null
+}
+const accounts = (version: number): PurposeRow => ({
+  purpose: 'accounts',
+  version,
+  status: 'active',
+  basis: null,
+  providers: [],
+})
+const aws = (change: Partial<ProviderRow> = {}): ProviderRow => ({
+  provider: 'aws',
+  revision: '2',
+  review_on: '2026-10-30',
+  clearance: null,
+  ...change,
+})
+
+function registerDatabase() {
+  const state = {
+    purposes: [accounts(1)],
+    providers: [aws()],
+    restrictions: [] as { id: string; person_id: string; purpose: string; effective_at: Date }[],
+    failing: false,
+  }
+  const p = scriptedPool((statement: Statement) => {
+    const { text } = statement
+    if (text.includes("from principals where org_id = $1 and kind = 'system'")) return [{ id: SYSTEM }]
+    if (text.startsWith('select "key", "enabled"')) return [row('core.system', { locked: true }), row('it.optional')]
+    if (text.startsWith('select distinct on (purpose)')) {
+      return state.failing ? new Error('permission denied for table processing_register') : state.purposes
+    }
+    if (text.startsWith('select r.provider')) return state.providers
+    if (text.startsWith('select id, person_id, purpose')) return state.restrictions
+    return []
+  })
+  return { ...p, state }
+}
+
+function registerCache(db: ReturnType<typeof registerDatabase>, registers = { restrictions: true }) {
+  const log = captureLogger('worker')
+  const flags = new FlagCache({
+    db: db.db,
+    as: 'hearth_queue',
+    registry: REGISTRY,
+    registers,
+    logger: log.logger,
+    now: () => Date.now(),
+    random: () => 0.5,
+  })
+  return { flags, log }
+}
+
+describe('PGT-07 C0.9 PD-16 T22 item 9 the worker’s cache keeps the registers with its flags', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    vi.setSystemTime(new Date('2026-10-22T09:00:00Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('reads them in the flags’ own read-only transaction, as hearth_queue, after the flags, with only the granted columns', async () => {
+    const db = registerDatabase()
+    const { flags } = registerCache(db)
+    await flags.track(ORG)
+    const texts = db.texts()
+    expect(texts[0]).toBe('start transaction isolation level read committed read only')
+    expect(db.statements.find(s => s.text.startsWith("select set_config('role'"))?.values[0]).toBe('hearth_queue')
+    const at = (start: string) => texts.findIndex(text => text.startsWith(start))
+    expect(at('select "key", "enabled"')).toBeLessThan(at('select distinct on (purpose)'))
+    expect(at('select distinct on (purpose)')).toBeLessThan(at('select r.provider'))
+    expect(at('select r.provider')).toBeLessThan(at('select id, person_id, purpose'))
+    expect(texts.indexOf('commit')).toBe(texts.length - 1)
+    expect(texts.filter(text => text.startsWith('start transaction'))).toHaveLength(1)
+    // hearth_queue's columns only (0009's grants), each read for the org set.
+    expect(texts.slice(at('select distinct on (purpose)'))).toEqual([
+      'select distinct on (purpose) purpose, version, status, basis, providers from processing_register where org_id = $1 order by purpose, version desc',
+      'select r.provider, r.revision, r.review_on::text as review_on, c.id as clearance from transfer_register r left join transfer_clearances c on c.org_id = r.org_id and c.provider = r.provider and c.withdrawn_at is null where r.org_id = $1',
+      'select id, person_id, purpose, effective_at from processing_restrictions where org_id = $1 and lifted_at is null',
+      'commit',
+    ])
+    expect(flags.register(ORG)?.purposes.get('accounts')).toEqual({
+      version: 1,
+      status: 'active',
+      basis: null,
+      providers: [],
+    })
+    expect(flags.register(ORG)?.providers.get('aws')).toEqual({ revision: 2, reviewOn: '2026-10-30', clearance: null })
+    expect(flags.register(ORG)?.restrictions).toEqual(new Map())
+    expect(flags.register(ORG)?.notified).toEqual(new Set())
+    expect(flags.register(OTHER_ORG)).toBeUndefined()
+    flags.stop()
+  })
+
+  it('reads no restrictions unless asked, and no registers at all without the option (the api’s and realtime’s caches)', async () => {
+    const without = registerDatabase()
+    const plain = registerCache(without, { restrictions: false })
+    await plain.flags.track(ORG)
+    expect(without.texts().some(text => text.startsWith('select id, person_id, purpose'))).toBe(false)
+    expect(plain.flags.register(ORG)?.restrictions).toBeUndefined()
+    plain.flags.stop()
+    const db = registerDatabase()
+    const log = captureLogger('api')
+    const flags = new FlagCache({ db: db.db, registry: REGISTRY, logger: log.logger, now: () => Date.now() })
+    await flags.track(ORG)
+    expect(db.texts().some(text => /processing_register|transfer_register|processing_restrictions/.test(text))).toBe(
+      false,
+    )
+    expect(flags.confirmed(ORG)).toBe(true)
+    expect(flags.register(ORG)).toBeUndefined()
+    flags.stop()
+  })
+
+  it('a register statement that fails fails the whole read: the org goes unconfirmed, flags and registers together', async () => {
+    const db = registerDatabase()
+    const { flags, log } = registerCache(db)
+    await flags.track(ORG)
+    expect(flags.register(ORG)).toBeDefined()
+    db.state.failing = true
+    await vi.advanceTimersByTimeAsync(FLAG_STALE_MS + FLAG_POLL_MS)
+    expect(flags.confirmed(ORG)).toBe(false)
+    expect(flags.register(ORG)).toBeUndefined()
+    expect(flags.verdict(ORG, 'it.optional', null)).toBe('unconfirmed')
+    expect(flags.verdict(ORG, 'core.system', null)).toBe('on')
+    expect(log.events('flags_poll_failed')[0]).toMatchObject({ org: ORG, failure: { error: 'Error' } })
+    expect(log.events('flags_unconfirmed')).toHaveLength(1)
+    db.state.failing = false
+    await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 1.1)
+    expect(flags.confirmed(ORG)).toBe(true)
+    expect(flags.register(ORG)).toBeDefined()
+    flags.stop()
+  })
+
+  it('logs register_changed when a purpose’s version, a provider’s revision or clearance, or a restriction moves, never for the first read, and tells no flag listener', async () => {
+    const db = registerDatabase()
+    const { flags, log } = registerCache(db)
+    const listener = vi.fn()
+    flags.onChange(listener)
+    await flags.track(ORG)
+    await flags.reload(ORG)
+    expect(log.events('register_changed')).toEqual([])
+    const restriction = {
+      id: 'e1000000-0000-4000-8000-000000000001',
+      person_id: PERSON,
+      purpose: 'presence_receipts',
+      effective_at: new Date(),
+    }
+    const changes: [string, () => void][] = [
+      ['a new version', () => (db.state.purposes = [accounts(2)])],
+      // A change of facts alone (no clearance): the revision.
+      ['new facts', () => (db.state.providers = [aws({ revision: '3' })])],
+      [
+        'a clearance',
+        () => (db.state.providers = [aws({ revision: '3', clearance: 'c1000000-0000-4000-8000-000000000001' })]),
+      ],
+      ['a restriction', () => (db.state.restrictions = [restriction])],
+    ]
+    for (const [what, change] of changes) {
+      const before = log.events('register_changed').length
+      change()
+      await flags.reload(ORG)
+      expect(log.events('register_changed'), what).toHaveLength(before + 1)
+      expect(log.events('register_changed').at(-1), what).toMatchObject({ level: 30, org: ORG })
+      await flags.reload(ORG)
+      expect(log.events('register_changed'), `${what}, read again`).toHaveLength(before + 1)
+    }
+    expect(listener).not.toHaveBeenCalled()
+    expect(log.events('flags_changed')).toEqual([])
+    flags.stop()
+  })
+
+  it('PD-13: logs an open clearance past its review date at warn, once a UTC day for each org and provider, and never one not cleared', async () => {
+    const db = registerDatabase()
+    db.state.providers = [
+      aws({ review_on: '2026-10-21', clearance: 'c1000000-0000-4000-8000-000000000001' }),
+      aws({ provider: 'twilio', review_on: '2026-10-22', clearance: 'c1000000-0000-4000-8000-000000000002' }),
+      aws({ provider: 'livekit', review_on: '2026-01-01' }),
+    ]
+    const { flags, log } = registerCache(db)
+    await flags.track(ORG)
+    await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 10)
+    // aws's date has passed; twilio's is today, not yet; livekit isn't cleared.
+    expect(log.events('transfer_review_overdue')).toEqual([
+      expect.objectContaining({ level: 40, org: ORG, provider: 'aws', reviewOn: '2026-10-21' }),
+    ])
+    // The next UTC day: aws again, and twilio now too.
+    vi.setSystemTime(new Date('2026-10-23T00:00:01Z'))
+    await vi.advanceTimersByTimeAsync(FLAG_POLL_MS * 2)
+    expect(log.events('transfer_review_overdue').map(line => line.provider)).toEqual(['aws', 'aws', 'twilio'])
+    flags.stop()
+  })
+})

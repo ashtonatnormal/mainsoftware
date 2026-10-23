@@ -1,4 +1,5 @@
--- T18, CLAUDE.md Database: the worker's roles (0007, 0008). The worker logs in as hearth_worker, which
+-- T18, CLAUDE.md Database: the worker's roles (0007, 0008; 0009 lets hearth_queue read the registers,
+-- T22 item 9). The worker logs in as hearth_worker, which
 -- holds nothing itself and takes one job role per transaction; each job role gets only the grants
 -- its jobs need. This pins every privilege each job role can use on every table, column, sequence
 -- and function, however it got it, as 030 does hearth_app's, so any new grant must be added here on
@@ -40,6 +41,19 @@ select pg_temp.expect_privileges('hearth_queue', array[
   'outbox_checkpoints: SELECT', 'outbox_floors: SELECT',
   -- withOrg's system principal.
   'principals.id: SELECT', 'principals.kind: SELECT', 'principals.org_id: SELECT', 'principals.system_key: SELECT',
+  -- The worker's copy of the registers (0009, C0.9 PD-16), read with its flags: each purpose's
+  -- versions, status, basis and providers; each provider's review date and revision (C0.9 PD-13,
+  -- the change it notices); which clearances are open; live restrictions by id, person, purpose and
+  -- time only. Never a register's other facts, nor who recorded, cleared or withdrew anything.
+  'processing_register.basis: SELECT', 'processing_register.org_id: SELECT', 'processing_register.providers: SELECT',
+  'processing_register.purpose: SELECT', 'processing_register.status: SELECT', 'processing_register.version: SELECT',
+  'transfer_register.org_id: SELECT', 'transfer_register.provider: SELECT', 'transfer_register.review_on: SELECT',
+  'transfer_register.revision: SELECT',
+  'transfer_clearances.id: SELECT', 'transfer_clearances.org_id: SELECT', 'transfer_clearances.provider: SELECT',
+  'transfer_clearances.withdrawn_at: SELECT',
+  'processing_restrictions.effective_at: SELECT', 'processing_restrictions.id: SELECT',
+  'processing_restrictions.lifted_at: SELECT', 'processing_restrictions.org_id: SELECT',
+  'processing_restrictions.person_id: SELECT', 'processing_restrictions.purpose: SELECT',
   'function is_ids_only(jsonb): EXECUTE',
   'function worker_org_ids(): EXECUTE'
 ]);

@@ -148,7 +148,7 @@ describe('C0.8 T21 item 10 T17 item 11 GET /api/session and GET /api/flags on th
     expect(after.device.getTime()).toBeGreaterThan(before.device.getTime() + 60_000)
   })
 
-  it('WI-04 T21 item 10 OD-10: GET /api/session gives the person’s id, display name and profile zone; without a profile, the full name and the org’s zone', async () => {
+  it('WI-04 T21 item 10 OD-10: GET /api/session gives the person’s id, display name and profile zone; without a profile, the full name and the org’s zone; capabilities.registers for the DPO alone (C0.9 PD-26)', async () => {
     const org = await s.newOrg()
     await s.query("update orgs set time_zone = 'Asia/Jakarta' where id = $1", [org.id])
     const ahmad = await s.person({ org })
@@ -163,6 +163,7 @@ describe('C0.8 T21 item 10 T17 item 11 GET /api/session and GET /api/flags on th
       personId: ahmad.id,
       name: 'Ahmad',
       timeZone: 'Asia/Kuala_Lumpur',
+      capabilities: { registers: false },
     })
     const without = await (await s.signIn(other)).get('/api/session')
     expect(without.status).toBe(200)
@@ -170,10 +171,20 @@ describe('C0.8 T21 item 10 T17 item 11 GET /api/session and GET /api/flags on th
       personId: other.id,
       name: `Person ${other.id.slice(0, 8)}`,
       timeZone: 'Asia/Jakarta',
+      capabilities: { registers: false },
     })
+    // The DPO may reach the registers (can() allows register.read once they re-authenticate),
+    // which the shell shows as its "Data protection" entry; an Owner who isn't the DPO may not.
+    const dpo = await s.person({ org, roles: ['dpo'] })
+    const owner = await s.person({ org, roles: ['owner'] })
+    const asDpo = await (await s.signIn(dpo)).get('/api/session')
+    expect(SessionResponse.parse(asDpo.body).capabilities).toEqual({ registers: true })
+    const asOwner = await (await s.signIn(owner)).get('/api/session')
+    expect(SessionResponse.parse(asOwner.body).capabilities).toEqual({ registers: false })
     // No phone number, no roles.
-    for (const reply of [withProfile, without]) {
-      for (const person of [ahmad, other]) expect(reply.text).not.toContain(person.local)
+    for (const reply of [withProfile, without, asDpo, asOwner]) {
+      for (const person of [ahmad, other, dpo, owner]) expect(reply.text).not.toContain(person.local)
+      expect(reply.text).not.toMatch(/"(dpo|owner)"/)
     }
   })
 

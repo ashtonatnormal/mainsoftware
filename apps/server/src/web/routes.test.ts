@@ -400,7 +400,12 @@ describe('C0.8 T21 item 10 GET /api/session', () => {
     const { get } = setup({ db: pool.db })
     const response = await get('/api/session', COOKIE)
     expect(response.statusCode).toBe(200)
-    expect(response.json()).toEqual({ personId: PERSON, name: 'Ahmad', timeZone: 'Asia/Kuala_Lumpur' })
+    expect(response.json()).toEqual({
+      personId: PERSON,
+      name: 'Ahmad',
+      timeZone: 'Asia/Kuala_Lumpur',
+      capabilities: { registers: false },
+    })
     expect(SessionResponse.safeParse(response.json()).success).toBe(true)
     // The fallbacks are the read's own: the profile first, then the roster's name and the org's
     // zone (NOT NULL), for the session's org and person only.
@@ -409,6 +414,33 @@ describe('C0.8 T21 item 10 GET /api/session', () => {
       text: 'select coalesce(pr.display_name, p.full_name) as name, coalesce(pr.time_zone, o.time_zone) as time_zone from people p join orgs o on o.id = p.org_id left join profiles pr on pr.org_id = p.org_id and pr.person_id = p.id where p.org_id = $1 and p.id = $2',
       values: [ORG, PERSON],
     })
+  })
+
+  it('RGS-18 C0.9 PD-26 T22 item 14: capabilities.registers is can()’s register.read once re-authenticated: the DPO alone, never another role, and it needs no fresh re-authentication to show', async () => {
+    const found = { name: 'Ashton', time_zone: 'Asia/Singapore' }
+    for (const [roles, registers] of [
+      [[{ role: 'dpo', team_id: null }], true],
+      [
+        [
+          { role: 'owner', team_id: null },
+          { role: 'dpo', team_id: null },
+        ],
+        true,
+      ],
+      [[{ role: 'owner', team_id: null }], false],
+      [[{ role: 'admin', team_id: null }], false],
+      [[{ role: 'compliance_officer', team_id: null }], false],
+      [[{ role: 'team_admin', team_id: TEAM }], false],
+      [[], false],
+    ] as const) {
+      // The acting session's stamp isn't fresh (signedIn's re-read says so): the capability is about
+      // what the person may reach, and the route asks for the re-authentication when they do.
+      const { get } = setup({ db: signedIn({ roles: [...roles], found }).db })
+      const response = await get('/api/session', COOKIE)
+      expect(response.statusCode, JSON.stringify(roles)).toBe(200)
+      expect(response.json().capabilities, JSON.stringify(roles)).toEqual({ registers })
+      expect(SessionResponse.safeParse(response.json()).success).toBe(true)
+    }
   })
 
   it('T21 item 10: a person the read can’t find reads as signed out, without clearing the cookie', async () => {
