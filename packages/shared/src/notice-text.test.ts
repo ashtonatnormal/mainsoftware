@@ -725,4 +725,13 @@ describe('NTG-13 C0.9 PD-62 decision 8: the DPO’s free text is held to AI_COPY
       [],
     )
   })
+
+  it('NTG-13 PD-62 decision 8: an org name AI_COPY refuses is never printed; the notice says "your organisation" instead', () => {
+    const body = generateNotice(input({ org: 'Agents of Change Pte Ltd' }))
+    expect(body).not.toContain('Agents of Change')
+    expect(body).toContain('your organisation')
+    expect(aiCopyIn(body)).toBeUndefined()
+    // Any other name is printed as it is.
+    expect(generateNotice(input({ org: 'Tembusu Logistics' }))).toContain('Tembusu Logistics')
+  })
 })

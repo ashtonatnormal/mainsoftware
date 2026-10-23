@@ -128,7 +128,7 @@ export type NoticeProblemCode = (typeof NOTICE_PROBLEMS)[number]
 // The DPO's free text the notice prints, by the register field it comes from: a purpose's basis
 // reference and retention, and a provider's stated facts that are text. The org's name is printed
 // too, but the DPO doesn't set it: the bootstrap and C0.16's org settings refuse a name that
-// matches AI_COPY instead.
+// matches AI_COPY, and until they do the generator prints "your organisation" for such a name.
 export const NOTICE_FREE_TEXT_FIELDS = [
   'basis_reference',
   'retention',

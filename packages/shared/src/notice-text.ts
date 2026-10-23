@@ -198,8 +198,13 @@ const byProvider = (a: ProviderKey, b: ProviderKey) => PROVIDERS.indexOf(a) - PR
 // entry that noticeProblems() holds back (no basis or no retention, or a consent-type basis), so
 // the server asks for problems first.
 function read(input: NoticeInput): Read {
-  const org = flat(input.org)
-  if (org === '') throw new Error('A notice names its organisation')
+  const named = flat(input.org)
+  if (named === '') throw new Error('A notice names its organisation')
+  // The DPO can't change the org's name, so a name holding wording Hearth keeps off its screens
+  // (AI_COPY, decision 8) isn't refused at publish, which would stop the org from ever publishing
+  // (C0.9 PD-62). The bootstrap and C0.16's org settings refuse such a name; until they exist the
+  // notice says "your organisation" instead.
+  const org = aiCopyIn(named) === undefined ? named : 'your organisation'
   const purposes = new Set<PurposeKey>()
   for (const purpose of input.purposes) {
     if (isAiPurpose(purpose.key)) throw new Error(`${purpose.key} is an AI purpose, never in the notice before A0`)

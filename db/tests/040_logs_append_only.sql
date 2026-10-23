@@ -47,9 +47,7 @@ select pg_temp.expect_error($$insert into public.data_access_events (org_id, typ
   values ('f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a2', now() - interval '1 day')$$, '42501');
 select pg_temp.expect_error($$insert into public.data_access_events (id, org_id, type, subject_id, actor_id)
   values (gen_random_uuid(), 'f1000000-0000-4000-8000-000000000000', 'export', 'f1000000-0000-4000-8000-0000000000a8', 'f1000000-0000-4000-8000-0000000000a2')$$, '42501');
--- Nor a notice acknowledgment's time (PDPA-03 records when it was given): from 0010 hearth_app adds
--- no acknowledgement at all, which only acknowledge_notice() writes, stamped by the database
--- (C0.9 PD-42; 160).
+-- Nor a notice acknowledgment's time (PDPA-03 records when it was given).
 select pg_temp.expect_error($$insert into public.notice_acknowledgments (org_id, person_id, notice_version_id, method, acknowledged_at)
   values ('f1000000-0000-4000-8000-000000000000', 'f1000000-0000-4000-8000-0000000000a7', 'f1000000-0000-4000-8000-0000000000e3', 'in_app', '2020-01-01')$$, '42501');
 

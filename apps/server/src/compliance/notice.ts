@@ -381,11 +381,14 @@ export async function readNotice(api: Api, session: SessionIds, info: ReqInfo): 
       const current = latestRows[0]
       const standing: NoticeStanding =
         current === undefined ? 'unpublished' : current.acknowledged ? 'acknowledged' : 'required'
+      // Up to the version this answer shows: each statement reads afresh (READ COMMITTED), so a
+      // version published and acknowledged since the read above never lists here as acknowledged
+      // while the answer asks for the older one.
       const { rows: mine } = await sql<MineRow>`
         select v.version, a.acknowledged_at, a.method
         from notice_acknowledgments a
         join notice_versions v on v.org_id = a.org_id and v.id = a.notice_version_id
-        where a.org_id = ${orgId} and a.person_id = ${userId}
+        where a.org_id = ${orgId} and a.person_id = ${userId} and v.version <= ${current?.version ?? -1}
         order by v.version desc, a.acknowledged_at desc
         limit ${NOTICE_MINE_MAX}`.execute(trx)
       let changes: NoticeChangesJSON | null = null
