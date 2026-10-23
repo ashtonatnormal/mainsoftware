@@ -69,6 +69,7 @@ export const CONTACT_PROBLEM_COPY = {
   email_shape: () => 'Enter an email address such as name@example.org.',
   phone_shape: () => 'Enter the phone number starting with + and the country code.',
   postal_long: () => 'Keep the postal address to 500 characters.',
+  postal_no_text: () => 'Write the postal address itself, not only punctuation.',
   ai_copy: (field: string) => `The ${field} uses wording Hearth keeps off its screens. Reword it.`,
 } as const satisfies Record<ContactProblemCode, (field: string) => string>
 

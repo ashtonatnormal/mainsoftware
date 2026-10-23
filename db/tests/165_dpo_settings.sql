@@ -306,7 +306,9 @@ begin
       ('a postal address with a blank line', 'Data Protection Officer', null, null, E'1 Example Road\n\nSingapore',
        'Keep the postal address to 500 characters%'),
       ('a postal address with a line of spaces', 'Data Protection Officer', null, null, E'1 Example Road\n \t\nSingapore',
-       'Keep the postal address to 500 characters%')
+       'Keep the postal address to 500 characters%'),
+      ('a postal address of punctuation alone', 'Data Protection Officer', null, null, E', ;\n.',
+       'Write the postal address itself: it needs a letter or a digit, not only punctuation.')
     ) as v (what, title, email, phone, postal, message)
   loop
     begin
@@ -356,6 +358,7 @@ begin
       ('Data Protection Officer', null, null, E'1 Example Road\n\nSingapore', 'dpo_settings_postal'),
       ('Data Protection Officer', null, null, E'1 Example Road\tSingapore', 'dpo_settings_postal'),
       ('Data Protection Officer', null, null, repeat('p', 501), 'dpo_settings_postal'),
+      ('Data Protection Officer', null, null, ',', 'dpo_settings_postal'),
       ('Data Protection Officer', null, null, null, 'dpo_settings_channel')
     ) as v (title, email, phone, postal, constraint_name)
   loop

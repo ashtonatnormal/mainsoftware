@@ -142,8 +142,9 @@ describe('DCS-01 C0.9 PD-64: the shapes and limits, at their edges', () => {
     expect(contactProblems(only({ title: SMILE.repeat(CONTACT_TITLE_MAX + 1), email: CONTACT.email }))).toEqual([
       { code: 'title_long', field: 'title' },
     ])
-    expect(contactProblems(only({ postal: SMILE.repeat(CONTACT_POSTAL_MAX) }))).toEqual([])
-    expect(contactProblems(only({ postal: SMILE.repeat(CONTACT_POSTAL_MAX + 1) }))).toEqual([
+    // A digit first, since an address needs a letter or a digit (postal_no_text).
+    expect(contactProblems(only({ postal: `1${SMILE.repeat(CONTACT_POSTAL_MAX - 1)}` }))).toEqual([])
+    expect(contactProblems(only({ postal: `1${SMILE.repeat(CONTACT_POSTAL_MAX)}` }))).toEqual([
       { code: 'postal_long', field: 'postal' },
     ])
     // An address the pattern takes but longer than 254 characters.
@@ -175,6 +176,17 @@ describe('DCS-01 C0.9 PD-64: the shapes and limits, at their edges', () => {
         { code: 'postal_long', field: 'postal' },
       ])
     }
+    // A postal address of punctuation alone would print as an empty "Post:" (postalOneLine()), so
+    // it needs a letter or a digit; a line of punctuation inside a real address is dropped instead.
+    for (const postal of [',', ';', ' , ; ', '.', '-', ',\n;']) {
+      expect(contactProblems(only({ postal })), JSON.stringify(postal)).toEqual([
+        { code: 'postal_no_text', field: 'postal' },
+      ])
+    }
+    for (const postal of ['1', 'Singapore', '1 Example Road\n,\nSingapore']) {
+      expect(contactProblems(only({ postal })), JSON.stringify(postal)).toEqual([])
+      expect(postalOneLine(postal), JSON.stringify(postal)).not.toBe('')
+    }
     // The database's [[:space:]] has no no-break space, so a line of one isn't empty there either.
     expect(contactProblems(only({ postal: `1 Example Road\n${NBSP}\nSingapore` }))).toEqual([])
     expect(contactProblems(only({ postal: '1 Example Road\nSingapore 000000' }))).toEqual([])
@@ -196,6 +208,7 @@ describe('DCS-02 C0.9 PD-64 PD-65: contactProblems() mirrors set_dpo_contact()',
       [{ email: 'dpo at contact.example' }, { code: 'email_shape', field: 'email' }],
       [{ phone: '8000 0197' }, { code: 'phone_shape', field: 'phone' }],
       [{ postal: 'x'.repeat(CONTACT_POSTAL_MAX + 1) }, { code: 'postal_long', field: 'postal' }],
+      [{ postal: ',' }, { code: 'postal_no_text', field: 'postal' }],
       [{ title: 'Ask the Data Protection Officer' }, { code: 'ai_copy', field: 'title' }],
     ]
     for (const [change, problem] of cases) {
@@ -240,6 +253,7 @@ describe('DCS-02 C0.9 PD-64 PD-65: contactProblems() mirrors set_dpo_contact()',
       'email_shape',
       'phone_shape',
       'postal_long',
+      'postal_no_text',
       'ai_copy',
     ])
   })

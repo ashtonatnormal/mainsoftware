@@ -1059,6 +1059,7 @@ describe('C0.9 PR 2 the privacy notice and the acknowledgement gate (PDPA-02, PD
       [/^Enter an email address/, 'email_shape'],
       [/^Enter the phone number/, 'phone_shape'],
       [/^Keep the postal address/, 'postal_long'],
+      [/^Write the postal address itself/, 'postal_no_text'],
     ]
     const title = 'Data Protection Officer'
     const samples: Array<{ title: string | null; email: string | null; phone: string | null; postal: string | null }> =
@@ -1105,6 +1106,10 @@ describe('C0.9 PR 2 the privacy notice and the acknowledgement gate (PDPA-02, PD
         { title, email: null, phone: null, postal: '1 Fictional Road\n \nSingapore' },
         { title, email: null, phone: null, postal: '1 Fictional Road\r\nSingapore' },
         { title, email: null, phone: null, postal: '1 Fictional\tRoad' },
+        { title, email: null, phone: null, postal: ',' },
+        { title, email: null, phone: null, postal: ' , ;\n. ' },
+        { title, email: null, phone: null, postal: '1' },
+        { title, email: null, phone: null, postal: '1 Fictional Road\n,\nSingapore' },
         { title, email: null, phone: null, postal: 'x'.repeat(500) },
         { title, email: null, phone: null, postal: 'x'.repeat(501) },
         { title, email: 'bad', phone: null, postal: 'x'.repeat(501) },

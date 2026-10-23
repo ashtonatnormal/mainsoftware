@@ -85,11 +85,14 @@ create table public.dpo_settings (
   -- International format, so people abroad can dial it: + and 7 to 15 digits, with single spaces or
   -- hyphens between them (CONTACT_PHONE_PATTERN).
   constraint dpo_settings_phone check (contact_phone ~ '^\+[1-9]([ -]?[0-9]){6,14}$'),
-  -- Up to 500 characters on as many lines as it needs: trimmed at both ends, no empty line, and no
-  -- control character but the line break (the api also trims each line: SetContactBody).
+  -- Up to 500 characters on as many lines as it needs: trimmed at both ends, no empty line, no
+  -- control character but the line break (the api also trims each line: SetContactBody), and at
+  -- least one letter or digit, so the notice never prints an empty "Post:" once each line loses the
+  -- commas it ends with (postalOneLine()).
   constraint dpo_settings_postal check (
     contact_postal = btrim(contact_postal) and length(contact_postal) between 1 and 500
-    and translate(contact_postal, E'\n', '') !~ '[[:cntrl:]]' and contact_postal !~ '\n[[:space:]]*\n'),
+    and translate(contact_postal, E'\n', '') !~ '[[:cntrl:]]' and contact_postal !~ '\n[[:space:]]*\n'
+    and contact_postal ~ '[[:alnum:]]'),
   -- OD-10: at least one channel outside Hearth.
   constraint dpo_settings_channel check (num_nonnulls(contact_email, contact_phone, contact_postal) >= 1),
   foreign key (org_id, recorded_by) references public.principals (org_id, id)
@@ -197,6 +200,9 @@ begin
   elsif to_postal is not null and (pg_catalog.length(to_postal) > 500
         or pg_catalog.translate(to_postal, E'\n', '') ~ '[[:cntrl:]]' or to_postal ~ '\n[[:space:]]*\n') then
     raise exception 'Keep the postal address to 500 characters of plain text.' using errcode = 'HF006';
+  elsif to_postal is not null and to_postal !~ '[[:alnum:]]' then
+    raise exception 'Write the postal address itself: it needs a letter or a digit, not only punctuation.'
+      using errcode = 'HF006';
   end if;
   fields := pg_catalog.array_remove(array[
     case when cur.contact_title is distinct from to_title then 'title' end,

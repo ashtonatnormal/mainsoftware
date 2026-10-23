@@ -101,6 +101,7 @@ export const telHref = (phone: string): string => `tel:${phone.replace(/[ -]/g, 
 //   email_shape      an email address the notice can't print exactly or Settings link
 //   phone_shape      a number not in international format
 //   postal_long      a postal address over 500 characters, or not plain text
+//   postal_no_text   a postal address with no letter or digit, which the notice would print empty
 //   ai_copy          a field uses wording Hearth keeps off its screens (AI_COPY, decision 8): only
 //                    the route checks it, before it calls the function, its one caller (PD-65)
 export const CONTACT_PROBLEMS = [
@@ -110,6 +111,7 @@ export const CONTACT_PROBLEMS = [
   'email_shape',
   'phone_shape',
   'postal_long',
+  'postal_no_text',
   'ai_copy',
 ] as const
 export type ContactProblemCode = (typeof CONTACT_PROBLEMS)[number]
@@ -124,6 +126,8 @@ export interface ContactProblem {
 // U+FEFF, so a postal address is refused here exactly when 0011's check refuses it.
 const CONTROL = /\p{Cc}/u
 const EMPTY_LINE = /\n[\t\n\v\f\r \u1680\u2000-\u2006\u2008-\u200a\u2028\u2029\u205f\u3000]*\n/u
+// Postgres's [[:alnum:]] in that ctype, for the addresses people write: a letter or a digit.
+const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u
 
 // What holds the contact back, in CONTACT_PROBLEMS order, then CONTACT_FIELDS'. It reads the fields
 // as set_dpo_contact() does: trimmed (String.prototype.trim()'s set, which the function's own trim
@@ -155,6 +159,7 @@ export function contactProblems(contact: Record<ContactField, string | null>): C
   ) {
     found.push({ code: 'postal_long', field: 'postal' })
   }
+  if (postal !== null && !LETTER_OR_DIGIT.test(postal)) found.push({ code: 'postal_no_text', field: 'postal' })
   const printed: [ContactField, string | null][] = [
     ['title', title],
     ['email', email],
