@@ -15,7 +15,8 @@
 //   unless its request was sent before the last move to required, since it may speak of a version
 //   since replaced; one saying anything else moves it back only when its request was sent after the
 //   last acknowledgement here, so a request that crossed the acknowledgement can't send the tab back
-//   to /notice. A session answer saying required resets the cached notice answer as required() does;
+//   to /notice. A session answer saying required resets the cached notice answer as required() does,
+//   or, while required already, fetches it again in place;
 // - acknowledged(from): the person acknowledged, here (this tab's POST /api/notice/acknowledge) or
 //   elsewhere (another tab's { t: 'notice' }, or an answer that says so). The live connection
 //   starts, if the standing kept it off since the boot (the runtime starts it only once the
@@ -133,9 +134,11 @@ export function createNoticeStore(deps: NoticeStoreDeps): NoticeStore {
       }
       // Sent before the last acknowledgement here: it may speak of a version since acknowledged.
       if (asked.acknowledgements !== count) return
-      // The session asking for the notice: a newer version was published, and the cached notice
-      // answer may still say the older one was acknowledged, so it goes, as with required().
-      if (next === 'required' && from === 'session' && standing !== 'required') step(deps.resetNotice)
+      // The session asking for the notice: a newer version may have been published. Coming from
+      // another standing, the cached notice answer may still say the older one was acknowledged, so
+      // it goes, as with required(); already required, it is fetched again in place, so /notice
+      // moves to the newer version without dropping what someone is reading.
+      if (next === 'required' && from === 'session') step(standing === 'required' ? deps.fetchNotice : deps.resetNotice)
       set(next)
     },
     acknowledged,

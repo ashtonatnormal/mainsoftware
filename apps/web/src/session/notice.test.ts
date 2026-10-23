@@ -84,11 +84,15 @@ describe('C0.9 PD-46: the notice store (session/notice.ts)', () => {
     expect(seen).toEqual(['required', 'acknowledged'])
   })
 
-  it('NTW-02 PD-46: the session asking for the notice resets the cached notice answer, as a hint does; GET /api/notice saying so keeps the answer it brought', () => {
+  it('NTW-02 PD-46: the session asking for the notice resets the cached notice answer, as a hint does, or fetches it again in place while required already; GET /api/notice saying so keeps the answer it brought', () => {
     const fromSession = store('acknowledged')
     fromSession.notice.heard('required', fromSession.notice.mark(), 'session')
     expect(fromSession.notice.standing()).toBe('required')
     expect(fromSession.steps).toEqual(['reset'])
+    // Already required (a newer version than the one /notice shows may be out): fetched again in
+    // place, never dropped, so nobody reading it sees it vanish.
+    fromSession.notice.heard('required', fromSession.notice.mark(), 'session')
+    expect(fromSession.steps).toEqual(['reset', 'fetch'])
     const fromNotice = store('acknowledged')
     fromNotice.notice.heard('required', fromNotice.notice.mark(), 'notice')
     expect(fromNotice.notice.standing()).toBe('required')
