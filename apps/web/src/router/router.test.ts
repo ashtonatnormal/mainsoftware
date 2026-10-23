@@ -53,6 +53,7 @@ function runtimeWith(
       refetchAll: noop,
       resetNotice: noop,
       fetchNotice: noop,
+      refreshNotice: noop,
       post: noop,
     }),
   } as unknown as SessionRuntime

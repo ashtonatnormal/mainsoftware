@@ -249,6 +249,12 @@ export function startSessionRuntime(info: SessionInfo, env: RuntimeEnv): Session
     },
     resetNotice: () => void queryClient.resetQueries({ queryKey: noticeQuery.queryKey, exact: true }),
     fetchNotice: () => void queryClient.fetchQuery(noticeQuery).catch(() => {}),
+    // A fetch in flight is cancelled first (fetchQuery would share it, and a refetch cancels one
+    // only once the query holds data), then the notice is fetched again; what it shows stays.
+    refreshNotice: () =>
+      void queryClient
+        .cancelQueries({ queryKey: noticeQuery.queryKey, exact: true })
+        .then(() => queryClient.refetchQueries({ queryKey: noticeQuery.queryKey, exact: true })),
     post: () => identity.postNotice(),
   })
 

@@ -52,6 +52,7 @@ function runtime(person: typeof MARCUS = MARCUS): SessionRuntime {
       refetchAll: noop,
       resetNotice: noop,
       fetchNotice: noop,
+      refreshNotice: noop,
       post: noop,
     }),
     signOut: async () => 'ended',

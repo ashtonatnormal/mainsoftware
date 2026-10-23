@@ -76,6 +76,7 @@ function runtime(person: typeof NADIA, noticeAnswer: NoticeForClient | undefined
       refetchAll: noop,
       resetNotice: noop,
       fetchNotice: noop,
+      refreshNotice: noop,
       post: noop,
     }),
     signOut: async () => 'ended',

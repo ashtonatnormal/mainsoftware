@@ -57,6 +57,7 @@ async function appAt(path: string, notice?: NoticeForClient): Promise<string> {
       refetchAll: noop,
       resetNotice: noop,
       fetchNotice: noop,
+      refreshNotice: noop,
       post: noop,
     }),
     signOut: async () => 'ended',

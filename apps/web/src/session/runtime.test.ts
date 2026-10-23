@@ -1,4 +1,4 @@
-import { onlineManager } from '@tanstack/react-query'
+import { onlineManager, QueryObserver } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { FakeClock, type FakeSocket, socketClass } from '@/live/testing/fakes.ts'
@@ -776,6 +776,36 @@ describe('T21 D-01: the session runtime (session/runtime.ts)', () => {
     await tick()
     expect(runtime.notice.standing()).toBe('required')
     expect(runtime.queryClient.getQueryData(['notice'])).toBeUndefined()
+  })
+
+  it('NTW-03 C0.9 PD-46: already required, a session answer asking for the notice fetches it again, never sharing a request sent before it, so a newer version replaces the one shown', async () => {
+    const answers: ((response: Response) => void)[] = []
+    const v2 = { ...noticeAnswer('required'), current: { ...noticeAnswer('required').current, version: 2 } }
+    stubFetch({
+      '/api/notice': () =>
+        new Promise<Response>(resolve => {
+          answers.push(resolve)
+        }),
+      '/api/session': () => json(200, UNACKNOWLEDGED),
+    })
+    const { env } = fakeEnv()
+    const runtime = runtimeModule.startSessionRuntime(UNACKNOWLEDGED, env)
+    const { noticeQuery } = await import('@/api/queries.ts')
+    // /notice watches the notice; its fetch, sent before the newer version was published, is still
+    // in flight.
+    const stopWatching = new QueryObserver(runtime.queryClient, noticeQuery).subscribe(() => {})
+    await vi.waitFor(() => expect(answers).toHaveLength(1))
+    await runtime.queryClient.refetchQueries({ queryKey: ['session'] })
+    await vi.waitFor(() => expect(answers).toHaveLength(2))
+    answers[1]?.(json(200, v2))
+    answers[0]?.(json(200, noticeAnswer('required')))
+    await vi.waitFor(() =>
+      expect(runtime.queryClient.getQueryData<{ current: { version: number } }>(['notice'])?.current.version).toBe(2),
+    )
+    await tick()
+    expect(runtime.queryClient.getQueryData<{ current: { version: number } }>(['notice'])?.current.version).toBe(2)
+    expect(runtime.notice.standing()).toBe('required')
+    stopWatching()
   })
 
   it('NTW-03 C0.9 PD-46: a session answer saying acknowledged whose request was sent before a 403 notice_required landed changes nothing: it may speak of a version since replaced', async () => {

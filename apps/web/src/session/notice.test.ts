@@ -11,6 +11,7 @@ function store(initial: NoticeStanding) {
     refetchAll: () => steps.push('refetch'),
     resetNotice: () => steps.push('reset'),
     fetchNotice: () => steps.push('fetch'),
+    refreshNotice: () => steps.push('refresh'),
     post: () => steps.push('post'),
   })
   const seen: NoticeStanding[] = []
@@ -92,7 +93,7 @@ describe('C0.9 PD-46: the notice store (session/notice.ts)', () => {
     // Already required (a newer version than the one /notice shows may be out): fetched again in
     // place, never dropped, so nobody reading it sees it vanish.
     fromSession.notice.heard('required', fromSession.notice.mark(), 'session')
-    expect(fromSession.steps).toEqual(['reset', 'fetch'])
+    expect(fromSession.steps).toEqual(['reset', 'refresh'])
     const fromNotice = store('acknowledged')
     fromNotice.notice.heard('required', fromNotice.notice.mark(), 'notice')
     expect(fromNotice.notice.standing()).toBe('required')
@@ -131,6 +132,7 @@ describe('C0.9 PD-46: the notice store (session/notice.ts)', () => {
         throw new Error('reset failed')
       },
       fetchNotice: () => {},
+      refreshNotice: () => {},
       post: () => {},
     })
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})

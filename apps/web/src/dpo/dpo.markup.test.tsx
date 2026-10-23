@@ -85,6 +85,7 @@ function runtime(registers?: typeof REGISTERS, notice?: NoticeAdmin): SessionRun
       refetchAll: noop,
       resetNotice: noop,
       fetchNotice: noop,
+      refreshNotice: noop,
       post: noop,
     }),
     signOut: async () => 'ended',

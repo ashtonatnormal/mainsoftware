@@ -71,6 +71,9 @@ export interface NoticeStoreDeps {
   resetNotice(): void
   // GET /api/notice, whose answer reaches heard() through the runtime.
   fetchNotice(): void
+  // The cached notice answer fetched again in place, cancelling a request already in flight (which
+  // may have read an older version), so what it shows stays until the new answer lands.
+  refreshNotice(): void
   // Tells this browser's other tabs: { t: 'notice' } on the identity channel (session/document.ts).
   post(): void
 }
@@ -136,9 +139,11 @@ export function createNoticeStore(deps: NoticeStoreDeps): NoticeStore {
       if (asked.acknowledgements !== count) return
       // The session asking for the notice: a newer version may have been published. Coming from
       // another standing, the cached notice answer may still say the older one was acknowledged, so
-      // it goes, as with required(); already required, it is fetched again in place, so /notice
-      // moves to the newer version without dropping what someone is reading.
-      if (next === 'required' && from === 'session') step(standing === 'required' ? deps.fetchNotice : deps.resetNotice)
+      // it goes, as with required(); already required, it is fetched again in place, never from a
+      // request sent before this answer, so /notice moves to the newer version without dropping
+      // what someone is reading.
+      if (next === 'required' && from === 'session')
+        step(standing === 'required' ? deps.refreshNotice : deps.resetNotice)
       set(next)
     },
     acknowledged,
