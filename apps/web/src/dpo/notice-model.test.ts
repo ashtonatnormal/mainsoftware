@@ -1,19 +1,26 @@
 // The DPO's Notice tab and the register pages' notice markers, pure, in Node (C0.9 PD-37 to PD-41,
 // PD-48, PD-52, PD-59, PD-61; B-04, B-12, C-05, C-09; TECH-SPEC T22 items 25, 27 and 31): the
 // answer of GET /api/admin/notice as the tab shows it (dpo/notice-model.ts), its calls
-// (dpo/queries.ts), and the markers the registers' answer brings (dpo/notice-markers.tsx).
+// (dpo/queries.ts), and the markers the registers' answer brings (dpo/notice-markers.tsx). From
+// C0.9 PR 3a: the DPO's contact in the draft (NTW-11; OD-10, OD-11, PD-65 to PD-68, PD-86) and
+// recording an acknowledgement made outside Hearth (NTW-12; OD-19, PD-75, PD-76).
 import {
   MESSAGES,
+  NOTICE_PEOPLE_MAX,
   NOTICE_PROBLEMS,
   NOTICE_PROVIDER_NAMES,
   NOTICE_WARNINGS,
+  NoticeAdminResponseForClient,
   REAUTH_METHOD_MESSAGES,
+  RECORD_PROBLEMS,
+  RecordAcknowledgementBody,
 } from '@hearth/shared'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiFailure } from '@/api/http.ts'
 import { formattersFor } from '@/lib/time.ts'
 import { DPO } from '@/strings/dpo.ts'
 import { NOTICE_MARKERS, NOTICE_PROBLEM_COPY, NOTICE_TAB, NOTICE_WARNING_COPY } from '@/strings/dpo-notice.ts'
+import { RECORD } from '@/strings/dpo-record.ts'
 import {
   factsSaveStops,
   factsStopText,
@@ -26,21 +33,36 @@ import {
 } from './notice-markers.tsx'
 import {
   changeGroups,
+  EMPTY_RECORD,
+  fixPages,
   noticeStatusOf,
   noticeTabView,
+  problemGroups,
   publishBodyOf,
   publishHeldOf,
   publishRefusalOf,
+  recordEditor,
+  recordedText,
+  recordLines,
+  recordOptions,
+  recordRefusalOf,
+  recordView,
+  warningLine,
 } from './notice-model.ts'
-import { noticeAdminQuery, publishNotice } from './queries.ts'
+import { noticeAdminQuery, noticePeopleQuery, publishNotice, recordAcknowledgement } from './queries.ts'
 import {
   COMPLETE_FACTS,
   DIGEST,
   DRAFT_BODY,
   NEXT_ID,
+  NO_CONTACT_DRAFT,
   NOTICE_ID,
+  noticeAdminAnswer,
   noticeAdminForClient,
+  noticePeopleForClient,
+  PEOPLE,
   registersForClient,
+  TODAY,
 } from './testing/registers.ts'
 
 afterEach(() => {
@@ -85,14 +107,16 @@ describe('C0.9 PD-48: the DPO’s Notice tab (dpo/notice-model.ts)', () => {
           },
           { title: 'No longer listed', lines: ['Amazon Web Services'] },
         ],
+        contact: undefined,
         wording: false,
       },
       problems: [],
       fixAt: [],
-      warnings: [NOTICE_WARNING_COPY.dpo_contact_pending()],
+      warnings: [NOTICE_WARNING_COPY.production_access_pending()],
       publishHeld: undefined,
       body: DRAFT_BODY,
       history: [{ id: NOTICE_ID, lines: ['Version 0, published Wed 21 Oct 2026 by Ashton Teo.'] }],
+      record: { version: '0' },
     })
     expect(publishBodyOf(answer)).toEqual({ seen: 0, digest: DIGEST })
   })
@@ -102,6 +126,7 @@ describe('C0.9 PD-48: the DPO’s Notice tab (dpo/notice-model.ts)', () => {
       since: 0,
       purposes: { added: [], changed: [], removed: [] },
       providers: { added: ['aws_sms', 'google_fcm'], changed: ['microsoft_wns'], removed: [] },
+      contact: 'same',
       wording: false,
     })
     expect(groups?.groups).toEqual([
@@ -138,6 +163,8 @@ describe('C0.9 PD-48: the DPO’s Notice tab (dpo/notice-model.ts)', () => {
       changes: undefined,
       publishHeld: undefined,
       history: [],
+      // Nothing to record an acknowledgement of yet (C0.9 OD-19).
+      record: undefined,
     })
     expect(publishBodyOf(answer)).toEqual({ seen: null, digest: DIGEST })
   })
@@ -212,6 +239,7 @@ describe('C0.9 PD-48: the DPO’s Notice tab (dpo/notice-model.ts)', () => {
           since: 0,
           purposes: { added: [], changed: [], removed: [] },
           providers: { added: [], changed: [], removed: [] },
+          contact: 'same',
           wording: false,
         },
         upToDate: true,
@@ -259,7 +287,6 @@ describe('C0.9 PD-48: the DPO’s Notice tab (dpo/notice-model.ts)', () => {
             { code: 'sends_waiting', provider: 'twilio' },
             { code: 'sends_waiting', provider: 'apple_push' },
             { code: 'same_text' },
-            { code: 'dpo_contact_pending' },
             { code: 'production_access_pending' },
           ],
         },
@@ -272,7 +299,6 @@ describe('C0.9 PD-48: the DPO’s Notice tab (dpo/notice-model.ts)', () => {
       NOTICE_WARNING_COPY.sends_waiting_twilio(),
       'Nothing is sent to Apple Push Notification service until you publish: the published notice doesn’t state its facts.',
       NOTICE_WARNING_COPY.same_text(),
-      NOTICE_WARNING_COPY.dpo_contact_pending(),
       NOTICE_WARNING_COPY.production_access_pending(),
     ])
   })
@@ -321,6 +347,244 @@ describe('C0.9 PD-48: the DPO’s Notice tab (dpo/notice-model.ts)', () => {
       ['/api/admin/notice/publish', 'POST'],
     ])
     expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ seen: 0, digest: DIGEST })
+  })
+})
+
+describe('C0.9 OD-10 OD-11: the DPO’s contact on the Notice tab (dpo/notice-model.ts)', () => {
+  it('NTW-11 OD-10 PD-65 PD-68: no contact recorded holds publishing back under “Your contact details”, with a link to the contact page, and shows no words; the contact’s own text using AI wording joins that group, by its field', () => {
+    const answer = noticeAdminForClient({ draft: NO_CONTACT_DRAFT })
+    const view = noticeTabView(answer, date)
+    expect(view.problems).toEqual([
+      { key: 'contact', subject: NOTICE_TAB.draft.contactSubject, lines: [NOTICE_PROBLEM_COPY.dpo_contact_pending()] },
+    ])
+    expect(view.fixAt).toEqual(['contact'])
+    expect(view.publishHeld).toBe(DPO.fixFirst)
+    expect(view.body).toBeUndefined()
+    expect(view.warnings).toEqual([NOTICE_WARNING_COPY.production_access_pending()])
+    expect(NOTICE_PROBLEM_COPY.dpo_contact_pending()).toBe(
+      'Record your contact details, so the notice can say how to reach you.',
+    )
+    const free = problemGroups([
+      { code: 'free_text_ai_copy', field: 'contact_title' },
+      { code: 'free_text_ai_copy', field: 'contact_postal' },
+      { code: 'free_text_ai_copy', purpose: 'backups', field: 'retention' },
+    ])
+    expect(free).toEqual([
+      {
+        key: 'contact',
+        subject: 'Your contact details',
+        lines: [
+          '“Role title” uses wording Hearth keeps off its screens. Reword it.',
+          '“Postal address” uses wording Hearth keeps off its screens. Reword it.',
+        ],
+      },
+      {
+        key: 'purpose:backups',
+        subject: 'Backups',
+        lines: ['“How long it’s kept” uses wording Hearth keeps off its screens. Reword it.'],
+      },
+    ])
+    expect(fixPages([{ code: 'free_text_ai_copy', field: 'contact_email' }])).toEqual(['contact'])
+  })
+
+  it('NTW-11 OD-18 PD-86: a purpose on deemed consent by conduct that can’t be stopped for one person is listed under its purpose and fixed on the processing register; the pages are offered purposes, transfers, contact, each once', () => {
+    const problems = [
+      { code: 'dpo_contact_pending' },
+      { code: 'purpose_conduct_unstoppable', purpose: 'security_audit' },
+      { code: 'provider_not_cleared', purpose: 'security_audit', provider: 'twilio' },
+      { code: 'purpose_consent_basis', purpose: 'backups' },
+    ] as const
+    expect(problemGroups(problems)).toEqual([
+      { key: 'contact', subject: 'Your contact details', lines: [NOTICE_PROBLEM_COPY.dpo_contact_pending()] },
+      {
+        key: 'purpose:security_audit',
+        subject: 'Security audit and monitoring',
+        lines: [
+          'It rests on deemed consent by conduct, but Hearth can’t yet stop it for one person who withdraws, so the notice can’t promise that. Choose another basis.',
+          'It lists Twilio Verify, which isn’t cleared for use.',
+        ],
+      },
+      {
+        key: 'purpose:backups',
+        subject: 'Backups',
+        lines: [
+          'It rests on consent or deemed consent by notification, which the notice can’t state yet. Choose another basis.',
+        ],
+      },
+    ])
+    expect(fixPages(problems)).toEqual(['purposes', 'transfers', 'contact'])
+    expect(fixPages([{ code: 'purpose_conduct_unstoppable', purpose: 'backups' }])).toEqual(['purposes'])
+  })
+
+  it('NTW-11 OD-11 PD-67 PD-68: the contact is no longer a warning; what the next version changes says when it gives the contact for the first time or another one, and that alone is a change to show', () => {
+    expect(NOTICE_WARNINGS as readonly string[]).not.toContain('dpo_contact_pending')
+    expect(Object.keys(NOTICE_WARNING_COPY)).not.toContain('dpo_contact_pending')
+    expect(warningLine({ code: 'production_access_pending' })).toBe(NOTICE_WARNING_COPY.production_access_pending())
+    const none = { added: [], changed: [], removed: [] }
+    expect(changeGroups({ since: 0, purposes: none, providers: none, contact: 'added', wording: false })).toEqual({
+      groups: [],
+      contact: 'The notice gives your contact details for the first time.',
+      wording: false,
+    })
+    expect(changeGroups({ since: 0, purposes: none, providers: none, contact: 'changed', wording: false })).toEqual({
+      groups: [],
+      contact: 'Your contact details change.',
+      wording: false,
+    })
+    expect(changeGroups({ since: 0, purposes: none, providers: none, contact: 'same', wording: false })).toBeUndefined()
+    // From the answer, and an unreadable marker claims nothing (ChangesForClient's catch).
+    const answer = noticeAdminAnswer()
+    const withContact = (contact: string) =>
+      NoticeAdminResponseForClient.parse({
+        ...answer,
+        draft: { ...answer.draft, changes: { ...answer.draft.changes, contact } },
+      })
+    expect(noticeTabView(withContact('changed'), date).changes?.contact).toBe(NOTICE_TAB.draft.contact)
+    expect(noticeTabView(withContact('a marker this build can’t read'), date).changes?.contact).toBeUndefined()
+  })
+})
+
+describe('C0.9 OD-19: recording an acknowledgement made outside Hearth (dpo/notice-model.ts)', () => {
+  it('NTW-12 OD-19: the button shows only once a version is published', () => {
+    expect(recordView(noticeAdminForClient())).toEqual({ version: '0' })
+    expect(recordView({ latest: null })).toBeUndefined()
+  })
+
+  it('NTW-12 PD-76: the people are listed in the answer’s order after “Choose someone”, by name with the department in brackets, never a number or whether they acknowledged; two of one name and department gain their manager, then the day they were added, and the dialog warns when nothing tells them apart', () => {
+    const people = noticePeopleForClient()
+    expect(recordOptions(people.people)).toEqual({
+      options: [
+        { value: '', label: 'Choose someone' },
+        { value: PEOPLE[0]?.id, label: 'Ahmad Rahman (Commercial)' },
+        { value: PEOPLE[1]?.id, label: 'Kelvin Tan' },
+        { value: PEOPLE[2]?.id, label: 'Marcus Ong (Operations)' },
+        { value: PEOPLE[3]?.id, label: 'Priya Nair (Operations)' },
+        { value: PEOPLE[4]?.id, label: 'Rachel Goh (Commercial)' },
+      ],
+      same: false,
+    })
+    const twin = (id: string, manager: string | null, addedOn: string) => ({
+      id,
+      name: 'Siti Rahim',
+      department: 'Finance',
+      manager,
+      addedOn,
+    })
+    const ids = ['b0000000-0000-4000-8000-000000000101', 'b0000000-0000-4000-8000-000000000102'] as const
+    expect(
+      recordOptions([twin(ids[0], 'Tan Wei Ling', '2026-10-01'), twin(ids[1], 'Priya Nair', '2026-10-01')]).options,
+    ).toEqual([
+      { value: '', label: 'Choose someone' },
+      { value: ids[0], label: 'Siti Rahim (Finance), reports to Tan Wei Ling' },
+      { value: ids[1], label: 'Siti Rahim (Finance), reports to Priya Nair' },
+    ])
+    expect(
+      recordOptions([twin(ids[0], 'Priya Nair', '2026-08-01'), twin(ids[1], 'Priya Nair', '2026-10-01')]).options,
+    ).toEqual([
+      { value: '', label: 'Choose someone' },
+      { value: ids[0], label: 'Siti Rahim (Finance), reports to Priya Nair, added Sat 1 Aug 2026' },
+      { value: ids[1], label: 'Siti Rahim (Finance), reports to Priya Nair, added Thu 1 Oct 2026' },
+    ])
+    const same = recordOptions([twin(ids[0], null, '2026-10-01'), twin(ids[1], null, '2026-10-01')])
+    expect(same.same).toBe(true)
+    expect(same.options.slice(1).map(option => option.label)).toEqual([
+      'Siti Rahim (Finance), added Thu 1 Oct 2026',
+      'Siti Rahim (Finance), added Thu 1 Oct 2026',
+    ])
+    // A cut list says so, with the figure the server cuts at.
+    expect(RECORD.more).toContain(NOTICE_PEOPLE_MAX.toLocaleString('en-GB'))
+  })
+
+  it('NTW-12 OD-19 PD-75: the record is held back until someone is chosen, a day from the version’s publication to today and a note of how on one line; then it posts the person, the version read, the day and the note, trimmed', () => {
+    const people = noticePeopleForClient()
+    const empty = recordEditor(people, EMPTY_RECORD)
+    expect(empty.version).toBe('0')
+    expect(empty.problems).toEqual([
+      'Choose who acknowledged it.',
+      'Give the day they acknowledged it.',
+      'Say how they acknowledged it.',
+    ])
+    expect(empty.recording).toBeUndefined()
+    const rachel = PEOPLE[4]?.id ?? ''
+    for (const [acknowledgedOn, held] of [
+      ['2026-10-20', true],
+      ['2026-10-21', false],
+      [TODAY, false],
+      ['2026-10-23', true],
+    ] as const) {
+      const editor = recordEditor(people, { person: rachel, acknowledgedOn, note: 'Signed a printed copy' })
+      expect(editor.problems, acknowledgedOn).toEqual(
+        held ? ['Give a day from the day version 0 was published to today.'] : [],
+      )
+    }
+    expect(recordEditor(people, { person: rachel, acknowledgedOn: TODAY, note: 'x'.repeat(501) }).problems).toEqual([
+      'Keep it to 500 characters.',
+    ])
+    expect(recordEditor(people, { person: rachel, acknowledgedOn: TODAY, note: 'one\ntwo' }).problems).toEqual([
+      'Keep it on one line.',
+    ])
+    expect(recordLines([...RECORD_PROBLEMS], '3')).toHaveLength(RECORD_PROBLEMS.length)
+    const ready = recordEditor(people, {
+      person: rachel,
+      acknowledgedOn: '2026-10-21',
+      note: '  Signed a printed copy at induction ',
+    })
+    expect(ready.recording).toEqual({
+      name: 'Rachel Goh',
+      body: {
+        person: rachel,
+        notice: NOTICE_ID,
+        acknowledgedOn: '2026-10-21',
+        note: 'Signed a printed copy at induction',
+      },
+    })
+    expect(RecordAcknowledgementBody.parse(ready.recording?.body)).toEqual(ready.recording?.body)
+  })
+
+  it('NTW-12 PD-76: the toast says what was recorded, or that they had already acknowledged; a refusal says a newer version was published (Reload), what to check, that only someone else still at the organisation can be recorded for, or asks for the PIN', () => {
+    expect(recordedText({ changed: true }, 'Rachel Goh', '0')).toBe('Recorded: Rachel Goh acknowledged version 0.')
+    expect(recordedText({ changed: false }, 'Rachel Goh', '0')).toBe(
+      'Rachel Goh had already acknowledged version 0, so nothing was recorded.',
+    )
+    const failure = (status: number, code: string, extra = {}) =>
+      new ApiFailure(status, code, (MESSAGES as Record<string, string>)[code] ?? MESSAGES.internal, extra)
+    expect(recordRefusalOf(failure(409, 'notice_changed'), '0')).toEqual({ kind: 'changed', text: RECORD.newer })
+    expect(recordRefusalOf(failure(400, 'notice_invalid'), '0')).toEqual({ kind: 'message', text: RECORD.invalid('0') })
+    expect(recordRefusalOf(failure(403, 'forbidden'), '0')).toEqual({ kind: 'message', text: RECORD.refused })
+    expect(recordRefusalOf(failure(403, 'reauth_required', { method: 'pin' }), '0')).toEqual({ kind: 'pin' })
+    expect(recordRefusalOf(failure(404, 'not_found'), '0')).toEqual({ kind: 'message', text: MESSAGES.not_found })
+  })
+
+  it('NTW-12 PD-76: the dialog reads /api/admin/notice/people leniently, never again on focus or reconnect, and Record posts its body to /api/admin/notice/acknowledgements/record and reads whether it changed anything', async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = []
+    const answers: Response[] = []
+    vi.stubGlobal('fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), init })
+      const next = answers.shift()
+      if (next === undefined) throw new TypeError('Failed to fetch')
+      return next
+    })
+    expect(noticePeopleQuery.queryKey).toEqual(['notice-people'])
+    expect(noticePeopleQuery).toMatchObject({ staleTime: 0, refetchOnWindowFocus: false, refetchOnReconnect: false })
+    const unreadable = { id: 'not an id', name: 'Someone', department: null, manager: null, addedOn: '2026-10-01' }
+    answers.push(json(200, { ...noticePeopleForClient(), people: [...PEOPLE, unreadable], later: true }))
+    const read = await noticePeopleQuery.queryFn?.({ signal: new AbortController().signal } as never)
+    expect(read?.people.map(person => person.name)).toEqual(PEOPLE.map(person => person.name))
+    expect(read).not.toHaveProperty('later')
+
+    const body = {
+      person: PEOPLE[4]?.id ?? '',
+      notice: NOTICE_ID,
+      acknowledgedOn: '2026-10-21',
+      note: 'Signed a printed copy at induction',
+    }
+    answers.push(json(200, { version: 0, changed: true }))
+    expect(await recordAcknowledgement(body)).toEqual({ version: 0, changed: true })
+    expect(calls.map(call => [call.url, call.init?.method])).toEqual([
+      ['/api/admin/notice/people', 'GET'],
+      ['/api/admin/notice/acknowledgements/record', 'POST'],
+    ])
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual(body)
   })
 })
 

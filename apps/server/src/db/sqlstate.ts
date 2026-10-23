@@ -1,22 +1,29 @@
 // The Postgres error codes (SQLSTATE) the server acts on, Hearth's own among them, and what a
 // failure may write to the logs (TECH-SPEC T15, T16, T17).
 //
-// Hearth's own codes are raised by migration 0007's, 0009's and 0010's functions, so the server can
-// tell a refusal it expects from a failure:
+// Hearth's own codes are raised by migration 0007's, 0009's, 0010's and 0011's functions, so the
+// server can tell a refusal it expects from a failure:
 //   HF001  a fence refused: the feature is off, or its flags changed since the server checked them
 //          (feature_fence, job_fence, job_finish). The caller reloads the flags and decides again.
 //   HF002  a job's lease has gone to another worker or the sweeper (job_fence, job_finish).
 //   HF003  set_feature_flag(): the flag is locked; only a migration changes it.
 //   HF004  set_feature_flag(): the change adds someone who isn't a person still at this org (A8).
-//   HF005  a register's writer (0009): the entry changed since the version or revision the DPO
-//          edited (409 register_changed, which the page answers with a Reload; C0.9 PD-25).
-//   HF006  a register's writer or the clearance trigger (0009): a rule refuses the entry, such as a
-//          fact missing before clearing (400 register_invalid; the page lists what it needs).
-//   HF007  publish_notice() or acknowledge_notice() (0010): the notice or its sources moved since
-//          the caller looked (a newer version, the registers changed since the preview, or an
-//          acknowledgement of a version no longer the latest): 409 notice_changed (C0.9 PD-52).
+//   HF005  a register's writer (0009), or set_dpo_contact() (0011): the entry or the DPO's contact
+//          changed since the version or revision the DPO edited, a second first record included
+//          (409 register_changed, which the page answers with a Reload; C0.9 PD-25, PD-71).
+//   HF006  a register's writer or the clearance trigger (0009), set_dpo_contact()'s rules, or the
+//          bootstrap's break-glass re-clear (0011, which no api route calls): a rule refuses the
+//          entry, such as a fact missing before clearing or a contact with no channel outside
+//          Hearth (400 register_invalid; the page lists what it needs).
+//   HF007  publish_notice() or acknowledge_notice() (0010), and from 0011
+//          record_notice_acknowledgement() and publish_notice()'s contact check: the notice or its
+//          sources moved since the caller looked (a newer version, the registers or the DPO's
+//          contact changed since the preview, or an acknowledgement of a version no longer the
+//          latest): 409 notice_changed (C0.9 PD-52).
 //   HF008  publish_notice() (0010): a rule refuses publishing, such as an active purpose with no
-//          basis or retention (400 notice_invalid; the page lists what it needs, PD-52).
+//          basis or retention, or from 0011 no contact for the DPO; and
+//          record_notice_acknowledgement() (0011): a day or a note it can't take (400
+//          notice_invalid; the page lists what it needs, PD-52).
 import { z } from 'zod'
 
 export const FEATURE_OFF = 'HF001'
@@ -28,7 +35,8 @@ export const REGISTER_INVALID = 'HF006'
 export const NOTICE_CHANGED = 'HF007'
 export const NOTICE_INVALID = 'HF008'
 // invalid_parameter_value: set_feature_flag()'s unknown flag, a register's unknown key, a clean-up
-// batch out of range.
+// batch out of range, and from 0011 a notice version or person record_notice_acknowledgement()
+// doesn't find in the org.
 export const INVALID_PARAMETER = '22023'
 // insufficient_privilege: a refused person or role, and a fence, clean-up or register check with no
 // org set.

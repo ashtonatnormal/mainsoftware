@@ -91,6 +91,16 @@ export type AdminRequest =
   // its problems, the counts of who has acknowledged and the history, and publishing a version.
   | { action: 'notice.read' }
   | { action: 'notice.publish' }
+  // The DPO's business contact (PDPA-13, PDPA-02; C0.9 OD-10, PD-63): recording its next version.
+  // Reading it is notice.read's.
+  | { action: 'notice.contact.set' }
+  // An acknowledgement made outside Hearth, which the DPO records (PDPA-03, ACC-12; C0.9 OD-19,
+  // PD-76): for the latest version, for someone else still at the organisation.
+  | { action: 'notice.acknowledgement.record'; person: Id }
+  // The people the DPO may record an acknowledgement for (C0.9 OD-19, PD-76): every active
+  // person's name, department, manager and the day they were added, never a number or who has
+  // acknowledged. An action of its own, so notice.read still names nobody (PD-49).
+  | { action: 'notice.people.read' }
 
 // Your own session, devices and passkeys (ACC-02, ACC-04, T21), for any active person. Reading your
 // own session, listing and signing out devices need no re-authentication and are never refused,
@@ -163,6 +173,9 @@ export const ADMIN_ACTIONS = new Set<string>([
   'register.transfer.set',
   'notice.read',
   'notice.publish',
+  'notice.contact.set',
+  'notice.acknowledgement.record',
+  'notice.people.read',
 ])
 
 export function isAdminRequest(request: Request): request is AdminRequest {

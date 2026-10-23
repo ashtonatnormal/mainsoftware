@@ -21,6 +21,7 @@
 --   e4 a8's withdrawal (processing restriction) of presence_receipts, which a5 (the DPO) recorded
 --      as resting on consent in its version 2
 --   e5 aws's clearance, by a5 in the app, on the facts a5 recorded (its revision 2)
+--   e6 the org's DPO contact, version 1, recorded by a5 (0011), which no version prints yet
 -- Each org also has every feature flag (the orgs trigger, 0007), one outbox event (flag.changed for
 -- core.system, Hearth acting), the offboarding consumer's checkpoint (at the start), a floor
 -- (nothing purged yet), and every purpose's and provider's register entry (the orgs trigger, 0009).
@@ -200,6 +201,11 @@ begin
     values (org, pg_temp.id(o, 'e3'), 'accounts', 1);
   insert into public.notice_version_providers (org_id, notice_version_id, clearance_id)
     values (org, pg_temp.id(o, 'e3'), pg_temp.id(o, 'e5'));
+
+  -- The DPO's contact (0011, C0.9 OD-10), as set_dpo_contact() writes it: a role title and a
+  -- made-up mailbox, so a publish passes the contact rule (160).
+  insert into public.dpo_settings (id, org_id, version, contact_title, contact_email, recorded_by)
+    values (pg_temp.id(o, 'e6'), org, 1, 'Data Protection Officer', 'dpo-' || o || '@fixture.example', pg_temp.id(o, 'a5'));
 end
 $$;
 

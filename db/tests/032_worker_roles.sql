@@ -1,12 +1,13 @@
 -- T18, CLAUDE.md Database: the worker's roles (0007, 0008; 0009 lets hearth_queue read the registers,
--- and 0010 the notice's versions and links, T22 item 9). The worker logs in as hearth_worker, which
--- holds nothing itself and takes one job role per transaction; each job role gets only the grants
--- its jobs need. This pins every privilege each job role can use on every table, column, sequence
--- and function, however it got it, as 030 does hearth_app's, so any new grant must be added here on
--- purpose. It also pins who the roles are: hearth_worker NOINHERIT with no privilege of its own and
--- SET (never INHERIT) on exactly the five job roles (0008 adds hearth_job_revocation); each job
--- role NOLOGIN, owning nothing, a member of nothing, and usable by hearth_worker alone. And who
--- may add to the outbox (T16 item 20), and what worker_org_ids() gives whom.
+-- and 0010 the notice's versions and links, T22 item 9; 0011 gives them nothing). The worker logs
+-- in as hearth_worker, which holds nothing itself and takes one job role per transaction; each job
+-- role gets only the grants its jobs need. This pins every privilege each job role can use on every
+-- table, column, sequence and function, however it got it, as 030 does hearth_app's, so any new
+-- grant must be added here on purpose. It also pins who the roles are: hearth_worker NOINHERIT
+-- with no privilege of its own and SET (never INHERIT) on exactly the five job roles (0008 adds
+-- hearth_job_revocation); each job role NOLOGIN, owning nothing, a member of nothing, and usable by
+-- hearth_worker alone. And who may add to the outbox (T16 item 20), and what worker_org_ids() gives
+-- whom.
 \ir fixtures/two_orgs.sql
 
 -- Every privilege each job role holds, by any route.
@@ -77,6 +78,37 @@ select pg_temp.check(not has_column_privilege('hearth_queue', 'public.transfer_c
                      and not has_function_privilege('hearth_queue', 'public.transfer_send_state(text)', 'EXECUTE')
                      and has_function_privilege('hearth_queue', 'public.notice_provider_states()', 'EXECUTE'),
                      'hearth_queue reads clearance facts or a version''s providers, runs notice_facts() or transfer_send_state(), or can''t run notice_provider_states()');
+
+-- C0.9 PR 3a (0011): no job role, nor hearth_worker, holds anything on the DPO's contact or runs
+-- 0011's functions, and hearth_queue's column grant on notice_versions doesn't reach the contact a
+-- version printed: the worker never reads the contact, nor a recorded acknowledgement's day or
+-- note (it reads no acknowledgement at all). The lists above pin it; this names the new objects.
+do $$
+declare
+  r text;
+  p text;
+begin
+  foreach r in array array['hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge',
+                           'hearth_job_revocation', 'hearth_worker'] loop
+    foreach p in array array['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'] loop
+      perform pg_temp.check(not has_table_privilege(r, 'public.dpo_settings', p)
+                            and (p not in ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES')
+                                 or not has_any_column_privilege(r, 'public.dpo_settings', p)),
+                            format('%s holds %s on dpo_settings', r, p));
+    end loop;
+    foreach p in array array['public.set_dpo_contact(integer,text,text,text,text,text,uuid,inet)',
+                             'public.record_notice_acknowledgement(uuid,uuid,date,text,text,uuid,inet)',
+                             'public.publish_notice(integer,text,text,text[],integer[],uuid[],integer,text,uuid,inet)',
+                             'public.dpo_settings_unchanged()'] loop
+      perform pg_temp.check(not has_function_privilege(r, p, 'EXECUTE'), format('%s can run %s', r, p));
+    end loop;
+    perform pg_temp.check(not has_column_privilege(r, 'public.notice_versions', 'dpo_settings_version', 'SELECT')
+                          and not has_column_privilege(r, 'public.notice_acknowledgments', 'acknowledged_on', 'SELECT')
+                          and not has_column_privilege(r, 'public.notice_acknowledgments', 'recorded_note', 'SELECT'),
+                          format('%s reads the contact a version printed, or a recorded acknowledgement''s day or note', r));
+  end loop;
+end
+$$;
 
 select pg_temp.expect_privileges('hearth_job_offboarding', array[
   -- The offboarding consumer: read the outbox, start and move its own checkpoint, read the floors.

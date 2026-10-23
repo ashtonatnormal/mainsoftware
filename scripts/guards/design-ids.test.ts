@@ -8,8 +8,8 @@
 // The same holds for C0.9's defaults (C0.9 PD-01): every PD id that code cites in apps/,
 // packages/, scripts/ and db/ (the migration and the DB tests cite them too) is one TECH-SPEC T22
 // records; "PD-04/05" names both. T22 records every default from PD-01 to the last its index row
-// names (PD-62 from C0.9 PR 2: PD-32 to PD-57 and the amendments' PD-58 to PD-62), with no gap, so
-// the index row and the items agree.
+// names (PD-62 from C0.9 PR 2: PD-32 to PD-57 and the amendments' PD-58 to PD-62; PD-86 from C0.9
+// PR 3a: PD-63 to PD-86), with no gap, so the index row and the items agree.
 import { describe, expect, it } from 'vitest'
 import { readRepoFile, repoFiles } from './repo-files'
 
@@ -126,8 +126,8 @@ describe('C0.9 T22: the defaults code cites are recorded in TECH-SPEC T22', () =
   })
 })
 
-describe('C0.9 PR 2 T22: the defaults are recorded with no gap, up to the index row’s last', () => {
-  // The highest PD id the T22 index row names ("PD-01 to PD-62").
+describe('C0.9 PR 2 and PR 3a T22: the defaults are recorded with no gap, up to the index row’s last', () => {
+  // The highest PD id the T22 index row names ("PD-01 to PD-86").
   const lastNamed = (spec: string): number | undefined => {
     const row = spec.split('\n').find(line => line.startsWith('| T22 |'))
     const found = row?.match(/\bPD-01 to PD-(\d+)\b/)
@@ -142,10 +142,10 @@ describe('C0.9 PR 2 T22: the defaults are recorded with no gap, up to the index 
     expect(missing(pdIdsIn('PD-01, PD-02/03 and PD-05'), 5)).toEqual(['PD-04'])
   })
 
-  it('C0.9 PD-32 to PD-62: T22 records PD-01 to the last id its index row names, PD-62 or later', () => {
+  it('C0.9 PD-32 to PD-86 (PD-63 to PD-86 from C0.9 PR 3a): T22 records PD-01 to the last id its index row names, PD-86 or later', () => {
     const spec = readRepoFile('docs/TECH-SPEC.md')
     const last = lastNamed(spec)
-    expect(last).toBeGreaterThanOrEqual(62)
+    expect(last).toBeGreaterThanOrEqual(86)
     expect(missing(pdIdsIn(sectionOf(spec, 'T22')), last ?? 0)).toEqual([])
   })
 })

@@ -15,6 +15,13 @@ export const TRANSFERS_COPY = {
   twilioNotClearedAgain: 'No sign-in code is sent until it’s cleared again.',
   clearedOn: (day: string, name: string) => `Cleared on ${day} by ${name}`,
   clearedAtSetUp: (day: string) => `Cleared at set-up on ${day}`,
+  // Twilio Verify, cleared again by the break-glass re-clear while no DPO was signed in (C0.9
+  // OD-20, PD-80): the DPO coming back sees why it is cleared, and that it wasn't them.
+  clearedByBreakGlass: (day: string) =>
+    `Cleared again by the emergency re-clear on ${day}. Check its facts and review date.`,
+  // Said beside withdrawing Twilio Verify, and beside a plain Save that ends its clearance.
+  twilioLastSession:
+    'If every Data Protection Officer’s session ends before Twilio Verify is cleared again, only the emergency re-clear in the runbook restores sign-in codes.',
   withdrawnOn: (day: string) => `Clearance withdrawn on ${day}`,
   endedOn: (day: string) => `Clearance ended on ${day}, when new facts were saved`,
   reviewBy: (day: string) => `Review by ${day}`,
@@ -82,8 +89,7 @@ export const TRANSFERS_COPY = {
 export const PROVIDER_CHECKS: Readonly<Record<NonAiProviderKey, { checkedBy: string; withdrawing: string }>> = {
   twilio: {
     checkedBy: 'Hearth checks this before it sends each sign-in or re-authentication code.',
-    withdrawing:
-      'Withdrawing stops Hearth sending Twilio Verify anyone’s number. Nobody can get a sign-in code, and people who confirm it’s them with a texted code can’t, until Twilio is cleared again. Your PIN still confirms it’s you, and open sessions keep working. Clear it again here before your own session ends.',
+    withdrawing: `Withdrawing stops Hearth sending Twilio Verify anyone’s number. Nobody can get a sign-in code, and people who confirm it’s them with a texted code can’t, until Twilio is cleared again. Your PIN still confirms it’s you, and open sessions keep working. Clear it again here before your own session ends. ${TRANSFERS_COPY.twilioLastSession}`,
   },
   aws: {
     checkedBy: 'Hearth’s hosting and logs run on it whatever this says. Nothing else in Hearth sends to it yet.',

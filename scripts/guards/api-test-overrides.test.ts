@@ -27,6 +27,16 @@
 // testing/ folder, *.test.ts files and CI's checks against throwaway databases
 // (apps/server/scripts/) name it, apart from its signature as a catalogue key (coverage.ts). Read
 // with comments stripped.
+//
+// From C0.9 PR 3a (PD-65, PD-86; design 5.5) the notice's two other writers of the DPO's free text
+// are held the same way: set_dpo_contact() records the DPO's business contact and
+// record_notice_acknowledgement() an acknowledgement's note, each as given, and only the route
+// holds that text to AI_COPY first (the contact through contactProblems(), the note through
+// aiCopyIn()), since AI_COPY is a code list a migration can't follow. So outside a comment only
+// compliance/routes.ts names set_dpo_contact and only compliance/notice.ts names
+// record_notice_acknowledgement, with publish_notice's exceptions (testing/, tests, CI's checks)
+// and apart from each one's signature as a catalogue key; and each route runs its check before its
+// call.
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 import { withoutComments } from './imports'
@@ -48,6 +58,10 @@ const CI_CHECKS = 'apps/server/scripts/'
 // text, …)'): a call in any form (public.publish_notice(…), from publish_notice(…), a name passed
 // to a query builder).
 const PUBLISH_NOTICE = /\bpublish_notice\b(?!\s*\(\s*integer\s*,)/
+// The contact's writer and its one caller (C0.9 PD-65), and the recorder's, the publisher's file.
+const CONTACT_ROUTE = `${SERVER}compliance/routes.ts`
+const SET_DPO_CONTACT = /\bset_dpo_contact\b(?!\s*\(\s*integer\s*,)/
+const RECORD_ACKNOWLEDGEMENT = /\brecord_notice_acknowledgement\b(?!\s*\(\s*uuid\s*,)/
 // An assignment or declaration of the switch: `PASSKEYS_ON =`, `PASSKEYS_ON:` (an object key) or a
 // `let`/`var`/`const` naming it. A comparison (`===`) isn't one.
 const ASSIGNED = /\bPASSKEYS_ON\s*(?:=(?!=)|:)|\b(?:let|var|const)\s+(?:\{[^}]*\b)?PASSKEYS_ON\b/
@@ -183,7 +197,58 @@ describe('T20 D46 the api test overrides never reach production', () => {
       expect(PUBLISH_NOTICE.test(call), call).toBe(true)
     }
     expect(
-      PUBLISH_NOTICE.test("'publish_notice(integer, text, text, text[], integer[], uuid[], text, uuid, inet)'"),
+      PUBLISH_NOTICE.test(
+        "'publish_notice(integer, text, text, text[], integer[], uuid[], integer, text, uuid, inet)'",
+      ),
+    ).toBe(false)
+  })
+
+  // The files outside the guard's exceptions that mention the pattern, comments stripped.
+  const callersOf = (pattern: RegExp, allowed: string) =>
+    scripts.filter(
+      path =>
+        path !== allowed &&
+        path !== SELF &&
+        !path.startsWith(TESTING) &&
+        !path.startsWith(CI_CHECKS) &&
+        !isTest(path) &&
+        pattern.test(withoutComments(path, readRepoFile(path))),
+    )
+
+  it('C0.9 PD-65 OD-10: only the contact route (compliance/routes.ts) calls set_dpo_contact(), after contactProblems(), outside testing/, tests and CI’s checks', () => {
+    expect(callersOf(SET_DPO_CONTACT, CONTACT_ROUTE)).toEqual([])
+    const route = withoutComments(CONTACT_ROUTE, readRepoFile(CONTACT_ROUTE))
+    const call = route.indexOf('from public.set_dpo_contact(')
+    expect(call).toBeGreaterThan(0)
+    // The route holds the body to the shared rules, AI_COPY included, before it calls the function.
+    const checked = route.lastIndexOf('contactProblems(body)', call)
+    expect(checked).toBeGreaterThan(route.lastIndexOf('export async function setContact(', call))
+    for (const caller of [
+      "pool.query('select * from public.set_dpo_contact($1, $2)', [seen, title])",
+      'sql`select version from set_dpo_contact ($1, $2)`',
+      "db.selectFrom(eb => eb.fn('set_dpo_contact', [seen]).as('v'))",
+    ]) {
+      expect(SET_DPO_CONTACT.test(caller), caller).toBe(true)
+    }
+    expect(SET_DPO_CONTACT.test("'set_dpo_contact(integer, text, text, text, text, text, uuid, inet)'")).toBe(false)
+  })
+
+  it('C0.9 PD-65 OD-19: only the record route (compliance/notice.ts) calls record_notice_acknowledgement(), after aiCopyIn() on the note, outside testing/, tests and CI’s checks', () => {
+    expect(callersOf(RECORD_ACKNOWLEDGEMENT, PUBLISHER)).toEqual([])
+    const route = withoutComments(PUBLISHER, readRepoFile(PUBLISHER))
+    const call = route.indexOf('from public.record_notice_acknowledgement(')
+    expect(call).toBeGreaterThan(0)
+    const checked = route.lastIndexOf('aiCopyIn(flatText(body.note))', call)
+    expect(checked).toBeGreaterThan(route.lastIndexOf('export async function recordAcknowledgement(', call))
+    for (const caller of [
+      "pool.query('select * from public.record_notice_acknowledgement($1, $2)', [person, notice])",
+      'sql`select version from record_notice_acknowledgement ($1)`',
+      "db.selectFrom(eb => eb.fn('record_notice_acknowledgement', [person]).as('v'))",
+    ]) {
+      expect(RECORD_ACKNOWLEDGEMENT.test(caller), caller).toBe(true)
+    }
+    expect(
+      RECORD_ACKNOWLEDGEMENT.test("'record_notice_acknowledgement(uuid, uuid, date, text, text, uuid, inet)'"),
     ).toBe(false)
   })
 

@@ -10,20 +10,33 @@
 //   so a draft the DPO is reading is never swapped under them; and POST /api/admin/notice/publish,
 //   which sends the latest version and the digest the tab previewed (PD-36), and answers the new
 //   version's number.
+// - GET /api/admin/notice/contact, the contact page's (C0.9 PD-70), under its own key with the
+//   same policy; and POST /api/admin/notice/contact/set, which sends the settings version the page
+//   read (PD-25's pattern) and answers whether it recorded anything. A save reads the contact, the
+//   registers and the Notice tab again, since the registers' notice marker and the draft both move.
+// - GET /api/admin/notice/people, the record dialog's list (C0.9 OD-19, PD-76), read only while the
+//   dialog is open; and POST /api/admin/notice/acknowledgements/record, which answers as the
+//   person's own acknowledgement does (whether it recorded anything).
 // - POST /api/auth/reauth/pin, the inline PIN step's (C0.16's sheet replaces it). The PIN is never
 //   the mutation's variables, which the document's MutationCache keeps after the step settles
 //   (pinStepOptions).
 // Nothing is kept outside Query's cache, which lives as long as the document and the person (D-01);
 // an unsaved form is component state, never storage (WS-01).
 import {
+  AcknowledgeResponseForClient,
   type ClearTransferJSON,
+  ContactAdminResponseForClient,
+  ContactWriteResponseForClient,
   NoticeAdminResponseForClient,
+  NoticePeopleResponseForClient,
   type PublishJSON,
   PublishResponseForClient,
   ReauthenticatedSchema,
+  type RecordAcknowledgementJSON,
   type RecordTransferJSON,
   RegistersResponseForClient,
   RegisterWriteResponseForClient,
+  type SetContactJSON,
   type SetPurposeJSON,
   type WithdrawTransferJSON,
 } from '@hearth/shared'
@@ -69,6 +82,43 @@ export async function publishNotice(body: PublishJSON): Promise<{ version: numbe
   // A 2xx is always read with the schema, so an answer is there.
   if (answer === undefined) throw new Error('publish answered nothing')
   return { version: answer.version }
+}
+
+// The DPO's business contact (C0.9 OD-10, PD-70).
+export const contactQuery = queryOptions({
+  queryKey: ['notice-contact'] as const,
+  queryFn: ({ signal }) => apiGet('/api/admin/notice/contact', ContactAdminResponseForClient, { signal }),
+  staleTime: 0,
+  refetchOnWindowFocus: false,
+  refetchOnReconnect: false,
+})
+
+export async function saveContact(body: SetContactJSON): Promise<{ version: number; changed: boolean }> {
+  const answer = await apiPost('/api/admin/notice/contact/set', body, ContactWriteResponseForClient)
+  // A 2xx is always read with the schema, so an answer is there.
+  if (answer === undefined) throw new Error('the contact save answered nothing')
+  return { version: answer.version, changed: answer.changed }
+}
+
+// What a contact save moves: the contact itself, the registers' notice marker and the Notice tab's
+// draft (its problems, its changes and its words).
+export const CONTACT_SAVE_MOVES = [contactQuery.queryKey, registersQuery.queryKey, noticeAdminQuery.queryKey] as const
+
+// The people the DPO may record an acknowledgement for (C0.9 OD-19, PD-76), for the dialog alone.
+export const noticePeopleQuery = queryOptions({
+  queryKey: ['notice-people'] as const,
+  queryFn: ({ signal }) => apiGet('/api/admin/notice/people', NoticePeopleResponseForClient, { signal }),
+  staleTime: 0,
+  refetchOnWindowFocus: false,
+  refetchOnReconnect: false,
+})
+
+export async function recordAcknowledgement(
+  body: RecordAcknowledgementJSON,
+): Promise<{ version: number; changed: boolean }> {
+  const answer = await apiPost('/api/admin/notice/acknowledgements/record', body, AcknowledgeResponseForClient)
+  if (answer === undefined) throw new Error('the record answered nothing')
+  return { version: answer.version, changed: answer.changed }
 }
 
 export async function reauthWithPin(pin: string): Promise<void> {

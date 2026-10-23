@@ -137,7 +137,7 @@ describe('T21: the api answers as Query options (api/queries.ts)', () => {
     expect(flagOn(fresh.getQueryData(flagsQuery.queryKey), 'ai.ask')).toBe(false)
   })
 
-  it('NTW-03 C0.9 PD-46 T22 item 31: noticeQuery reads GET /api/notice leniently, is never fresh, and polls every 30 s while the page is visible and on focus', async () => {
+  it('NTW-03 C0.9 PD-46 PD-69 PD-75 T22 item 31: noticeQuery reads GET /api/notice leniently, is never fresh, and polls every 30 s while the page is visible and on focus; a contact it can’t read is undefined, never none, and an acknowledgement’s missing day and note read as none', async () => {
     expect(noticeQuery.queryKey).toEqual(['notice'])
     expect(noticeQuery).toMatchObject({
       staleTime: 0,
@@ -149,6 +149,7 @@ describe('T21: the api answers as Query options (api/queries.ts)', () => {
       person: WEI_LING.personId,
       standing: 'standing this build can’t read',
       current: { id: 'e1', version: 2, publishedAt: '2026-10-23T01:00:00.000Z', body: '## About this notice' },
+      contact: { title: 'Data Protection Officer', email: 'not an address', phone: null, postal: null },
       changes: { since: 'x' },
       mine: [{ version: 1, acknowledgedAt: '2026-10-01T01:00:00.000Z', method: 'in_app' }, { version: 'x' }],
       later: true,
@@ -160,13 +161,15 @@ describe('T21: the api answers as Query options (api/queries.ts)', () => {
     })
     const client = createQueryClient(() => {})
     // An unreadable standing reads as required, and what else doesn't read is left out.
-    expect(await client.fetchQuery(noticeQuery)).toEqual({
+    const read = await client.fetchQuery(noticeQuery)
+    expect(read).toEqual({
       person: WEI_LING.personId,
       standing: 'required',
       current: answer.current,
       changes: null,
-      mine: [answer.mine[0]],
+      mine: [{ ...answer.mine[0], acknowledgedOn: null, note: null }],
     })
+    expect(read.contact).toBeUndefined()
     expect(seen).toEqual(['/api/notice'])
   })
 })

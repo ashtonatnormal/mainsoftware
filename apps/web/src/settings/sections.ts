@@ -2,8 +2,9 @@
 // each later step adds its own section here and /settings lists it with no other change (C0.14's
 // notifications, C0.16's devices and more, A4's assistant settings). Each section is a page of its
 // own under /settings (router/router.tsx registers it, and APP_PATHS lists its path). It holds:
-// - Privacy (C0.9): the privacy notice and your own acknowledgements of it. C0.9 PR 3 adds the
-//   Data Protection Officer's contact and the requests form there.
+// - Privacy (C0.9): how to reach the Data Protection Officer (from C0.9 PR 3a, OD-12), the privacy
+//   notice and your own acknowledgements of it. C0.9 PR 3b adds the requests form there, after the
+//   contact.
 import type { LucideIcon } from 'lucide-react'
 import { ShieldCheck } from 'lucide-react'
 import type { AppPath } from '@/router/paths.ts'

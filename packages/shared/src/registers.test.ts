@@ -2,17 +2,21 @@
 // rules agree with migration 0009's is checked against the database by the DB tests (RGS-02,
 // RGS-06, RGS-09) and the registers integration suite (RGS-I4).
 import { describe, expect, it } from 'vitest'
-import { PINNED_PURPOSES } from './flags.ts'
+import { isPinnedPurpose, PINNED_PURPOSES } from './flags.ts'
 import { PROVIDERS, PURPOSE_KEYS, PURPOSES } from './purposes.ts'
 import {
   BASES,
   BASIS_NEEDS,
   type Basis,
   basesFor,
+  CLEARED_VIA,
   ClearTransferBody,
+  CONDUCT_WITHDRAWABLE,
   CONSENT_BASES,
+  isNoticeHeldBasis,
   NON_AI_PROVIDERS,
   NON_AI_PURPOSE_KEYS,
+  NOTICE_HELD_BASES,
   NOTICE_STATUSES,
   PURPOSE_PROBLEMS,
   PURPOSE_STATUSES,
@@ -86,6 +90,32 @@ describe('PDPA-01 C0.9 PD-11: the bases', () => {
     const taking = (need: 'reference' | 'optOutDays') => BASES.filter(basis => BASIS_NEEDS[basis][need])
     expect(taking('reference')).toEqual(['legitimate_interests', 'deemed_consent_notification', 'other_exception'])
     expect(taking('optOutDays')).toEqual(['deemed_consent_notification'])
+  })
+
+  it('RGS-11 C0.9 PD-38 OD-18: the notice can’t state consent or deemed consent by notification yet; deemed consent by conduct it can', () => {
+    expect([...NOTICE_HELD_BASES]).toEqual(['consent', 'deemed_consent_notification'])
+    for (const basis of BASES) {
+      expect(isNoticeHeldBasis(basis), basis).toBe(basis === 'consent' || basis === 'deemed_consent_notification')
+    }
+    expect(isNoticeHeldBasis('deemed_consent_conduct')).toBe(false)
+    expect(isNoticeHeldBasis('contract')).toBe(false)
+    // Every held basis is consent-type; the switch rule still refuses all three (0009, PD-11).
+    for (const basis of NOTICE_HELD_BASES) expect(CONSENT_BASES as readonly string[], basis).toContain(basis)
+    expect(SWITCH_BASES).toContain('deemed_consent_conduct')
+  })
+
+  it('RGS-11 C0.9 OD-18 PD-86: the purposes a notice may state on deemed consent by conduct are outside the AI layer, unpinned, need no switch and are listed once; none in C0', () => {
+    expect(new Set(CONDUCT_WITHDRAWABLE).size).toBe(CONDUCT_WITHDRAWABLE.length)
+    for (const key of CONDUCT_WITHDRAWABLE) {
+      expect(PURPOSES[key].ai, key).toBe(false)
+      expect(isPinnedPurpose(key), key).toBe(false)
+      expect(PURPOSES[key].needsSwitch, key).toBe(false)
+      expect(basesFor(key), key).toContain('deemed_consent_conduct')
+    }
+    // Empty in C0: security_audit and backups, the only unpinned purposes active in C0, can't be
+    // stopped for one person. A purpose joins in the PR that writes its row in
+    // docs/runbooks/withdrawal-by-hand.md (RB-05).
+    expect(CONDUCT_WITHDRAWABLE).toEqual([])
   })
 
   it('C0.9 PD-27: the pages list the 13 purposes and 8 providers outside the AI layer', () => {
@@ -461,6 +491,7 @@ describe('C0.9 PD-20 PD-27: the answers', () => {
       { ...answer, transfers: [{ ...transferRow, provider: 'bedrock' }] },
       { ...answer, transfers: [{ ...transferRow, processingCountries: ['us'] }] },
       { ...answer, transfers: [{ ...transferRow, clearance: { ...transferRow.clearance, clearedVia: 'script' } }] },
+      { ...answer, transfers: [{ ...transferRow, clearance: { ...transferRow.clearance, clearedVia: 'breakglass' } }] },
       { ...answer, transfers: [{ ...transferRow, updatedBy: 'a'.repeat(201) }] },
       { ...answer, notice: 'stale' },
       { ...answer, purposes: [{ ...purposeRow, notified: 'yes' }] },
@@ -472,6 +503,15 @@ describe('C0.9 PD-20 PD-27: the answers', () => {
     expect(RegistersResponse.safeParse({ ...answer, purposes: [{ ...purposeRow, retention: emoji }] }).success).toBe(
       true,
     )
+  })
+
+  it('RGS-14 C0.9 OD-20 PD-80: a clearance was made in the app, by the bootstrap or by the break-glass re-clear, and both readings read each', () => {
+    expect([...CLEARED_VIA]).toEqual(['app', 'bootstrap', 'break_glass'])
+    for (const clearedVia of CLEARED_VIA) {
+      const via = { ...answer, transfers: [{ ...transferRow, clearance: { ...transferRow.clearance, clearedVia } }] }
+      expect(RegistersResponse.parse(via).transfers[0]?.clearance?.clearedVia, clearedVia).toBe(clearedVia)
+      expect(RegistersResponseForClient.parse(via).transfers[0]?.clearance?.clearedVia, clearedVia).toBe(clearedVia)
+    }
   })
 
   it('RGS-14 P6 C0.9 PD-27: the web app drops what it can’t read, AI rows included, and still shows the rest', () => {

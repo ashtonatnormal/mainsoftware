@@ -44,6 +44,13 @@ export type ApiPath =
   | '/api/notice/acknowledge'
   | '/api/admin/notice'
   | '/api/admin/notice/publish'
+  // The DPO's business contact (C0.9 OD-10, PD-70; /dpo/contact), and the acknowledgements they
+  // record for someone who acknowledged outside Hearth, with the people to pick from (OD-19, PD-76;
+  // /dpo/notice).
+  | '/api/admin/notice/contact'
+  | '/api/admin/notice/contact/set'
+  | '/api/admin/notice/people'
+  | '/api/admin/notice/acknowledgements/record'
 
 // The client's own codes, for failures the server didn't name.
 export type ClientFailureCode = 'network' | 'invalid_response' | 'halted'

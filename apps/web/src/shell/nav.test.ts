@@ -29,9 +29,16 @@ describe('T21 OD-02: the navigation (shell/nav.ts)', () => {
       if (path !== '/more') expect(rail.has(path), path).toBe(true)
     }
     // The app paths no navigation lists are Settings and the DPO's pages, which the avatar menu
-    // opens (C0.9 PD-47).
+    // opens (C0.9 PD-47; /dpo/contact from PR 3a, PD-70).
     const unlisted = APP_PATHS.filter(path => !phone.has(path) && !rail.has(path))
-    expect(unlisted).toEqual(['/settings', '/settings/privacy', '/dpo/purposes', '/dpo/transfers', '/dpo/notice'])
+    expect(unlisted).toEqual([
+      '/settings',
+      '/settings/privacy',
+      '/dpo/purposes',
+      '/dpo/transfers',
+      '/dpo/contact',
+      '/dpo/notice',
+    ])
   })
 
   it('NV-02 T21 item 5 PRD:128 Principle 3: no AI, Ask, assistant or agent entry or path', () => {

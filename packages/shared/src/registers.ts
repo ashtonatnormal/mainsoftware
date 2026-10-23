@@ -68,6 +68,23 @@ export function isConsentBasis(basis: string): boolean {
 // refuses the same three, and C2.11's migration lifts all three together.
 export const SWITCH_BASES: readonly Basis[] = CONSENT_BASES
 
+// The consent-type bases the notice can't state yet (C0.9 PD-38, OD-18): consent until C1.3's
+// consent items, and deemed consent by notification (s15A) until C2.11 tracks each person's opt-out
+// window. Deemed consent by conduct is stated from C0.9 PR 3a, its withdrawals carried out by hand
+// under the DPO's written procedure (docs/runbooks/withdrawal-by-hand.md). publish_notice(), as
+// migration 0011 replaced it, refuses the same two.
+export const NOTICE_HELD_BASES = ['consent', 'deemed_consent_notification'] as const satisfies readonly Basis[]
+export const isNoticeHeldBasis = (basis: string): boolean => (NOTICE_HELD_BASES as readonly string[]).includes(basis)
+
+// The purposes on deemed consent by conduct that a published notice may state (C0.9 OD-18, PD-86):
+// each one whose row in docs/runbooks/withdrawal-by-hand.md says how one person's withdrawal is
+// carried out and checked. The notice tells people such a purpose stops for them if they withdraw,
+// so the publish route holds back any other (purpose_conduct_unstoppable). A purpose joins in the
+// PR that writes its row, and the runbooks guard (RB-05) holds each one to its row. Empty in C0:
+// the only unpinned purposes active in C0, security_audit and backups, can't be stopped for one
+// person.
+export const CONDUCT_WITHDRAWABLE: readonly PurposeKey[] = []
+
 // What each basis takes beside it (0009's processing_register_attachment): a reference (where the
 // assessment is kept, or the provision relied on) and, for s15A, an opt-out window. A basis that
 // doesn't take one must have none, and so must an entry with no basis.
@@ -249,9 +266,11 @@ export type Training = (typeof TRAINING)[number]
 export const ZERO_RETENTION = ['granted', 'refused', 'not_offered', 'not_applicable', 'pending'] as const
 export type ZeroRetention = (typeof ZERO_RETENTION)[number]
 
-// How a clearance was made: by the DPO in the app, or by the first-Owner bootstrap, which clears
-// Twilio Verify and AWS once, from facts given at run time (C0.9 OD-01, PD-23).
-export const CLEARED_VIA = ['app', 'bootstrap'] as const
+// How a clearance was made: by the DPO in the app; by the first-Owner bootstrap, which clears
+// Twilio Verify and AWS once, from facts given at run time (C0.9 OD-01, PD-23); or by the
+// break-glass re-clear, which a person runs to clear Twilio Verify again once its clearance has
+// ended while no DPO is signed in, recorded as the named DPO's decision (C0.9 OD-20, PD-80).
+export const CLEARED_VIA = ['app', 'bootstrap', 'break_glass'] as const
 export type ClearedVia = (typeof CLEARED_VIA)[number]
 
 // Why a clearance ended: the DPO withdrew it, or new facts were recorded (C0.9 PD-05).
@@ -507,7 +526,8 @@ const purposeRow = {
   stale: z.boolean(),
 }
 
-// A provider's clearance: the open one, or else the last that ended.
+// A provider's clearance: the open one, or else the last that ended. Who cleared it is the DPO
+// named, for the bootstrap and the break-glass re-clear too.
 const clearance = {
   clearedOn: Day,
   clearedBy: PersonName.nullable(),

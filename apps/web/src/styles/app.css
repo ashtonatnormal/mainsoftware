@@ -178,6 +178,12 @@
   scroll-padding-bottom: var(--toast-h, 0px);
 }
 
+/* While #screen is a tab stop of its own (ui/scroller-focus.ts), its ring lies inside it, where
+   nothing clips it. */
+#screen:focus-visible {
+  outline-offset: -2px;
+}
+
 /* A Dialog locks the screen's scroll with this class, never with an injected <style>, which the
    CSP refuses (T21 item 7). */
 html.scroll-locked #screen {

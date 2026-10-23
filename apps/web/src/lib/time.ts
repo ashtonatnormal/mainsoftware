@@ -66,3 +66,14 @@ export function formattersFor(timeZone: string): Formatters {
   }
   return { date, time, dateTime: ms => `${date(ms)}, ${time(ms)}` }
 }
+
+// A day an answer gives (YYYY-MM-DD, already in the org's zone) as the app shows dates:
+// "Thu 22 Oct 2026". Formatted at UTC midnight in UTC, so no zone moves it. The DPO's pages show
+// the registers' days this way, and Settings the day the DPO recorded an acknowledgement for (C0.9
+// PD-75).
+export function dayText(day: string): string {
+  const [year, month, date] = day.split('-').map(Number)
+  if (year === undefined || month === undefined || date === undefined) return day
+  const ms = Date.UTC(year, month - 1, date)
+  return Number.isFinite(ms) ? formattersFor('UTC').date(ms) : day
+}

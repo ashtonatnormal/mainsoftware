@@ -54,6 +54,7 @@ function answer(standing: NoticeStanding, extra: Partial<NoticeForClient> = {}):
             publishedAt: '2026-10-23T01:00:00.000Z',
             body: BODY,
           },
+    contact: null,
     changes: null,
     mine: [],
     ...extra,
@@ -188,6 +189,7 @@ describe('C0.9 PD-46: /notice (notice/NoticeScreen.tsx)', () => {
           since: 2,
           purposes: { added: ['backups'], changed: ['accounts'], removed: [] },
           providers: { added: [], changed: ['twilio'], removed: ['livekit'] },
+          contact: 'same',
           wording: true,
         },
       }),
@@ -208,12 +210,46 @@ describe('C0.9 PD-46: /notice (notice/NoticeScreen.tsx)', () => {
         since: 1,
         purposes: { added: [], changed: [], removed: [] },
         providers: { added: [], changed: [], removed: [] },
+        contact: 'same',
         wording: false,
       }),
     ).toBeUndefined()
   })
 
-  it('NTW-07 OD-01: before any version, the DPO is offered the notice tab and the register, anyone else is told Hearth isn’t open yet; both can sign out', async () => {
+  it('NTW-07 OD-11 PD-67: a new contact, or the contact given for the first time, is a line of its own after the lists and before the wording, and alone is enough to show the callout', async () => {
+    const none = { added: [], changed: [], removed: [] }
+    for (const [contact, line] of [
+      ['changed', 'The Data Protection Officer’s contact details have changed.'],
+      ['added', 'The notice now gives the Data Protection Officer’s contact details.'],
+    ] as const) {
+      const changes = { since: 2, purposes: none, providers: none, contact, wording: false }
+      expect(changeLines(changes)?.contact).toBe(contact)
+      const markup = await noticeAt(answer('required', { changes }))
+      expect(textsOf(markup, 'h2')[0]).toBe('What’s changed since version 2')
+      expect(textsOf(markup, 'p')).toContain(line)
+      // Nothing listed above the body: the contact's line alone.
+      expect(textsOf(markup.slice(0, markup.indexOf('aria-label="Privacy notice, version 3"')), 'li')).toEqual([])
+    }
+    const both = await noticeAt(
+      answer('required', {
+        changes: {
+          since: 2,
+          purposes: { added: ['backups'], changed: [], removed: [] },
+          providers: none,
+          contact: 'changed',
+          wording: true,
+        },
+      }),
+    )
+    const callout = both.slice(0, both.indexOf('aria-label="Privacy notice, version 3"'))
+    const at = (text: string) => callout.indexOf(text)
+    expect(at('Backups')).toBeLessThan(at('The Data Protection Officer’s contact details have changed.'))
+    expect(at('The Data Protection Officer’s contact details have changed.')).toBeLessThan(
+      at('The notice’s wording has changed.'),
+    )
+  })
+
+  it('NTW-07 OD-01 PD-68: before any version, the DPO is offered the notice tab, their contact details and the register, in that order, anyone else is told Hearth isn’t open yet; both can sign out', async () => {
     const member = await noticeAt(answer('unpublished'))
     expect(textsOf(member, 'h1')).toEqual(['Privacy notice'])
     expect(textsOf(member, 'h2')).toEqual(['Hearth isn’t open yet'])
@@ -224,6 +260,19 @@ describe('C0.9 PD-46: /notice (notice/NoticeScreen.tsx)', () => {
     expect(textsOf(dpo, 'h2')).toEqual(['Publish the privacy notice'])
     expect(dpo).toMatch(/<a\b[^>]*href="\/dpo\/notice"[^>]*>Publish the notice<\/a>/)
     expect(dpo).toMatch(/<a\b[^>]*href="\/dpo\/purposes"[^>]*>Open the processing register<\/a>/)
+    expect(
+      [...dpo.matchAll(/<a\b[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/g)].map(match => [
+        match[1],
+        match[2]?.replaceAll('&#x27;', "'"),
+      ]),
+    ).toEqual([
+      ['/dpo/notice', 'Publish the notice'],
+      ['/dpo/contact', 'Record your contact details'],
+      ['/dpo/purposes', 'Open the processing register'],
+    ])
+    expect(textsOf(dpo, 'p')).toContain(
+      'Nobody can use Hearth until the notice is published. Record your contact details and each purpose’s legal basis and how long its data is kept, then publish the notice.',
+    )
     expect(textsOf(dpo, 'button')).toEqual(['Sign out'])
   })
 
@@ -231,8 +280,20 @@ describe('C0.9 PD-46: /notice (notice/NoticeScreen.tsx)', () => {
     const markup = await noticeAt(
       answer('acknowledged', {
         mine: [
-          { version: 3, acknowledgedAt: '2026-10-23T02:00:00.000Z', method: 'in_app' },
-          { version: 2, acknowledgedAt: '2026-09-01T02:00:00.000Z', method: 'in_app' },
+          {
+            version: 3,
+            acknowledgedAt: '2026-10-23T02:00:00.000Z',
+            method: 'in_app',
+            acknowledgedOn: null,
+            note: null,
+          },
+          {
+            version: 2,
+            acknowledgedAt: '2026-09-01T02:00:00.000Z',
+            method: 'in_app',
+            acknowledgedOn: null,
+            note: null,
+          },
         ],
       }),
     )

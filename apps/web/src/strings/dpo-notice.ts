@@ -1,8 +1,9 @@
 // What the DPO's Notice tab (/dpo/notice) and the register pages' notice markers say (C0.9 PD-39,
 // PD-48, PD-53, PD-59, PD-61; B-04, B-12, C-09; PDPA-02, PDPA-03). strings/dpo.ts's header gives
 // the rules for every DPO page's copy: British English, short and active, never "ask" and never an
-// AI word (decision 8, ST-02, DPP-06). Only the Notice tab and the two register screens load this
-// file, never RegisterPage.tsx (B-12). The notice's own words are the draft's body, which the
+// AI word (decision 8, ST-02, DPP-06). Only the Notice tab, the two register screens and the
+// contact page load this file, never RegisterPage.tsx (B-12); the record dialog's copy is
+// strings/dpo-record.ts, which only the Notice tab loads. The notice's own words are the draft's body, which the
 // server generates (packages/shared notice-text.ts); none of them is here. The problems and
 // warnings are packages/shared's codes (NOTICE_PROBLEMS, NOTICE_WARNINGS), worded here once each,
 // and never quote the DPO's own text (C-05). The DPO and the owner may reword any of it in the PR.
@@ -47,6 +48,12 @@ export const NOTICE_TAB = {
     warnings: 'Check before you publish',
     toPurposes: 'Open the processing register',
     toTransfers: 'Open the transfer register',
+    // The DPO's contact (C0.9 OD-10, OD-11, PD-67): where it is fixed, the problems' group, and what
+    // the next version changes.
+    toContact: 'Open your contact details',
+    contactSubject: 'Your contact details',
+    contact: 'Your contact details change.',
+    contactAdded: 'The notice gives your contact details for the first time.',
     publish: (version: string) => `Publish version ${version}`,
     publishing: 'Publishing…',
     // Publish held for this reason when the draft is the published notice again.
@@ -80,9 +87,15 @@ export const NOTICE_TAB = {
 export const NOTICE_PROBLEM_COPY = {
   purpose_basis_missing: () => 'Record its legal basis.',
   purpose_retention_missing: () => 'Say how long its data is kept.',
+  // Consent until C1.3, deemed consent by notification until C2.11 (C0.9 OD-18).
   purpose_consent_basis: () =>
-    'It rests on consent or deemed consent, which the notice can’t state yet. Choose another basis.',
+    'It rests on consent or deemed consent by notification, which the notice can’t state yet. Choose another basis.',
+  // Deemed consent by conduct with no way yet to stop it for one person (C0.9 OD-18, PD-86).
+  purpose_conduct_unstoppable: () =>
+    'It rests on deemed consent by conduct, but Hearth can’t yet stop it for one person who withdraws, so the notice can’t promise that. Choose another basis.',
   provider_not_cleared: (provider: string) => `It lists ${provider}, which isn’t cleared for use.`,
+  // No contact recorded (C0.9 OD-10, PD-68): the notice can't be written.
+  dpo_contact_pending: () => 'Record your contact details, so the notice can say how to reach you.',
   // The field, never the words matched (C-05).
   free_text_ai_copy: (field: string) => `“${field}” uses wording Hearth keeps off its screens. Reword it.`,
   unchanged: () => 'The published notice already says this.',
@@ -96,6 +109,10 @@ export const NOTICE_FIELD_LABELS: Readonly<Record<NoticeFreeTextField, string>> 
   data_types: 'The personal data it receives',
   provider_retention: 'How long it keeps the data',
   onward_recipients: 'Who it passes the data on to',
+  // The DPO's contact (C0.9 PD-65), as its page labels it.
+  contact_title: 'Role title',
+  contact_email: 'Email address',
+  contact_postal: 'Postal address',
 }
 
 // What publishing warns of (noticeWarnings), which never holds it back.
@@ -111,8 +128,6 @@ export const NOTICE_WARNING_COPY = {
     'Until you publish, only you get sign-in codes: the published notice doesn’t state Twilio Verify’s facts.',
   same_text: () =>
     'The words are the published version’s, but what they rest on has changed, so everyone acknowledges the same words again.',
-  dpo_contact_pending: () =>
-    'The notice doesn’t give your contact details yet: it points people to the contact in the employee data protection policy.',
   // C0.9 PD-57: the production-access paragraph describes what C0.11 and C0.19 put in place.
   production_access_pending: () =>
     'The notice says each use of the emergency production role is logged and reviewed by a second person each quarter. Publish it only once both are in place.',
@@ -122,7 +137,7 @@ export const NOTICE_WARNING_COPY = {
 // list, and the lines on the cards and in the edit dialogs.
 export const NOTICE_MARKERS = {
   banner: {
-    none: 'No notice is published yet, so nobody can use Hearth. Record each active purpose’s legal basis and how long its data is kept, then publish it.',
+    none: 'No notice is published yet, so nobody can use Hearth. Record your contact details and each active purpose’s legal basis and how long its data is kept, then publish it.',
     outOfDate: 'The published notice no longer says what the registers say. Publish a new version.',
     // A pinned purpose changed since the latest generated version: it runs for everyone anyway
     // (PD-07), so the notice is out of date until the next publish (PD-61, B-04).

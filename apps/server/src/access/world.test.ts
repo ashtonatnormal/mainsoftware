@@ -281,7 +281,7 @@ describe('C0.9 PD-43 PD-44 T22 items 28 and 29 the acknowledgement gate on REST 
     }
   })
 
-  it('NTS-01 OD-01 PD-44: before any version only the DPO passes, and only for the setup uses; once a version exists, nobody passes until they acknowledge it', async () => {
+  it('NTS-01 OD-01 PD-44 C0.9 OD-10: before any version only the DPO passes, and only for the setup uses, recording their contact among them; once a version exists, nobody passes until they acknowledge it', async () => {
     const asks = async (me: string, use: Parameters<typeof requireNotice>[3], standing: NoticeStanding) => {
       const { db } = org(true, true, standing)
       return withOrg(db, { orgId: ORG, userId: me }, async trx => {
@@ -298,6 +298,7 @@ describe('C0.9 PD-43 PD-44 T22 items 28 and 29 the acknowledgement gate on REST 
       'register.transfer.set',
       'notice.read',
       'notice.publish',
+      'notice.contact.set',
       'reauth',
     ] as const) {
       expect(await asks(DPO, use, 'unpublished'), use).toBe('passed')
@@ -308,6 +309,13 @@ describe('C0.9 PD-43 PD-44 T22 items 28 and 29 the acknowledgement gate on REST 
     }
     expect(await asks(DPO, 'person.deactivate', 'unpublished')).toBe('notice_required')
     expect(await asks(ADMIN, 'person.deactivate', 'acknowledged')).toBe('passed')
+    // C0.9 OD-19 PD-44 PD-76: listing the people and recording an acknowledgement aren't setup
+    // uses: before v0 there is nothing to record, and afterwards the DPO acknowledges first.
+    for (const use of ['notice.people.read', 'notice.acknowledgement.record'] as const) {
+      expect(await asks(DPO, use, 'unpublished'), use).toBe('notice_required')
+      expect(await asks(DPO, use, 'required'), use).toBe('notice_required')
+      expect(await asks(DPO, use, 'acknowledged'), use).toBe('passed')
+    }
   })
 
   it('C0.9 PD-43: the standing is unpublished with no version, acknowledged for the latest version only, and required otherwise; anyone the read misses reads as required', async () => {

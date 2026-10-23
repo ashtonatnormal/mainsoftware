@@ -45,10 +45,11 @@ begin
                                      from unnest(array['processing_register', 'transfer_register', 'transfer_clearances',
                                                        'processing_restrictions']) t),
                         'a register table is missing from the expected policies');
-  -- So are the notice's tables (0003) and its links (0010, C0.9 PD-34).
+  -- So are the notice's tables (0003) and its links (0010, C0.9 PD-34), and the DPO's contact
+  -- (0011, C0.9 PD-63).
   perform pg_temp.check(expected @> (select array_agg(format('%s|org_isolation|PERMISSIVE|ALL|{public}|%s|%s', t, scoped, scoped))
                                      from unnest(array['notice_versions', 'notice_acknowledgments', 'notice_version_purposes',
-                                                       'notice_version_providers']) t),
+                                                       'notice_version_providers', 'dpo_settings']) t),
                         'a notice table is missing from the expected policies');
 
   select coalesce(array_agg(e order by e), '{}') into missing from unnest(expected) e where e <> all (actual);

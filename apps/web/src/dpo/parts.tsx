@@ -1,12 +1,14 @@
-// The small pieces both DPO pages draw (C0.9 PD-26), from the kit's tokens and controls only: a
-// status pill, a card's facts, a note listing what blocks a save or what to check, and the fields
-// the kit has no component for yet (a text box, a date, a checkbox). Every control is at least 44 px
-// and its text 16 px (CONTROL_CLASS); every pill and note pairs its ink and ground as
-// styles/contrast-pairs.ts lists them, and says its state in words, never by colour alone.
+// The small pieces the DPO pages draw (C0.9 PD-26, PD-70), from the kit's tokens and controls only:
+// a status pill, a card's facts, a note listing what blocks a save or what to check, and the fields
+// the kit has no component for yet (a text box, an email address or phone number, a date, a
+// checkbox). Every control is at least 44 px and its text 16 px (CONTROL_CLASS); every pill and
+// note pairs its ink and ground as styles/contrast-pairs.ts lists them, and says its state in
+// words, never by colour alone. No field lets the browser fill it from the DPO's own details
+// (autoComplete off), so a personal address never lands in a role contact (C0.9 OD-10).
 import { Check } from 'lucide-react'
 import { type ReactNode, useId } from 'react'
 import { cx } from '@/ui/cx.ts'
-import { CONTROL_CLASS, Field } from '@/ui/Field.tsx'
+import { CONTROL_CLASS, Field, type FieldControlProps } from '@/ui/Field.tsx'
 import type { Fact } from './model.ts'
 
 export type PillTone = 'ok' | 'warn' | 'muted' | 'plain'
@@ -31,14 +33,18 @@ export function Pill({ tone, children }: { tone: PillTone; children: ReactNode }
   )
 }
 
-// A card's facts as a description list: term over value on a phone, side by side from sm.
+// A card's facts as a description list: term over value on a phone, side by side from sm. A value
+// of several lines (a postal address) keeps them; a long one breaks anywhere rather than scrolling
+// sideways.
 export function Facts({ facts }: { facts: readonly Fact[] }) {
   return (
     <dl className="flex flex-col gap-2">
       {facts.map(fact => (
         <div key={fact.term} className="flex flex-col gap-0.5 sm:flex-row sm:gap-4">
           <dt className="text-small text-muted sm:w-44 sm:shrink-0 sm:pt-px">{fact.term}</dt>
-          <dd className="min-w-0 break-words">{fact.value}</dd>
+          <dd className={cx('min-w-0 break-words [overflow-wrap:anywhere]', fact.lines && 'whitespace-pre-line')}>
+            {fact.value}
+          </dd>
         </div>
       ))}
     </dl>
@@ -82,23 +88,40 @@ export interface TextFieldProps {
   label: string
   hint?: string
   error?: string
+  // The ids of the lines elsewhere in the dialog (a "Before you can save" list) that say what is
+  // wrong with this field: it is marked invalid, and they describe it after its hint.
+  problems?: readonly string[]
   value: string
   onChange(value: string): void
   maxLength: number
-  // A text box of a few lines, for what is longer than a phrase.
+  // A text box of a few lines (rows, 2 unless given), for what is longer than a phrase.
   multiline?: boolean
-  inputMode?: 'text' | 'numeric'
+  rows?: number
+  // An email address or a phone number brings the phone's own keyboard for it; the form's noValidate
+  // keeps the browser's own check of it away (KM-14).
+  type?: 'text' | 'email' | 'tel'
+  inputMode?: 'text' | 'numeric' | 'email' | 'tel'
   name: string
+}
+
+// The control's props, with the lines that say what is wrong with it.
+function withProblems(control: FieldControlProps, problems: readonly string[] | undefined): FieldControlProps {
+  if (problems === undefined || problems.length === 0) return control
+  const describedBy = [control['aria-describedby'], ...problems].filter(Boolean).join(' ')
+  return { ...control, 'aria-describedby': describedBy, 'aria-invalid': true }
 }
 
 export function TextField({
   label,
   hint,
   error,
+  problems,
   value,
   onChange,
   maxLength,
   multiline,
+  rows = 2,
+  type = 'text',
   inputMode,
   name,
 }: TextFieldProps) {
@@ -107,18 +130,19 @@ export function TextField({
       {control =>
         multiline ? (
           <textarea
-            {...control}
+            {...withProblems(control, problems)}
             name={name}
-            rows={2}
+            rows={rows}
             maxLength={maxLength}
+            autoComplete="off"
             value={value}
             onChange={event => onChange(event.currentTarget.value)}
             className={cx(CONTROL_CLASS, 'py-2.5')}
           />
         ) : (
           <input
-            {...control}
-            type="text"
+            {...withProblems(control, problems)}
+            type={type}
             name={name}
             inputMode={inputMode}
             maxLength={maxLength}
@@ -133,24 +157,33 @@ export function TextField({
   )
 }
 
+// A day (YYYY-MM-DD), with the earliest and latest the picker offers where they are bounded.
 export function DateField({
   label,
+  hint,
   value,
   onChange,
   name,
+  min,
+  max,
 }: {
   label: string
+  hint?: string
   value: string
   onChange(value: string): void
   name: string
+  min?: string
+  max?: string
 }) {
   return (
-    <Field label={label}>
+    <Field label={label} hint={hint}>
       {control => (
         <input
           {...control}
           type="date"
           name={name}
+          min={min}
+          max={max}
           value={value}
           onChange={event => onChange(event.currentTarget.value)}
           className={CONTROL_CLASS}

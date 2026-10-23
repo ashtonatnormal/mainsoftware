@@ -79,6 +79,18 @@ export interface Devices {
   signed_out_by: string | null
 }
 
+export interface DpoSettings {
+  id: Generated<string>
+  org_id: string
+  version: number
+  contact_title: string
+  contact_email: string | null
+  contact_phone: string | null
+  contact_postal: string | null
+  recorded_at: Generated<Timestamp>
+  recorded_by: string
+}
+
 export interface FeatureFlags {
   id: Generated<string>
   org_id: string
@@ -127,6 +139,8 @@ export interface NoticeAcknowledgments {
   method: 'in_app' | 'recorded_by_dpo'
   device_id: string | null
   recorded_by: string | null
+  acknowledged_on: Timestamp | null
+  recorded_note: string | null
 }
 
 export interface NoticeVersionProviders {
@@ -150,6 +164,7 @@ export interface NoticeVersions {
   published_at: Generated<Timestamp>
   published_by: string
   generator: string | null
+  dpo_settings_version: number | null
 }
 
 export interface Orgs {
@@ -428,7 +443,7 @@ export interface TransferClearances {
   facts: Json
   cleared_at: Generated<Timestamp>
   cleared_by: string
-  cleared_via: 'app' | 'bootstrap'
+  cleared_via: 'app' | 'bootstrap' | 'break_glass'
   withdrawn_at: Timestamp | null
   withdrawn_by: string | null
   withdraw_reason: 'dpo_decision' | 'facts_changed' | null
@@ -488,6 +503,7 @@ export interface DB {
   data_access_events: DataAccessEvents
   departments: Departments
   devices: Devices
+  dpo_settings: DpoSettings
   feature_flags: FeatureFlags
   jobs: Jobs
   notice_acknowledgments: NoticeAcknowledgments

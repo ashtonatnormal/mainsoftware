@@ -28,8 +28,20 @@
 // provider, whether its sends wait for a version that states its facts (sendsWait, PD-41); and
 // whether publishing now would write a new version (notice), from the same draft the Notice tab
 // shows (compliance/notice.ts noticeDraft()). None of them changes what a write may do.
+//
+// From C0.9 PR 3a (OD-10, PD-63 to PD-65, PD-71) the DPO's business contact is written here too,
+// POST /api/admin/notice/contact/set (notice.contact.set: the DPO alone, before v0 too), by the same
+// four steps: can(); the shared rules (contactProblems(), AI_COPY included, which only this route
+// checks, set_dpo_contact() being its one caller: PD-65); set_dpo_contact() (migration 0011), which
+// re-checks the DPO, refuses a stale page (HF005) or a rule (HF006) and records the next version
+// with its audit row; and no outbox event (PD-72: nothing acts on a contact change until the next
+// published version, which notice.published covers). Its codes are the registers'
+// (register_changed, register_invalid), whose shared copy fits it. It lives beside the register
+// writers for their refusal map; its read is compliance/notice.ts's, which this file imports.
 import {
   type ClearTransferBody,
+  type ContactWriteJSON,
+  contactProblems,
   isAiProvider,
   NON_AI_PROVIDERS,
   NON_AI_PURPOSE_KEYS,
@@ -38,6 +50,7 @@ import {
   purposeProblems,
   type RecordTransferBody,
   type RegistersJSON,
+  type SetContactBody,
   type SetPurposeBody,
   type TransferRowJSON,
   type TransferWriteJSON,
@@ -67,13 +80,14 @@ import { appendOutbox } from '#src/outbox/append.ts'
 export const REGISTER_ERRORS = ['register_changed', 'register_invalid'] as const
 
 // A check constraint (23514) of a register's own table: a fact's shape the table refuses, such as a
-// certification with no verification date. The body's schema and the shared rules catch each
-// before the database, so this is a backstop that answers as the rule it is. Postgres names the
-// constraint, and each of these tables' names starts with its table's (0009). A check of any other
+// certification with no verification date, or of the DPO's contact (dpo_settings, 0011). The body's
+// schema and the shared rules catch each before the database, so this is a backstop that answers
+// as the rule it is. Postgres names the constraint, and each of these tables' names starts with its
+// table's (0009, 0011). A check of any other
 // table the functions write (the audit log's, say), or one a trigger raises with no constraint,
 // is a fault in the server, which answers 500 and is logged.
 const CHECK_VIOLATION = '23514'
-const REGISTER_CONSTRAINT = /^(?:processing_register|transfer_register|transfer_clearances)_/
+const REGISTER_CONSTRAINT = /^(?:processing_register|transfer_register|transfer_clearances|dpo_settings)_/
 
 function registerCheck(error: unknown): boolean {
   const { constraint } = error as { constraint?: unknown }
@@ -148,7 +162,7 @@ type TransferRow = {
   updated_by: string | null
   cleared_on: string | null
   cleared_by: string | null
-  cleared_via: 'app' | 'bootstrap' | null
+  cleared_via: 'app' | 'bootstrap' | 'break_glass' | null
   cleared_revision: string | null
   withdrawn_on: string | null
   withdrawn_by: string | null
@@ -461,4 +475,32 @@ export async function withdrawTransfer(
     return transferWritten(trx, orgId, body.provider, rows, 'withdraw_transfer_clearance')
   })
   return { body: answer }
+}
+
+// --- POST /api/admin/notice/contact/set -----------------------------------------------------------
+
+// The DPO records their business contact's next version from the version the page showed (seen,
+// null while none is recorded), with a fresh PIN (PD-30). The shared rules refuse what the body
+// itself shows to be wrong, AI_COPY wording included (400 register_invalid), before the database is
+// asked; set_dpo_contact() then refuses a stale page (HF005, 409 register_changed) or a rule (HF006),
+// and writes nothing for the same contact again (changed false). No outbox event (PD-72).
+export async function setContact(
+  api: Api,
+  body: z.output<typeof SetContactBody>,
+  session: SessionIds,
+  info: ReqInfo,
+): Promise<Answer> {
+  const written = await inSession(api, info, session, async (trx): Promise<ContactWriteJSON> => {
+    await authorise(trx, session, { action: 'notice.contact.set' }, 'forbidden')
+    if (contactProblems(body).length > 0) throw new ApiError(400, 'register_invalid')
+    const { rows } = await refusing(
+      sql<{ version: number; changed: boolean }>`
+        select version, changed from public.set_dpo_contact(${body.seen}::integer, ${body.title}, ${body.email},
+          ${body.phone}, ${body.postal}, ${info.requestId}, ${session.deviceId}::uuid, ${info.ip}::inet)`.execute(trx),
+    )
+    const row = rows[0]
+    if (row === undefined) throw new Error('set_dpo_contact() returned no row')
+    return { version: row.version, changed: row.changed }
+  })
+  return { body: written }
 }

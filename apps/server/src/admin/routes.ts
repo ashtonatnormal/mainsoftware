@@ -2,12 +2,16 @@
 // last 5 minutes and can()'s yes (admin/people.ts), from C0.6 changing a feature flag
 // (flags/set.ts, T17 item 9), and from C0.9 the DPO's registers (compliance/routes.ts, TECH-SPEC
 // T22 items 13 and 14) and, from C0.9 PR 2, the DPO's notice: its draft and publishing
-// (compliance/notice.ts, T22 item 25). A person id in a path is fine: it isn't personal data, and
-// the path is what gets logged.
+// (compliance/notice.ts, T22 item 25), and from C0.9 PR 3a the DPO's business contact (its read in
+// compliance/notice.ts, its write in compliance/routes.ts), the people they may record an
+// acknowledgement for, and recording one (T22 items 38 to 49). A person id in a path is fine: it
+// isn't personal data, and the path is what gets logged.
 import {
   ClearTransferBody,
   PublishBody,
+  RecordAcknowledgementBody,
   RecordTransferBody,
+  SetContactBody,
   SetPurposeBody,
   WithdrawTransferBody,
 } from '@hearth/shared'
@@ -16,8 +20,21 @@ import { z } from 'zod'
 import { deactivate, listDevices, resetPin, signOutDevices } from '#src/admin/people.ts'
 import type { Api } from '#src/api.ts'
 import { requireSession } from '#src/auth/sessions.ts'
-import { publishNotice, readNoticeAdmin } from '#src/compliance/notice.ts'
-import { clearTransfer, readRegisters, recordTransfer, setPurpose, withdrawTransfer } from '#src/compliance/routes.ts'
+import {
+  publishNotice,
+  readContactAdmin,
+  readNoticeAdmin,
+  readNoticePeople,
+  recordAcknowledgement,
+} from '#src/compliance/notice.ts'
+import {
+  clearTransfer,
+  readRegisters,
+  recordTransfer,
+  setContact,
+  setPurpose,
+  withdrawTransfer,
+} from '#src/compliance/routes.ts'
 import { SetFlagBody, setFlag } from '#src/flags/set.ts'
 import { parse, requestInfo, send, Uuid } from '#src/http.ts'
 
@@ -90,6 +107,24 @@ export function adminRoutes(api: Api) {
       const body = parse(PublishBody, request.body)
       const session = await requireSession(api.db, request)
       return send(reply, await publishNotice(api, body, session, requestInfo(api, request)))
+    })
+    scope.get('/notice/contact', async (request, reply) => {
+      const session = await requireSession(api.db, request)
+      return send(reply, await readContactAdmin(api, session, requestInfo(api, request)))
+    })
+    scope.post('/notice/contact/set', async (request, reply) => {
+      const body = parse(SetContactBody, request.body)
+      const session = await requireSession(api.db, request)
+      return send(reply, await setContact(api, body, session, requestInfo(api, request)))
+    })
+    scope.get('/notice/people', async (request, reply) => {
+      const session = await requireSession(api.db, request)
+      return send(reply, await readNoticePeople(api, session, requestInfo(api, request)))
+    })
+    scope.post('/notice/acknowledgements/record', async (request, reply) => {
+      const body = parse(RecordAcknowledgementBody, request.body)
+      const session = await requireSession(api.db, request)
+      return send(reply, await recordAcknowledgement(api, body, session, requestInfo(api, request)))
     })
   }
 }

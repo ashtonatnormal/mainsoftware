@@ -5,7 +5,7 @@
 // so a press still opens the picker. A data: URI chevron, as finance draws it, is what
 // check-web-dist refuses.
 import { ChevronDown } from 'lucide-react'
-import type { SelectHTMLAttributes } from 'react'
+import type { Ref, SelectHTMLAttributes } from 'react'
 import { cx } from './cx.ts'
 import { CONTROL_CLASS, Field } from './Field.tsx'
 
@@ -14,6 +14,9 @@ export type SelectProps = Omit<SelectHTMLAttributes<HTMLSelectElement>, 'childre
   hint?: string
   error?: string
   options: readonly { value: string; label: string }[]
+  // React 19 passes a ref as a prop: a dialog that loads its choices focuses the field once they
+  // arrive (dpo/RecordAcknowledgement.tsx).
+  ref?: Ref<HTMLSelectElement>
 }
 
 export function Select({ label, hint, error, options, className, ...rest }: SelectProps) {

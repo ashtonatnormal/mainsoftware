@@ -92,7 +92,7 @@ function shellPaths(): string[] {
 }
 
 describe('T21 item 1: the route tree (router/router.tsx)', () => {
-  it('RO-01 X12 OD-02 OD-03 C0.9 PD-26 PD-47 PD-48: every NAV path is a route with its title; Settings, its Privacy section and the DPO pages are routes with theirs and no nav entry; / goes to /chats; APP_PATHS (importing no module but a type, so main.ts may reach it) equals the paths registered in the shell, splat excluded, and NAV_PATHS the NAV entries', async () => {
+  it('RO-01 X12 OD-02 OD-03 C0.9 PD-26 PD-47 PD-48 PD-70: every NAV path is a route with its title; Settings, its Privacy section and the DPO pages (the contact page included) are routes with theirs and no nav entry; / goes to /chats; APP_PATHS (importing no module but a type, so main.ts may reach it) equals the paths registered in the shell, splat excluded, and NAV_PATHS the NAV entries', async () => {
     for (const entry of Object.values(NAV)) {
       const router = routerAt(entry.to, signedIn())
       await router.load()
@@ -106,6 +106,7 @@ describe('T21 item 1: the route tree (router/router.tsx)', () => {
       ['/settings/privacy', SHELL.settings.privacy],
       ['/dpo/purposes', SHELL.dpo.purposes],
       ['/dpo/transfers', SHELL.dpo.transfers],
+      ['/dpo/contact', SHELL.dpo.contact],
       ['/dpo/notice', SHELL.dpo.notice],
     ] as const) {
       const router = routerAt(path, signedIn())
@@ -128,8 +129,10 @@ describe('T21 item 1: the route tree (router/router.tsx)', () => {
       '/settings/privacy',
       '/dpo/purposes',
       '/dpo/transfers',
+      '/dpo/contact',
       '/dpo/notice',
     ])
+    expect(SHELL.dpo.contact).toBe('Contact details')
   })
 
   it('RO-02 D-02: getScrollRestorationKey is the pathname only; #screen is the scroll container', () => {
@@ -230,7 +233,15 @@ describe('T21 item 1: the route tree (router/router.tsx)', () => {
   })
 
   it('NTW-05 C0.9 PD-44 PD-46 T22 items 29 and 31: noticeAllowsPath lets an acknowledged person go anywhere, the DPO only their own pages before any version is published, and nobody anything else', () => {
-    const paths = ['/chats', '/settings/privacy', '/dpo/purposes', '/dpo/transfers', '/dpo/notice', '/xyz']
+    const paths = [
+      '/chats',
+      '/settings/privacy',
+      '/dpo/purposes',
+      '/dpo/transfers',
+      '/dpo/contact',
+      '/dpo/notice',
+      '/xyz',
+    ]
     for (const path of paths) {
       expect(noticeAllowsPath('acknowledged', false, path), path).toBe(true)
       expect(noticeAllowsPath('acknowledged', true, path), path).toBe(true)
