@@ -643,6 +643,9 @@ function rightsBlocks(org: string, contact: DpoContact): Block[] {
       line`To do any of these, or to raise a question or a complaint about how your personal data is handled, contact the Data Protection Officer of ${org}. You don't need a Hearth account for this, so it still works after you leave.`,
     ),
     list(channels),
+    paragraph(
+      "If you're not satisfied with the answer, you can complain to the Personal Data Protection Commission (PDPC).",
+    ),
   ]
 }
 

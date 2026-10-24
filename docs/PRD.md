@@ -943,7 +943,7 @@ Sheets and Slides are part of the core launch (D43): C5 comes before C6, and C6 
 | Q11 | Default storage quotas for files, and whether docs, sheets, and decks count toward them. | M5 |
 | Q12 | Does leadership commit to a date to stop using WhatsApp for work? | M6 |
 | Q13 | Remaining retention periods (PDPA-09 proposals). Session recordings (120 days) and voice-message audio (360 days) are decided (D36). | Before M1 pilot |
-| Q14 | ~~Who is the Data Protection Officer?~~ Resolved: Ashton Teo (D35). Their business contact still has to be published outside Hearth (PDPA-13); the PDPC also encourages registering the DPO on ACRA BizFile+. | M0 |
+| Q14 | ~~Who is the Data Protection Officer?~~ Resolved: Ashton Teo (D35). Their business contact still has to be published outside Hearth (PDPA-13), with production's v0 notice, the same day; the PDPC also encourages registering the DPO on ACRA BizFile+. | M0 |
 | Q15 | ~~Do Sheets (DOC-12) and Slides (DOC-13) move from P2 into v1?~~ Resolved: yes, both are in v1 (D39). | — |
 | Q16 | Is the conversion in SHEET-31 and SLIDE-27 good enough for the org's real files, and do the SHEET-33 size limits fit them? Answered by the B.7 spike on the 27 openly licensed public workbooks in `spike/sheets-corpus/` (the founder chose public files over the org's own, 11 Oct 2026) and a set of decks; a few anonymised internal workbooks checked the same way before the core launch would confirm it. | M5b |
 | Q17 | Macro-enabled and legacy Office files (XLSM, PPTM, and XLS or PPT with VBA): allow, warn, or block on upload? Hearth never runs macros and drops them when a file is opened as a sheet or deck. Does the uploaded original stay downloadable with its macros? | M5 |

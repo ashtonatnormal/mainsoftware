@@ -317,6 +317,10 @@ describe('NTG-02 C0.9 PD-33 PD-35 PD-53: every section and every basis', () => {
       },
       { kind: 'item', text: 'Role: Data Protection Officer' },
       { kind: 'item', text: 'Email: dpo@notice.example' },
+      {
+        kind: 'paragraph',
+        text: "If you're not satisfied with the answer, you can complain to the Personal Data Protection Commission (PDPC).",
+      },
     ])
     // The contact is printed, so the pointer to the employee data protection policy goes; the first
     // code's mention of that policy stays (OD-04).
@@ -678,7 +682,7 @@ describe('NTG-09 C0.9 PD-36: NOTICE_GENERATOR names these exact words', () => {
   // notice out of date. Country names come from the generator's own table (NTG-05), so a Node
   // upgrade doesn't move it. c09.1's digest is of its draft before the contact was an input; c09.2
   // (C0.9 PR 3a) prints the fixture's contact too.
-  const PINNED: Readonly<Record<string, string>> = { 'c09.1': '4c47a8c307f25504', 'c09.2': 'dfb429ba878e0d94' }
+  const PINNED: Readonly<Record<string, string>> = { 'c09.1': '4c47a8c307f25504', 'c09.2': 'd5da6ef62a264896' }
 
   it('NTG-09: the output of a fixed draft has the digest pinned for this generator id, which 0010 admits', () => {
     expect(NOTICE_GENERATOR_PATTERN.test(NOTICE_GENERATOR)).toBe(true)

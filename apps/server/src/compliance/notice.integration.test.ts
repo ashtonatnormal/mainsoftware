@@ -775,7 +775,7 @@ describe('C0.9 PR 2 the privacy notice and the acknowledgement gate (PDPA-02, PD
     // The draft prints it under "Your rights", and the version publishes what was previewed.
     const draft = await adminNotice(dpoClient)
     expect(draft.draft.body).toMatch(
-      /## Your rights\n[\s\S]*\n- Role: Data Protection Officer\n- Email: dpo@harness\.example$/,
+      /## Your rights\n[\s\S]*\n- Role: Data Protection Officer\n- Email: dpo@harness\.example\n\nIf you're not satisfied with the answer, you can complain to the Personal Data Protection Commission \(PDPC\)\.$/,
     )
     expect(await contactOf(dpoClient)).toMatchObject({ notice: 'none', contact: { version: 1 }, stated: 'unpublished' })
     const { notice } = await publishDraft(dpoClient)

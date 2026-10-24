@@ -156,7 +156,7 @@ Sizes are rough estimates for one founder working with AI coding tools; each sta
 - [ ] Privileged-role grants need two people and alert the DPO.
 - [ ] An induced error pages within 5 minutes; the log canary is clean.
 - [ ] Restore drill meets RTO ≤4 h and RPO ≤15 min with deletion-log replay.
-- [ ] SSIR registered through Twilio, and Twilio's go-live gates passed (TECH-SPEC T20 item 11); break-glass reviewed; DPO contact published.
+- [ ] SSIR registered through Twilio, and Twilio's go-live gates passed (TECH-SPEC T20 item 11); break-glass reviewed; DPO contact published outside Hearth with v0, the same day.
 - [ ] AI-free: a planted SDK import fails CI; no model permission or egress route exists.
 - [ ] 2-3 testers finish first run unaided in 5 minutes or less.
 - [ ] PDPA-10 entries for AWS, Twilio Verify and all four push services are cleared and shown in notice v0 before the first tester signs in (Twilio's before any real code is sent); the breach runbook and the access and correction procedures are written (`docs/runbooks/`, C0.9 PR 3a).
@@ -893,7 +893,7 @@ Core first changes which external items gate what. The core suite needs the AWS,
 | **SMS sender ID registration** with Singapore's SMS Sender ID Registry (SSIR), through Twilio, the SMS provider (D46). Check the current process and fees. | Unregistered alphanumeric sender IDs reach Singapore phones labelled "Likely-SCAM", which would wreck sign-in trust. | Before codes go to real phones (end of C0) |
 | **AWS accounts**: an AWS Organization with non-prod and prod accounts, billing alarms, ap-southeast-1. | Everything runs there (D37). | C0 |
 | **Domain, DNS and TLS** (Route 53, ACM). | PWA install and push need a stable HTTPS origin. | C0 deploy |
-| **DPO business contact published outside Hearth** (website) and, as the PDPC encourages, on ACRA BizFile+. | PDPA-13, Q14. | Before the C1 pilot |
+| **DPO business contact published outside Hearth** (website) and, as the PDPC encourages, on ACRA BizFile+. | PDPA-13, Q14. | With production's v0, the same day (`docs/runbooks/publishing-the-notice.md`; the owner, 24 Oct 2026) |
 | **Legal basis per purpose (Q3) and retention periods (Q13)** to the DPO and counsel, for the core purposes first: accounts, messaging, voice-message audio, recording sessions, access logs. | Real personal data flows from the C1 pilot; recording starts in C2. | Before the C1 pilot (recording before C2) |
 | **Twilio's and AWS's data processing agreements**, recorded in the transfer register (PDPA-10). Twilio processes phone numbers and codes in the United States (D46). | PDPA-10: before any real personal data reaches a provider. | Before the first tester signs in (C0.9); Twilio's before any real code is sent |
 | **Twilio account**: one subaccount per environment, set up by a person from a runbook (C0.8 AQ-27); a Verify Service with custom codes off; a Restricted API Key for Verify only; the 5-minute code validity, which Twilio Support may set; Fraud Guard and Geo Permissions; RCS opted out (the DPO's call). | Sign-in codes (D46; TECH-SPEC T20 items 10 and 11). | Non-prod before C0.12's secrets; prod before C0.19 |
