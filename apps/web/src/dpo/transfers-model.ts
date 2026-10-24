@@ -131,9 +131,10 @@ export function recordBodyOf(row: TransferRowForClient, form: TransferForm, keep
 export const isCleared = (row: TransferRowForClient): boolean =>
   row.clearance !== null && row.clearance.withdrawnOn === null
 
-// The clearance as the card says it, beside its pill: when and by whom, or how it ended. A provider
-// never cleared has no line but the pill's. Twilio Verify's says what not being cleared stops,
-// whether it never was or its clearance was withdrawn or ended (T22 item 3).
+// The clearance as the card says it, beside its pill: when and by whom, at set-up, by the
+// break-glass re-clear (C0.9 OD-20, PD-80), or how it ended. A provider never cleared has no line
+// but the pill's. Twilio Verify's says what not being cleared stops, whether it never was or its
+// clearance was withdrawn or ended (T22 item 3).
 export function clearanceText(row: TransferRowForClient): string | undefined {
   const clearance = row.clearance
   if (clearance === null) return row.provider === 'twilio' ? TRANSFERS_COPY.twilioNotCleared : undefined
@@ -145,6 +146,7 @@ export function clearanceText(row: TransferRowForClient): string | undefined {
     return row.provider === 'twilio' ? `${ended}. ${TRANSFERS_COPY.twilioNotClearedAgain}` : ended
   }
   if (clearance.clearedVia === 'bootstrap') return TRANSFERS_COPY.clearedAtSetUp(dayText(clearance.clearedOn))
+  if (clearance.clearedVia === 'break_glass') return TRANSFERS_COPY.clearedByBreakGlass(dayText(clearance.clearedOn))
   return clearance.clearedBy === null
     ? `${TRANSFERS_COPY.cleared}, ${dayText(clearance.clearedOn)}`
     : TRANSFERS_COPY.clearedOn(dayText(clearance.clearedOn), clearance.clearedBy)

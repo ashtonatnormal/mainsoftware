@@ -66,11 +66,14 @@ export const SHELL = {
     title: 'Settings',
     privacy: 'Privacy',
   },
-  // The DPO's pages' titles (C0.9 PD-26, PD-48). Everything else they say is in strings/dpo.ts,
-  // dpo-purposes.ts, dpo-transfers.ts and dpo-notice.ts, which only their lazy chunks load (PD-31).
+  // The DPO's pages' titles (C0.9 PD-26, PD-48, PD-70). Everything else they say is in
+  // strings/dpo.ts, dpo-purposes.ts, dpo-transfers.ts, dpo-contact.ts and dpo-notice.ts, which only
+  // their lazy chunks load (PD-31).
   dpo: {
     purposes: 'Processing register',
     transfers: 'Transfer register',
+    // The DPO's business contact, which the notice prints (C0.9 PD-70).
+    contact: 'Contact details',
     // Not /notice's title, so the move there after publishing and back reads as one (C0.9 PD-48).
     notice: 'Publish the notice',
   },

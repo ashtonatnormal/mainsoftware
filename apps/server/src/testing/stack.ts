@@ -27,9 +27,11 @@
 // answer (transfer_send_state() reads cleared), and the superuser's writes are the sweep's to skip.
 // acknowledge() acknowledges the latest version for someone, and publishNotice() publishes the
 // draft the org's registers make (recording a basis and retention for each active purpose that has
-// none first), as its DPO through set_register_purpose() and publish_notice(), the superuser acting
-// as them: a test that publishes uses an org of its own (B-08), since a publish sends everyone else
-// in the org back to /notice. The realtime apps' gateway admission (PD-45) is off ('none', C0.7's
+// none first, and from C0.9 PR 3a the DPO's business contact, HARNESS_CONTACT, when the org has
+// none, which every generated version prints: OD-10, OD-11), as its DPO through
+// set_register_purpose(), set_dpo_contact() and publish_notice(), the superuser acting as them: a
+// test that publishes uses an org of its own (B-08), since a publish sends everyone else in the org
+// back to /notice. recordContact() records a contact the same way. The realtime apps' gateway admission (PD-45) is off ('none', C0.7's
 // behaviour) unless a suite asks for production's (admissionForTests: 'notice') or its own (C-07).
 // The api's routes are collected as Fastify adds them (routes), for the notice suite's sweep of
 // every route (NTI-01).
@@ -59,7 +61,7 @@ import { randomBytes, randomInt, randomUUID } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import { Writable } from 'node:stream'
 import { PIN_ROLES } from '@hearth/access'
-import { FLAGS, type FlagSpec, NOTICE_GENERATOR, pinProblem } from '@hearth/shared'
+import { type DpoContact, FLAGS, type FlagSpec, NOTICE_GENERATOR, pinProblem } from '@hearth/shared'
 import type { FastifyInstance } from 'fastify'
 import type { Redis } from 'ioredis'
 import { Client as PgClient } from 'pg'
@@ -179,6 +181,18 @@ export const CLEARING_FACTS = {
   onwardRecipients: 'None',
   reviewOn: new Date(Date.now() + 365 * 86_400_000).toISOString().slice(0, 10),
 } as const
+
+// A provider's facts as bootstrapClearance() takes an override of them: CLEARING_FACTS' fields,
+// widened from its literals (a text, a list of country codes, a flag, a day or none).
+type ClearingFacts = {
+  [K in keyof typeof CLEARING_FACTS]: (typeof CLEARING_FACTS)[K] extends string
+    ? string
+    : (typeof CLEARING_FACTS)[K] extends readonly string[]
+      ? readonly string[]
+      : (typeof CLEARING_FACTS)[K] extends boolean
+        ? boolean
+        : string | null
+}
 
 // The worker's intervals in the integration tests: leases of 2 s renewed every 0.5 s,
 // the lease sweep (the scheduler's tick) every 0.5 s, polls every 100 ms, metrics every 200 ms and a
@@ -323,6 +337,14 @@ export interface RealtimeOptions {
 const STAND_IN_BODY = 'Integration test stand-in for the privacy notice, version 0.'
 // What publishNotice() records for an active purpose with no retention yet: fictional.
 const HARNESS_RETENTION = 'Kept while you work here, then 90 days'
+// The DPO's business contact publishNotice() records for an org that has none (C0.9 OD-10, PD-63):
+// a role title and a mailbox on a reserved .example domain, so nothing real, and no AI_COPY word.
+export const HARNESS_CONTACT: DpoContact = {
+  title: 'Data Protection Officer',
+  email: 'dpo@harness.example',
+  phone: null,
+  postal: null,
+}
 
 // For a test that proves one path alone by its counter (counts().closedDurable, dropped.durable):
 // timings under which a realtime app's periodic re-check never runs during the test, its first tick
@@ -452,7 +474,8 @@ export interface Stack {
   acknowledge(person: Person): Promise<void>
   // Publishes the draft the org's registers make, as its DPO (who must hold the role), through
   // publish_notice(), the superuser acting as them, after recording a basis and a retention for
-  // each active purpose that has none (through set_register_purpose(), the same way). Then
+  // each active purpose that has none (through set_register_purpose(), the same way) and, when the
+  // org has no contact for its DPO, HARNESS_CONTACT (through set_dpo_contact(); C0.9 PD-68). Then
   // acknowledges the new version for each person in acknowledge. Answers the version's id and
   // number. A test that publishes uses an org of its own (B-08).
   publishNotice(
@@ -460,6 +483,10 @@ export interface Stack {
     dpo: Person,
     options?: { acknowledge?: readonly Person[] },
   ): Promise<{ id: string; version: number }>
+  // Records the DPO's business contact's next version (HARNESS_CONTACT unless given) from the
+  // current one, through set_dpo_contact(), the superuser acting as the DPO (C0.9 OD-10). Answers
+  // the settings version now current (the same one when nothing changed).
+  recordContact(org: Org, dpo: Person, contact?: DpoContact): Promise<number>
   // Every route the stack's api app added while it got ready, every /api route among them (NTI-01).
   routes: readonly { method: string; url: string }[]
   // A role row inserted (or revoked) as the superuser and nothing else: no session is ended, so it
@@ -504,8 +531,23 @@ export interface Stack {
   // PD-23), as the first-Owner bootstrap does: the plain superuser (never hearth_owner, whose writes
   // the sweep would count as a runtime role's), acting as the org's Hearth principal, in a
   // transaction of its own, with CLEARING_FACTS, the DPO named and a reason. Answers the clearance's
-  // id. A clearance after a withdrawal is the DPO's, through the routes.
-  bootstrapClearance(options: { org: Org; provider: 'twilio' | 'aws'; dpo: Person; reason?: string }): Promise<string>
+  // id. A clearance after a withdrawal is the DPO's, through the routes, or, from C0.9 PR 3a, the
+  // break-glass re-clear's (OD-20, PD-77 to PD-80): breakGlass sets the emergency marker
+  // (hearth.break_glass = twilio_reclear) in the same transaction, as the bootstrap script's
+  // recovery mode does, for Twilio Verify once its clearance has ended while no DPO has a live
+  // session. The re-clear refuses a review date more than 90 days ahead in the org's zone, so a
+  // caller passes reviewOn (YYYY-MM-DD; CLEARING_FACTS' year ahead otherwise), and facts overrides
+  // some of CLEARING_FACTS. The re-clear bounds its own transaction (2 s for a lock, 30 s in all),
+  // which commits straight after it. Called with none of the three, it is the set-up's helper.
+  bootstrapClearance(options: {
+    org: Org
+    provider: 'twilio' | 'aws'
+    dpo: Person
+    reason?: string
+    breakGlass?: boolean
+    reviewOn?: string
+    facts?: Partial<Omit<ClearingFacts, 'reviewOn'>>
+  }): Promise<string>
   // Appends an outbox event as the superuser, Hearth acting, about the first subject (or entity).
   appendEvent(
     type: string,
@@ -1309,6 +1351,9 @@ export async function startStack(
           ),
         )
       }
+      // Every generated version prints the DPO's contact (C0.9 PD-68): one is recorded if none is.
+      const [recorded] = await query('select 1 from dpo_settings where org_id = $1 limit 1', [inOrg.id])
+      if (recorded === undefined) await recordContact(inOrg, dpo)
       const draft = await withOrg(db, { orgId: inOrg.id, userId: dpo.id }, trx => noticeDraft(trx, inOrg.id), {
         readOnly: true,
       })
@@ -1318,7 +1363,8 @@ export async function startStack(
       const body = draft.body
       const [published] = await actingAs(inOrg, dpo.id, () =>
         query<{ notice: string; version: number }>(
-          `select notice, version from public.publish_notice($1::integer, $2, $3, $4::text[], $5::integer[], $6::uuid[], $7, null, null)`,
+          `select notice, version from public.publish_notice($1::integer, $2, $3, $4::text[], $5::integer[], $6::uuid[],
+             $7::integer, $8, null, null)`,
           [
             draft.latest?.version ?? null,
             body,
@@ -1326,6 +1372,7 @@ export async function startStack(
             draft.sources.purposes.map(purpose => purpose.key),
             draft.sources.purposes.map(purpose => purpose.version),
             draft.sources.clearances.map(clearance => clearance.id),
+            draft.sources.contact?.version ?? null,
             randomUUID(),
           ],
         ),
@@ -1333,6 +1380,21 @@ export async function startStack(
       if (published === undefined) throw new Error('publish_notice() returned no row')
       for (const who of o.acknowledge ?? []) await acknowledge(who)
       return { id: published.notice, version: published.version }
+    }
+
+    async function recordContact(inOrg: Org, dpo: Person, contact: DpoContact = HARNESS_CONTACT): Promise<number> {
+      const [current] = await query<{ version: number }>(
+        'select max(version) as version from dpo_settings where org_id = $1',
+        [inOrg.id],
+      )
+      const [recorded] = await actingAs(inOrg, dpo.id, () =>
+        query<{ version: number }>(
+          'select version from public.set_dpo_contact($1::integer, $2, $3, $4, $5, $6, null, null)',
+          [current?.version ?? null, contact.title, contact.email, contact.phone, contact.postal, randomUUID()],
+        ),
+      )
+      if (recorded === undefined) throw new Error('set_dpo_contact() returned no row')
+      return recorded.version
     }
 
     // Whether the person holds a PIN role now, read from their unrevoked role rows.
@@ -1512,19 +1574,16 @@ export async function startStack(
       }
     }
 
-    async function bootstrapClearance(o: {
-      org: Org
-      provider: 'twilio' | 'aws'
-      dpo: Person
-      reason?: string
-    }): Promise<string> {
-      const f = CLEARING_FACTS
+    async function bootstrapClearance(o: Parameters<Stack['bootstrapClearance']>[0]): Promise<string> {
+      const f: ClearingFacts = { ...CLEARING_FACTS, ...o.facts, reviewOn: o.reviewOn ?? CLEARING_FACTS.reviewOn }
       await query('begin')
       try {
         await query("select set_config('app.org_id', $1, true), set_config('app.user_id', $2, true)", [
           o.org.id,
           o.org.system,
         ])
+        // The emergency marker, transaction-local, as the recovery mode sets it (C0.9 PD-77).
+        if (o.breakGlass === true) await query("select set_config('hearth.break_glass', 'twilio_reclear', true)")
         const [cleared] = await query<{ id: string }>(
           `select public.bootstrap_transfer_clearance($1, $2::uuid, $3, $4, $5::text[], $6::text[], $7, $8, $9, $10::date,
              $11::boolean, $12, $13, $14, $15, $16, $17::date, $18) as id`,
@@ -1604,6 +1663,7 @@ export async function startStack(
       person,
       acknowledge,
       publishNotice,
+      recordContact,
       routes,
       grantRole,
       revokeRole,

@@ -1,8 +1,10 @@
 import {
   ClearTransferBody,
+  ContactWriteResponse,
   PurposeWriteResponse,
   RecordTransferBody,
   RegistersResponse,
+  SetContactBody,
   SetPurposeBody,
   TransferWriteResponse,
   WithdrawTransferBody,
@@ -21,6 +23,7 @@ import {
   REGISTER_ERRORS,
   readRegisters,
   recordTransfer,
+  setContact,
   setPurpose,
   withdrawTransfer,
 } from '#src/compliance/routes.ts'
@@ -54,13 +57,28 @@ const latestNotice = [
     published_by: 'Ashton Tan',
     generator: 'c09.1',
     body: '## About this notice',
+    // A c09.1 version printed no contact (C0.9 PD-66).
+    dpo_settings_version: null,
   },
 ]
+// The DPO's current contact the draft reads (C0.9 PR 3a), fictional: settings version 1.
+const contactRow = {
+  version: 1,
+  title: 'Data Protection Officer',
+  email: 'dpo@registers.example',
+  phone: null,
+  postal: null,
+  recorded_on: '2026-10-20',
+  recorded_by: 'Ashton Tan',
+}
 
 // The org: an Owner who isn't the DPO, and the DPO, on a PIN-rule session re-authenticated in the
-// last 5 minutes unless a test says. `call` answers the register function's statement: its row, or
-// an error to raise. `notice` says whether a version is published (C0.9 PR 2's markers).
-function org(options: { fresh?: boolean; call?: unknown[] | Error; notice?: boolean } = {}) {
+// last 5 minutes unless a test says. `call` answers the register function's statement (or the
+// contact's): its row, or an error to raise. `notice` says whether a version is published (C0.9 PR
+// 2's markers). The DPO's contact is recorded (C0.9 PR 3a).
+function org(
+  options: { fresh?: boolean; call?: unknown[] | Error; notice?: boolean; transfers?: readonly unknown[] } = {},
+) {
   return scriptedPool((statement: Statement) => {
     const { text } = statement
     if (text.includes('from people p join devices d')) {
@@ -81,7 +99,7 @@ function org(options: { fresh?: boolean; call?: unknown[] | Error; notice?: bool
     if (text.startsWith('select ((now() at time zone time_zone)::date)::text as today'))
       return [{ today: '2026-10-22' }]
     if (text.startsWith('select distinct on (r.purpose)')) return purposeRows
-    if (text.startsWith('select t.provider')) return transferRows
+    if (text.startsWith('select t.provider')) return [...(options.transfers ?? transferRows)]
     // The registers' copy (compliance/registers.ts readRegisterState()) and the notice's draft
     // (compliance/notice.ts noticeDraft()), for the markers.
     if (text.startsWith('select distinct on (purpose) purpose, version, status, basis, providers')) {
@@ -116,7 +134,8 @@ function org(options: { fresh?: boolean; call?: unknown[] | Error; notice?: bool
     }
     if (text.startsWith('select v.id, v.version, v.published_at, p.full_name'))
       return options.notice ? latestNotice : []
-    if (/^select entry, (version|revision), /.test(text)) return options.call ?? []
+    if (text.startsWith('select s.version, s.contact_title as title')) return [contactRow]
+    if (/^select (entry, (version|revision), |version, changed from public\.)/.test(text)) return options.call ?? []
     return []
   })
 }
@@ -353,6 +372,8 @@ describe('RGS-17 C0.9 PD-20 PD-27 GET /api/admin/registers', () => {
     })
     // Before any version, Twilio's clearance waits for nothing (C0.9 PD-41).
     expect(answer.transfers[1]?.sendsWait).toBe(false)
+    // With the DPO's contact recorded, the draft can be written; with no version it reads none.
+    expect(pool.texts().some(text => text.startsWith('select s.version, s.contact_title as title'))).toBe(true)
     const texts = pool.texts()
     expect(texts[0]).toBe('start transaction isolation level read committed read only')
     // can() first, then the reads, the answer's own filtering AI rows in SQL too, none locking, and
@@ -653,5 +674,131 @@ describe('RGS-17 C0.9 PD-05 PD-21 PD-22 POST /api/admin/registers/transfers/*', 
       ).toMatchObject({ status, code })
       expect(appended(pool.statements)).toEqual([])
     }
+  })
+})
+
+describe('RGS-17 C0.9 OD-20 PD-80: a clearance the break-glass re-clear made', () => {
+  it('reads as cleared_via break_glass in the registers’ answer, in the DPO’s name', async () => {
+    const pool = org({
+      transfers: transferRows.map(row => (row.provider === 'twilio' ? { ...row, cleared_via: 'break_glass' } : row)),
+    })
+    const c = context(pool)
+    const answer = RegistersResponse.parse((await readRegisters(c.api, session(), c.info)).body)
+    expect(answer.transfers.find(row => row.provider === 'twilio')?.clearance).toMatchObject({
+      clearedVia: 'break_glass',
+      clearedBy: 'Ashton Tan',
+    })
+  })
+})
+
+describe('NTS-06 C0.9 OD-10 PD-63 PD-64 PD-65 PD-71 PD-72 POST /api/admin/notice/contact/set', () => {
+  const contactBody = (input: Record<string, unknown> = {}) =>
+    parse(SetContactBody, {
+      seen: 1,
+      title: ' Data Protection Officer ',
+      email: 'dpo@registers.example',
+      phone: '',
+      postal: null,
+      ...input,
+    })
+
+  it('records the next version through set_dpo_contact(), the session’s device and never the body’s, and appends nothing (PD-72)', async () => {
+    for (const changed of [true, false]) {
+      const pool = org({ call: [{ version: 2, changed }] })
+      const c = context(pool)
+      const { body } = await setContact(c.api, contactBody(), session(), c.info)
+      expect(ContactWriteResponse.parse(body)).toEqual({ version: 2, changed })
+      const call = callOf(pool, 'set_dpo_contact')
+      expect(call?.text).toBe(
+        'select version, changed from public.set_dpo_contact($1::integer, $2, $3, $4, $5, $6, $7::uuid, $8::inet)',
+      )
+      // Trimmed, and blank as not recorded (SetContactBody).
+      expect(call?.values).toEqual([
+        1,
+        'Data Protection Officer',
+        'dpo@registers.example',
+        null,
+        null,
+        c.info.requestId,
+        DEVICE,
+        c.info.ip,
+      ])
+      expect(appended(pool.statements)).toEqual([])
+      // can() first, re-reading the acting session FOR SHARE.
+      const texts = pool.texts()
+      const acting = texts.findIndex(text => text.includes('from people p join devices d'))
+      expect(texts[acting]).toMatch(/for share of p, d, s/)
+      expect(acting).toBeLessThan(texts.findIndex(text => text.includes('from public.set_dpo_contact(')))
+      expect(texts.at(-1)).toBe('commit')
+    }
+  })
+
+  it('refuses someone who isn’t the DPO and a stale PIN through can(), before anything is read or called', async () => {
+    for (const [who, fresh, code] of [
+      [OWNER, true, 'forbidden'],
+      [DPO, false, 'reauth_required'],
+    ] as const) {
+      const pool = org({ fresh, call: [{ version: 2, changed: true }] })
+      const c = context(pool)
+      expect(await refusal(setContact(c.api, contactBody(), session(who), c.info)), who).toMatchObject({
+        status: 403,
+        code,
+      })
+      expect(pool.texts().some(text => /dpo_settings|set_dpo_contact/.test(text))).toBe(false)
+    }
+  })
+
+  it('PD-64 PD-65: answers 400 register_invalid for what contactProblems() finds, AI_COPY wording included, after can() and before the database is asked', async () => {
+    for (const input of [
+      { title: '' },
+      { title: 'x'.repeat(121) },
+      { email: null, phone: null, postal: '   ' },
+      { email: 'dpo at registers.example' },
+      { email: 'dpo@registers.example?subject=hi' },
+      { phone: '6580000196' },
+      { postal: 'x'.repeat(501) },
+      // Wording Hearth keeps off its screens: only this route checks it (PD-65).
+      { title: 'Privacy agent' },
+      { email: 'agent@registers.example' },
+      { postal: '1 Fictional Road\nAsk for the DPO' },
+    ]) {
+      const pool = org({ call: [{ version: 2, changed: true }] })
+      const c = context(pool)
+      expect(
+        await refusal(setContact(c.api, contactBody(input), session(), c.info)),
+        JSON.stringify(input),
+      ).toMatchObject({ status: 400, code: 'register_invalid' })
+      expect(pool.texts().some(text => text.startsWith('select "person_id", "role"'))).toBe(true)
+      expect(callOf(pool, 'set_dpo_contact')).toBeUndefined()
+      expect(pool.texts().at(-1)).toBe('rollback')
+    }
+  })
+
+  it('PD-71: answers the function’s refusals: HF005 409 register_changed, HF006 and the table’s checks 400 register_invalid, 42501 403', async () => {
+    for (const [sqlstate, status, code, constraint] of [
+      ['HF005', 409, 'register_changed', undefined],
+      ['HF006', 400, 'register_invalid', undefined],
+      ['23514', 400, 'register_invalid', 'dpo_settings_email'],
+      ['23514', 400, 'register_invalid', 'dpo_settings_channel'],
+      ['42501', 403, 'forbidden', undefined],
+    ] as const) {
+      const pool = org({ call: pgError(sqlstate, constraint) })
+      const c = context(pool)
+      expect(await refusal(setContact(c.api, contactBody(), session(), c.info)), sqlstate).toMatchObject({
+        status,
+        code,
+      })
+      expect(appended(pool.statements)).toEqual([])
+      expect(pool.texts().at(-1)).toBe('rollback')
+    }
+    // A version that changed (dpo_settings_unchanged()'s check_violation names no constraint) is a
+    // fault, never a rule: nothing writes a version twice.
+    const pool = org({ call: pgError('23514') })
+    const c = context(pool)
+    const error = await setContact(c.api, contactBody(), session(), c.info).then(
+      () => undefined,
+      (e: unknown) => e,
+    )
+    expect(error).not.toBeInstanceOf(ApiError)
   })
 })

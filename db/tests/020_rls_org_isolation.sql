@@ -182,7 +182,7 @@ from public.audit_events where org_id = pg_temp.id('1', '00') and action like 'r
 -- answer and the stated clearances are org 2's own.
 select set_config('app.org_id', pg_temp.id('2', '00')::text, true), set_config('app.user_id', pg_temp.id('1', 'a5')::text, true);
 set local role hearth_app;
-select pg_temp.expect_error($$select * from public.publish_notice(0, 'Body', 'c09.1', '{}', '{}', '{}', null, null, null)$$, '42501',
+select pg_temp.expect_error($$select * from public.publish_notice(0, 'Body', 'c09.1', '{}', '{}', '{}', 1, null, null, null)$$, '42501',
                             'Only the Data Protection Officer can publish the notice.');
 select set_config('app.user_id', pg_temp.id('1', 'a8')::text, true);
 select pg_temp.expect_error($$select * from public.acknowledge_notice('f1000000-0000-4000-8000-0000000000e3', null,
@@ -200,6 +200,42 @@ select pg_temp.act_as('1', 'a8');
 select pg_temp.check(public.transfer_send_state('aws') = 'cleared' and array_agg(provider) = '{aws}', 'org 2''s withdrawal reached org 1''s notice states')
 from public.notice_provider_states();
 reset role;
+
+-- The DPO's contact and the acknowledgements the DPO records (0011, C0.9 PR 3a): definer functions
+-- too, filtering by the org the server set. Org 1's DPO named in an org 2 transaction records
+-- neither (42501). Acting in org 1, the contact's next version and a recorded acknowledgement land
+-- in org 1 only, and org 2's person or version is no person or version of org 1's (22023).
+select set_config('test.audit_max', (select coalesce(max(id), 0)::text from public.audit_events), true);
+select set_config('app.org_id', pg_temp.id('2', '00')::text, true), set_config('app.user_id', pg_temp.id('1', 'a5')::text, true);
+set local role hearth_app;
+select pg_temp.expect_error($$select * from public.set_dpo_contact(1, 'Data Protection Officer', 'dpo@isolation.example', null,
+  null, null, null, null)$$, '42501', 'Only the Data Protection Officer can change the registers.');
+select pg_temp.expect_error($$select * from public.record_notice_acknowledgement('f2000000-0000-4000-8000-0000000000a7',
+  'f2000000-0000-4000-8000-0000000000e3', current_date, 'Signed a printed copy', null, null, null)$$, '42501',
+  'Only the Data Protection Officer can publish the notice.');
+reset role;
+select pg_temp.act_as('1', 'a5');
+select set_config('test.today', (select (now() at time zone o.time_zone)::date::text from public.orgs o
+                                 where o.id = pg_temp.id('1', '00')), true);
+select pg_temp.check(changed and version = 2, 'org 1''s DPO could not record org 1''s contact')
+from public.set_dpo_contact(1, 'Data Protection Officer', 'dpo@isolation.example', null, null, 'req-isolation', null, null);
+select pg_temp.expect_error(format($$select * from public.record_notice_acknowledgement(%L, %L, %L, 'Signed a printed copy',
+  null, null, null)$$, pg_temp.id('2', 'a7'), pg_temp.id('1', 'e3'), current_setting('test.today')), '22023',
+  'There is no such person at the organisation.');
+select pg_temp.expect_error(format($$select * from public.record_notice_acknowledgement(%L, %L, %L, 'Signed a printed copy',
+  null, null, null)$$, pg_temp.id('1', 'a7'), pg_temp.id('2', 'e3'), current_setting('test.today')), '22023',
+  'There is no such version of the notice.');
+select pg_temp.check(changed and version = 0, 'org 1''s DPO could not record a7''s acknowledgement of org 1''s version')
+from public.record_notice_acknowledgement(pg_temp.id('1', 'a7'), pg_temp.id('1', 'e3'), current_setting('test.today')::date,
+                                          'Signed a printed copy', 'req-isolation', null, null);
+reset role;
+select pg_temp.check(count(*) = 1 and bool_and(id = pg_temp.id('2', 'e6') and contact_email = 'dpo-2@fixture.example'),
+                     'org 1''s contact change reached org 2''s')
+from public.dpo_settings where org_id = pg_temp.id('2', '00');
+select pg_temp.check(count(*) = 0, 'org 1''s record reached an org 2 acknowledgement')
+from public.notice_acknowledgments where org_id = pg_temp.id('2', '00') and method = 'recorded_by_dpo';
+select pg_temp.check(count(*) = 2 and bool_and(org_id = pg_temp.id('1', '00')), 'org 1''s changes wrote audit rows outside org 1')
+from public.audit_events where id > current_setting('test.audit_max')::bigint;
 
 -- No register row can point at another org's: a clearance of org 1's entry recorded in org 2, or a
 -- withdrawal by org 1's person recorded in org 2 (as the superuser, so only the checks stand in the

@@ -8,9 +8,23 @@
 //                                     back and what it warns of, the latest version's count of
 //                                     acknowledgements, and the history (notice.read)
 //   POST /api/admin/notice/publish    the DPO publishes the draft they previewed (notice.publish)
+// and from C0.9 PR 3a (OD-10, OD-19; PD-69, PD-70, PD-75, PD-76; T22 items 38 to 49):
+//   GET  /api/admin/notice/contact    the DPO's business contact, and whether the latest version
+//                                     prints it (notice.read; its write, POST
+//                                     /api/admin/notice/contact/set, is compliance/routes.ts's)
+//   GET  /api/admin/notice/people     the people still at the organisation the DPO may record an
+//                                     acknowledgement for: names, departments, managers and the
+//                                     day each was added, never a number or who has acknowledged
+//                                     (notice.people.read)
+//   POST /api/admin/notice/acknowledgements/record
+//                                     the DPO records that someone else acknowledged the latest
+//                                     version outside Hearth, on a day and how
+//                                     (notice.acknowledgement.record)
 // The two of yours are exempt from the acknowledgement gate (packages/access NOTICE_FREE), so the
 // notice can always be read and acknowledged; the DPO's pass it before any version exists, for the
-// DPO alone (NOTICE_SETUP, OD-01), and afterwards only once the DPO has acknowledged the latest.
+// DPO alone (NOTICE_SETUP, OD-01: the draft, publishing and the contact, which publishing needs),
+// and afterwards only once the DPO has acknowledged the latest. Listing the people and recording an
+// acknowledgement aren't setup uses: before v0 there is nothing to record (PD-44).
 //
 // The draft (noticeDraft()) is generated on the server from the registers, in the request's own
 // transaction, by packages/shared's generateNotice(), which is pure: the same registers always make
@@ -22,13 +36,25 @@
 // version and refuses unless the sources are still the ones the draft was made from. The registers'
 // own answer reads the same draft for its notice marker (compliance/routes.ts).
 //
-// The answers carry ids, numbers, the notice's own words and the names of who published, never
-// anyone's number or who has acknowledged: the DPO sees a count (data minimisation, PD-48).
+// From PR 3a every generated version prints the DPO's business contact (generator c09.2, OD-11):
+// the draft reads the current settings version (dpo_settings) into the generator's input, and
+// publish_notice() (migration 0011) locks and compares it as one more source and links the version
+// to it, so GET /api/notice answers the contact the latest version printed, from the same row.
+//
+// The answers carry ids, numbers, the notice's own words, the DPO's role contact and the names of
+// who published, never anyone's number or who has acknowledged: the DPO sees a count (data
+// minimisation, PD-48), and the people they may record for by name, never by standing (PD-76).
 import { createHash } from 'node:crypto'
 import {
   AcknowledgeBody,
   type AcknowledgeResponseJSON,
+  aiCopyIn,
   type Basis,
+  type ContactAdminJSON,
+  type ContactRowJSON,
+  type ContactStated,
+  type DpoContact,
+  flatText,
   generateNotice,
   isAiProvider,
   isProviderKey,
@@ -37,12 +63,15 @@ import {
   NOTICE_GENERATOR,
   NOTICE_HISTORY_MAX,
   NOTICE_MINE_MAX,
+  NOTICE_PEOPLE_MAX,
   type NoticeAdminJSON,
   type NoticeChangesJSON,
   type NoticeClearance,
+  type NoticeContactJSON,
   type NoticeFacts,
   type NoticeInput,
   type NoticeJSON,
+  type NoticePeopleJSON,
   type NoticeProblem,
   type NoticePurpose,
   type NoticeSources,
@@ -59,6 +88,7 @@ import {
   type PublishResponseJSON,
   type PurposeKey,
   type PurposeStatus,
+  type RecordAcknowledgementBody,
   TRAINING,
 } from '@hearth/shared'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
@@ -99,13 +129,15 @@ export interface NoticeVersionRead {
 }
 
 // What the registers make now (C0.9 PD-36, PD-37): today in the org's zone, the generator's input,
-// the latest version (null while none is published), the number the draft would get, its words and
+// the DPO's current contact as its page shows it (null until one is recorded: C0.9 PD-70), the
+// latest version (null while none is published), the number the draft would get, its words and
 // digest (null while it can't be written or shown: UNSHOWN below), its sources, what holds it
 // back, what it warns of, what changed since the latest version, and whether the published notice
 // already says it.
 export interface NoticeDraft {
   today: string
   input: NoticeInput
+  contact: ContactRead | null
   latest: NoticeVersionRead | null
   version: number
   body: string | null
@@ -134,7 +166,47 @@ type VersionRow = {
   published_by: string | null
   generator: string | null
   body: string
+  // The DPO's settings version it printed (C0.9 PD-66; none on a stand-in or a c09.1 version).
+  dpo_settings_version: number | null
 }
+type ContactRow = { title: string; email: string | null; phone: string | null; postal: string | null }
+
+// The DPO's current settings version (its highest) with their business contact, the day it was
+// recorded in the org's zone and who recorded it, from the roster (C0.9 OD-10, PD-63, PD-70).
+export type ContactRead = ContactRowJSON
+
+// The current contact, in one statement, or null until the DPO records one. The draft's input and
+// the contact page's answer read it.
+export async function readContact(trx: InOrg, orgId: string): Promise<ContactRead | null> {
+  const { rows } = await sql<ContactRow & { version: number; recorded_on: string; recorded_by: string | null }>`
+    select s.version, s.contact_title as title, s.contact_email as email, s.contact_phone as phone,
+      s.contact_postal as postal, ((s.recorded_at at time zone o.time_zone)::date)::text as recorded_on,
+      p.full_name as recorded_by
+    from dpo_settings s
+    join orgs o on o.id = s.org_id
+    left join people p on p.org_id = s.org_id and p.id = s.recorded_by
+    where s.org_id = ${orgId}
+    order by s.version desc
+    limit 1`.execute(trx)
+  const row = rows[0]
+  if (row === undefined) return null
+  return {
+    version: row.version,
+    title: row.title,
+    email: row.email,
+    phone: row.phone,
+    postal: row.postal,
+    recordedOn: row.recorded_on,
+    recordedBy: row.recorded_by,
+  }
+}
+
+const contactOf = (row: ContactRow): DpoContact => ({
+  title: row.title,
+  email: row.email,
+  phone: row.phone,
+  postal: row.postal,
+})
 
 const isNonAiPurpose = (key: string): key is PurposeKey => (NON_AI_PURPOSE_KEYS as readonly string[]).includes(key)
 const isNonAiProvider = (key: string): key is ProviderKey =>
@@ -203,7 +275,8 @@ async function readClearances(trx: InOrg, orgId: string): Promise<NoticeClearanc
 }
 
 // What each of these versions lists (PD-34): its purposes at their register versions, and its
-// clearances with the facts each rests on, from the link tables.
+// clearances with the facts each rests on, from the link tables; and the DPO's settings version it
+// printed, with the contact (C0.9 PD-66), or none.
 async function readSources(
   trx: InOrg,
   orgId: string,
@@ -220,7 +293,19 @@ async function readSources(
     from notice_version_providers l
     join transfer_clearances c on c.org_id = l.org_id and c.id = l.clearance_id
     where l.org_id = ${orgId} and l.notice_version_id = any(${ids}::uuid[])`.execute(trx)
+  const printed = versions.flatMap(version =>
+    version.dpo_settings_version === null ? [] : [version.dpo_settings_version],
+  )
+  const { rows: contacts } =
+    printed.length === 0
+      ? { rows: [] }
+      : await sql<ContactRow & { version: number }>`
+          select version, contact_title as title, contact_email as email, contact_phone as phone,
+            contact_postal as postal
+          from dpo_settings
+          where org_id = ${orgId} and version = any(${printed}::integer[])`.execute(trx)
   for (const version of versions) {
+    const contact = contacts.find(row => row.version === version.dpo_settings_version)
     sources.set(version.id, {
       generator: version.generator,
       body: version.body,
@@ -234,6 +319,7 @@ async function readSources(
             ? [{ id: link.id, provider: link.provider, facts: noticeFactsFrom(link.facts) }]
             : [],
         ),
+      contact: contact === undefined ? null : { version: contact.version, facts: contactOf(contact) },
     })
   }
   return sources
@@ -246,13 +332,14 @@ const versionRead = (row: VersionRow, sources: NoticeSources | undefined): Notic
   publishedBy: row.published_by,
   generated: row.generator !== null,
   body: row.body,
-  sources: sources ?? { generator: row.generator, body: row.body, purposes: [], clearances: [] },
+  sources: sources ?? { generator: row.generator, body: row.body, purposes: [], clearances: [], contact: null },
 })
 
 // The org's latest version, with who published it from the roster (none when Hearth did).
 async function readLatest(trx: InOrg, orgId: string): Promise<NoticeVersionRead | null> {
   const { rows } = await sql<VersionRow>`
-    select v.id, v.version, v.published_at, p.full_name as published_by, v.generator, v.body
+    select v.id, v.version, v.published_at, p.full_name as published_by, v.generator, v.body,
+      v.dpo_settings_version
     from notice_versions v
     left join people p on p.org_id = v.org_id and p.id = v.published_by
     where v.org_id = ${orgId}
@@ -264,12 +351,16 @@ async function readLatest(trx: InOrg, orgId: string): Promise<NoticeVersionRead 
 }
 
 // The problems after which the draft is neither written nor shown: an entry it can't state (no
-// basis or retention, or a consent-type basis), and free text the screens keep off (AI_COPY,
-// PD-62), which the preview would otherwise show the DPO.
+// basis or retention, or a basis no version states yet), no contact for the DPO, without which
+// "Your rights" can't be written (C0.9 PD-68), and free text the screens keep off (AI_COPY, PD-62),
+// which the preview would otherwise show the DPO. A purpose on deemed consent by conduct that
+// CONDUCT_WITHDRAWABLE doesn't name (purpose_conduct_unstoppable, PD-86) is written and previewed:
+// only publishing is held back.
 const UNSHOWN: ReadonlySet<NoticeProblem['code']> = new Set([
   'purpose_basis_missing',
   'purpose_retention_missing',
   'purpose_consent_basis',
+  'dpo_contact_pending',
   'free_text_ai_copy',
 ])
 
@@ -277,20 +368,22 @@ const UNSHOWN: ReadonlySet<NoticeProblem['code']> = new Set([
 export const noticeDigest = (sources: NoticeSources): string =>
   createHash('sha256').update(noticeDigestText(sources)).digest('hex')
 
-// The draft the registers make now, read with plain statements in the caller's transaction (no
-// lock: publish_notice() locks and compares what this read). A statement each, so at READ COMMITTED
-// a change committing between them makes a draft whose sources disagree with the registers, which
-// publish_notice() refuses (HF007), and the page reloads.
+// The draft the registers and the DPO's current contact make now, read with plain statements in the
+// caller's transaction (no lock: publish_notice() locks and compares what this read). A statement
+// each, so at READ COMMITTED a change committing between them makes a draft whose sources disagree
+// with the registers or the contact, which publish_notice() refuses (HF007), and the page reloads.
 export async function noticeDraft(trx: InOrg, orgId: string): Promise<NoticeDraft> {
   const { rows } = await sql<{ name: string; today: string }>`
     select name, ((now() at time zone time_zone)::date)::text as today from orgs where id = ${orgId}`.execute(trx)
   const org = rows[0]
   // Past can() the org exists.
   if (org === undefined) throw new ApiError(404, 'not_found')
+  const contact = await readContact(trx, orgId)
   const input: NoticeInput = {
     org: org.name,
     purposes: await readPurposes(trx, orgId),
     clearances: await readClearances(trx, orgId),
+    contact: contact === null ? null : { version: contact.version, ...contactOf(contact) },
   }
   const latest = await readLatest(trx, orgId)
   const problems = noticeProblems(input, latest?.sources ?? null)
@@ -300,6 +393,7 @@ export async function noticeDraft(trx: InOrg, orgId: string): Promise<NoticeDraf
   return {
     today: org.today,
     input,
+    contact,
     latest,
     version: latest === null ? 0 : latest.version + 1,
     body,
@@ -323,9 +417,11 @@ export function noticeStatusOf(draft: Pick<NoticeDraft, 'latest' | 'upToDate'>):
 
 // --- The functions' refusals ----------------------------------------------------------------------
 
-// What publish_notice() and acknowledge_notice() refuse with, as the api answers it (C0.9 PD-52). A
-// lock not granted in time (55P03) or a deadlock is the api's 409 try_again already (auth/errors.ts
-// fromDatabase). 42501 is the publisher's 403; acknowledging answers its own (signed_out).
+// What publish_notice(), acknowledge_notice() and record_notice_acknowledgement() refuse with, as
+// the api answers it (C0.9 PD-52, PD-71). A lock not granted in time (55P03) or a deadlock is the
+// api's 409 try_again already (auth/errors.ts fromDatabase). 42501 is the publisher's and the
+// recorder's 403, in the api's own words (notice_check_dpo()'s message speaks of publishing);
+// acknowledging answers its own (signed_out).
 function refusalOf(error: unknown, insufficient: () => ApiError): ApiError | undefined {
   switch (sqlstateOf(error)) {
     case NOTICE_CHANGED:
@@ -351,14 +447,36 @@ async function refusing<T>(work: Promise<T>, insufficient: () => ApiError): Prom
 
 // --- GET /api/notice ------------------------------------------------------------------------------
 
-type MineRow = { version: number; acknowledged_at: Date; method: 'in_app' | 'recorded_by_dpo' }
+type MineRow = {
+  version: number
+  acknowledged_at: Date
+  method: 'in_app' | 'recorded_by_dpo'
+  acknowledged_on: string | null
+  recorded_note: string | null
+}
+// The latest version, whether you acknowledged it, and the contact it printed (all null for none).
+type CurrentRow = VersionRow & {
+  acknowledged: boolean
+  contact_title: string | null
+  contact_email: string | null
+  contact_phone: string | null
+  contact_postal: string | null
+}
 
-// Your standing, the current version, what changed since you last acknowledged a generated one, and
-// your own acknowledgements, newest version first. In a read-only transaction that leaves the
-// session's last use alone: /notice polls it every 30 s while visible (PD-46), as the shell polls
-// its flags (OD-14). The standing is read with the latest version, in one statement, by the rule
-// notice-standing.ts reads it by, so the two never disagree within an answer. The person is named,
-// so a tab whose cookie now holds someone else's session ends its document (B-11).
+// The contact a version printed, from its row's join, or none (a stand-in, a c09.1 version).
+function printedContact(row: CurrentRow): NoticeContactJSON | null {
+  if (row.contact_title === null) return null
+  return { title: row.contact_title, email: row.contact_email, phone: row.contact_phone, postal: row.contact_postal }
+}
+
+// Your standing, the current version with the DPO's contact it printed, what changed since you last
+// acknowledged a generated one, and your own acknowledgements, newest version first, with the day
+// and the note of one the DPO recorded (C0.9 PD-69, PD-75). In a read-only transaction that leaves
+// the session's last use alone: /notice polls it every 30 s while visible (PD-46), as the shell
+// polls its flags (OD-14). The standing and the contact are read with the latest version, in one
+// statement, by the rule notice-standing.ts reads it by, so none of them disagree within an answer
+// (Settings shows that contact, PD-69). The person is named, so a tab whose cookie now holds
+// someone else's session ends its document (B-11).
 export async function readNotice(api: Api, session: SessionIds, info: ReqInfo): Promise<Answer> {
   const { orgId, userId } = session
   const body = await inSession(
@@ -370,11 +488,14 @@ export async function readNotice(api: Api, session: SessionIds, info: ReqInfo): 
       // The action's one refusal is someone no longer at the org, whose sessions a deactivation ends
       // in the same commit: an ended session, as readOwn() answers it (web/session.ts).
       if (verdict !== 'allowed') throw new ApiError(401, 'signed_out')
-      const { rows: latestRows } = await sql<VersionRow & { acknowledged: boolean }>`
+      const { rows: latestRows } = await sql<CurrentRow>`
         select v.id, v.version, v.published_at, null::text as published_by, v.generator, v.body,
+          v.dpo_settings_version,
           exists (select 1 from notice_acknowledgments a
-            where a.org_id = v.org_id and a.person_id = ${userId} and a.notice_version_id = v.id) as acknowledged
+            where a.org_id = v.org_id and a.person_id = ${userId} and a.notice_version_id = v.id) as acknowledged,
+          s.contact_title, s.contact_email, s.contact_phone, s.contact_postal
         from notice_versions v
+        left join dpo_settings s on s.org_id = v.org_id and s.version = v.dpo_settings_version
         where v.org_id = ${orgId}
         order by v.version desc
         limit 1`.execute(trx)
@@ -385,7 +506,7 @@ export async function readNotice(api: Api, session: SessionIds, info: ReqInfo): 
       // version published and acknowledged since the read above never lists here as acknowledged
       // while the answer asks for the older one.
       const { rows: mine } = await sql<MineRow>`
-        select v.version, a.acknowledged_at, a.method
+        select v.version, a.acknowledged_at, a.method, a.acknowledged_on::text as acknowledged_on, a.recorded_note
         from notice_acknowledgments a
         join notice_versions v on v.org_id = a.org_id and v.id = a.notice_version_id
         where a.org_id = ${orgId} and a.person_id = ${userId} and v.version <= ${current?.version ?? -1}
@@ -395,7 +516,8 @@ export async function readNotice(api: Api, session: SessionIds, info: ReqInfo): 
       if (current !== undefined && current.generator !== null) {
         // The last generated version you acknowledged before this one.
         const { rows: before } = await sql<VersionRow>`
-          select v.id, v.version, v.published_at, null::text as published_by, v.generator, v.body
+          select v.id, v.version, v.published_at, null::text as published_by, v.generator, v.body,
+            v.dpo_settings_version
           from notice_versions v
           where v.org_id = ${orgId} and v.generator is not null and v.version < ${current.version}
             and exists (select 1 from notice_acknowledgments a
@@ -424,11 +546,14 @@ export async function readNotice(api: Api, session: SessionIds, info: ReqInfo): 
                 publishedAt: current.published_at.toISOString(),
                 body: current.body,
               },
+        contact: current === undefined ? null : printedContact(current),
         changes,
         mine: mine.map(row => ({
           version: row.version,
           acknowledgedAt: row.acknowledged_at.toISOString(),
           method: row.method,
+          acknowledgedOn: row.acknowledged_on,
+          note: row.recorded_note,
         })),
       }
     },
@@ -553,11 +678,13 @@ export async function readNoticeAdmin(api: Api, session: SessionIds, info: ReqIn
 // The DPO publishes the draft they previewed (C0.9 PD-36, PD-37), with a fresh PIN (PD-30), in one
 // transaction: can() decides (notice.publish); the draft is read and regenerated; a seen that isn't
 // the latest version or a digest that isn't the draft's is 409 notice_changed (the page shows the
-// new draft), and any problem 400 notice_invalid (the page lists them); then publish_notice() locks
-// the registers and the latest version, refuses sources that moved (HF007) or a rule (HF008), writes
-// the version, its links and the audit row; and notice.published goes to the outbox in the same
-// transaction (T16). Everyone, the DPO included, then acknowledges the new version before using
-// Hearth again (PD-39): REST at once, sockets within a periodic check.
+// new draft), and any problem 400 notice_invalid (the page lists them: no contact for the DPO and a
+// purpose on deemed consent by conduct no procedure stops among them, from C0.9 PR 3a); then
+// publish_notice() locks the registers, the DPO's contact and the latest version, refuses sources
+// that moved (HF007) or a rule (HF008), writes the version, its links and the audit row; and
+// notice.published goes to the outbox in the same transaction (T16). Everyone, the DPO included,
+// then acknowledges the new version before using Hearth again (PD-39): REST at once, sockets within
+// a periodic check.
 export async function publishNotice(
   api: Api,
   body: z.output<typeof PublishBody>,
@@ -574,13 +701,16 @@ export async function publishNotice(
     // publish_notice() is this route's alone (scripts/guards/api-test-overrides.test.ts), so SQL
     // doesn't repeat it (C0.9 PD-62, B-14).
     if (draft.digest !== body.digest) throw new ApiError(409, 'notice_changed')
+    // The contact's settings version the draft printed (C0.9 PD-66): publish_notice() locks the
+    // latest and refuses another (HF007), or none (HF008), and links the version to it.
     const { rows } = await refusing(
       sql<{ notice: string; version: number }>`
         select notice, version from public.publish_notice(${body.seen}::integer, ${draft.body}, ${NOTICE_GENERATOR},
           ${draft.sources.purposes.map(purpose => purpose.key)}::text[],
           ${draft.sources.purposes.map(purpose => purpose.version)}::integer[],
-          ${draft.sources.clearances.map(clearance => clearance.id)}::uuid[], ${info.requestId},
-          ${session.deviceId}::uuid, ${info.ip}::inet)`.execute(trx),
+          ${draft.sources.clearances.map(clearance => clearance.id)}::uuid[],
+          ${draft.sources.contact?.version ?? null}::integer, ${info.requestId}, ${session.deviceId}::uuid,
+          ${info.ip}::inet)`.execute(trx),
       () => new ApiError(403, 'forbidden'),
     )
     const row = rows[0]
@@ -594,6 +724,172 @@ export async function publishNotice(
       ids: { version: row.version },
     })
     return { notice: row.notice, version: row.version }
+  })
+  return { body: answer }
+}
+
+// --- GET /api/admin/notice/contact ----------------------------------------------------------------
+
+// Whether the latest version prints this contact (C0.9 PD-70): none before any version; stated when
+// the latest is generated and links the current settings version; not printed when it links none (a
+// stand-in, a c09.1 version, or one published before any contact was recorded, since a version can
+// link one only once one exists); not stated when it links an earlier one. So a contact recorded
+// after a c09.1 latest reads as not printed, never as an earlier one, and no contact with a version
+// never reads as stated.
+export function contactStated(
+  latest: Pick<NoticeVersionRead, 'generated' | 'sources'> | null,
+  contact: Pick<ContactRead, 'version'> | null,
+): ContactStated {
+  if (latest === null) return 'unpublished'
+  // A stand-in's words aren't the generator's, so it prints no contact whatever it links.
+  const printed = latest.generated ? (latest.sources.contact?.version ?? null) : null
+  if (contact !== null && printed === contact.version) return 'stated'
+  if (contact === null || printed === null) return 'not_printed'
+  return 'not_stated'
+}
+
+// The DPO's contact page (C0.9 OD-10, PD-70): whether the published notice is up to date with the
+// registers (the Notice link's badge), the current contact (null until the DPO records one) and
+// whether the latest version prints it, from one draft. In a read-only transaction, under
+// notice.read: the DPO alone, before v0 too (NOTICE_SETUP); the request counts as use of the session.
+export async function readContactAdmin(api: Api, session: SessionIds, info: ReqInfo): Promise<Answer> {
+  const { orgId } = session
+  const body = await inSession(
+    api,
+    info,
+    session,
+    async (trx): Promise<ContactAdminJSON> => {
+      await authorise(trx, session, { action: 'notice.read' }, 'forbidden', { lock: false })
+      // The contact the draft read, so the marker and the contact shown are one statement's.
+      const draft = await noticeDraft(trx, orgId)
+      return {
+        notice: noticeStatusOf(draft),
+        contact: draft.contact,
+        stated: contactStated(draft.latest, draft.contact),
+      }
+    },
+    { readOnly: true },
+  )
+  return { body }
+}
+
+// --- GET /api/admin/notice/people -----------------------------------------------------------------
+
+type PeopleHead = { today: string; id: string | null; version: number | null; published_on: string | null }
+type PersonRow = {
+  id: string
+  name: string
+  department: string | null
+  manager: string | null
+  added_on: string
+}
+
+// The people the DPO may record an acknowledgement for (C0.9 OD-19, PD-76): today in the org's
+// zone, the latest version a record would be for, and every person still at the organisation but
+// the DPO, by name, department, manager and the day they were added, at most NOTICE_PEOPLE_MAX in
+// name order, with more when there were others, so a cut list is never silent. Roster facts only:
+// never a number, a device or who has acknowledged (notice.read still names nobody, PD-49). The
+// manager and the day added let the dialog tell apart two people who would otherwise read the same.
+// In a read-only transaction, under notice.people.read, which isn't a setup use: the gate has
+// required the DPO to acknowledge the latest version, so a version exists, and with none this
+// answers as the gate would (403 notice_required).
+export async function readNoticePeople(api: Api, session: SessionIds, info: ReqInfo): Promise<Answer> {
+  const { orgId, userId } = session
+  const body = await inSession(
+    api,
+    info,
+    session,
+    async (trx): Promise<NoticePeopleJSON> => {
+      await authorise(trx, session, { action: 'notice.people.read' }, 'forbidden', { lock: false })
+      const { rows: heads } = await sql<PeopleHead>`
+        select ((now() at time zone o.time_zone)::date)::text as today, v.id, v.version,
+          ((v.published_at at time zone o.time_zone)::date)::text as published_on
+        from orgs o
+        left join lateral (
+          select id, version, published_at from notice_versions where org_id = o.id order by version desc limit 1
+        ) v on true
+        where o.id = ${orgId}`.execute(trx)
+      const head = heads[0]
+      if (head === undefined || head.id === null || head.version === null || head.published_on === null) {
+        throw new ApiError(403, 'notice_required')
+      }
+      const { rows } = await sql<PersonRow>`
+        select p.id, p.full_name as name, d.name as department, m.full_name as manager,
+          ((p.created_at at time zone o.time_zone)::date)::text as added_on
+        from people p
+        join orgs o on o.id = p.org_id
+        left join departments d on d.org_id = p.org_id and d.id = p.department_id
+        left join people m on m.org_id = p.org_id and m.id = p.manager_id
+        where p.org_id = ${orgId} and p.deactivated_at is null and p.id <> ${userId}
+        order by p.full_name collate "C", p.id
+        limit ${NOTICE_PEOPLE_MAX + 1}`.execute(trx)
+      return {
+        today: head.today,
+        latest: { notice: head.id, version: head.version, publishedOn: head.published_on },
+        people: rows.slice(0, NOTICE_PEOPLE_MAX).map(row => ({
+          id: row.id,
+          name: row.name,
+          department: row.department,
+          manager: row.manager,
+          addedOn: row.added_on,
+        })),
+        more: rows.length > NOTICE_PEOPLE_MAX,
+      }
+    },
+    { readOnly: true },
+  )
+  return { body }
+}
+
+// --- POST /api/admin/notice/acknowledgements/record -----------------------------------------------
+
+// The DPO records that someone else acknowledged the latest version outside Hearth (PDPA-03, ACC-12;
+// C0.9 OD-19, PD-75, PD-76), with a fresh PIN (PD-30), in one transaction: can() decides
+// (notice.acknowledgement.record: the DPO, for someone else still at the organisation, so yourself,
+// a leaver, another org's person and an unknown id are 403 before the function); the note is held
+// to AI_COPY, since the person sees it in Settings (400 notice_invalid: PD-65, the route's alone, as
+// record_notice_acknowledgement() is its one caller), and a control character in it is refused here
+// too (400 notice_invalid, as the function's HF008 answers one), because Postgres can't take a NUL
+// as text at all and would refuse the parameter (22021) before the function runs; then the
+// function re-checks the DPO, reads the person FOR SHARE, refuses any version but the latest
+// (HF007, 409 notice_changed) and any other day or note it can't take (HF008, 400), and records the
+// row on no device, with the day and the note, once per person and version. The audit row names the
+// person, the version and the day, never the note. notice.acknowledged goes to the outbox in the
+// same transaction when something was recorded, the DPO acting, for later consumers (catalogue:
+// notice); nothing consumes it yet. The person is let in because the REST gate and the gateway's
+// admission read the standing afresh (noticeStandings(), any method): at their next request, and
+// for sockets at accept and in each check. The DPO's device comes from the session, never the body.
+export async function recordAcknowledgement(
+  api: Api,
+  body: z.output<typeof RecordAcknowledgementBody>,
+  session: SessionIds,
+  info: ReqInfo,
+): Promise<Answer> {
+  const { orgId } = session
+  const answer = await inSession(api, info, session, async (trx): Promise<AcknowledgeResponseJSON> => {
+    await authorise(trx, session, { action: 'notice.acknowledgement.record', person: body.person }, 'forbidden')
+    if (aiCopyIn(flatText(body.note)) !== undefined) throw new ApiError(400, 'notice_invalid')
+    if (/\p{Cc}/u.test(body.note.trim())) throw new ApiError(400, 'notice_invalid')
+    const { rows } = await refusing(
+      sql<{ version: number; changed: boolean }>`
+        select version, changed from public.record_notice_acknowledgement(${body.person}::uuid, ${body.notice}::uuid,
+          ${body.acknowledgedOn}::date, ${body.note}, ${info.requestId}, ${session.deviceId}::uuid,
+          ${info.ip}::inet)`.execute(trx),
+      () => new ApiError(403, 'forbidden'),
+    )
+    const row = rows[0]
+    if (row === undefined) throw new Error('record_notice_acknowledgement() returned no row')
+    if (row.changed) {
+      await appendOutbox(trx, {
+        orgId,
+        type: 'notice.acknowledged',
+        entity: { type: 'person', id: body.person },
+        subjects: [body.person],
+        purpose: 'accounts',
+        ids: { notice: body.notice, version: row.version },
+      })
+    }
+    return { version: row.version, changed: row.changed }
   })
   return { body: answer }
 }

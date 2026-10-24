@@ -32,6 +32,24 @@
 // and never reads a stated clearance as not stated (NTR-07). The cases run in that order, each
 // from the versions the one before left.
 //
+// C0.9 PR 3a (0011, TECH-SPEC T22 items 39, 40, 43 and 44) adds, after NTR-07, the DPO's contact,
+// recorded acknowledgements and the break-glass re-clear: a publish against a contact change, each
+// order (NTR-08); two contact changes from one version, and two first records, with the first
+// committed and with it rolled back, in orgs of their own with no contact (CONTACT_FIXTURE, NTR-09);
+// a recorded acknowledgement against a publish, each order (NTR-10); a record against its person's
+// deactivation, and a record or a contact change by a DPO being deactivated or losing the role
+// (NTR-11); a record against the person's own acknowledgement, each order (NTR-12); and, in an org
+// of its own (BREAK_GLASS_FIXTURE), the re-clear against a DPO's sign-in, each order (BGR-01),
+// against a DPO's sessions ending (BGR-02), against another re-clear (BGR-03), against the DPO's
+// own clear in the app (BGR-04) and against the named DPO losing the role or being deactivated
+// (BGR-05). The re-clear sets its own 2 s lock_timeout, so each case's first transaction commits as
+// soon as the re-clear is seen waiting, as race() does. BGR-06 isn't a race but needs a connection
+// of its own: a session that set a longer transaction_timeout, under a lower value the transaction
+// set, outlives its old timer because the re-clear starts the timer again at 30 s. NTR-13 builds a
+// database of its own up to 0010 and applies 0011 while a gated request holds the notice tables and
+// then reads a clearance: the migration never waits while it holds one of the three, so neither
+// fails.
+//
 // Each case opens two connections to a throwaway database (concurrency_check, built from
 // db/migrations/ with the migrator, owned by hearth_owner), starts the change in one, starts the
 // dependent write in the other, waits until Postgres reports that write waiting on a lock, commits
@@ -161,11 +179,13 @@ const C09_FIXTURE = `
 // (deactivated in a case) and n(64) (whose role is revoked in one); members n(71) to n(75), each
 // with an account and a device n(e1) to n(e5). The four purposes active from the start (A-05) have a basis and a
 // retention at version 2, so a draft can be published; twilio, aws, livekit and apple_push have
-// every clearing fact recorded (revision 2), and twilio and aws are cleared.
+// every clearing fact recorded (revision 2), and twilio and aws are cleared. From 0011 (C0.9 PR
+// 3a) the DPO's contact is recorded (version 1, by n(61)), so a publish passes the contact rule,
+// and DPOs n(65) and n(67) are deactivated, and n(66) and n(68) lose the role, in NTR-11.
 const n = (suffix: string) => `c0000000-0000-4000-8000-0000000001${suffix}`
 const NOTICE_ORG = n('00')
 const nids = (suffixes: string[]) => suffixes.map(s => `'${n(s)}'`).join(', ')
-const NOTICE_PEOPLE = ['61', '62', '63', '64', '71', '72', '73', '74', '75']
+const NOTICE_PEOPLE = ['61', '62', '63', '64', '65', '66', '67', '68', '71', '72', '73', '74', '75']
 const NOTICE_FIXTURE = `
   set local role hearth_owner;
   insert into public.orgs (id, name) values ('${NOTICE_ORG}', 'Concurrency check notice');
@@ -175,7 +195,8 @@ const NOTICE_FIXTURE = `
   insert into public.people (id, org_id, full_name, created_by)
   select s.id, '${NOTICE_ORG}', 'Person ' || s.id, '${n('a0')}' from unnest(array[${nids(NOTICE_PEOPLE)}]::uuid[]) as s (id);
   insert into public.role_assignments (org_id, person_id, role, created_by)
-  select '${NOTICE_ORG}', s.id, 'dpo', '${n('a0')}' from unnest(array[${nids(['61', '62', '63', '64'])}]::uuid[]) as s (id);
+  select '${NOTICE_ORG}', s.id, 'dpo', '${n('a0')}'
+  from unnest(array[${nids(['61', '62', '63', '64', '65', '66', '67', '68'])}]::uuid[]) as s (id);
   insert into public.users (id, org_id)
   select s.id, '${NOTICE_ORG}' from unnest(array[${nids(['71', '72', '73', '74', '75'])}]::uuid[]) as s (id);
   insert into public.devices (id, org_id, user_id, label)
@@ -196,6 +217,62 @@ const NOTICE_FIXTURE = `
   insert into public.transfer_clearances (org_id, entry_id, cleared_by, cleared_via)
   select '${NOTICE_ORG}', t.id, '${n('61')}', 'app' from public.transfer_register t
   where t.org_id = '${NOTICE_ORG}' and t.provider in ('twilio', 'aws');
+  insert into public.dpo_settings (org_id, version, contact_title, contact_email, recorded_by)
+  values ('${NOTICE_ORG}', 1, 'Data Protection Officer', 'dpo@race.example', '${n('61')}');
+`
+// C0.9 PR 3a (0011): two orgs with no contact, for two first records (NTR-09), one whose first
+// record commits and one whose first rolls back: CONTACT_ORGS[0], with Hearth k(a0) and DPOs k(61)
+// and k(62), and CONTACT_ORGS[1], with Hearth k(a1) and DPOs k(63) and k(64).
+const k = (suffix: string) => `c0000000-0000-4000-8000-0000000002${suffix}`
+const CONTACT_ORGS = [k('00'), k('01')] as const
+const CONTACT_FIXTURE = `
+  set local role hearth_owner;
+  insert into public.orgs (id, name) values ('${k('00')}', 'Concurrency check contact'), ('${k('01')}', 'Concurrency check contact 2');
+  insert into public.principals (id, org_id, kind, system_key)
+  values ('${k('a0')}', '${k('00')}', 'system', 'hearth'), ('${k('a1')}', '${k('01')}', 'system', 'hearth');
+  insert into public.principals (id, org_id, kind)
+  select ('c0000000-0000-4000-8000-0000000002' || d.dpo)::uuid, ('c0000000-0000-4000-8000-0000000002' || d.org)::uuid, 'human'
+  from (values ('61', '00'), ('62', '00'), ('63', '01'), ('64', '01')) as d (dpo, org);
+  insert into public.people (id, org_id, full_name, created_by)
+  select p.id, p.org_id, 'Person ' || p.id, case p.org_id when '${k('00')}' then '${k('a0')}'::uuid else '${k('a1')}'::uuid end
+  from public.principals p where p.org_id in ('${k('00')}', '${k('01')}') and p.kind = 'human';
+  insert into public.role_assignments (org_id, person_id, role, created_by)
+  select p.org_id, p.id, 'dpo', p.created_by from public.people p where p.org_id in ('${k('00')}', '${k('01')}');
+`
+// C0.9 PR 3a (0011): the break-glass re-clear's org, as the owner. Its Hearth principal g(a0); DPOs
+// g(81) and g(82), each with an account and a device (g(e1), g(e2)); member g(85), with an account
+// and a device g(e5). Twilio's facts are recorded and cleared by the first-Owner bootstrap's
+// clearance (no marker, as the set-up runs it), in g(81)'s name, which g(81) then withdrew. No DPO
+// has a session yet, and the org has no notice version.
+const g = (suffix: string) => `c0000000-0000-4000-8000-0000000003${suffix}`
+const BREAK_GLASS_ORG = g('00')
+// The bootstrap's clearance of Twilio, as the set-up calls it, on the same facts each time and a
+// review date 30 days ahead, inside the re-clear's 90-day cap.
+const bootstrapTwilio = (dpo: string, reason: string) =>
+  `select public.bootstrap_transfer_clearance('twilio', '${g(dpo)}', 'Test service', 'A number', '{US}', '{US}',
+     'Test DPA', 'dpa', 'Test DPA', null, true, 'not_applicable', 'not_applicable', '30 days', 'Test DPA', 'None',
+     current_date + 30, '${reason}')`
+const BREAK_GLASS_FIXTURE = `
+  set local role hearth_owner;
+  insert into public.orgs (id, name) values ('${BREAK_GLASS_ORG}', 'Concurrency check break-glass');
+  insert into public.principals (id, org_id, kind, system_key) values ('${g('a0')}', '${BREAK_GLASS_ORG}', 'system', 'hearth');
+  insert into public.principals (id, org_id, kind)
+  select s.id, '${BREAK_GLASS_ORG}', 'human' from unnest(array['${g('81')}', '${g('82')}', '${g('85')}']::uuid[]) as s (id);
+  insert into public.people (id, org_id, full_name, created_by)
+  select s.id, '${BREAK_GLASS_ORG}', 'Person ' || s.id, '${g('a0')}'
+  from unnest(array['${g('81')}', '${g('82')}', '${g('85')}']::uuid[]) as s (id);
+  insert into public.role_assignments (org_id, person_id, role, created_by)
+  values ('${BREAK_GLASS_ORG}', '${g('81')}', 'dpo', '${g('a0')}'), ('${BREAK_GLASS_ORG}', '${g('82')}', 'dpo', '${g('a0')}');
+  insert into public.users (id, org_id)
+  select s.id, '${BREAK_GLASS_ORG}' from unnest(array['${g('81')}', '${g('82')}', '${g('85')}']::uuid[]) as s (id);
+  insert into public.devices (id, org_id, user_id, label) values
+    ('${g('e1')}', '${BREAK_GLASS_ORG}', '${g('81')}', 'Phone'), ('${g('e2')}', '${BREAK_GLASS_ORG}', '${g('82')}', 'Phone'),
+    ('${g('e5')}', '${BREAK_GLASS_ORG}', '${g('85')}', 'Phone');
+  select set_config('app.org_id', '${BREAK_GLASS_ORG}', true), set_config('app.user_id', '${g('a0')}', true);
+  ${bootstrapTwilio('81', 'Concurrency check: the first set-up')};
+  update public.transfer_clearances set withdrawn_at = now(), withdrawn_by = '${g('81')}', withdraw_reason = 'dpo_decision'
+  where org_id = '${BREAK_GLASS_ORG}' and provider = 'twilio';
+  select set_config('app.org_id', '', true), set_config('app.user_id', '', true);
 `
 // A PIN hash in the one shape the server issues (0006; DB test 100 uses the same).
 const PIN_HASH = "'$argon2id$v=19$m=19456,t=2,p=1$' || repeat('A', 22) || '$' || repeat('B', 43)"
@@ -235,7 +312,7 @@ const FIXTURE = `
     ('${ORG}', '${id('ba')}', 'leadership', '${ADMIN}'), ('${ORG}', '${id('c5')}', 'admin', '${ADMIN}');
   insert into public.audit_log_readers (org_id, role, created_by) values
     ('${ORG}', 'dpo', '${ADMIN}'), ('${ORG}', 'compliance_officer', '${ADMIN}'), ('${ORG}', 'leadership', '${ADMIN}');
-${C06_FIXTURE}${C09_FIXTURE}${NOTICE_FIXTURE}`
+${C06_FIXTURE}${C09_FIXTURE}${NOTICE_FIXTURE}${CONTACT_FIXTURE}${BREAK_GLASS_FIXTURE}`
 
 function url(database: string): string {
   const result = new URL(`postgres://${connection.host.includes(':') ? `[${connection.host}]` : connection.host}`)
@@ -303,9 +380,14 @@ async function waitsOnLock(watcher: Client, pid: number): Promise<boolean> {
 }
 
 // Starts `first` and leaves it open, runs `second` in another connection until it waits on a
-// lock, then commits `first`. Returns whether `second` waited and the error it ended with, if
-// any; `second` commits if it succeeded.
-async function race(watcher: Client, first: Step, second: Step): Promise<{ waited: boolean; error?: string }> {
+// lock, then commits `first` (or, with firstEnds 'rollback', rolls it back). Returns whether
+// `second` waited and the error it ended with, if any; `second` commits if it succeeded.
+async function race(
+  watcher: Client,
+  first: Step,
+  second: Step,
+  firstEnds: 'commit' | 'rollback' = 'commit',
+): Promise<{ waited: boolean; error?: string }> {
   const a = await connect(DB)
   const b = await connect(DB)
   try {
@@ -318,7 +400,7 @@ async function race(watcher: Client, first: Step, second: Step): Promise<{ waite
       (error: unknown) => message(error),
     )
     const waited = await waitsOnLock(watcher, pid)
-    await a.query('commit')
+    await a.query(firstEnds)
     const error = await pending
     await b.query(error === undefined ? 'commit' : 'rollback')
     return error === undefined ? { waited } : { waited, error }
@@ -594,9 +676,11 @@ const REGISTER_CHANGED = 'This entry changed since you opened it. Reload it and 
 // hearth_app acting as the person the server would set. A publish names the sources its draft
 // was made from as the route does, read in its own statement before publish_notice() locks
 // anything, and (unless the case gives one) the latest version it saw: so one that waits sees,
-// once its locks are granted, whatever committed meanwhile.
+// once its locks are granted, whatever committed meanwhile. From 0011 the sources include the
+// DPO's settings version the draft printed, the latest when the statement starts (PD-66).
 const LATEST_VERSION = `(select max(v.version) from public.notice_versions v where v.org_id = '${NOTICE_ORG}')`
 const LATEST_ID = `(select v.id from public.notice_versions v where v.org_id = '${NOTICE_ORG}' order by v.version desc limit 1)`
+const LATEST_CONTACT = `(select max(s.version) from public.dpo_settings s where s.org_id = '${NOTICE_ORG}')`
 const SOURCES = `(select distinct on (r.purpose) r.purpose, r.version, r.status from public.processing_register r
                   where r.org_id = '${NOTICE_ORG}' and not r.ai order by r.purpose, r.version desc)`
 const publish = (body: string, options: { dpo?: string; seen?: number | null } = {}): Step => ({
@@ -611,7 +695,7 @@ const publish = (body: string, options: { dpo?: string; seen?: number | null } =
           array(select c.id from public.transfer_clearances c
                 join public.transfer_register t on t.org_id = c.org_id and t.id = c.entry_id
                 where c.org_id = '${NOTICE_ORG}' and c.withdrawn_at is null and not t.ai),
-          'race', null, null)`,
+          ${LATEST_CONTACT}::integer, 'race', null, null)`,
 })
 // Member n(7k) acknowledges the version their screen showed: the latest when the statement starts.
 const acknowledge = (k: string): Step => ({
@@ -662,6 +746,108 @@ const NOTICE_SOURCES_MOVED =
   'The registers changed since this notice was prepared. Check the preview again, then publish.'
 const NOTICE_ACK_NEWER = 'A newer version of the notice was published. Read it, then acknowledge it.'
 const NOTICE_DPO_REFUSED = 'Only the Data Protection Officer can publish the notice.'
+
+// C0.9 PR 3a (0011): the statements the contact page's and the record dialog's routes make, each as
+// hearth_app acting as the person the server would set (NOTICE_ORG unless a case names another).
+// A contact change from the version the page showed (seen), as set_dpo_contact() takes it.
+const contactChange = (seen: number | null, email: string, options: { dpo?: string; org?: string } = {}): Step => ({
+  as: 'app',
+  org: options.org ?? NOTICE_ORG,
+  user: options.dpo ?? n('61'),
+  sql: `select * from public.set_dpo_contact(${seen === null ? 'null' : seen}::integer, 'Data Protection Officer',
+          '${email}', null, null, 'race', null, null)`,
+})
+// The DPO's record of member n(7k)'s acknowledgement of the version their dialog showed (the latest
+// when the statement starts), on today in the org's zone; with unchanged, it must change nothing.
+const recordCall = (k: string) =>
+  `public.record_notice_acknowledgement('${n(`7${k}`)}', ${LATEST_ID}, (now() at time zone 'Asia/Singapore')::date,
+     'Signed a printed copy', 'race', null, null)`
+const recordAck = (k: string, options: { dpo?: string; unchanged?: boolean } = {}): Step => ({
+  as: 'app',
+  org: NOTICE_ORG,
+  user: n(options.dpo ?? '62'),
+  sql:
+    options.unchanged === true
+      ? `do $$ begin if (select changed from ${recordCall(k)}) then raise exception 'the record changed something'; end if; end $$`
+      : `select * from ${recordCall(k)}`,
+})
+// Member n(7k)'s own acknowledgement, which must change nothing.
+const acknowledgeUnchanged = (k: string): Step => ({
+  as: 'app',
+  org: NOTICE_ORG,
+  user: n(`7${k}`),
+  sql: `do $$ begin
+          if (select changed from public.acknowledge_notice(${LATEST_ID}, 'race', '${n(`e${k}`)}', null)) then
+            raise exception 'the acknowledgement changed something';
+          end if;
+        end $$`,
+})
+const deactivateIn = (org: string, person: string, by: string): Step => ({
+  as: 'app',
+  org,
+  user: by,
+  sql: `update public.people set deactivated_at = now(), deactivated_by = '${by}' where org_id = '${org}' and id = '${person}'`,
+})
+const revokeDpo = (org: string, person: string, by: string): Step => ({
+  as: 'owner',
+  sql: `update public.role_assignments set revoked_at = now(), revoked_by = '${by}'
+        where org_id = '${org}' and person_id = '${person}' and role = 'dpo' and revoked_at is null`,
+})
+const CONTACT_CHANGED = 'Your contact details changed since you opened them. Reload them and try again.'
+const NOTICE_CONTACT_MOVED =
+  "The Data Protection Officer's contact changed since this notice was prepared. Check the preview again, then publish."
+const RECORD_NEWER = 'A newer version of the notice was published. Record the acknowledgement of that one.'
+
+// The break-glass re-clear (0011, C0.9 OD-20) as the bootstrap script's recovery mode runs it: as
+// the owner, acting as the org's Hearth principal, with the emergency marker set in the
+// transaction, naming the DPO who decided.
+const reclear = (dpo: string): Step => ({
+  as: 'owner',
+  sql: `select set_config('app.org_id', '${BREAK_GLASS_ORG}', true), set_config('app.user_id', '${g('a0')}', true),
+               set_config('hearth.break_glass', 'twilio_reclear', true);
+        ${bootstrapTwilio(dpo, 'Concurrency check: Twilio withdrawn and no DPO signed in')}`,
+})
+// A DPO's sign-in issuing its session, as sign-in.ts finish() does: the person FOR SHARE first,
+// then (with check) the transfer gate, then the session on their device.
+const dpoSignIn = (dpo: string, device: string, session: string, check = false): Step => ({
+  as: 'app',
+  org: BREAK_GLASS_ORG,
+  user: g('a0'),
+  sql: `do $$ begin
+          perform 1 from public.people where org_id = '${BREAK_GLASS_ORG}' and id = '${g(dpo)}' and deactivated_at is null
+          for share;
+          if not found then raise exception 'the DPO has left'; end if;
+          ${check ? "if not public.transfer_cleared('twilio') then raise exception 'the sign-in found twilio not cleared'; end if;" : ''}
+          insert into public.sessions (id, org_id, user_id, device_id, token_hash, expires_at)
+          values ('${g(session)}', '${BREAK_GLASS_ORG}', '${g(dpo)}', '${g(device)}', sha256('bg ${session}'::bytea),
+                  now() + interval '7 days');
+        end $$`,
+})
+const REGISTER_SIGNED_IN = 'A Data Protection Officer is signed in, so they clear Twilio Verify again in Hearth.'
+const REGISTER_NOT_DPO = 'The person named as the DPO must be at the organisation and hold the DPO role.'
+const REGISTER_CLEARED_ALREADY = 'Twilio Verify is cleared already. The DPO changes its entry in Hearth.'
+// The break-glass org between cases (the watcher, as the superuser): Twilio withdrawn by g(81), and
+// every session ended, so the next case starts with Twilio not cleared and no DPO signed in.
+async function resetBreakGlass(watcher: Client): Promise<void> {
+  await watcher.query(
+    `update public.transfer_clearances set withdrawn_at = now(), withdrawn_by = $2, withdraw_reason = 'dpo_decision'
+     where org_id = $1 and provider = 'twilio' and withdrawn_at is null`,
+    [BREAK_GLASS_ORG, g('81')],
+  )
+  await watcher.query(
+    `update public.sessions set revoked_at = now(), revoked_by = user_id, revoke_reason = 'sign_out'
+     where org_id = $1 and revoked_at is null`,
+    [BREAK_GLASS_ORG],
+  )
+}
+// Twilio's open clearances in the break-glass org, as "cleared_via cleared_by-suffix".
+const openTwilio = (watcher: Client) =>
+  scalar(
+    watcher,
+    `select string_agg(cleared_via || ' ' || right(cleared_by::text, 2), ',') as v from public.transfer_clearances
+     where org_id = $1 and provider = 'twilio' and withdrawn_at is null`,
+    [BREAK_GLASS_ORG],
+  )
 
 // One step alone, in a transaction of its own: the error it ended with, if any (committed if none).
 async function alone(step: Step): Promise<string | undefined> {
@@ -1824,7 +2010,380 @@ const CASES: Array<[string, (watcher: Client) => Promise<void>]> = [
       )(watcher)
     },
   ],
+  [
+    'NTR-08 PDPA-02 C0.9 OD-11 PD-66: a publish waits for a contact change in progress and is refused as made from the older contact (HF007); a contact change waits for a publish in progress, which links the settings version it locked',
+    async watcher => {
+      const first = await race(watcher, contactChange(1, 'dpo2@race.example'), publish('Race v9'))
+      expect(first.waited, 'the publish did not wait for the contact change in progress')
+      expect(first.error?.includes(NOTICE_CONTACT_MOVED) === true, `expected HF007, got ${first.error ?? 'success'}`)
+      const second = await race(watcher, publish('Race v9'), contactChange(2, 'dpo3@race.example', { dpo: n('62') }))
+      expect(second.waited, 'the contact change did not wait for the publish in progress')
+      expect(second.error === undefined, `the contact change failed: ${second.error}`)
+      const linked = await scalar(
+        watcher,
+        `select format('%s:%s', v.version, v.dpo_settings_version) as v from public.notice_versions v
+         where v.org_id = $1 order by v.version desc limit 1`,
+        [NOTICE_ORG],
+      )
+      expect(
+        linked === '9:2',
+        `the latest version links ${linked ?? 'nothing'}, not 9:2 (the settings version it locked)`,
+      )
+      const contact = await scalar(
+        watcher,
+        'select max(version)::text as v from public.dpo_settings where org_id = $1',
+        [NOTICE_ORG],
+      )
+      expect(contact === '3', `the contact is at version ${contact ?? 'none'}, not 3`)
+    },
+  ],
+  [
+    // C0.9 PD-63: with no version recorded there is nothing to lock, so the second of two first
+    // records waits on the unique (org_id, version) index, and is refused as stale (HF005), never
+    // with 23505; when the first rolls back it records version 1 itself.
+    'NTR-09 PDPA-13 C0.9 OD-10 PD-63: of two contact changes from one version the second waits and is refused (HF005); of two first records the second waits on the index and is refused (HF005), or records version 1 when the first rolled back',
+    async watcher => {
+      await refused(
+        contactChange(3, 'dpo4@race.example'),
+        contactChange(3, 'dpo5@race.example', { dpo: n('62') }),
+        CONTACT_CHANGED,
+      )(watcher)
+      const [committed, rolledBack] = CONTACT_ORGS
+      const first = await race(
+        watcher,
+        contactChange(null, 'dpo@contact.example', { dpo: k('61'), org: committed }),
+        contactChange(null, 'privacy@contact.example', { dpo: k('62'), org: committed }),
+      )
+      expect(first.waited, 'the second first record did not wait for the first')
+      expect(first.error?.includes(CONTACT_CHANGED) === true, `expected HF005, got ${first.error ?? 'success'}`)
+      const second = await race(
+        watcher,
+        contactChange(null, 'dpo@contact.example', { dpo: k('63'), org: rolledBack }),
+        contactChange(null, 'privacy@contact.example', { dpo: k('64'), org: rolledBack }),
+        'rollback',
+      )
+      expect(second.waited, 'the second first record did not wait for the first, rolled back')
+      expect(second.error === undefined, `the second first record failed: ${second.error}`)
+      const recorded = await scalar(
+        watcher,
+        `select string_agg(format('%s %s %s', case when s.org_id = $1 then 'committed' else 'rolled back' end, s.version,
+                                  s.contact_email), ',' order by s.org_id, s.version) as v
+         from public.dpo_settings s where s.org_id = any($2::uuid[])`,
+        [committed, [committed, rolledBack]],
+      )
+      expect(
+        recorded === 'committed 1 dpo@contact.example,rolled back 1 privacy@contact.example',
+        `the contact orgs hold ${recorded ?? 'nothing'}`,
+      )
+    },
+  ],
+  [
+    'NTR-10 PDPA-03 C0.9 OD-19 PD-75: a recorded acknowledgement waits for a publish in progress and is refused (HF007); a publish waits for a record in progress, which stays the older version’s',
+    async watcher => {
+      const first = await race(watcher, publish('Race v10'), recordAck('5'))
+      expect(first.waited, 'the record did not wait for the publish in progress')
+      expect(first.error?.includes(RECORD_NEWER) === true, `expected HF007, got ${first.error ?? 'success'}`)
+      const second = await race(watcher, recordAck('5'), publish('Race v11'))
+      expect(second.waited, 'the publish did not wait for the record in progress')
+      expect(second.error === undefined, `the publish failed: ${second.error}`)
+      const recorded = await scalar(
+        watcher,
+        `select string_agg(v.version || ' ' || a.method, ',' order by v.version) as v from public.notice_acknowledgments a
+         join public.notice_versions v on v.org_id = a.org_id and v.id = a.notice_version_id
+         where a.org_id = $1 and a.person_id = $2`,
+        [NOTICE_ORG, n('75')],
+      )
+      expect(
+        recorded === '10 recorded_by_dpo',
+        `n(75)'s acknowledgements are ${recorded ?? 'none'}, not version 10's alone`,
+      )
+    },
+  ],
+  [
+    'NTR-11 PDPA-03 PDPA-13 C0.9 OD-19 ACC-05: a record waits for its person’s deactivation in progress, and a record or a contact change waits for its DPO’s deactivation or loss of the role, and each is refused (42501)',
+    async watcher => {
+      const before = await scalar(
+        watcher,
+        `select (select count(*) from public.notice_acknowledgments where org_id = $1) || ' ' ||
+                (select max(version) from public.dpo_settings where org_id = $1) as v`,
+        [NOTICE_ORG],
+      )
+      await refused(
+        deactivateIn(NOTICE_ORG, n('73'), n('61')),
+        recordAck('3'),
+        'Only someone still at the organisation can have an acknowledgement recorded.',
+      )(watcher)
+      await refused(
+        deactivateIn(NOTICE_ORG, n('65'), n('61')),
+        recordAck('4', { dpo: '65' }),
+        NOTICE_DPO_REFUSED,
+      )(watcher)
+      await refused(revokeDpo(NOTICE_ORG, n('66'), n('61')), recordAck('4', { dpo: '66' }), NOTICE_DPO_REFUSED)(watcher)
+      await refused(
+        deactivateIn(NOTICE_ORG, n('67'), n('61')),
+        contactChange(3, 'dpo6@race.example', { dpo: n('67') }),
+        REGISTER_DPO_REFUSED,
+      )(watcher)
+      await refused(
+        revokeDpo(NOTICE_ORG, n('68'), n('61')),
+        contactChange(3, 'dpo6@race.example', { dpo: n('68') }),
+        REGISTER_DPO_REFUSED,
+      )(watcher)
+      const after = await scalar(
+        watcher,
+        `select (select count(*) from public.notice_acknowledgments where org_id = $1) || ' ' ||
+                (select max(version) from public.dpo_settings where org_id = $1) as v`,
+        [NOTICE_ORG],
+      )
+      expect(after === before, `the refused writes changed the org: ${before ?? ''} before, ${after ?? ''} after`)
+    },
+  ],
+  [
+    // The second writer waits on the unique (org_id, person_id, notice_version_id) index for the
+    // first, then finds its row and writes nothing (changed false): one row and one audit row.
+    'NTR-12 PDPA-03 C0.9 OD-19 PD-42: a record and the person’s own acknowledgement of one version never both write, in either order',
+    async watcher => {
+      const first = await race(watcher, acknowledge('1'), recordAck('1', { unchanged: true }))
+      expect(first.waited, 'the record did not wait for the acknowledgement in progress')
+      expect(first.error === undefined, `the record wrote: ${first.error}`)
+      const second = await race(watcher, recordAck('4'), acknowledgeUnchanged('4'))
+      expect(second.waited, 'the acknowledgement did not wait for the record in progress')
+      expect(second.error === undefined, `the acknowledgement wrote: ${second.error}`)
+      for (const [member, method] of [
+        ['71', 'in_app notice.acknowledge'],
+        ['74', 'recorded_by_dpo notice.acknowledgement_recorded'],
+      ] as const) {
+        const written = await scalar(
+          watcher,
+          `select string_agg(a.method || ' ' || e.action, ',') as v from public.notice_acknowledgments a
+           join public.audit_events e on e.org_id = a.org_id and e.target_type = 'person' and e.target_id = a.person_id::text
+             and e.details ->> 'notice' = a.notice_version_id::text
+           where a.org_id = $1 and a.person_id = $2 and a.notice_version_id = ${LATEST_ID}`,
+          [NOTICE_ORG, n(member)],
+        )
+        expect(
+          written === method,
+          `n(${member})'s acknowledgement of the latest version and its audit rows are ${written ?? 'none'}`,
+        )
+      }
+    },
+  ],
+  [
+    'BGR-01 PDPA-10 C0.9 OD-20 PD-79: a re-clear waits for a DPO’s sign-in in progress and is refused (a DPO is signed in); a DPO’s sign-in waits for a re-clear in progress, then finds Twilio cleared',
+    async watcher => {
+      await refused(dpoSignIn('81', 'e1', 'f1'), reclear('81'), REGISTER_SIGNED_IN)(watcher)
+      expect((await openTwilio(watcher)) === null, 'a refused re-clear cleared Twilio')
+      await resetBreakGlass(watcher)
+      const { waited, error } = await race(watcher, reclear('81'), dpoSignIn('81', 'e1', 'f2', true))
+      expect(waited, 'the sign-in did not wait for the re-clear in progress')
+      expect(error === undefined, `the sign-in failed: ${error}`)
+      const open = await openTwilio(watcher)
+      expect(open === 'break_glass 81', `Twilio's open clearances are ${open ?? 'none'}`)
+      await resetBreakGlass(watcher)
+    },
+  ],
+  [
+    'BGR-02 PDPA-10 C0.9 OD-20 PD-79: a re-clear waits for a DPO’s sessions ending (every device, or one) and then clears Twilio',
+    async watcher => {
+      const issue = async (device: string, session: string) => {
+        await watcher.query('insert into public.devices (id, org_id, user_id, label) values ($1, $2, $3, $4)', [
+          g(device),
+          BREAK_GLASS_ORG,
+          g('82'),
+          'Phone',
+        ])
+        await watcher.query(
+          `insert into public.sessions (id, org_id, user_id, device_id, token_hash, expires_at)
+           values ($1, $2, $3, $4, sha256($5::bytea), now() + interval '7 days')`,
+          [g(session), BREAK_GLASS_ORG, g('82'), g(device), `bg ${session}`],
+        )
+      }
+      await issue('e3', 'f3')
+      const all = await race(
+        watcher,
+        {
+          as: 'app',
+          org: BREAK_GLASS_ORG,
+          user: g('82'),
+          sql: `select 1 from public.people where org_id = '${BREAK_GLASS_ORG}' and id = '${g('82')}' for no key update;
+                update public.devices set signed_out_at = now(), signed_out_by = '${g('82')}'
+                where org_id = '${BREAK_GLASS_ORG}' and user_id = '${g('82')}' and signed_out_at is null`,
+        },
+        reclear('82'),
+      )
+      expect(all.waited, 'the re-clear did not wait for every device being signed out')
+      expect(all.error === undefined, `the re-clear failed: ${all.error}`)
+      await resetBreakGlass(watcher)
+      await issue('e4', 'f4')
+      const one = await race(
+        watcher,
+        {
+          as: 'app',
+          org: BREAK_GLASS_ORG,
+          user: g('82'),
+          sql: `select 1 from public.people where org_id = '${BREAK_GLASS_ORG}' and id = '${g('82')}' for share;
+                update public.devices set signed_out_at = now(), signed_out_by = '${g('82')}' where id = '${g('e4')}'`,
+        },
+        reclear('82'),
+      )
+      expect(one.waited, 'the re-clear did not wait for one device being signed out')
+      expect(one.error === undefined, `the re-clear failed: ${one.error}`)
+      const open = await openTwilio(watcher)
+      expect(open === 'break_glass 82', `Twilio's open clearances are ${open ?? 'none'}`)
+      await resetBreakGlass(watcher)
+    },
+  ],
+  [
+    'BGR-03 PDPA-10 C0.9 OD-20 PD-79: of two re-clears at once, the second waits on the DPOs’ rows and is refused (cleared already)',
+    async watcher => {
+      await refused(reclear('81'), reclear('82'), REGISTER_CLEARED_ALREADY)(watcher)
+      const open = await openTwilio(watcher)
+      expect(open === 'break_glass 81', `Twilio's open clearances are ${open ?? 'none'}`)
+      await resetBreakGlass(watcher)
+    },
+  ],
+  [
+    'BGR-04 PDPA-10 C0.9 OD-20 PD-79: a re-clear waits for the DPO’s own clear in the app in progress and is refused (a DPO is signed in)',
+    async watcher => {
+      await watcher.query('insert into public.devices (id, org_id, user_id, label) values ($1, $2, $3, $4)', [
+        g('e6'),
+        BREAK_GLASS_ORG,
+        g('82'),
+        'Phone',
+      ])
+      await watcher.query(
+        `insert into public.sessions (id, org_id, user_id, device_id, token_hash, expires_at)
+         values ($1, $2, $3, $4, sha256($5::bytea), now() + interval '7 days')`,
+        [g('f6'), BREAK_GLASS_ORG, g('82'), g('e6'), 'bg f6'],
+      )
+      await refused(
+        {
+          as: 'app',
+          org: BREAK_GLASS_ORG,
+          user: g('82'),
+          sql: `select * from public.clear_transfer_entry('twilio',
+                  (select t.revision from public.transfer_register t
+                   where t.org_id = '${BREAK_GLASS_ORG}' and t.provider = 'twilio'), 'race', null, null)`,
+        },
+        reclear('81'),
+        REGISTER_SIGNED_IN,
+      )(watcher)
+      const open = await openTwilio(watcher)
+      expect(open === 'app 82', `Twilio's open clearances are ${open ?? 'none'}`)
+      await resetBreakGlass(watcher)
+    },
+  ],
+  [
+    'BGR-05 PDPA-10 C0.9 OD-20 PD-79: a re-clear waits for the named DPO losing the role, or being deactivated, and is refused',
+    async watcher => {
+      // The revocation holds only the role row, so the re-clear's FOR SHARE on it is what waits.
+      await refused(revokeDpo(BREAK_GLASS_ORG, g('81'), g('85')), reclear('81'), REGISTER_NOT_DPO)(watcher)
+      expect((await openTwilio(watcher)) === null, 'a re-clear naming a DPO who lost the role cleared Twilio')
+      await watcher.query(
+        `insert into public.role_assignments (org_id, person_id, role, created_by) values ($1, $2, 'dpo', $3)`,
+        [BREAK_GLASS_ORG, g('81'), g('a0')],
+      )
+      // The deactivation holds the person's row, which the holders loop waits for and then reads
+      // again without them.
+      await refused(deactivateIn(BREAK_GLASS_ORG, g('82'), g('85')), reclear('82'), REGISTER_NOT_DPO)(watcher)
+      expect((await openTwilio(watcher)) === null, 'a re-clear naming a DPO who left cleared Twilio')
+      // g(82) back at the org, past keep_history (the watcher is the superuser), for later cases.
+      await watcher.query('begin')
+      await watcher.query('set local session_replication_role = replica')
+      await watcher.query(
+        'update public.people set deactivated_at = null, deactivated_by = null where org_id = $1 and id = $2',
+        [BREAK_GLASS_ORG, g('82')],
+      )
+      await watcher.query('commit')
+      await resetBreakGlass(watcher)
+    },
+  ],
+  [
+    'BGR-06 PDPA-10 C0.9 OD-20 PD-79: the re-clear starts its transaction’s timer again at 30 s, under a longer one its session set and a lower value set over it',
+    async watcher => {
+      // The session's 4 s timer starts at begin; lowering the value to 2 s doesn't shorten it. A
+      // re-clear 1.5 s in that kept it would be ended at 4 s, inside the 3 s sleep after it.
+      const a = new Client({ ...connection, database: DB, options: '-c transaction_timeout=4s' })
+      a.on('error', () => {})
+      await a.connect()
+      try {
+        await a.query('begin')
+        await a.query('set local role hearth_owner')
+        await a.query("select set_config('transaction_timeout', '2s', true)")
+        await a.query('select pg_sleep(1.5)')
+        await a.query(reclear('81').sql)
+        const after = await a
+          .query<{ v: string }>("select pg_sleep(3), current_setting('transaction_timeout') as v")
+          .then(
+            result => result.rows[0]?.v ?? null,
+            (error: unknown) => `ended: ${message(error)}`,
+          )
+        expect(after === '30s', `4.5 s into the transaction, 3 s after the re-clear, it read ${after ?? 'nothing'}`)
+        await a.query('rollback')
+      } finally {
+        await a.end().catch(() => {})
+      }
+      expect((await openTwilio(watcher)) === null, 'the rolled-back re-clear cleared Twilio')
+    },
+  ],
+  [
+    'NTR-13 C0.9 PR 3a: 0011 applied while a gated request holds the notice tables and then reads a clearance never waits holding one of the three, so both commit',
+    async watcher => {
+      const db = 'concurrency_0011_check'
+      const admin = await connect('postgres')
+      try {
+        await admin.query(`drop database if exists ${db} with (force)`)
+        await admin.query(`create database ${db} owner hearth_owner template template0`)
+      } finally {
+        await admin.end()
+      }
+      try {
+        const built = await migrate({ databaseUrl: url(db), role: 'hearth_owner', before: '0011' })
+        if (built.error !== undefined) throw new Error(`the migrations before 0011 failed: ${message(built.error)}`)
+        // As the notice gate reads (requireNotice), then a re-authentication code's transfer check.
+        const request = await connect(db)
+        try {
+          const pid = (await request.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]?.pid ?? 0
+          await request.query('begin')
+          await request.query("set local lock_timeout = '10s'")
+          await request.query('select count(*) from public.notice_versions')
+          await request.query('select count(*) from public.notice_acknowledgments')
+          const migrating = migrate({ databaseUrl: url(db), role: 'hearth_owner' })
+          expect(await heldUp(watcher, db, pid), '0011 was never held up by the request')
+          const read = await request.query('select count(*) from public.transfer_clearances').then(
+            () => undefined,
+            (error: unknown) => message(error),
+          )
+          await request.query(read === undefined ? 'commit' : 'rollback')
+          const { error } = await migrating
+          expect(read === undefined, `the request's clearance read failed: ${read}`)
+          expect(error === undefined, `0011 failed: ${error === undefined ? '' : message(error)}`)
+        } finally {
+          await request.end()
+        }
+      } finally {
+        const cleanup = await connect('postgres')
+        await cleanup.query(`drop database if exists ${db} with (force)`)
+        await cleanup.end()
+      }
+    },
+  ],
 ]
+
+// Whether the migrator in `db` (any backend there but `except`) is held up, asked of Postgres for
+// up to 10 seconds: sleeping between attempts at its locks, or waiting on a table.
+async function heldUp(watcher: Client, db: string, except: number): Promise<boolean> {
+  for (let tries = 0; tries < 200; tries += 1) {
+    const result = await watcher.query<{ n: string }>(
+      `select count(*) as n from pg_stat_activity
+       where datname = $1 and pid <> $2 and (wait_event = 'PgSleep' or (wait_event_type = 'Lock' and wait_event = 'relation'))`,
+      [db, except],
+    )
+    if (Number(result.rows[0]?.n ?? 0) > 0) return true
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  return false
+}
 
 async function main(): Promise<number> {
   if (!LOCAL_HOSTS.has(host)) {

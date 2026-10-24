@@ -22,6 +22,9 @@ export const NOTICE = {
     changed: 'Changed',
     removed: 'No longer listed',
     wording: 'The notice’s wording has changed.',
+    // The DPO's contact (C0.9 OD-11, PD-67), on a line of its own.
+    contact: 'The Data Protection Officer’s contact details have changed.',
+    contactAdded: 'The notice now gives the Data Protection Officer’s contact details.',
   },
   confirm: (version: string) => `I’ve read the privacy notice, version ${version}.`,
   tickFirst: 'Tick the box to say you’ve read it.',
@@ -37,7 +40,9 @@ export const NOTICE = {
   unpublished: {
     dpoTitle: 'Publish the privacy notice',
     dpoBody:
-      'Nobody can use Hearth until the notice is published. Record each purpose’s legal basis and how long its data is kept, then publish the notice.',
+      'Nobody can use Hearth until the notice is published. Record your contact details and each purpose’s legal basis and how long its data is kept, then publish the notice.',
+    // Publishing needs the DPO's contact (C0.9 OD-10, PD-68).
+    toContact: 'Record your contact details',
     toPurposes: 'Open the processing register',
     toNotice: 'Publish the notice',
     title: 'Hearth isn’t open yet',
@@ -55,9 +60,20 @@ export const SETTINGS = {
   // The registry's sections (settings/sections.ts): each one's line on /settings.
   sections: {
     label: 'Settings sections',
-    privacy: 'The privacy notice, and when you acknowledged it',
+    privacy: 'How to reach the Data Protection Officer, the privacy notice and your acknowledgements',
   },
   privacy: {
+    // The contact the latest version printed (C0.9 OD-12, PD-69), for everyone.
+    contact: {
+      title: 'Contact the Data Protection Officer',
+      body: 'For a copy of your personal data, to have it corrected or to withdraw consent, or with a question or complaint about how it is handled.',
+      email: 'Email',
+      phone: 'Phone',
+      postal: 'Post',
+      leaving: 'You don’t need Hearth for this, so it still works after you leave.',
+      none: 'The current notice doesn’t give the Data Protection Officer’s contact yet. The employee data protection policy gives it.',
+      unreadable: 'The contact details can’t be shown. Reload the page to try again.',
+    },
     noticeTitle: 'Privacy notice',
     acknowledged: (version: string, date: string, method: string) =>
       `You acknowledged version ${version} on ${date} (${method}).`,
@@ -66,5 +82,7 @@ export const SETTINGS = {
     historyTitle: 'Your acknowledgements',
     history: (version: string, date: string, method: string) => `Version ${version}, ${date} (${method})`,
     noHistory: 'You haven’t acknowledged a version yet.',
+    // An acknowledgement the DPO recorded: how you acknowledged outside Hearth (C0.9 OD-19, PD-75).
+    recordedHow: (note: string) => `How: ${note}`,
   },
 } as const

@@ -8,8 +8,10 @@
 -- generated one (NTD-07); acknowledging is the latest version only, once, on the person's own device
 -- (NTD-08, PD-42); the transfer gate answers its four states, and transfer_cleared() PR 1's meaning
 -- before the first version (NTD-09, PD-41, B-03, B-06); and notice_facts() names the seven stated
--- facts (NTD-10). Every case runs as hearth_app (act_as), the owner or the role it tests unless it
--- says it arranges data as the superuser. The facts and the text are made up.
+-- facts (NTD-10). From 0011 (C0.9 PR 3a) a publish names the DPO's settings version its draft
+-- printed: a stale one is refused (NTD-04), and deemed consent by conduct is stated (NTD-05,
+-- OD-18); 165 has the contact's own cases. Every case runs as hearth_app (act_as), the owner or the
+-- role it tests unless it says it arranges data as the superuser. The facts and the text are made up.
 \ir fixtures/two_orgs.sql
 
 -- Today in the transaction's org's time zone.
@@ -30,12 +32,18 @@ create function pg_temp.sources(out keys text[], out versions integer[], out cle
          array(select x.id from public.transfer_clearances x join public.transfer_register t on t.id = x.entry_id
                where x.org_id = current_setting('app.org_id')::uuid and x.withdrawn_at is null and not t.ai order by x.id)
 $$;
+-- The org's latest DPO settings version (0011), as the api's draft reads it; null with none.
+create function pg_temp.contact_version() returns integer language sql as $$
+  select max(s.version) from public.dpo_settings s where s.org_id = nullif(current_setting('app.org_id', true), '')::uuid
+$$;
 -- publish_notice with the sources given, from the version the DPO saw, with the request's details
 -- (the device a plain id), as the api's route calls it; pg_temp.publish with the current sources.
+-- The settings version is the org's latest unless a case names another (PD-66).
 create function pg_temp.publish_with(seen integer, keys text[], versions integer[], clearances uuid[],
-                                     body text default 'Privacy notice', generator text default 'c09.1')
+                                     body text default 'Privacy notice', generator text default 'c09.1',
+                                     contact integer default pg_temp.contact_version())
 returns table (notice uuid, version integer) language sql as $$
-  select * from public.publish_notice(seen, body, generator, keys, versions, clearances, 'req-notice',
+  select * from public.publish_notice(seen, body, generator, keys, versions, clearances, contact, 'req-notice',
                                       'd0000000-0000-4000-8000-0000000000d1', '192.0.2.40')
 $$;
 create function pg_temp.publish(seen integer, body text default 'Privacy notice', generator text default 'c09.1')
@@ -153,6 +161,9 @@ insert into public.role_assignments (org_id, person_id, role, created_by) values
   (pg_temp.id('3', '00'), pg_temp.id('3', 'a5'), 'dpo', pg_temp.id('3', 'a1'));
 insert into public.users (id, org_id) values (pg_temp.id('3', 'a8'), pg_temp.id('3', '00'));
 insert into public.devices (id, org_id, user_id, label) values (pg_temp.id('3', 'e1'), pg_temp.id('3', '00'), pg_temp.id('3', 'a8'), 'Phone 3');
+-- Its DPO's contact (0011), as set_dpo_contact() writes it, so its publishes pass the contact rule.
+insert into public.dpo_settings (org_id, version, contact_title, contact_email, recorded_by)
+values (pg_temp.id('3', '00'), 1, 'Data Protection Officer', 'dpo-3@fixture.example', pg_temp.id('3', 'a5'));
 
 -- NTD-10 (PD-41, A-01): notice_facts() keeps exactly the seven facts the notice states, from a
 -- clearance's snapshot (every fact the DPO records, written confirmations included), a missing one
@@ -174,10 +185,11 @@ select pg_temp.check(public.notice_facts('{}') = '{"services": null, "data_types
 select pg_temp.check(provolatile = 'i' and not prosecdef, 'notice_facts() is not an immutable invoker function')
 from pg_proc where oid = 'public.notice_facts(jsonb)'::regprocedure;
 
--- NTD-02 (CLAUDE.md, Database; C0.9 PD-42, B-06, C-03): no runtime role (nor hearth_worker) may
--- insert, update, delete, empty, reference or trigger on any of the four notice tables; nobody runs
--- notice_facts(), notice_check_dpo() or the triggers' functions; only hearth_app publishes,
--- acknowledges and asks transfer_send_state(); hearth_app and hearth_queue read the stated
+-- NTD-02 (CLAUDE.md, Database; C0.9 PD-42, PD-66, B-06, C-03): no runtime role (nor hearth_worker)
+-- may insert, update, delete, empty, reference or trigger on any of the four notice tables; nobody
+-- runs notice_facts(), notice_check_dpo() or the triggers' functions; only hearth_app publishes (by
+-- 0011's signature, which names the contact: 0010's is gone, so no contact-blind publisher is
+-- left), acknowledges and asks transfer_send_state(); hearth_app and hearth_queue read the stated
 -- clearances. (030 and 032 pin each role's whole list.)
 do $$
 declare
@@ -198,7 +210,7 @@ begin
       perform pg_temp.check(not has_function_privilege(r, p, 'EXECUTE'), format('%s can run %s', r, p));
     end loop;
     perform pg_temp.check(
-      has_function_privilege(r, 'public.publish_notice(integer,text,text,text[],integer[],uuid[],text,uuid,inet)', 'EXECUTE')
+      has_function_privilege(r, 'public.publish_notice(integer,text,text,text[],integer[],uuid[],integer,text,uuid,inet)', 'EXECUTE')
         = (r = 'hearth_app')
       and has_function_privilege(r, 'public.acknowledge_notice(uuid,text,uuid,inet)', 'EXECUTE') = (r = 'hearth_app')
       and has_function_privilege(r, 'public.transfer_send_state(text)', 'EXECUTE') = (r = 'hearth_app')
@@ -207,6 +219,9 @@ begin
   end loop;
 end
 $$;
+select pg_temp.check(to_regprocedure('public.publish_notice(integer,text,text,text[],integer[],uuid[],text,uuid,inet)') is null
+                     and (select count(*) from pg_proc where proname = 'publish_notice') = 1,
+                     '0010''s publish_notice(), which names no contact, is still there');
 -- hearth_app's writes are refused outright (42501).
 select pg_temp.act_as('1', 'a5');
 select pg_temp.expect_error($$insert into public.notice_versions (org_id, version, body, published_by)
@@ -312,7 +327,7 @@ begin
   foreach r in array array['hearth_queue', 'hearth_job_offboarding', 'hearth_job_partitions', 'hearth_job_purge',
                            'hearth_job_revocation', 'hearth_worker'] loop
     perform pg_temp.act_as_job('1', r);
-    perform pg_temp.expect_error($f$select * from public.publish_notice(0, 'Body', 'c09.1', '{}', '{}', '{}', null, null, null)$f$,
+    perform pg_temp.expect_error($f$select * from public.publish_notice(0, 'Body', 'c09.1', '{}', '{}', '{}', 1, null, null, null)$f$,
                                  '42501', 'permission denied%');
     perform set_config('role', 'none', true);
   end loop;
@@ -402,21 +417,35 @@ select pg_temp.expect_error($$select * from pg_temp.publish(null)$$, 'HF007',
 reset role;
 select pg_temp.next_version('1', p, '{"basis": "employment", "retention": "Kept for 12 months"}')
 from unnest(array['accounts', 'backups', 'security_audit', 'service_operation']) p;
--- Consent, deemed consent by conduct and by notification (s15A) are each refused.
+-- Consent and deemed consent by notification (s15A) are each refused. Deemed consent by conduct
+-- is stated from 0011 (OD-18, PD-73): on presence_receipts, which needs no switch, it passes the
+-- rule, and with every later rule met the version publishes (rolled back, HT001, so the cases below
+-- see version 0 as the latest). The publish route holds such a purpose back unless its withdrawal
+-- by hand is written down (CONDUCT_WITHDRAWABLE, PD-86), which SQL doesn't repeat.
 do $$
 declare
   basis jsonb;
 begin
-  foreach basis in array array['{}'::jsonb, '{"basis": "deemed_consent_conduct"}',
+  foreach basis in array array['{}'::jsonb,
                                '{"basis": "deemed_consent_notification", "basis_reference": "Assessment 4", "opt_out_days": 30}'] loop
     if basis <> '{}' then
       perform pg_temp.next_version('1', 'presence_receipts', basis);
     end if;
     perform pg_temp.act_as('1', 'a5');
     perform pg_temp.expect_error($f$select * from pg_temp.publish(0)$f$, 'HF008',
-                                 'A purpose resting on consent or deemed consent can''t be in the notice yet.');
+                                 'A purpose resting on consent or deemed consent by notification can''t be in the notice yet.');
     perform set_config('role', 'none', true);
   end loop;
+  begin
+    perform pg_temp.next_version('1', 'presence_receipts',
+                                 '{"basis": "deemed_consent_conduct", "basis_reference": null, "opt_out_days": null}');
+    perform pg_temp.act_as('1', 'a5');
+    perform pg_temp.check((select version from pg_temp.publish(0)) = 1,
+                          'a purpose on deemed consent by conduct held publishing back');
+    raise exception 'roll the publish back' using errcode = 'HT001';
+  exception when sqlstate 'HT001' then
+    null;
+  end;
 end
 $$;
 select pg_temp.next_version('1', 'presence_receipts',
@@ -454,10 +483,11 @@ from public.audit_events where id > current_setting('test.audit_max')::bigint an
 select pg_temp.check(count(*) = 2, 'a refused publish added a version') from public.notice_versions
 where org_id in (pg_temp.id('1', '00'), pg_temp.id('2', '00'), pg_temp.id('3', '00'));
 
--- NTD-06 (PDPA-03, ADM-06, C0.9 PD-33, PD-34, B-05): org 1 publishes its first generated version,
--- numbered after its stand-in (1). It links exactly the sources it locked: every active and retired
--- non-AI purpose at its current version (content_delivery retired among them; nothing planned), and
--- the open clearance e5. One audit row, ids and numbers only.
+-- NTD-06 (PDPA-03, ADM-06, C0.9 PD-33, PD-34, PD-66, B-05): org 1 publishes its first generated
+-- version, numbered after its stand-in (1). It links exactly the sources it locked: every active and
+-- retired non-AI purpose at its current version (content_delivery retired among them; nothing
+-- planned), the open clearance e5, and the DPO's settings version it printed (e6's 1). One audit
+-- row, ids and numbers only.
 select set_config('test.audit_max', (select coalesce(max(id), 0)::text from public.audit_events), true);
 select pg_temp.act_as('1', 'a5');
 select set_config('test.v1', notice::text, true) from pg_temp.publish(0) where version = 1;
@@ -475,8 +505,8 @@ select pg_temp.check(
 from (select pg_temp.sources() s) x;
 reset role;
 select pg_temp.check(v.org_id = pg_temp.id('1', '00') and v.version = 1 and v.body = 'Privacy notice' and v.generator = 'c09.1'
-                     and v.published_by = pg_temp.id('1', 'a5') and v.published_at = now(),
-                     'version 1 was not stored as published')
+                     and v.published_by = pg_temp.id('1', 'a5') and v.published_at = now() and v.dpo_settings_version = 1,
+                     'version 1 was not stored as published, linking the contact it printed (e6, settings version 1)')
 from public.notice_versions v where v.id = current_setting('test.v1')::uuid;
 select pg_temp.check(count(*) = 1 and bool_and(
                        a.org_id = pg_temp.id('1', '00') and a.actor_id = pg_temp.id('1', 'a5') and a.action = 'notice.publish'
@@ -487,7 +517,7 @@ select pg_temp.check(count(*) = 1 and bool_and(
                          'version', 1, 'was_version', 0, 'generator', 'c09.1',
                          'purposes', (select jsonb_object_agg(l.purpose, l.register_version) from public.notice_version_purposes l
                                       where l.notice_version_id = current_setting('test.v1')::uuid),
-                         'clearances', jsonb_build_object('aws', pg_temp.id('1', 'e5')))),
+                         'clearances', jsonb_build_object('aws', pg_temp.id('1', 'e5')), 'contact_version', 1)),
                      format('the publish''s audit row is wrong: %s', array_agg(a.details)))
 from public.audit_events a where a.id > current_setting('test.audit_max')::bigint;
 -- Org 3 publishes its first version, numbered 0 (with no version before it), stating twilio.
@@ -508,9 +538,9 @@ select pg_temp.check((a.details ->> 'version')::int = 0 and a.details -> 'was_ve
                      format('org 3''s publish audit row is wrong: %s', a.details))
 from public.audit_events a where a.org_id = pg_temp.id('3', '00') and a.action = 'notice.publish';
 
--- NTD-04 (C0.9 PD-37, PD-52, B-02): what the DPO saw is stale (HF007): a version that isn't the
--- latest, or none when one exists; and sources other than those locked, purposes or clearances, in
--- any way. The same sources in another order pass. Two first publishes: the second finds the first's
+-- NTD-04 (C0.9 PD-37, PD-52, PD-66, B-02): what the DPO saw is stale (HF007): a version that isn't
+-- the latest, or none when one exists; sources other than those locked, purposes or clearances, in
+-- any way; and a settings version other than the latest. The same sources in another order pass. Two first publishes: the second finds the first's
 -- version (HF007), never a constraint's error (the concurrent orders run in check-concurrency, NTR-04).
 select pg_temp.act_as('1', 'a5');
 select pg_temp.expect_error($$select * from pg_temp.publish(0, 'Another body')$$, 'HF007', 'A newer version was published since you looked.%');
@@ -544,6 +574,14 @@ begin
       raise exception '%: %', c.what, sqlerrm;
     end;
   end loop;
+  -- The DPO's settings version (0011, PD-66): one that isn't the latest, none while one is
+  -- recorded, or one that doesn't exist, is stale too, with its own message, after the registers'.
+  perform pg_temp.expect_error(format($f$select * from pg_temp.publish_with(1, %L, %L, %L, 'Another body', 'c09.1', %s)$f$,
+                                      s.keys, s.versions, s.clearances, stale.v), 'HF007',
+                               'The Data Protection Officer''s contact changed since this notice was prepared. Check the preview again, then publish.')
+  from (values ('null'), ('0'), ('2')) as stale (v);
+  perform pg_temp.expect_error(format($f$select * from pg_temp.publish_with(1, %L, %L, %L, 'Another body', 'c09.1', null)$f$,
+                                      s.keys[2:], s.versions[2:], s.clearances), 'HF007', 'The registers changed since%');
   perform pg_temp.check((select version from pg_temp.publish_with(1, array(select k from unnest(s.keys) k order by k desc),
                                                                    array(select v from unnest(s.versions) with ordinality as x (v, n) order by n desc),
                                                                    s.clearances, 'Another body')) = 2,

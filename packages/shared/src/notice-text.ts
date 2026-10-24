@@ -1,5 +1,6 @@
-// The privacy notice's words (PDPA-02; C0.9 PD-33, PD-35, PD-36, PD-53, PD-58, PD-60, PD-62;
-// TECH-SPEC T22 items 22 to 25): generateNotice() writes a version's body from the registers, and
+// The privacy notice's words (PDPA-02; C0.9 PD-33, PD-35, PD-36, PD-53, PD-58, PD-60, PD-62, and
+// from PR 3a PD-67, PD-68, PD-73, PD-74 and PD-86; TECH-SPEC T22 items 22 to 25):
+// generateNotice() writes a version's body from the registers and the DPO's business contact, and
 // noticeProblems() and noticeWarnings() say what holds publishing back and what it warns of. It is
 // pure and deterministic, so the same registers always give the same words and the DPO's preview is
 // what gets published: the publish route regenerates the draft and compares digests. Only the
@@ -10,11 +11,14 @@
 // The copy is British, short and active (CLAUDE.md, Conventions), never "ask", "I agree" or an AI
 // word (decision 8, AI_COPY), and its verb is "acknowledge": acknowledging records that people
 // were told, and it isn't consent (D28, PRD §8.18). The DPO confirms OD-04's paragraph, the
-// production-access paragraph, the "doesn't do" clauses and every basis's wording (C0.9 PD-53).
+// production-access paragraph, the "doesn't do" clauses and every basis's wording (C0.9 PD-53),
+// and from c09.2 the wording of deemed consent by conduct and of "If you withdraw consent" (PD-73)
+// and of "Your rights", which prints the DPO's contact (PD-74).
 //
 // The server loads this file on Node (T2), and the package compiles with lib ES2024 and no DOM or
 // Node types.
 import { aiCopyIn } from './ai-copy.ts'
+import { type DpoContact, flatText, postalOneLine } from './dpo-contact.ts'
 import {
   NOTICE_FREE_TEXT_FIELDS,
   NOTICE_LINE,
@@ -37,10 +41,11 @@ import {
   PURPOSES,
   type PurposeKey,
 } from './purposes.ts'
-import { BASIS_NEEDS, type Basis, isConsentBasis, type PurposeStatus } from './registers.ts'
+import { BASIS_NEEDS, type Basis, CONDUCT_WITHDRAWABLE, isNoticeHeldBasis, type PurposeStatus } from './registers.ts'
 
-// The id of the words below. A new id with any change to the output (NTG-09).
-export const NOTICE_GENERATOR = 'c09.1'
+// The id of the words below. A new id with any change to the output (NTG-09). c09.2 (C0.9 PR 3a)
+// prints the DPO's contact under "Your rights" and states deemed consent by conduct.
+export const NOTICE_GENERATOR = 'c09.2'
 
 // --- What the generator reads (TECH-SPEC T22 item 23) ------------------------------------------
 
@@ -65,12 +70,14 @@ export interface NoticeClearance {
 }
 
 // Everything a draft is written from, read in one transaction: the org's name, the current entry
-// of every purpose outside the AI layer (planned ones are left out of the notice), and every open
-// clearance of a provider outside it.
+// of every purpose outside the AI layer (planned ones are left out of the notice), every open
+// clearance of a provider outside it, and the DPO's current settings version with its business
+// contact (C0.9 OD-10, OD-11; null until the DPO records one).
 export interface NoticeInput {
   org: string
   purposes: readonly NoticePurpose[]
   clearances: readonly NoticeClearance[]
+  contact: (DpoContact & { version: number }) | null
 }
 
 // --- Fixed words ------------------------------------------------------------------------------
@@ -137,17 +144,13 @@ export const DOES_NOT_EXEMPT = {
 
 // --- Lines --------------------------------------------------------------------------------------
 
-// Free text (the DPO's, the org's name) as one line: every run of whitespace or control characters,
-// line breaks of every kind included, becomes one space, and the ends are trimmed.
-const flat = (text: string) => text.replace(/[\s\p{Cc}]+/gu, ' ').trim()
-
-// One line of the body, written as a template whose values are free text. It always starts with the
-// generator's own words, never with a value, so nothing the DPO types can begin a line and pass for
-// a heading or an item (C0.9 PD-33).
+// One line of the body, written as a template whose values are free text, each flattened to one
+// line (flatText(), dpo-contact.ts). It always starts with the generator's own words, never with a
+// value, so nothing the DPO types can begin a line and pass for a heading or an item (C0.9 PD-33).
 function line(fixed: TemplateStringsArray, ...free: readonly string[]): string {
   const start = fixed[0] ?? ''
   if (!/^\S/u.test(start)) throw new Error('A notice line starts with the generator’s own words')
-  return free.reduce((text, value, index) => `${text}${flat(value)}${fixed[index + 1] ?? ''}`, start)
+  return free.reduce((text, value, index) => `${text}${flatText(value)}${fixed[index + 1] ?? ''}`, start)
 }
 
 // A sentence that ends with free text, closed with a full stop unless the text closes itself.
@@ -449,7 +452,7 @@ export const NOTICE_COUNTRY_NAMES: Readonly<Record<string, string>> = {
 function countryName(code: string): string {
   return (Object.hasOwn(NOTICE_COUNTRY_NAMES, code) ? NOTICE_COUNTRY_NAMES[code] : undefined) ?? code
 }
-const countries = (codes: readonly string[]) => joinList(codes.map(code => countryName(flat(code))))
+const countries = (codes: readonly string[]) => joinList(codes.map(code => countryName(flatText(code))))
 
 // Text counts as recorded once it holds more than whitespace, as the registers count it.
 const recorded = (text: string | null): text is string => text !== null && text.trim() !== ''
@@ -467,17 +470,26 @@ interface Read {
   active: readonly NoticePurpose[]
   retired: readonly NoticePurpose[]
   clearances: readonly NoticeClearance[]
+  contact: DpoContact
 }
 
 const byPurpose = (a: NoticePurpose, b: NoticePurpose) => PURPOSE_KEYS.indexOf(a.key) - PURPOSE_KEYS.indexOf(b.key)
 const byProvider = (a: ProviderKey, b: ProviderKey) => PROVIDERS.indexOf(a) - PROVIDERS.indexOf(b)
 
 // What generateNotice() can't write is a bug in its caller, never something to publish: an AI
-// purpose or provider (D41; the server reads neither), the same purpose or provider twice, or an
-// entry that noticeProblems() holds back (no basis or no retention, or a consent-type basis), so
-// the server asks for problems first.
+// purpose or provider (D41; the server reads neither), the same purpose or provider twice, an entry
+// that noticeProblems() holds back (no basis or no retention, or a basis no version can state yet),
+// or no contact for the DPO (dpo_contact_pending), so the server asks for problems first.
 function read(input: NoticeInput): Read {
-  const named = flat(input.org)
+  const contact = input.contact
+  if (
+    contact === null ||
+    !recorded(contact.title) ||
+    ![contact.email, contact.phone, contact.postal].some(channel => recorded(channel))
+  ) {
+    throw new Error('A notice gives the Data Protection Officer’s contact')
+  }
+  const named = flatText(input.org)
   if (named === '') throw new Error('A notice names its organisation')
   // The DPO can't change the org's name, so a name holding wording Hearth keeps off its screens
   // (AI_COPY, decision 8) isn't refused at publish, which would stop the org from ever publishing
@@ -493,7 +505,7 @@ function read(input: NoticeInput): Read {
       if (isAiProvider(provider)) throw new Error(`${purpose.key} lists ${provider}, an AI provider`)
     }
     if (purpose.status === 'planned') continue
-    if (purpose.status === 'active' && (purpose.basis === null || isConsentBasis(purpose.basis))) {
+    if (purpose.status === 'active' && (purpose.basis === null || isNoticeHeldBasis(purpose.basis))) {
       throw new Error(`${purpose.key} has no basis the notice can state`)
     }
     if (!recorded(purpose.retention)) throw new Error(`${purpose.key} has no retention`)
@@ -506,12 +518,13 @@ function read(input: NoticeInput): Read {
   }
   const current = (status: PurposeStatus) => input.purposes.filter(p => p.status === status).sort(byPurpose)
   const clearances = [...input.clearances].sort((a, b) => byProvider(a.provider, b.provider))
-  return { org, active: current('active'), retired: current('retired'), clearances }
+  return { org, active: current('active'), retired: current('retired'), clearances, contact }
 }
 
 // --- The body (TECH-SPEC T22 items 22 and 23) ---------------------------------------------------
 
-// How the notice states each basis it may (C0.9 PD-38: no consent-type basis is stated yet).
+// How the notice states each basis it may (C0.9 PD-38, OD-18): deemed consent by conduct from c09.2
+// (PD-73), pointing to how to withdraw it; consent and deemed consent by notification not yet.
 // Legitimate interests says so and how to learn more (PDPA-02). No line puts the org's name in the
 // possessive, which reads badly for a name ending in s.
 function basisItem(purpose: NoticePurpose, org: string): string {
@@ -529,6 +542,8 @@ function basisItem(purpose: NoticePurpose, org: string): string {
       return reference === null
         ? 'Legal basis: an exception or requirement in law.'
         : line`Legal basis: an exception or requirement in law (${reference}).`
+    case 'deemed_consent_conduct':
+      return `Legal basis: your deemed consent. You give this data yourself, for this purpose, and it is reasonable that you would. You can withdraw it, as “${NOTICE_SECTIONS.withdraw}” below says.`
     default:
       // read() refuses the rest first.
       throw new Error(`${purpose.key}: no basis the notice can state`)
@@ -577,13 +592,71 @@ function providerItems(clearance: NoticeClearance, org: string): string[] {
   return [...items, ...trainingItem(facts, org)]
 }
 
+// "If you withdraw consent" (C0.9 OD-18, PD-73): which purposes stop for you, and how to withdraw.
+// Both branches speak only of the purposes under "Why your data is processed", the ones Hearth
+// still processes data for: a retired purpose continues for nobody and may keep a consent-type
+// basis (publishing's consent rule reads active purposes only), so it is never listed or said to
+// continue. Every other active purpose rests on a basis that isn't consent-type, since no version
+// states consent or deemed consent by notification yet, and the pinned purposes are always among
+// them (0009). Until the DPO's procedure says how one person's withdrawal of a purpose is carried
+// out, the publish route holds that purpose back (purpose_conduct_unstoppable, PD-86), so the
+// second branch is written and previewed, and published only once it can be kept.
+function withdrawBlocks(active: readonly NoticePurpose[]): Block[] {
+  const conduct = active.filter(purpose => purpose.basis === 'deemed_consent_conduct')
+  if (conduct.length === 0) {
+    return [
+      section(NOTICE_SECTIONS.withdraw),
+      paragraph(
+        `None of the purposes under “${NOTICE_SECTIONS.purposes}” rests on your consent, so they all continue if you withdraw it.`,
+      ),
+    ]
+  }
+  return [
+    section(NOTICE_SECTIONS.withdraw),
+    paragraph('These purposes rest on your deemed consent, so they stop for you if you withdraw it:'),
+    list(conduct.map(purpose => PURPOSES[purpose.key].register)),
+    paragraph(
+      `The other purposes under “${NOTICE_SECTIONS.purposes}” don't rest on consent, so they continue if you withdraw it.`,
+    ),
+    paragraph(
+      `To withdraw, contact the Data Protection Officer, as “${NOTICE_SECTIONS.rights}” below says. Hearth can't take a withdrawal in the app yet, so they carry it out by hand: they tell you first what withdrawing changes for you, and confirm once it has taken effect.`,
+    ),
+  ]
+}
+
+// "Your rights" (PDPA-02, PDPA-13; C0.9 OD-10, OD-13, PD-74): what you may ask for, and the DPO's
+// business contact, so someone with no account, or who has left, can still reach them. Each
+// channel recorded is an item of its own, with no full stop, so an address reads exactly; the
+// postal address is printed on one line, its lines joined with commas. PR 3b adds the form and the
+// reply targets here.
+function rightsBlocks(org: string, contact: DpoContact): Block[] {
+  const channels = [line`Role: ${contact.title}`]
+  if (recorded(contact.email)) channels.push(line`Email: ${contact.email}`)
+  if (recorded(contact.phone)) channels.push(line`Phone: ${contact.phone}`)
+  if (recorded(contact.postal)) channels.push(line`Post: ${postalOneLine(contact.postal)}`)
+  return [
+    section(NOTICE_SECTIONS.rights),
+    paragraph(
+      line`You can request a copy of the personal data ${org} holds about you, have it corrected, or withdraw consent where a purpose rests on it.`,
+    ),
+    paragraph(
+      line`To do any of these, or to raise a question or a complaint about how your personal data is handled, contact the Data Protection Officer of ${org}. You don't need a Hearth account for this, so it still works after you leave.`,
+    ),
+    list(channels),
+    paragraph(
+      "If you're not satisfied with the answer, you can complain to the Personal Data Protection Commission (PDPC).",
+    ),
+  ]
+}
+
 // The body of a new version, from the registers as they are (C0.9 PD-35): every active purpose,
 // with its basis, retention and providers; every retired one, with how long what it collected is
-// kept (PD-60); whether consent can be withdrawn; what Hearth doesn't do (PD-58); every cleared
-// provider with the facts it states, and OD-04's paragraph when Twilio is one; production access
-// (PRD-101); and your rights. Throws on what noticeProblems() holds back (read() above).
+// kept (PD-60); whether consent can be withdrawn (PD-73); what Hearth doesn't do (PD-58); every
+// cleared provider with the facts it states, and OD-04's paragraph when Twilio is one; production
+// access (PRD-101); and your rights, with the DPO's contact (PD-74). Throws on what
+// noticeProblems() holds back (read() above).
 export function generateNotice(input: NoticeInput): string {
-  const { org, active, retired, clearances } = read(input)
+  const { org, active, retired, clearances, contact } = read(input)
   const blocks: Block[] = []
 
   blocks.push(
@@ -621,10 +694,7 @@ export function generateNotice(input: NoticeInput): string {
     }
   }
 
-  blocks.push(
-    section(NOTICE_SECTIONS.withdraw),
-    paragraph('None of these purposes rests on your consent, so all of them continue if you withdraw it.'),
-  )
+  blocks.push(...withdrawBlocks(active))
 
   const running = new Set<PurposeKey>(active.map(purpose => purpose.key))
   const clauses = DOES_NOT.filter(row => !row.purposes.some(key => running.has(key)))
@@ -669,13 +739,7 @@ export function generateNotice(input: NoticeInput): string {
     paragraph(
       line`The person who runs Hearth's servers for ${org} can reach its production systems only through a separate emergency role. Each use is logged, and a second person reviews every use each quarter.`,
     ),
-    section(NOTICE_SECTIONS.rights),
-    paragraph(
-      line`You can request a copy of the personal data ${org} holds about you, have it corrected, or withdraw consent where a purpose rests on it.`,
-    ),
-    paragraph(
-      line`To do any of these, contact the Data Protection Officer through the contact given in the employee data protection policy of ${org}.`,
-    ),
+    ...rightsBlocks(org, contact),
   )
 
   return blocks.map(block => block.join('\n')).join('\n\n')
@@ -687,9 +751,10 @@ export function generateNotice(input: NoticeInput): string {
 const codeUnits = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
 // The draft's sources, as publish_notice() takes them and the version links them: every active or
-// retired purpose at its current version, sorted by key (PD-60), and every open clearance, sorted
-// by id.
+// retired purpose at its current version, sorted by key (PD-60), every open clearance, sorted by
+// id, and the DPO's current settings version with its contact (PD-66).
 export function noticeDraftSources(input: NoticeInput, body: string | null): NoticeSources {
+  const contact = input.contact
   return {
     generator: NOTICE_GENERATOR,
     body,
@@ -700,11 +765,19 @@ export function noticeDraftSources(input: NoticeInput, body: string | null): Not
     clearances: input.clearances
       .map(clearance => ({ id: clearance.id, provider: clearance.provider, facts: clearance.facts }))
       .sort((a, b) => codeUnits(a.id, b.id)),
+    contact:
+      contact === null
+        ? null
+        : {
+            version: contact.version,
+            facts: { title: contact.title, email: contact.email, phone: contact.phone, postal: contact.postal },
+          },
   }
 }
 
 // What the draft's digest hashes (sha-256, on the server): JSON with sorted keys of its words, its
-// generator and its sources, so a preview and a publish agree only when every one of them does.
+// generator and its sources, the DPO's settings version among them (PD-66), so a preview and a
+// publish agree only when every one of them does.
 export function noticeDigestText(sources: NoticeSources): string {
   const purposes: Record<string, number> = {}
   for (const purpose of [...sources.purposes].sort((a, b) => codeUnits(a.key, b.key))) {
@@ -713,12 +786,16 @@ export function noticeDigestText(sources: NoticeSources): string {
   return JSON.stringify({
     body: sources.body,
     clearances: sources.clearances.map(clearance => clearance.id).sort(codeUnits),
+    contact: sources.contact?.version ?? null,
     generator: sources.generator,
     purposes,
   })
 }
 
-// The same words from the same generator, listing the same purposes at the same versions.
+// The same words from the same generator, listing the same purposes at the same versions and
+// printing the same settings version of the DPO's contact (PD-67): a new settings version counts as
+// a purpose's new register version does, so it reads out of date until it is published, and warns
+// same_text when the words match.
 function sameWords(draft: NoticeSources, latest: NoticeSources): boolean {
   const pairs = (sources: NoticeSources) =>
     sources.purposes
@@ -729,7 +806,8 @@ function sameWords(draft: NoticeSources, latest: NoticeSources): boolean {
     draft.body !== null &&
     draft.body === latest.body &&
     draft.generator === latest.generator &&
-    pairs(draft) === pairs(latest)
+    pairs(draft) === pairs(latest) &&
+    (draft.contact?.version ?? null) === (latest.contact?.version ?? null)
   )
 }
 
@@ -760,14 +838,33 @@ export function noticeSaysTheSame(draft: NoticeSources, latest: NoticeSources): 
   )
 }
 
-// --- Problems and warnings (C0.9 PD-37, PD-38, PD-62) ------------------------------------------
+// --- Problems and warnings (C0.9 PD-37, PD-38, PD-62, PD-68, PD-86) ----------------------------
 
-// The problems that stop the draft being written at all.
+// The problems that stop the draft being written at all. With no contact for the DPO there is no
+// preview either (PD-68): "Your rights" can't be written without it.
 const UNWRITABLE: readonly NoticeProblem['code'][] = [
   'purpose_basis_missing',
   'purpose_retention_missing',
   'purpose_consent_basis',
+  'dpo_contact_pending',
 ]
+
+// The active purposes on deemed consent by conduct that no published notice may state yet (C0.9
+// OD-18, PD-86), in the registry's order: each one CONDUCT_WITHDRAWABLE doesn't list, since the
+// DPO's written procedure doesn't yet say how one person's withdrawal of it is carried out, and the
+// notice would tell people it stops for them. withdrawable is a parameter so a test can plant a
+// list; noticeProblems(), and so the publish route, always uses the real one.
+export function conductUnstoppable(
+  purposes: readonly Pick<NoticePurpose, 'key' | 'status' | 'basis'>[],
+  withdrawable: readonly PurposeKey[] = CONDUCT_WITHDRAWABLE,
+): PurposeKey[] {
+  const held = new Set(
+    purposes
+      .filter(p => p.status === 'active' && p.basis === 'deemed_consent_conduct' && !withdrawable.includes(p.key))
+      .map(p => p.key),
+  )
+  return PURPOSE_KEYS.filter(key => held.has(key))
+}
 
 function sortedBy<T extends { code: string; purpose?: PurposeKey; provider?: ProviderKey; field?: string }>(
   codes: readonly string[],
@@ -793,8 +890,9 @@ function sortedBy<T extends { code: string; purpose?: PurposeKey; provider?: Pro
 // What holds a draft back, in NOTICE_PROBLEMS order, then the registries' (notice.ts says what
 // each means). The rules hold for active purposes; a retired one's retention is checked too, which
 // 0009 already requires, so the generator never meets one without it. Free text is checked as the
-// notice prints it, and only where it prints it. Whether the draft is the latest version again is
-// known only once it can be written.
+// notice prints it, and only where it prints it, the DPO's contact included (PD-65), since AI_COPY
+// is code and may grow after the contact was saved. Whether the draft is the latest version again
+// is known only once it can be written.
 export function noticeProblems(input: NoticeInput, latest: NoticeSources | null): NoticeProblem[] {
   const found: NoticeProblem[] = []
   const cleared = new Set(input.clearances.map(clearance => clearance.provider))
@@ -803,7 +901,16 @@ export function noticeProblems(input: NoticeInput, latest: NoticeSources | null)
     text: string | null,
     about: Pick<NoticeProblem, 'purpose' | 'provider'>,
   ) => {
-    if (text !== null && aiCopyIn(flat(text)) !== undefined) found.push({ code: 'free_text_ai_copy', ...about, field })
+    if (text !== null && aiCopyIn(flatText(text)) !== undefined) {
+      found.push({ code: 'free_text_ai_copy', ...about, field })
+    }
+  }
+  const contact = input.contact
+  if (contact === null) found.push({ code: 'dpo_contact_pending' })
+  else {
+    freeText('contact_title', contact.title, {})
+    freeText('contact_email', contact.email, {})
+    freeText('contact_postal', contact.postal === null ? null : postalOneLine(contact.postal), {})
   }
   for (const purpose of input.purposes) {
     if (purpose.status === 'planned') continue
@@ -812,11 +919,14 @@ export function noticeProblems(input: NoticeInput, latest: NoticeSources | null)
     freeText('retention', purpose.retention, about)
     if (purpose.status !== 'active') continue
     if (purpose.basis === null) found.push({ code: 'purpose_basis_missing', ...about })
-    else if (isConsentBasis(purpose.basis)) found.push({ code: 'purpose_consent_basis', ...about })
+    else if (isNoticeHeldBasis(purpose.basis)) found.push({ code: 'purpose_consent_basis', ...about })
     else if (BASIS_NEEDS[purpose.basis].reference) freeText('basis_reference', purpose.basisReference, about)
     for (const provider of new Set(purpose.providers)) {
       if (!cleared.has(provider)) found.push({ code: 'provider_not_cleared', ...about, provider })
     }
+  }
+  for (const key of conductUnstoppable(input.purposes)) {
+    found.push({ code: 'purpose_conduct_unstoppable', purpose: key })
   }
   for (const clearance of input.clearances) {
     const about = { provider: clearance.provider }
@@ -854,8 +964,9 @@ export function noticeWarnings(input: NoticeInput, latest: NoticeSources | null,
     const draft = noticeDraftSources(input, generateNotice(input))
     if (draft.body === latest.body && !sameVersion(draft, latest)) found.push({ code: 'same_text' })
   }
-  // Standing warnings: what the notice says of the DPO's contact and of production access isn't in
-  // place yet (C0.9 PD-57), so the DPO is told each time.
-  found.push({ code: 'dpo_contact_pending' }, { code: 'production_access_pending' })
+  // The standing warning: what the notice says of production access isn't in place yet (C0.9
+  // PD-57), so the DPO is told each time. The DPO's contact, which PR 2 warned of here, is a problem
+  // from PR 3a (dpo_contact_pending, PD-68).
+  found.push({ code: 'production_access_pending' })
   return sortedBy(NOTICE_WARNINGS, found)
 }

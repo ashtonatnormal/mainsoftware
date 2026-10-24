@@ -14,9 +14,22 @@
 // C0.9 PR 1 sends to a push service, and the e2e api's fake SMS provider names no transfer, so
 // clearing or withdrawing changes no send. DPP-E6 publishes nothing: the seed's org keeps its
 // placeholder version 0 until SE-05 publishes version 1, last in the run (session-end.spec.ts); its
-// ready draft and its free-text problem are answers the test gives the page itself (C-05).
-import { generateNotice, NoticeAdminResponse, REAUTH_METHOD_MESSAGES } from '@hearth/shared'
-import type { Page } from '@playwright/test'
+// ready draft and its free-text problem are answers the test gives the page itself (C-05). DPP-E7
+// and DPP-E8 (C0.9 PR 3a) write nothing either: their reads are the api's, and the contact's save
+// and the recorded acknowledgement are answered by the test, so every case in this project sees
+// the seed's org with no contact recorded, whatever the order, and SE-05 records the contact last.
+// Past the session's first 5 minutes the api asks for the PIN again, and confirmPinIfAsked()
+// answers it as DPP-E3 does.
+import {
+  type ContactAdminJSON,
+  ContactAdminResponse,
+  generateNotice,
+  NoticeAdminResponse,
+  NoticePeopleResponse,
+  REAUTH_METHOD_MESSAGES,
+  type SetContactJSON,
+} from '@hearth/shared'
+import type { Locator, Page } from '@playwright/test'
 import { expectAxeClean } from './support/axe.ts'
 import { inputs16, noAiCopy, noSidewaysScroll, targets44 } from './support/checks.ts'
 import { stateFile } from './support/env.ts'
@@ -34,6 +47,7 @@ test.beforeAll(async () => {
 })
 
 const h1 = (page: Page) => page.getByRole('heading', { level: 1 })
+const toasts = (page: Page) => page.getByRole('region', { name: 'Notifications' })
 const accountMenu = (page: Page) => page.getByRole('menu', { name: 'Account' })
 
 // A card on a register's page, by its heading.
@@ -42,6 +56,24 @@ const card = (page: Page, name: string | RegExp) =>
 
 // The first purpose's card, which shows once the register has been read.
 const firstPurpose = (page: Page) => page.getByRole('heading', { level: 2, name: /^Accounts and sign-in/ })
+
+// DPP-E3's step, when the api asks for it: past the session's first 5 minutes, a read of the DPO's
+// pages is refused for a fresh re-authentication (403 reauth_required), and the inline step
+// confirms the PIN, after which the read is made again and `shown` appears.
+async function confirmPinIfAsked(page: Page, shown: Locator): Promise<void> {
+  const pin = page.getByLabel('Your PIN', { exact: true })
+  await expect(shown.or(pin).first()).toBeVisible()
+  if (!(await pin.isVisible())) return
+  await pin.fill(E2E_PIN)
+  await page.getByRole('button', { name: 'Confirm', exact: true }).click()
+  await expect(shown).toBeVisible()
+}
+
+// The refusals confirmPinIfAsked() meets, for the guard.
+const PIN_ASKED = (...paths: string[]) => paths.map(path => ({ path, status: 403 }))
+
+// The day after a YYYY-MM-DD day.
+const dayAfter = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10)
 
 // A review date a year from now: after today in any zone.
 const nextYear = () => {
@@ -316,6 +348,8 @@ function readyAnswer(today: string) {
       },
     ],
     clearances: [],
+    // The contact SE-05 records (support/registers-api.ts), made up, on a reserved domain.
+    contact: { version: 1, title: 'Data Protection Officer', email: 'dpo@tembusu.example', phone: null, postal: null },
   })
   return NoticeAdminResponse.parse({
     today,
@@ -325,11 +359,12 @@ function readyAnswer(today: string) {
       body,
       digest: 'ab'.repeat(32),
       problems: [],
-      warnings: [{ code: 'dpo_contact_pending' }],
+      warnings: [{ code: 'production_access_pending' }],
       changes: {
         since: 0,
         purposes: { added: ['accounts', 'backups'], changed: [], removed: [] },
         providers: { added: [], changed: [], removed: [] },
+        contact: 'added',
         wording: true,
       },
       upToDate: false,
@@ -338,7 +373,7 @@ function readyAnswer(today: string) {
   })
 }
 
-test('DPP-E6 PDPA-02 PD-37 PD-48 PD-62 C-05: the Notice tab, from the Registers links (badged Out of date), shows the placeholder version 0 with a count of acknowledgements, what holds publishing back with a link to the processing register, Publish held and no preview; a ready draft shows its words and Publish asks first, and Cancel publishes nothing; free text the screens keep off is named by its field, never quoted; each state passes axe with no AI copy, 44 px targets and nothing sideways', async ({
+test('DPP-E6 PDPA-02 PD-37 PD-48 PD-62 PD-68 C-05: the Notice tab, from the Registers links (badged Out of date), shows the placeholder version 0 with a count of acknowledgements, what holds publishing back (the DPO’s contact included) with links to the processing register and the contact page, Publish held and no preview; a ready draft shows its words and Publish asks first, and Cancel publishes nothing; free text the screens keep off is named by its field, never quoted; each state passes axe with no AI copy, 44 px targets and nothing sideways', async ({
   open,
 }, testInfo) => {
   // Three states of the tab, each through axe at its sizes and schemes.
@@ -390,6 +425,18 @@ test('DPP-E6 PDPA-02 PD-37 PD-48 PD-62 C-05: the Notice tab, from the Registers 
       .filter({ hasText: /^Backups/ })
       .filter({ hasText: 'Record its legal basis.' }),
   ).toBeVisible()
+  // No contact is recorded in this project (C0.9 OD-10, PD-68), under its own heading, fixed on its
+  // page.
+  await expect(
+    page
+      .getByRole('listitem')
+      .filter({ hasText: /^Your contact details/ })
+      .filter({ hasText: 'Record your contact details, so the notice can say how to reach you.' }),
+  ).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Open your contact details', exact: true })).toHaveAttribute(
+    'href',
+    '/dpo/contact',
+  )
   const publish = page.getByRole('button', { name: 'Publish version 1', exact: true })
   await expect(publish).toHaveAttribute('aria-disabled', 'true')
   await expect(page.getByText('The preview shows once what’s listed above is fixed.', { exact: true })).toBeVisible()
@@ -410,6 +457,10 @@ test('DPP-E6 PDPA-02 PD-37 PD-48 PD-62 C-05: the Notice tab, from the Registers 
   await expect(preview.getByRole('heading', { level: 3, name: 'About this notice' })).toBeVisible()
   await expect(preview.getByRole('heading', { level: 4, name: /^Accounts and sign-in/ })).toBeVisible()
   await expect(page.getByText('Now listed', { exact: true })).toBeVisible()
+  await expect(
+    page.getByText('The notice gives your contact details for the first time.', { exact: true }),
+  ).toBeVisible()
+  await expect(preview.getByText('Email: dpo@tembusu.example', { exact: true })).toBeVisible()
   await expect(publish).not.toHaveAttribute('aria-disabled')
   await checked('/dpo/notice ready')
   await publish.click()
@@ -444,12 +495,237 @@ test('DPP-E6 PDPA-02 PD-37 PD-48 PD-62 C-05: the Notice tab, from the Registers 
   expect(publishes).toEqual([])
 })
 
-test('DPP-E4 PD-20 PD-49 PDPA-13 B-09: someone who isn’t the DPO (Marcus) has Settings and Sign out but no Data protection entry, and his deep links to a register and to the Notice tab are refused by the api and say the page is the DPO’s', async ({
+test('DPP-E7 PDPA-13 OD-10 PD-64 PD-70: the DPO opens Contact from the Registers links; with none recorded the page says so, and Record contact details opens the dialog with the role title filled in; no channel, or a phone number without +, holds Save back with a line saying why; a made-up role, mailbox and address save, focus lands on Edit, and the card then says the published notice doesn’t give them yet; the page and the dialog pass axe at 320, 390 and 1440 px in both schemes, with no AI copy, 44 px targets, 16 px inputs and nothing sideways', async ({
+  open,
+  guard,
+}, testInfo) => {
+  test.setTimeout(150_000)
+  guard.expectResponses(PIN_ASKED('/api/admin/registers', '/api/admin/notice/contact'))
+  const page = await open({ ...SIZES.w390, signedIn: ASHTON })
+  // The contact's reads go to the api (it has none: nothing in this project records one) until the
+  // save, which the test answers itself, so nothing is written; then the read answers what the
+  // server would for what was saved: recorded today, and not in the seed's placeholder (C0.9 PD-70).
+  let real: ContactAdminJSON | undefined
+  let saved: SetContactJSON | undefined
+  await page.route('**/api/admin/notice/contact', async route => {
+    if (saved === undefined || real === undefined) {
+      const response = await route.fetch()
+      if (response.status() === 200) real = ContactAdminResponse.parse(await response.json())
+      return route.fulfill({ response })
+    }
+    const after = ContactAdminResponse.parse({
+      notice: real.notice,
+      contact: {
+        version: 1,
+        title: saved.title,
+        email: saved.email,
+        phone: saved.phone,
+        postal: saved.postal,
+        recordedOn: new Date().toISOString().slice(0, 10),
+        recordedBy: 'Ashton Teo',
+      },
+      stated: 'not_printed',
+    })
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(after) })
+  })
+  await page.route('**/api/admin/notice/contact/set', route => {
+    saved = route.request().postDataJSON() as SetContactJSON
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ version: 1, changed: true }),
+    })
+  })
+  // What NFR-02 and decision 8 ask of the page or dialog as it stands, at each size and scheme.
+  const checked = async (what: string, sizes = CHECK_SIZES, schemes: readonly ('light' | 'dark')[] = SCHEMES) => {
+    for (const size of sizes) {
+      await page.setViewportSize(size)
+      for (const scheme of schemes) {
+        await page.emulateMedia({ colorScheme: scheme })
+        await expectAxeClean(page, `${what} at ${size.width} ${scheme}`, testInfo)
+      }
+      const label = `${what} at ${size.width}`
+      expect(await noAiCopy(page), label).toEqual([])
+      expect(await targets44(page), label).toEqual([])
+      expect(await inputs16(page), label).toEqual([])
+    }
+    await page.setViewportSize(SIZES.w320)
+    expect(await noSidewaysScroll(page), `${what} at 320`).toEqual([])
+    await page.setViewportSize(SIZES.w390)
+    await page.emulateMedia({ colorScheme: 'light' })
+  }
+
+  await page.goto('/dpo/purposes')
+  await confirmPinIfAsked(page, firstPurpose(page))
+  const registers = page.getByRole('navigation', { name: 'Registers' })
+  await registers.getByRole('link', { name: 'Contact', exact: true }).click()
+  await expect(page).toHaveURL(/\/dpo\/contact$/)
+  await expect(h1(page)).toHaveText('Contact details')
+  const none = page.getByRole('heading', { level: 2, name: 'No contact details yet' })
+  await confirmPinIfAsked(page, none)
+  await expect(registers.getByRole('link', { name: 'Contact', exact: true })).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByText('The notice can’t be published until you record them.', { exact: true })).toBeVisible()
+  expect(real?.contact).toBeNull()
+  await checked('/dpo/contact with none')
+
+  await page.getByRole('button', { name: 'Record contact details', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Record your contact details' })
+  await expect(dialog).toBeVisible()
+  const field = (label: string) => dialog.getByLabel(label, { exact: true })
+  await expect(field('Role title')).toHaveValue('Data Protection Officer')
+  const save = dialog.getByRole('button', { name: 'Save', exact: true })
+  // No channel outside Hearth (OD-10).
+  await expect(
+    dialog.getByText('Give an email address, a phone number or a postal address.', { exact: true }),
+  ).toBeVisible()
+  await expect(save).toHaveAttribute('aria-disabled', 'true')
+  // A number not in international format, marked on its field.
+  await field('Phone').fill('12345')
+  await expect(
+    dialog.getByText('Enter the phone number starting with + and the country code.', { exact: true }),
+  ).toBeVisible()
+  await expect(field('Phone')).toHaveAttribute('aria-invalid', 'true')
+  await expect(save).toHaveAttribute('aria-disabled', 'true')
+  await checked('the contact dialog')
+
+  await field('Phone').fill('')
+  await field('Email address').fill('dpo@tembusu.example')
+  await field('Postal address').fill('1 Example Road\nSingapore 000000')
+  await expect(dialog.getByText('Before you can save', { exact: true })).toHaveCount(0)
+  await expect(save).not.toHaveAttribute('aria-disabled')
+  await save.click()
+  await expect(dialog).toBeHidden()
+  expect(saved).toEqual({
+    seen: null,
+    title: 'Data Protection Officer',
+    email: 'dpo@tembusu.example',
+    phone: null,
+    postal: '1 Example Road\nSingapore 000000',
+  })
+  await expect(toasts(page).getByText('Contact details saved.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 2, name: 'Data Protection Officer' })).toBeVisible()
+  // The button that opened the dialog has gone with the empty card, so focus is on Edit, never <body>.
+  await expect(page.getByRole('button', { name: 'Edit contact details', exact: true })).toBeFocused()
+  await expect(page.getByText('Not in the published notice yet', { exact: true })).toBeVisible()
+  await expect(
+    page.getByText('The published notice doesn’t give your contact details yet. Publish a new version so it does.', {
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Open the Notice tab', exact: true })).toHaveAttribute(
+    'href',
+    '/dpo/notice',
+  )
+  await checked('/dpo/contact with a contact', [SIZES.w390], ['light'])
+})
+
+test('DPP-E8 PDPA-03 OD-19 PD-75 PD-76: from the Notice tab, Record an acknowledgement lists the seed’s people but the DPO, by name and department with no number or status; a day after today and no note are each held back on the page; Rachel, a day and how are recorded, the body naming her, the placeholder version, the day and the note, once more after the dialog’s PIN step when the first is refused for a fresh re-authentication; the toast says so, the dialog closes and focus is back on the button; the dialog passes axe at 320 and 390 px in both schemes, with 44 px targets, 16 px inputs and nothing sideways', async ({
+  open,
+  guard,
+}, testInfo) => {
+  test.setTimeout(120_000)
+  guard.expectResponses([
+    ...PIN_ASKED('/api/admin/notice', '/api/admin/notice/people'),
+    { path: '/api/admin/notice/acknowledgements/record', status: 403 },
+  ])
+  const page = await open({ ...SIZES.w390, signedIn: ASHTON })
+  // The list is the api's (a read, which writes nothing); the record is answered here: the first
+  // with the refusal the api gives a PIN-rule session past its 5 minutes, so the dialog's own PIN
+  // step is shown (outside its form, since a form in a form never sends), the next recorded.
+  const recorded: unknown[] = []
+  await page.route('**/api/admin/notice/acknowledgements/record', route => {
+    recorded.push(route.request().postDataJSON())
+    return route.fulfill(
+      recorded.length === 1
+        ? {
+            status: 403,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              error: 'reauth_required',
+              message: REAUTH_METHOD_MESSAGES.pin.required,
+              method: 'pin',
+            }),
+          }
+        : { status: 200, contentType: 'application/json', body: JSON.stringify({ version: 0, changed: true }) },
+    )
+  })
+  const listed = page.waitForResponse(
+    response => new URL(response.url()).pathname === '/api/admin/notice/people' && response.status() === 200,
+  )
+  await page.goto('/dpo/notice')
+  const count = page.getByText(/^\d+ of the \d+ people at the organisation have acknowledged version 0\.$/)
+  await confirmPinIfAsked(page, count)
+  const opener = page.getByRole('button', { name: 'Record an acknowledgement', exact: true })
+  await opener.click()
+  const dialog = page.getByRole('dialog', { name: 'Record an acknowledgement of version 0' })
+  const who = dialog.getByLabel('Who acknowledged it', { exact: true })
+  await confirmPinIfAsked(page, who)
+  await expect(who).toBeFocused()
+  const people = NoticePeopleResponse.parse(await (await listed).json())
+  const rachel = people.people.find(person => person.name === 'Rachel Goh')
+  expect(rachel).toBeDefined()
+  expect(people.people.map(person => person.name)).not.toContain('Ashton Teo')
+  const options = (await who.locator('option').allInnerTexts()).map(text => text.trim())
+  expect(options[0]).toBe('Choose someone')
+  expect(options).toContain('Rachel Goh (Commercial)')
+  expect(options).toHaveLength(people.people.length + 1)
+  // Roster facts only: no number, and nothing about who has acknowledged (PD-76).
+  expect(options.filter(text => /\+\d|\d{8}|acknowledg/i.test(text))).toEqual([])
+
+  const day = dialog.getByLabel('When they acknowledged it', { exact: true })
+  const how = dialog.getByLabel('How they acknowledged it', { exact: true })
+  const record = dialog.getByRole('button', { name: 'Record', exact: true })
+  await who.selectOption(rachel?.id ?? '')
+  await day.fill(dayAfter(people.today))
+  await expect(
+    dialog.getByText('Give a day from the day version 0 was published to today.', { exact: true }),
+  ).toBeVisible()
+  await expect(dialog.getByText('Say how they acknowledged it.', { exact: true })).toBeVisible()
+  await expect(record).toHaveAttribute('aria-disabled', 'true')
+  for (const size of [SIZES.w320, SIZES.w390]) {
+    await page.setViewportSize(size)
+    for (const scheme of SCHEMES) {
+      await page.emulateMedia({ colorScheme: scheme })
+      await expectAxeClean(page, `the record dialog at ${size.width} ${scheme}`, testInfo)
+    }
+    const label = `the record dialog at ${size.width}`
+    expect(await targets44(page), label).toEqual([])
+    expect(await inputs16(page), label).toEqual([])
+    expect(await noSidewaysScroll(page), label).toEqual([])
+    expect(await noAiCopy(page), label).toEqual([])
+  }
+  await page.emulateMedia({ colorScheme: 'light' })
+
+  await day.fill(people.today)
+  await how.fill('Signed a printed copy at induction')
+  await expect(dialog.getByText('Before you can record', { exact: true })).toHaveCount(0)
+  await record.click()
+  const pin = dialog.getByLabel('Your PIN', { exact: true })
+  await expect(pin).toBeVisible()
+  expect(await dialog.locator('form form').count()).toBe(0)
+  const confirmed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/auth/reauth/pin')
+  await pin.fill(E2E_PIN)
+  await pin.press('Enter')
+  expect((await confirmed).status()).toBe(200)
+  await expect(dialog).toBeHidden()
+  const body = {
+    person: rachel?.id,
+    notice: people.latest.notice,
+    acknowledgedOn: people.today,
+    note: 'Signed a printed copy at induction',
+  }
+  expect(recorded).toEqual([body, body])
+  await expect(toasts(page).getByText('Recorded: Rachel Goh acknowledged version 0.', { exact: true })).toBeVisible()
+  await expect(opener).toBeFocused()
+})
+
+test('DPP-E4 PD-20 PD-49 PD-70 PDPA-13 B-09: someone who isn’t the DPO (Marcus) has Settings and Sign out but no Data protection entry, and his deep links to a register, to the contact page and to the Notice tab are refused by the api and say the page is the DPO’s', async ({
   open,
   guard,
 }) => {
   guard.expectResponses([
     { path: '/api/admin/registers', status: 403 },
+    { path: '/api/admin/notice/contact', status: 403 },
     { path: '/api/admin/notice', status: 403 },
   ])
   const page = await open({ ...SIZES.w390, signedIn: true })
@@ -469,6 +745,19 @@ test('DPP-E4 PD-20 PD-49 PDPA-13 B-09: someone who isn’t the DPO (Marcus) has 
   ).toBeVisible()
   await expect(page.getByRole('navigation', { name: 'Registers' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /^Edit / })).toHaveCount(0)
+
+  // The contact page is the DPO's alone (PD-70): reading it is notice.read's.
+  const contactRefusal = page.waitForResponse(
+    response => new URL(response.url()).pathname === '/api/admin/notice/contact',
+  )
+  await page.goto('/dpo/contact')
+  expect((await contactRefusal).status()).toBe(403)
+  await expect(h1(page)).toHaveText('Contact details')
+  await expect(
+    page.getByRole('heading', { level: 2, name: 'This page is for the Data Protection Officer.' }),
+  ).toBeVisible()
+  await expect(page.getByRole('navigation', { name: 'Registers' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Record contact details' })).toHaveCount(0)
 
   // The Notice tab is the DPO's alone too (PD-49).
   const noticeRefusal = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/notice')

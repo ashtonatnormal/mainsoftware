@@ -189,6 +189,20 @@ export function adminCan(world: World, actor: Id, request: AdminRequest, context
     case 'notice.read':
     case 'notice.publish':
       return world.holds(actor, 'dpo')
+    // PDPA-13: the DPO alone records their business contact (C0.9 OD-10), before v0 too
+    // (NOTICE_SETUP); never an Owner, Admin or Compliance Officer as such. Not Rule 9.
+    case 'notice.contact.set':
+      return world.holds(actor, 'dpo')
+    // PDPA-03 (C0.9 OD-19): the DPO alone records someone else's acknowledgement, for a person still
+    // at the organisation, never their own, which they make in Hearth, as every admin action on
+    // another person checks.
+    case 'notice.acknowledgement.record':
+      return request.person !== actor && world.isActivePerson(request.person) && world.holds(actor, 'dpo')
+    // PDPA-03 (C0.9 OD-19, PD-76): the DPO alone lists the people still at the organisation, by
+    // name, department, manager and the day they were added, to record someone's acknowledgement.
+    // Never a number or who has acknowledged. Not Rule 9: roster facts, no content.
+    case 'notice.people.read':
+      return world.holds(actor, 'dpo')
     default:
       return false
   }

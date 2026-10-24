@@ -11,6 +11,7 @@ import {
 import { MutationObserver } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiFailure } from '@/api/http.ts'
+import { dayText as timeDayText } from '@/lib/time.ts'
 import { createQueryClient } from '@/session/query-client.ts'
 import { DPO } from '@/strings/dpo.ts'
 import { PURPOSE_PROBLEM_COPY } from '@/strings/dpo-purposes.ts'
@@ -124,6 +125,8 @@ describe('C0.9 PD-26: the DPO pages’ model (dpo/model.ts)', () => {
     expect(countriesOf('Singapore').valid).toBe(false)
     expect(countriesOf('S1').valid).toBe(false)
     expect(dayText('2026-10-22')).toBe('Thu 22 Oct 2026')
+    // Re-exported from lib/time.ts, where Settings reads it without the DPO's chunk (C0.9 PD-75).
+    expect(dayText).toBe(timeDayText)
   })
 
   it('DPP-01 PD-20 PD-21: the calls go to their /api/admin/registers paths with the bodies given, the registers are read leniently and never again on focus or reconnect, and the PIN goes to /api/auth/reauth/pin', async () => {
@@ -255,7 +258,7 @@ describe('C0.9 PD-26: the DPO pages’ model (dpo/model.ts)', () => {
   })
 
   it('DPP-03 PDPA-10 PD-12 PD-13 T22 item 3: a card says whether the provider is cleared, by whom, at set-up or since withdrawn; the review date is overdue only once passed while cleared; Clear for use is held until nothing is missing; and what checks each provider today', () => {
-    const cleared = (via: 'app' | 'bootstrap', by: string | null) => ({
+    const cleared = (via: 'app' | 'bootstrap' | 'break_glass', by: string | null) => ({
       clearedOn: '2026-10-02',
       clearedBy: by,
       clearedVia: via,
@@ -358,6 +361,40 @@ describe('C0.9 PD-26: the DPO pages’ model (dpo/model.ts)', () => {
     for (const row of registers.transfers) {
       const checks = transferView(row, TODAY).checkedBy
       expect(checks === PROVIDER_CHECKS.twilio.checkedBy, row.provider).toBe(row.provider === 'twilio')
+    }
+  })
+
+  it('DPP-03 OD-20 PD-80: Twilio Verify cleared again by the break-glass re-clear says so, so the DPO coming back sees why it is cleared and that it wasn’t them; withdrawing it, and a plain Save that ends it, say only that re-clear restores codes once every DPO’s session has ended', () => {
+    const registers = registersForClient(
+      {},
+      {
+        twilio: {
+          ...COMPLETE_FACTS,
+          revision: 3,
+          clearance: {
+            clearedOn: '2026-10-02',
+            clearedBy: 'Ashton Teo',
+            clearedVia: 'break_glass',
+            revision: 3,
+            withdrawnOn: null,
+            withdrawnBy: null,
+            withdrawReason: null,
+          },
+        },
+      },
+    )
+    const twilio = transferView(transferOf(registers, 'twilio'), TODAY)
+    expect(twilio).toMatchObject({
+      cleared: true,
+      clearance: 'Cleared again by the emergency re-clear on Fri 2 Oct 2026. Check its facts and review date.',
+    })
+    expect(twilio.withdrawing.endsWith(TRANSFERS_COPY.twilioLastSession)).toBe(true)
+    expect(TRANSFERS_COPY.twilioLastSession).toBe(
+      'If every Data Protection Officer’s session ends before Twilio Verify is cleared again, only the emergency re-clear in the runbook restores sign-in codes.',
+    )
+    // Only Twilio Verify's warning says it: no other provider has a re-clear.
+    for (const row of registers.transfers.filter(each => each.provider !== 'twilio')) {
+      expect(transferView(row, TODAY).withdrawing, row.provider).not.toContain(TRANSFERS_COPY.twilioLastSession)
     }
   })
 

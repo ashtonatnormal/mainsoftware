@@ -1,7 +1,7 @@
 // What both DPO pages share (C0.9 PD-20, PD-25, PD-26, OD-03): the frame, the links between the
-// two registers and the Notice tab (PD-48), the registers' answer with each way it can be refused,
-// and the writes. The Notice link's badge is the screen's to pass in (noticeBadge), so this module
-// imports neither the notice markers nor their copy (B-12).
+// two registers, the contact details (PD-70) and the Notice tab (PD-48), the registers' answer with
+// each way it can be refused, and the writes. A link's badge is the screen's to pass in (badges,
+// noticeBadge), so this module imports neither the notice markers nor their copy (B-12).
 //
 // The server decides who may read or change the registers (can(): the DPO alone, freshly
 // re-authenticated, PD-20 and PD-30); the page only says what it answered:
@@ -33,20 +33,35 @@ import { ReauthPin } from './ReauthPin.tsx'
 import { SignOutNotice } from './SignOutNotice.tsx'
 
 export type RegisterName = 'purposes' | 'transfers'
-// The DPO's pages: the two registers and the Notice tab.
-export type DpoPageName = RegisterName | 'notice'
+// The DPO's pages: the two registers, the contact details (C0.9 PD-70) and the Notice tab.
+export type DpoPageName = RegisterName | 'contact' | 'notice'
 
-const REGISTER_PATHS = { purposes: '/dpo/purposes', transfers: '/dpo/transfers', notice: '/dpo/notice' } as const
+const REGISTER_PATHS = {
+  purposes: '/dpo/purposes',
+  transfers: '/dpo/transfers',
+  contact: '/dpo/contact',
+  notice: '/dpo/notice',
+} as const satisfies Record<DpoPageName, string>
 
-// The two registers and the Notice tab as links in a segmented track (finance's large segmented
-// control, as the kit's Segmented draws it): each is a real URL, so Back and Forward move between
-// them (X12), and the current one is marked by aria-current, the ink fill and a check mark, never
-// colour alone. children: what the Notice link shows beside its name (the screen's badge, B-12).
-export function RegisterLinks({ current, children }: { current: DpoPageName; children?: ReactNode }) {
+// In this order: the Notice tab last, since publishing is the step after the rest.
+const PAGE_ORDER = ['purposes', 'transfers', 'contact', 'notice'] as const satisfies readonly DpoPageName[]
+
+// The DPO's pages as links in a segmented track (finance's large segmented control, as the kit's
+// Segmented draws it): each is a real URL, so Back and Forward move between them (X12), and the
+// current one is marked by aria-current, the ink fill and a check mark, never colour alone. The
+// track wraps, to two rows at 320 px. badges: what a link shows beside its name (the screen's,
+// B-12): today the Notice link's, from C0.9 PR 3b the queue's count too (OD-22).
+export function RegisterLinks({
+  current,
+  badges,
+}: {
+  current: DpoPageName
+  badges?: Partial<Record<DpoPageName, ReactNode>>
+}) {
   return (
     <nav aria-label={DPO.tabs.label}>
       <div className="inline-flex max-w-full flex-wrap gap-2 rounded-2xl border border-line bg-surface p-1.5">
-        {(['purposes', 'transfers', 'notice'] as const).map(name => {
+        {PAGE_ORDER.map(name => {
           const here = name === current
           return (
             <Link
@@ -62,7 +77,7 @@ export function RegisterLinks({ current, children }: { current: DpoPageName; chi
             >
               {here && <Check aria-hidden size={16} className="shrink-0" />}
               {DPO.tabs[name]}
-              {name === 'notice' && children}
+              {badges?.[name]}
             </Link>
           )
         })}
@@ -107,7 +122,7 @@ export function RegisterPage({ current, noticeBadge, children }: RegisterPagePro
     <Page>
       <div className="flex flex-col gap-5">
         {refusal?.kind !== 'forbidden' && (
-          <RegisterLinks current={current}>{query.data !== undefined && noticeBadge?.(query.data)}</RegisterLinks>
+          <RegisterLinks current={current} badges={{ notice: query.data !== undefined && noticeBadge?.(query.data) }} />
         )}
         {refusal !== undefined && <ReadRefusal refusal={refusal} retry={retry} />}
         {query.isPending && (
@@ -176,8 +191,8 @@ export function useRegisterWrite(done: () => void, savedText: string = DPO.saved
   }
 }
 
-// A refused write, in its dialog.
-export function WriteRefusal({ writer }: { writer: RegisterWriter }) {
+// A refused write, in its dialog (a register's, or the contact's: dpo/ContactScreen.tsx).
+export function WriteRefusal({ writer }: { writer: Pick<RegisterWriter, 'refusal' | 'retry' | 'reload'> }) {
   const refusal = writer.refusal
   if (refusal === undefined) return null
   switch (refusal.kind) {

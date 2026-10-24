@@ -9,7 +9,7 @@
 import { MESSAGES, NON_AI_PROVIDERS, REAUTH_METHOD_MESSAGES } from '@hearth/shared'
 import type { ApiFailure } from '@/api/http.ts'
 import { reauthMethodOf } from '@/api/reauth.ts'
-import { formattersFor } from '@/lib/time.ts'
+import { dayText } from '@/lib/time.ts'
 import { DPO, type NonAiProviderKey, PROVIDER_NAMES } from '@/strings/dpo.ts'
 
 // --- Refusals (PD-25, PD-30) -------------------------------------------------------------------
@@ -81,14 +81,9 @@ export function pinEntryProblem(pin: string): string | undefined {
 
 // --- Days ----------------------------------------------------------------------------------------
 
-// A day the answer gives (YYYY-MM-DD, already in the org's zone) as the app shows dates:
-// "Thu 22 Oct 2026". Formatted at UTC midnight in UTC, so no zone moves it.
-export function dayText(day: string): string {
-  const [year, month, date] = day.split('-').map(Number)
-  if (year === undefined || month === undefined || date === undefined) return day
-  const ms = Date.UTC(year, month - 1, date)
-  return Number.isFinite(ms) ? formattersFor('UTC').date(ms) : day
-}
+// A day the answer gives, as the app shows dates (lib/time.ts, where Settings reads it too without
+// loading the DPO's chunk; C0.9 PD-75).
+export { dayText }
 
 // --- What both registers' cards share ------------------------------------------------------------
 
@@ -105,6 +100,8 @@ export function recordedText(day: string, name: string | null, hearths: boolean)
 export interface Fact {
   readonly term: string
   readonly value: string
+  // A value of several lines, kept as they are (a postal address).
+  readonly lines?: boolean
 }
 
 // Typed text as the register stores it: trimmed, and none when blank.

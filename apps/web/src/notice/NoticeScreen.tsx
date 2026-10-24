@@ -5,7 +5,8 @@
 // and there is no Skip. The router brings a tab here whenever the person's standing isn't
 // acknowledged (router/router.tsx); GET /api/notice decides what it shows (notice-model.ts):
 // - the version and when it was published (in the person's zone), what changed since the version
-//   they last acknowledged, and the body (NoticeBody) in a labelled, focusable scroll region;
+//   they last acknowledged (the DPO's contact included, C0.9 OD-11), and the body (NoticeBody) in a
+//   labelled, focusable scroll region;
 // - a box to tick, "I've read the privacy notice, version N.", then Acknowledge. Pressed unticked,
 //   it says "Tick the box to say you've read it." and moves focus to the box;
 // - acknowledged, the notice store (session/notice.ts) starts or resumes the live connection, every
@@ -97,6 +98,9 @@ function NoticeState({ view, retry }: { view: NoticeView; retry(): void }) {
           <Actions>
             <Link to="/dpo/notice" activeOptions={{ exact: true }} activeProps={{}} className={buttonClass('primary')}>
               {NOTICE.unpublished.toNotice}
+            </Link>
+            <Link to="/dpo/contact" activeOptions={{ exact: true }} activeProps={{}} className={buttonClass()}>
+              {NOTICE.unpublished.toContact}
             </Link>
             <Link to="/dpo/purposes" activeOptions={{ exact: true }} activeProps={{}} className={buttonClass()}>
               {NOTICE.unpublished.toPurposes}
@@ -210,6 +214,9 @@ function Changes({ changes }: { changes: ChangeLines }) {
               </ul>
             </div>
           ),
+      )}
+      {changes.contact !== undefined && (
+        <p>{changes.contact === 'added' ? NOTICE.changes.contactAdded : NOTICE.changes.contact}</p>
       )}
       {changes.wording && <p>{NOTICE.changes.wording}</p>}
     </section>

@@ -1,11 +1,13 @@
 // What the DPO's pages say (C0.9 PD-26, PD-27, PD-31; OD-03): British English, short and active
 // (CLAUDE.md, Conventions), never "ask" and never an AI word (decision 8, strings/ai-copy.ts). Only
 // the pages' lazy chunks load these files, so the boot's bundle carries none of it; their titles
-// and the avatar menu's entry are in strings/shell.ts. In three files, so each page's chunk carries
-// only its own copy: this one, what both pages say; strings/dpo-purposes.ts, the processing
-// register's; strings/dpo-transfers.ts, the transfer register's. The registers' rules are codes in
-// packages/shared (registers.ts) and are worded in these files, once each; a code with no line
-// fails typecheck. The purposes' own wording is the register's (PURPOSES[key].register), and
+// and the avatar menu's entry are in strings/shell.ts. In several files, so each page's chunk
+// carries only its own copy: this one, what both pages say; strings/dpo-purposes.ts, the processing
+// register's; strings/dpo-transfers.ts, the transfer register's; strings/dpo-contact.ts, the
+// contact page's (C0.9 PD-70); strings/dpo-notice.ts, the Notice tab's and the notice markers';
+// strings/dpo-record.ts, the Notice tab's record dialog's (PD-76). The registers' rules are
+// codes in packages/shared (registers.ts) and are worded in these files, once each; a code with no
+// line fails typecheck. The purposes' own wording is the register's (PURPOSES[key].register), and
 // dpo/copy.test.ts holds every label the pages can render to AI_COPY (DPP-06). The DPO and the
 // owner may reword any of it in the PR.
 import type { AI_PROVIDERS, ProviderKey } from '@hearth/shared'
@@ -14,11 +16,13 @@ import type { AI_PROVIDERS, ProviderKey } from '@hearth/shared'
 export type NonAiProviderKey = Exclude<ProviderKey, (typeof AI_PROVIDERS)[number]>
 
 export const DPO = {
-  // The links between the two registers and the notice (C0.9 PD-48), at the top of each page.
+  // The links between the two registers, the contact details (C0.9 PD-70) and the notice (PD-48),
+  // at the top of each page.
   tabs: {
     label: 'Registers',
     purposes: 'Purposes',
     transfers: 'Transfers',
+    contact: 'Contact',
     notice: 'Notice',
   },
   loading: 'Loading the register…',

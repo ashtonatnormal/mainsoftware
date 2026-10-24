@@ -199,8 +199,10 @@ jobs:
       # someone leaving, a session lookup during a deactivation, ending someone's sessions or
       # resetting their PIN during a sign-in, a number removed during a sign-in, and an admin
       # acting while being deactivated; from C0.6, the queue's fences, leases, claims, schedulers
-      # and consumer rounds against flag changes and each other, and the outbox's horizon), in two
-      # connections to a throwaway database.
+      # and consumer rounds against flag changes and each other, and the outbox's horizon; from
+      # C0.9, the registers' and the notice's, and from PR 3a the contact's, the recorded
+      # acknowledgement's and the break-glass re-clear's, and 0011 applied while a request reads
+      # the notice and then a clearance), in two connections to a throwaway database.
       - run: node apps/server/scripts/check-concurrency.ts
       # The catalogues in code match the database (C0.6): every write grant of every runtime role,
       # every function one can run and every SECURITY DEFINER and trigger function is covered by
@@ -261,7 +263,9 @@ jobs:
       # row unchanged and nothing linked, hearth_app no longer writing either notice table, an older
       # version refused and the latest acknowledged, the transfer gate keeping PR 1's answers before
       # the first generated version, and the schema matching the fresh build. The two 0006 runs and
-      # the 0008 step above apply 0010 too, over the seed.
+      # the 0008 step above apply 0010 too, over the seed. 0011 (C0.9 PR 3a) rides this step: it
+      # changes no row; NTU-06 to NTU-08 check the recorded acknowledgement made before it, the
+      # notice's new link and publisher, and the clearances under the widened check.
       - env:
           CHECK_DB: hearth_upgrade_check
         run: UP_TO=0010 scripts/check-migrations.sh && scripts/check-notice-upgrade.sh

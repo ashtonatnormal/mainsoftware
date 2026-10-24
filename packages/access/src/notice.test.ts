@@ -129,8 +129,9 @@ describe('NTA-02 C0.9 PD-43 PD-44: what is open before acknowledging, exactly', 
     expect(NOTICE_FREE.has('passkeys.remove_own')).toBe(false)
   })
 
-  it('NTA-02 OD-01 PD-44: the setup uses are the registers, the notice’s admin routes and re-authentication, and can() allows each only to a DPO', () => {
+  it('NTA-02 OD-01 PD-44 C0.9 OD-10: the setup uses are the registers, the notice’s admin routes, recording the DPO’s contact and re-authentication, and can() allows each only to a DPO', () => {
     expect([...NOTICE_SETUP].sort()).toEqual([
+      'notice.contact.set',
       'notice.publish',
       'notice.read',
       'reauth',
@@ -144,6 +145,7 @@ describe('NTA-02 C0.9 PD-43 PD-44: what is open before acknowledging, exactly', 
       { action: 'register.transfer.set', provider: 'twilio', op: 'record' },
       { action: 'notice.read' },
       { action: 'notice.publish' },
+      { action: 'notice.contact.set' },
     ]
     expect(requests.map(r => r.action).sort()).toEqual([...NOTICE_SETUP].filter(use => use !== 'reauth').sort())
     const everyone = world.facts.people.map(p => p.id)
@@ -159,6 +161,17 @@ describe('NTA-02 C0.9 PD-43 PD-44: what is open before acknowledging, exactly', 
     // No use is both free and setup, and the gateway is neither.
     for (const use of NOTICE_SETUP) expect(NOTICE_FREE.has(use), use).toBe(false)
     expect(NOTICE_FREE.has('gateway') || NOTICE_SETUP.has('gateway')).toBe(false)
+    // C0.9 OD-19 PD-44 PD-76: recording someone's acknowledgement, and listing the people to pick
+    // from, are neither: before v0 there is nothing to record, and after it the DPO acknowledges the
+    // latest version first. NTA-01 holds both refused to the DPO before v0, as it loops over every
+    // admin action.
+    for (const use of ['notice.acknowledgement.record', 'notice.people.read'] as const) {
+      expect(ADMIN_ACTIONS.has(use), use).toBe(true)
+      expect(NOTICE_SETUP.has(use) || NOTICE_FREE.has(use), use).toBe(false)
+      expect(noticeAdmits(world, DPO, use, 'unpublished'), use).toBe(false)
+      expect(noticeAdmits(world, DPO, use, 'required'), use).toBe(false)
+      expect(noticeAdmits(world, DPO, use, 'acknowledged'), use).toBe(true)
+    }
   })
 })
 

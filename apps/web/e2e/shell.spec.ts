@@ -3,10 +3,15 @@
 // no AI copy and no Search bar, and the boot's scroll-cache wipe on the built bundle. Signed in as
 // the project's persona (Marcus in Chromium; Farah and Daniel for the @smoke cases in WebKit and
 // Firefox).
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { mailtoHref, NoticeResponse, telHref } from '@hearth/shared'
 import type { Page } from '@playwright/test'
 import { SETTINGS } from '../src/strings/notice.ts'
 import { noAiCopy, noSidewaysScroll, targets44, visibleH1s } from './support/checks.ts'
+import { REPO_DIR } from './support/env.ts'
 import { expect, type Guard, test } from './support/fixtures.ts'
+import { CONTACT_PHONE, PERSONAS } from './support/personas.ts'
 import { hasRail, SCREENS, SIZES } from './support/viewports.ts'
 
 const TABS = ['Today', 'Chats', 'Rooms', 'Tasks', 'More']
@@ -310,9 +315,33 @@ test('SH-14 X11 WCAG 4.1.3: a screen that fails inside the shell is announced, w
   await expect(page.locator('[aria-live="assertive"]')).toHaveText(/Something went wrong/)
 })
 
-test('NTE-01 PDPA-02 PDPA-03 C0.9 PD-47: Settings, from the avatar menu, lists Privacy; Privacy shows the current notice, when Marcus acknowledged it and his acknowledgements, at 320 and 1440 px with nothing sideways, 44 px targets and no AI copy', async ({
+// A contact a published version printed (C0.9 PD-69), made up: a long mailbox on a reserved domain,
+// a business line no one in the seed or the personas holds, and a postal address of three lines.
+const PLANTED_CONTACT = {
+  title: 'Data Protection Officer',
+  email: 'data-protection-officer@tembusu-holdings.example',
+  phone: CONTACT_PHONE,
+  postal: '1 Example Road\nUnit 01-01\nSingapore 000000',
+}
+
+// The seed's phone numbers, as db/seed/tembusu.sql makes them: a persona's prefix and each suffix
+// of its phone_numbers insert.
+function seedNumbers(): string[] {
+  const seed = readFileSync(resolve(REPO_DIR, 'db/seed/tembusu.sql'), 'utf8')
+  const insert = seed.slice(seed.indexOf('insert into public.phone_numbers'))
+  const suffixes = /unnest\(array\[([^\]]*)\]\)/.exec(insert)?.[1]?.match(/\d+/g) ?? []
+  const prefix = PERSONAS.marcus.e164.slice(0, -2)
+  return suffixes.map(suffix => `${prefix}${suffix}`)
+}
+
+test('NTE-01 PDPA-02 PDPA-03 PDPA-13 C0.9 PD-47 OD-12 PD-69: Settings, from the avatar menu, lists Privacy; Privacy says first how to reach the Data Protection Officer (the seed’s notice gives no contact yet), then the current notice, when Marcus acknowledged it and his acknowledgements; with a contact the notice printed, its email address and phone number are links; at 320 and 1440 px with nothing sideways, 44 px targets and no AI copy', async ({
   open,
 }) => {
+  // The planted number is no one's: not a persona's, and not one the seed holds.
+  const e164 = CONTACT_PHONE.replace(/[ -]/g, '')
+  expect(Object.values(PERSONAS).map(persona => persona.e164)).not.toContain(e164)
+  expect(seedNumbers().length).toBeGreaterThan(0)
+  expect(seedNumbers()).not.toContain(e164)
   for (const size of [SIZES.w320, SIZES.desktop]) {
     const page = await open({ ...size, signedIn: true })
     await page.goto('/chats')
@@ -332,6 +361,9 @@ test('NTE-01 PDPA-02 PDPA-03 C0.9 PD-47: Settings, from the avatar menu, lists P
     await expect(page).toHaveURL(/\/settings\/privacy$/)
     await expect(h1(page)).toHaveText('Privacy')
     const screen = page.locator('#screen')
+    // How to reach the DPO comes first (OD-12): the seed's placeholder gives no contact.
+    await expect(screen.getByRole('heading', { level: 2 }).first()).toHaveText(SETTINGS.privacy.contact.title)
+    await expect(screen.getByText(SETTINGS.privacy.contact.none, { exact: true })).toBeVisible()
     await expect(screen.getByRole('heading', { level: 2, name: SETTINGS.privacy.noticeTitle })).toBeVisible()
     // The seed's notice v0, which Marcus acknowledged in the app (db/seed/tembusu.sql).
     await expect(screen.getByText(/^Version 0 · published /)).toBeVisible()
@@ -345,5 +377,30 @@ test('NTE-01 PDPA-02 PDPA-03 C0.9 PD-47: Settings, from the avatar menu, lists P
     // Back returns to the list, a real URL each.
     await page.goBack()
     await expect(h1(page)).toHaveText('Settings')
+
+    // A contact the latest version printed, planted in the real answer: the email address and the
+    // phone number are links, at least 44 px, and the long address breaks rather than scrolling.
+    await page.route('**/api/notice', async route => {
+      if (route.request().method() !== 'GET') return route.fallback()
+      const response = await route.fetch()
+      const answer = NoticeResponse.parse(await response.json())
+      return route.fulfill({ response, json: NoticeResponse.parse({ ...answer, contact: PLANTED_CONTACT }) })
+    })
+    await page.goto('/settings/privacy')
+    await expect(screen.getByText(PLANTED_CONTACT.title, { exact: true })).toBeVisible()
+    await expect(screen.getByRole('link', { name: PLANTED_CONTACT.email, exact: true })).toHaveAttribute(
+      'href',
+      mailtoHref(PLANTED_CONTACT.email),
+    )
+    await expect(screen.getByRole('link', { name: CONTACT_PHONE, exact: true })).toHaveAttribute(
+      'href',
+      telHref(CONTACT_PHONE),
+    )
+    await expect(screen.getByText('Singapore 000000')).toBeVisible()
+    await expect(screen.getByText(SETTINGS.privacy.contact.leaving, { exact: true })).toBeVisible()
+    expect(await noSidewaysScroll(page), `/settings/privacy with a contact at ${size.width}`).toEqual([])
+    expect(await targets44(page), `/settings/privacy with a contact at ${size.width}`).toEqual([])
+    expect(await noAiCopy(page), `/settings/privacy with a contact at ${size.width}`).toEqual([])
+    await page.unroute('**/api/notice')
   }
 })

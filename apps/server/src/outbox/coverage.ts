@@ -40,6 +40,8 @@ const QUEUE = "the queue's and scheduler's own machinery: jobs, schedules and th
 const CHECKPOINT = "the outbox's own machinery: a consumer's position, moved with its effects"
 const LAST_SEEN = 'bookkeeping, at most once a minute, which no one makes and nothing acts on (T14 item 6)'
 const CHECK = 'a check or a lock: it refuses or waits, and writes nothing'
+const DPO_CONTACT =
+  "the DPO's business contact: its versions are its history, and nothing acts on a change until the next published version, which notice.published covers"
 const STAMP = 'stamps the row being written with the database clock; that write is covered by its own entry'
 
 const deactivation: Coverage = { events: ['person.deactivated'] }
@@ -110,8 +112,9 @@ export const WRITES: Readonly<Record<string, Coverage>> = {
   // Working hours are replaced whole: the old rows deleted, the new inserted, one profile.updated.
   'hearth_app working_hours:DELETE': profile,
 
-  // The privacy notice: hearth_app writes neither table itself from 0010; publish_notice() and
-  // acknowledge_notice() below are their only writers (C0.9 PD-42).
+  // The privacy notice: hearth_app writes neither table itself from 0010; publish_notice(),
+  // acknowledge_notice() and, from 0011, record_notice_acknowledgement() below are their only
+  // writers (C0.9 PD-42, OD-19). Nor the DPO's contact: set_dpo_contact() is its only writer.
 
   // Accounts and PINs. W3 and W4: setting a PIN at a PIN-role holder's first sign-in, or a code-only
   // sign-in making the account beside its signin.started (D46); W16: an admin's reset.
@@ -214,8 +217,8 @@ export const WRITES: Readonly<Record<string, Coverage>> = {
   // The registers (C0.9 PD-21, PD-22; TECH-SPEC T22 item 13): the DPO's routes call these after
   // can() allows the change and append the event in the same transaction, naming the new version's
   // row or the transfer entry. Their audit rows are covered by hearth_app's audit grant, as for
-  // set_feature_flag(). The first-Owner bootstrap's function (bootstrap_transfer_clearance()) is no
-  // runtime role's and appends its own event (PD-23).
+  // set_feature_flag(). The first-Owner bootstrap's function (bootstrap_transfer_clearance()), and
+  // its break-glass re-clear (C0.9 OD-20), is no runtime role's and appends its own event (PD-23).
   'set_register_purpose(text, integer, text, text, text, integer, text, text[], text, uuid, inet)': {
     events: ['register.purpose_changed'],
     writes: ['processing_register:INSERT'],
@@ -257,12 +260,14 @@ export const WRITES: Readonly<Record<string, Coverage>> = {
   // why a code may or may not go too (PD-59, B-03, C-02).
   'transfer_cleared(text)': { exempt: CHECK, writes: [] },
   'transfer_send_state(text)': { exempt: CHECK, writes: [] },
-  // The privacy notice (C0.9 PD-37, PD-42, PD-50; TECH-SPEC T22 item 33): the notice tables' only
-  // writers. The api calls each after can() allows it (notice.publish, notice.acknowledge_own) and
-  // appends the event in the same transaction: notice.published naming the new version's row, whose
-  // id its links carry, and notice.acknowledged naming the person, only when something was recorded.
-  // Their audit rows are covered by hearth_app's audit grant, as for set_feature_flag().
-  'publish_notice(integer, text, text, text[], integer[], uuid[], text, uuid, inet)': {
+  // The privacy notice (C0.9 PD-37, PD-42, PD-50; TECH-SPEC T22 items 33 and 45): the notice
+  // tables' three writers. The api calls each after can() allows it (notice.publish,
+  // notice.acknowledge_own, notice.acknowledgement.record) and appends the event in the same
+  // transaction: notice.published naming the new version's row, whose id its links carry, and
+  // notice.acknowledged naming the person, only when something was recorded. Their audit rows are
+  // covered by hearth_app's audit grant, as for set_feature_flag(). 0011 replaced 0010's
+  // publish_notice() with one that names the contact its draft printed (the same events and writes).
+  'publish_notice(integer, text, text, text[], integer[], uuid[], integer, text, uuid, inet)': {
     events: ['notice.published'],
     writes: ['notice_versions:INSERT', 'notice_version_purposes:INSERT', 'notice_version_providers:INSERT'],
   },
@@ -270,13 +275,27 @@ export const WRITES: Readonly<Record<string, Coverage>> = {
     events: ['notice.acknowledged'],
     writes: ['notice_acknowledgments:INSERT'],
   },
+  // An acknowledgement the DPO records (C0.9 OD-19): the event an acknowledgement in the app appends.
+  'record_notice_acknowledgement(uuid, uuid, date, text, text, uuid, inet)': {
+    events: ['notice.acknowledged'],
+    writes: ['notice_acknowledgments:INSERT'],
+  },
+  // The DPO's business contact (C0.9 OD-10, PD-63, PD-72): its only writer. Its versions are its
+  // history and its audit row the record of who changed it; nothing acts on a change until the next
+  // published version, which notice.published covers.
+  'set_dpo_contact(integer, text, text, text, text, text, uuid, inet)': {
+    exempt: DPO_CONTACT,
+    writes: ['dpo_settings:INSERT'],
+  },
   // Whether the latest version states each open clearance, for the registers' copy (B-06): a read.
   'notice_provider_states()': {
     exempt: 'a read: whether the latest notice states each open clearance, and nothing written',
     writes: [],
   },
-  // A published version never changes, and a stand-in never follows a generated one (PD-33).
+  // A published version never changes, and a stand-in never follows a generated one (PD-33); nor
+  // does a recorded contact version (PD-63).
   'notice_unchanged()': { exempt: CHECK, writes: [] },
+  'dpo_settings_unchanged()': { exempt: CHECK, writes: [] },
   'notice_versions_generated()': { exempt: CHECK, writes: [] },
   'orgs_add_registers()': {
     exempt: 'gives a new org its register entries; it runs only when the owner makes an org, never at run time',

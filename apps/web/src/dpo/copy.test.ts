@@ -3,14 +3,18 @@
 // because it isn't in a table under strings/: the register's wording of each purpose shown
 // (packages/shared PURPOSES), and the shared refusal copy the pages pass on in the server's words.
 // The notice's own words are the server's draft, which NTW-10 (notice/notice-copy.test.ts) holds
-// to AI_COPY branch by branch, and the DPO's free text in it publishing refuses (PD-62).
+// to AI_COPY branch by branch, and the DPO's free text in it publishing refuses (PD-62). From C0.9
+// PR 3a: the contact page's copy (strings/dpo-contact.ts), the record dialog's
+// (strings/dpo-record.ts) and the transfer page's break-glass lines (PD-65, PD-70, PD-76, PD-80).
 import { MESSAGES, NON_AI_PROVIDERS, NON_AI_PURPOSE_KEYS, PURPOSES, REAUTH_METHOD_MESSAGES } from '@hearth/shared'
 import { describe, expect, it } from 'vitest'
 import { aiCopyIn } from '@/strings/ai-copy.ts'
 import { API_COPY } from '@/strings/api.ts'
 import * as DPO_TABLES from '@/strings/dpo.ts'
+import * as CONTACT_TABLES from '@/strings/dpo-contact.ts'
 import * as NOTICE_TABLES from '@/strings/dpo-notice.ts'
 import * as PURPOSE_TABLES from '@/strings/dpo-purposes.ts'
+import * as RECORD_TABLES from '@/strings/dpo-record.ts'
 import * as TRANSFER_TABLES from '@/strings/dpo-transfers.ts'
 import { NOTICE } from '@/strings/notice.ts'
 import { SHELL } from '@/strings/shell.ts'
@@ -52,13 +56,15 @@ const PASSED_ON = [
 ] as const satisfies readonly (keyof typeof MESSAGES)[]
 
 describe('C0.9 PD-27 PD-31: the DPO pages’ copy', () => {
-  it('DPP-06 decision 8 PD-53: no label the pages can render matches AI_COPY: the purposes shown, the provider names, the bases and every problem and warning (strings/dpo*.ts, the Notice tab’s and the notice markers’ included), the shared refusals passed on, the re-authentication lines, and the titles and menu entry in strings/shell.ts', () => {
+  it('DPP-06 decision 8 PD-53 PD-65: no label the pages can render matches AI_COPY: the purposes shown, the provider names, the bases and every problem and warning (strings/dpo*.ts, the Notice tab’s, the notice markers’, the contact page’s and the record dialog’s included), the shared refusals passed on, the re-authentication lines, and the titles and menu entry in strings/shell.ts', () => {
     const shown = [
       ...NON_AI_PURPOSE_KEYS.map(key => ({ where: `PURPOSES.${key}.register`, text: PURPOSES[key].register })),
       ...stringsIn(DPO_TABLES, 'strings/dpo.ts'),
       ...stringsIn(PURPOSE_TABLES, 'strings/dpo-purposes.ts'),
       ...stringsIn(TRANSFER_TABLES, 'strings/dpo-transfers.ts'),
       ...stringsIn(NOTICE_TABLES, 'strings/dpo-notice.ts'),
+      ...stringsIn(CONTACT_TABLES, 'strings/dpo-contact.ts'),
+      ...stringsIn(RECORD_TABLES, 'strings/dpo-record.ts'),
       ...PASSED_ON.map(code => ({ where: `MESSAGES.${code}`, text: MESSAGES[code] })),
       ...stringsIn(REAUTH_METHOD_MESSAGES.pin, 'REAUTH_METHOD_MESSAGES.pin'),
       ...stringsIn(REAUTH_METHOD_MESSAGES.sign_in, 'REAUTH_METHOD_MESSAGES.sign_in'),
@@ -69,6 +75,12 @@ describe('C0.9 PD-27 PD-31: the DPO pages’ copy', () => {
     // The tables were read: every non-AI purpose, provider name, basis and problem, and the notice's.
     expect(shown.length).toBeGreaterThan(200)
     expect(shown.filter(entry => entry.where.startsWith('strings/dpo-notice.ts')).length).toBeGreaterThan(50)
+    expect(shown.filter(entry => entry.where.startsWith('strings/dpo-record.ts')).length).toBeGreaterThan(30)
+    expect(shown.filter(entry => entry.where.startsWith('strings/dpo-contact.ts')).length).toBeGreaterThan(40)
+    expect(shown).toContainEqual({
+      where: 'strings/dpo-transfers.ts.TRANSFERS_COPY.twilioLastSession',
+      text: TRANSFER_TABLES.TRANSFERS_COPY.twilioLastSession,
+    })
     expect(Object.keys(DPO_TABLES.PROVIDER_NAMES).sort()).toEqual([...NON_AI_PROVIDERS].sort())
     expect(
       shown.filter(entry => aiCopyIn(entry.text) !== undefined).map(entry => `${entry.where}: ${entry.text}`),

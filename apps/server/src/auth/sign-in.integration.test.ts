@@ -1349,6 +1349,137 @@ describe('C0.5 sign-in, devices and socket revocation on the Compose stack (ACC-
     expect(await codeOn(app, twilioLike, owner)).toEqual({ status: 200, sent: 1, send: { send: 'attempted' } })
   })
 
+  // Signs every device of the person's out through their own devices route (ACC-04): the others,
+  // then this one.
+  async function signOutEverywhere(client: Client): Promise<void> {
+    const { deviceId } = await s.sessionOf(client)
+    expect((await client.post('/api/devices/sign-out', { allOthers: true })).status).toBe(200)
+    expect((await client.post('/api/devices/sign-out', { device: deviceId })).status).toBe(200)
+  }
+
+  // Twilio's clearances in the org, oldest first.
+  const twilioClearances = (org: Org) =>
+    s.query<{
+      id: string
+      cleared_by: string
+      cleared_via: string
+      withdrawn_at: Date | null
+      withdraw_reason: string | null
+    }>(
+      `select id, cleared_by, cleared_via, withdrawn_at, withdraw_reason from transfer_clearances
+       where org_id = $1 and provider = 'twilio' order by cleared_at, id`,
+      [org.id],
+    )
+
+  it('XFR-I8 PDPA-10 C0.9 OD-20 PD-77 to PD-80: once Twilio is withdrawn, the set-up can’t clear it again, and the break-glass re-clear does so only while no DPO is signed in, on the facts the notice states, so codes resume; on other facts only the DPO gets one', async () => {
+    // Budgets: M 3 code requests; the DPO 2 sign-ins on the stack's api and 1 code request on the
+    // org's.
+    const { org, dpo, owner, twilioLike, app } = await noticeOrg()
+    const m = await s.person({ org })
+    await s.publishNotice(org, dpo, { acknowledge: [dpo, owner, m] })
+    const dpoClient = await s.signIn(dpo)
+    const withdrawn = await dpoClient.post('/api/admin/registers/transfers/withdraw', { provider: 'twilio' })
+    expect([withdrawn.status, withdrawn.body]).toMatchObject([200, { cleared: false, changed: true }])
+    expect(await codeOn(app, twilioLike, m)).toEqual({ status: 200, sent: 0, send: { send: 'skipped_not_cleared' } })
+    const [bootstrapped] = await twilioClearances(org)
+
+    // Without the emergency marker the bootstrap is the set-up's, which never clears a provider
+    // cleared before (0009's path, unchanged).
+    await expect(s.bootstrapClearance({ org, provider: 'twilio', dpo })).rejects.toMatchObject({
+      code: 'HF006',
+      message: expect.stringMatching(/has been cleared in this organisation before/),
+    })
+    // With it, a review date 30 days ahead, refused while the DPO has a live session: they clear
+    // Twilio again in Hearth. Nothing changes.
+    const reviewOn = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10)
+    await expect(
+      s.bootstrapClearance({ org, provider: 'twilio', dpo, breakGlass: true, reviewOn }),
+    ).rejects.toMatchObject({
+      code: 'HF006',
+      message: expect.stringMatching(/^A Data Protection Officer is signed in/),
+    })
+    expect(await twilioClearances(org)).toHaveLength(1)
+
+    // Once the DPO has signed every device out, the re-clear goes ahead on the stated facts.
+    await signOutEverywhere(dpoClient)
+    const recleared = await s.bootstrapClearance({
+      org,
+      provider: 'twilio',
+      dpo,
+      breakGlass: true,
+      reviewOn,
+      reason: 'Integration test: Twilio withdrawn and no DPO signed in',
+    })
+    expect(await twilioClearances(org)).toEqual([
+      expect.objectContaining({ id: bootstrapped?.id, cleared_via: 'bootstrap', withdraw_reason: 'dpo_decision' }),
+      { id: recleared, cleared_by: dpo.id, cleared_via: 'break_glass', withdrawn_at: null, withdraw_reason: null },
+    ])
+    expect(await codeOn(app, twilioLike, m)).toEqual({ status: 200, sent: 1, send: { send: 'attempted' } })
+    // Hearth acted, the DPO decided, and the audit row names the clearance that last ended and why.
+    const audit = await s.query<{ actor_id: string; reason: string; details: Record<string, unknown> }>(
+      `select actor_id, reason, details from audit_events
+       where org_id = $1 and action = 'register.transfer_cleared' and details ->> 'by' = 'break_glass'`,
+      [org.id],
+    )
+    expect(audit).toEqual([
+      {
+        actor_id: org.system,
+        reason: 'Integration test: Twilio withdrawn and no DPO signed in',
+        details: expect.objectContaining({
+          by: 'break_glass',
+          decided_by: dpo.id,
+          clearance: recleared,
+          ended_clearance: bootstrapped?.id,
+          ended_reason: 'dpo_decision',
+        }),
+      },
+    ])
+    const events = await s.query<{ actor_id: string; actor_kind: string; ids: unknown }>(
+      `select actor_id, actor_kind, ids from outbox_events
+       where org_id = $1 and type = 'register.transfer_changed' order by tx_id, id`,
+      [org.id],
+    )
+    expect(events.at(-1)).toEqual({
+      actor_id: org.system,
+      actor_kind: 'system',
+      ids: { provider: 'twilio', cleared: true },
+    })
+    // The DPO's Transfers page says how it was cleared.
+    const again = await s.signIn(dpo)
+    const read = RegistersResponse.parse((await again.get('/api/admin/registers')).body)
+    expect(read.transfers.find(row => row.provider === 'twilio')?.clearance).toMatchObject({
+      clearedVia: 'break_glass',
+      withdrawnOn: null,
+    })
+
+    // Withdrawn again, and re-cleared on facts the published version doesn't state: only the DPO
+    // gets a code (PD-59), until a version states them.
+    expect((await again.post('/api/admin/registers/transfers/withdraw', { provider: 'twilio' })).status).toBe(200)
+    await signOutEverywhere(again)
+    await s.bootstrapClearance({
+      org,
+      provider: 'twilio',
+      dpo,
+      breakGlass: true,
+      reviewOn,
+      facts: { providerRetention: '60 days' },
+    })
+    expect(await codeOn(app, twilioLike, m)).toEqual({ status: 200, sent: 0, send: { send: 'skipped_unstated' } })
+    expect(await codeOn(app, twilioLike, dpo)).toEqual({ status: 200, sent: 1, send: { send: 'attempted' } })
+  })
+
+  it('XFR-I9 PDPA-10 C0.9 OD-21 (twilio-fact-changed.md): a stated Twilio fact changed with “Save and keep cleared” stops codes for everyone but the DPO, and recording the stated value again, exactly, resumes them with no new version', async () => {
+    // Budgets: the DPO 2 sign-ins on the stack's api and 1 code request on the org's; the Owner 2.
+    const { org, dpo, owner, twilioLike, app } = await noticeOrg()
+    await s.publishNotice(org, dpo, { acknowledge: [dpo, owner] })
+    await recordTwilio(dpo, { providerRetention: '60 days' })
+    expect(await codeOn(app, twilioLike, owner)).toEqual({ status: 200, sent: 0, send: { send: 'skipped_unstated' } })
+    expect(await codeOn(app, twilioLike, dpo)).toEqual({ status: 200, sent: 1, send: { send: 'attempted' } })
+    await recordTwilio(dpo, { providerRetention: CLEARING_FACTS.providerRetention })
+    expect(await codeOn(app, twilioLike, owner)).toEqual({ status: 200, sent: 1, send: { send: 'attempted' } })
+    expect(await s.query('select version from notice_versions where org_id = $1', [org.id])).toEqual([{ version: 0 }])
+  })
+
   it('T20 item 2: a foreign verification whose cancel fails gets no second start and nothing attached: sign-in answers as for any number, re-authentication 503, and a later request works (Qodo)', async () => {
     // Budgets: F 2 code requests and an off-roster number 1; G 1 (the sign-in), and 2
     // re-authentication requests, which count against their own windows.

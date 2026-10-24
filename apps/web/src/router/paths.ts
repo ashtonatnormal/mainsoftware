@@ -10,8 +10,9 @@
 // - NAV_PATHS: the places the phone's tab bar and More page and the rail reach (shell/nav.ts),
 //   each from both layouts (NV-01);
 // - APP_PATHS: NAV_PATHS and the pages no navigation lists, which a menu or a link opens: Settings
-//   and its sections (/settings/*), from the avatar menu; and the DPO's pages (/dpo/*), reached
-//   from the avatar menu and moved under /admin by C0.16.
+//   and its sections (/settings/*), from the avatar menu; and the DPO's pages (/dpo/*: the two
+//   registers, their contact details from C0.9 PR 3a and the Notice tab), reached from the avatar
+//   menu and moved under /admin by C0.16.
 import type { NoticeStanding } from '@hearth/shared'
 
 export const NAV_PATHS = ['/today', '/chats', '/rooms', '/tasks', '/calendar', '/drive', '/more'] as const
@@ -22,6 +23,7 @@ export const APP_PATHS = [
   '/settings/privacy',
   '/dpo/purposes',
   '/dpo/transfers',
+  '/dpo/contact',
   '/dpo/notice',
 ] as const
 

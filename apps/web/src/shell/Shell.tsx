@@ -11,7 +11,9 @@
 //   (a tab press leaves it there, and Back or Forward comes next; X6, X12);
 // - ConnectionBanner, which renders nothing while the live connection is fine;
 // - #screen, the one scroll container, whose position the router restores within the document
-//   (data-scroll-restoration-id; never across a document, D-02);
+//   (data-scroll-restoration-id; never across a document, D-02), and which takes a tab stop of its
+//   own only while it scrolls with nothing in the tab order, as a region named by the h1
+//   (ui/scroller-focus.ts, WCAG 2.1.1, 4.1.2);
 // - the Toaster, over the bottom of <main>, after #screen in reading order.
 // Neither <main> nor the frame scrolls or clips, so a Menu opening from the header or the rail's foot
 // lies over the screen in full (the Menu contract, ui/Menu.tsx).
@@ -21,16 +23,21 @@
 //
 // A route marked immersive (C1's conversation view) hides the tab bar; none is in C0.8.
 import { Outlet, useMatches } from '@tanstack/react-router'
+import { useEffect, useRef } from 'react'
 import { useRuntime } from '@/app/runtime-context.ts'
 import { ConnectionBanner } from '@/live/ConnectionBanner.tsx'
 import { SHELL } from '@/strings/shell.ts'
 import { ScreenHeader } from '@/ui/ScreenHeader.tsx'
 import { SkipLink } from '@/ui/SkipLink.tsx'
+import { keepReachable } from '@/ui/scroller-focus.ts'
 import { Toaster } from '@/ui/Toaster.tsx'
 import { AvatarMenu } from './AvatarMenu.tsx'
 import { InShell } from './in-shell.ts'
 import { Rail } from './Rail.tsx'
 import { TabBar } from './TabBar.tsx'
+
+// The screen's h1, which names #screen while it is a tab stop of its own (ui/scroller-focus.ts).
+const SCREEN_TITLE_ID = 'screen-title'
 
 export function Shell() {
   const runtime = useRuntime()
@@ -39,6 +46,8 @@ export function Shell() {
   const path = useMatches({ select: matches => matches.at(-1)?.pathname })
   const title = useMatches({ select: matches => matches.at(-1)?.staticData.title })
   const immersive = useMatches({ select: matches => matches.at(-1)?.staticData.immersive === true })
+  const screen = useRef<HTMLDivElement>(null)
+  useEffect(() => (screen.current === null ? undefined : keepReachable(screen.current, SCREEN_TITLE_ID)), [])
   return (
     <>
       <SkipLink />
@@ -48,6 +57,7 @@ export function Shell() {
           <ScreenHeader
             key={path}
             title={title ?? SHELL.appName}
+            titleId={SCREEN_TITLE_ID}
             actions={
               <div className="rail:hidden">
                 <AvatarMenu placement="bottom-end" />
@@ -56,6 +66,7 @@ export function Shell() {
           />
           <ConnectionBanner live={runtime.live} />
           <div
+            ref={screen}
             id="screen"
             data-scroll-restoration-id="screen"
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain"

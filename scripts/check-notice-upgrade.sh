@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The upgrade check for 0010_notice (C0.9 PR 2, PD-54; CLAUDE.md, Testing and CI): 0010 applied on
-# top of the notice rows 0003 to 0009 allow, as a C0.9 PR 1 deployment could hold them, instead of
-# to an empty database.
+# The upgrade check for 0010_notice (C0.9 PR 2, PD-54; CLAUDE.md, Testing and CI), which
+# 0011_dpo_contact rides (C0.9 PR 3a, PD-83): 0010 and 0011 applied on top of the notice rows 0003
+# to 0009 allow, as a C0.9 PR 1 deployment could hold them, instead of to an empty database.
 #
 # 0010 changes no existing row: it adds a nullable column to notice_versions, the version links and
 # the notice's functions, revokes hearth_app's INSERT on both notice tables, and replaces
@@ -26,6 +26,18 @@
 # - NTU-05: transfer_cleared('twilio') is true in orgs C and D, as before 0010: no_notice in C and
 #   cleared under D's stand-in (transfer_send_state()); the seed's org, which cleared nothing, is
 #   not_cleared.
+#
+# 0011 (C0.9 PR 3a, PD-83) rides this step: it changes no existing row either, and its new checks
+# pass every row 0003 to 0010 allow, so it is applied with 0010 and checked here too:
+# - NTU-06 (OD-19): org B's acknowledgement the DPO recorded before 0011 keeps no day and no note,
+#   and still counts in the standing read's query; both new acknowledgement checks are validated;
+# - NTU-07 (OD-11, PD-66): no contact is recorded and no version links one; 0010's publish_notice()
+#   is gone and hearth_app runs 0011's; and acting as org B's DPO, set_dpo_contact() records
+#   version 1 over the upgraded data, and a second first record is refused (HF005);
+# - NTU-08 (OD-20, PD-77, PD-80): every clearance keeps how it was cleared, and both new checks on
+#   transfer_clearances are validated; in org C, the bootstrap's clearance of Twilio again is
+#   refused as cleared before without the emergency marker (0009's refusal), and as cleared
+#   already with it (the re-clear's).
 # The data is made up; none of it is anyone's.
 #
 # Usage, after a full scratch build (BASE_DB, default hearth_check):
@@ -116,8 +128,11 @@ versions="select string_agg(format('%s %s %s %s %s %s', id, org_id, version, md5
   order by org_id, version) from public.notice_versions"
 acks="select string_agg(format('%s %s %s %s %s %s %s %s', id, org_id, person_id, notice_version_id, acknowledged_at, method,
   device_id, recorded_by), E'\n' order by id) from public.notice_acknowledgments"
+clearances="select string_agg(format('%s %s %s %s %s', id, org_id, provider, cleared_via, withdrawn_at), E'\n' order by id)
+  from public.transfer_clearances"
 kept_versions=$(sql -d "$db" -Atc "$versions")
 kept_acks=$(sql -d "$db" -Atc "$acks")
+kept_clearances=$(sql -d "$db" -Atc "$clearances")
 [ "$(sql -d "$db" -Atc "select count(*) from public.notice_versions")" = 4 ] &&
   [ "$(sql -d "$db" -Atc "select count(*) from public.notice_acknowledgments")" = 14 ] &&
   [ "$(sql -d "$db" -Atc "select count(*) from public.notice_acknowledgments
@@ -135,8 +150,8 @@ sql -d postgres -c "set client_min_messages = warning" \
 PGUSER=$migrator PGPASSWORD=$migrator_pw PGDATABASE=$db MIGRATION_ROLE=$owner \
   env -u MIGRATION_DATABASE_URL node apps/server/src/db/migrate.ts >&2 ||
   { echo "0010 (or a later migration) failed over the notice rows 0003 to 0009 allow: see the migrate: lines above." >&2; exit 1; }
-[ "$(sql -d "$db" -Atc "select count(*) from public.kysely_migration where name = '0010_notice'")" = 1 ] ||
-  { echo "0010_notice was not applied" >&2; exit 1; }
+[ "$(sql -d "$db" -Atc "select count(*) from public.kysely_migration where name in ('0010_notice', '0011_dpo_contact')")" = 2 ] ||
+  { echo "0010_notice and 0011_dpo_contact were not both applied" >&2; exit 1; }
 
 # NTU-01: every row as it was, every version a stand-in, nothing linked.
 now_versions=$(sql -d "$db" -Atc "$versions")
@@ -197,4 +212,72 @@ for row in "$org_c:$hearth_c:t no_notice" "$org_d:$hearth_d:t cleared" "$seed:b0
   [ "$got" = "$want" ] || { echo "NTU-05: in org $o, twilio reads '$got', not '$want'" >&2; exit 1; }
 done
 
-echo "OK: 0010 upgraded $db over the notice rows 0003 to 0009 allow; the rows, the writes, acknowledging and the transfer gate check out, and the schema matches a fresh build."
+# A statement that must be refused with the given SQLSTATE and a message like the pattern.
+refused_like() { # SQLSTATE, the message's pattern (LIKE), what is refused, then the statement
+  local what=${3//\'/\'\'}
+  printf "do \$\$ begin %s; raise exception 'allowed after 0011: %s'; exception when sqlstate '%s' then
+    if sqlerrm not like '%s' then raise; end if; end \$\$" "$4" "$what" "$1" "$2"
+}
+
+# NTU-06: the DPO's record of b3's acknowledgement of v1, made before 0011, has neither the day nor
+# the note, which the new checks allow, and still lets b3 through: the standing read's query
+# (compliance/notice-standing.ts), as hearth_app.
+[ "$(sql -d "$db" -Atc "select format('%s %s %s', method, acknowledged_on is null, recorded_note is null)
+       from public.notice_acknowledgments where org_id = '$org_b' and person_id = '$b3' and notice_version_id = '$b_v1'")" = \
+  'recorded_by_dpo t t' ] || { echo "NTU-06: org B's recorded acknowledgement gained a day or a note" >&2; exit 1; }
+[ "$(as_app_out "$org_b" "$b3" "select case when v.id is null then 'unpublished'
+       when exists (select 1 from public.notice_acknowledgments a
+                    where a.org_id = '$org_b' and a.person_id = '$b3' and a.notice_version_id = v.id) then 'acknowledged'
+       else 'required' end
+     from (select 1) one left join lateral (select id from public.notice_versions where org_id = '$org_b'
+                                            order by version desc limit 1) v on true")" = acknowledged ] ||
+  { echo "NTU-06: org B's recorded acknowledgement of v1 no longer lets b3 through" >&2; exit 1; }
+[ "$(sql -d "$db" -Atc "select string_agg(conname || ' ' || convalidated, ',' order by conname) from pg_constraint
+       where conrelid = 'public.notice_acknowledgments'::regclass
+         and conname in ('notice_acknowledgments_recorded_details', 'notice_acknowledgments_recorded_note')")" = \
+  'notice_acknowledgments_recorded_details true,notice_acknowledgments_recorded_note true' ] ||
+  { echo "NTU-06: a new acknowledgement check is missing or left NOT VALID" >&2; exit 1; }
+
+# NTU-07: nothing printed a contact before 0011, so none is recorded and no version links one;
+# publishing has only 0011's signature, which hearth_app runs; and the contact's writer works over the
+# upgraded data, as org B's DPO: version 1, then a second first record refused (HF005).
+[ "$(sql -d "$db" -Atc "select (select count(*) from public.dpo_settings) || ' ' ||
+       (select count(*) from public.notice_versions where dpo_settings_version is not null)")" = '0 0' ] ||
+  { echo "NTU-07: 0011 recorded a contact, or linked a version to one" >&2; exit 1; }
+[ "$(sql -d "$db" -Atc "select format('%s %s',
+       to_regprocedure('public.publish_notice(integer,text,text,text[],integer[],uuid[],text,uuid,inet)') is null,
+       has_function_privilege('hearth_app',
+         'public.publish_notice(integer,text,text,text[],integer[],uuid[],integer,text,uuid,inet)', 'EXECUTE'))")" = 't t' ] ||
+  { echo "NTU-07: 0010's publish_notice() is still there, or hearth_app can't run 0011's" >&2; exit 1; }
+[ "$(as_app_out "$org_b" "$b2" "select format('%s %s', version, changed) from public.set_dpo_contact(null,
+       'Data Protection Officer', 'dpo@upgrade.example', null, null, 'req-upgrade', null, null)")" = '1 t' ] ||
+  { echo "NTU-07: org B's DPO couldn't record a contact over the upgraded data" >&2; exit 1; }
+as_app "$org_b" "$b2" "$(refused_like HF005 'Your contact details changed since you opened them.%' 'a second first record' \
+  "perform public.set_dpo_contact(null, 'Data Protection Officer', 'privacy@upgrade.example', null, null, 'req-upgrade', null, null)")" ||
+  { echo "NTU-07: a second first record of org B's contact wasn't refused as stale" >&2; exit 1; }
+
+# NTU-08: every clearance is as it was (how, and whether it ended); both new checks on
+# transfer_clearances are validated; and org C's Twilio, which the set-up cleared, can't be cleared
+# by it again (0009's refusal, without the emergency marker) nor re-cleared while its clearance is
+# open (with the marker), acting as org C's Hearth principal as the superuser, as the harness runs
+# it, on the facts it was cleared on and a review date 30 days ahead, inside the re-clear's cap.
+now_clearances=$(sql -d "$db" -Atc "$clearances")
+[ "$now_clearances" = "$kept_clearances" ] || { echo "NTU-08: the migrations changed a clearance already there" >&2; exit 1; }
+[ "$(sql -d "$db" -Atc "select string_agg(conname || ' ' || convalidated, ',' order by conname) from pg_constraint
+       where conrelid = 'public.transfer_clearances'::regclass
+         and conname in ('transfer_clearances_break_glass', 'transfer_clearances_cleared_via')")" = \
+  'transfer_clearances_break_glass true,transfer_clearances_cleared_via true' ] ||
+  { echo "NTU-08: a new clearance check is missing or left NOT VALID" >&2; exit 1; }
+again="perform public.bootstrap_transfer_clearance('twilio', '$c2', 'Sign-in codes by text message',
+  'The phone number, the channel and the service id', '{US}', '{US}', 'The agreement, schedule 2', 'dpa_addendum',
+  'The agreement and its addendum', null, true, 'off', 'not_offered', 'Verification records for 30 days',
+  'A letter from the provider', 'Mobile carriers', current_date + 30, 'Upgrade check: Twilio again')"
+sql -d "$db" --single-transaction -o /dev/null -c "select set_config('app.org_id', '$org_c', true), set_config('app.user_id', '$hearth_c', true)" \
+  -c "$(refused_like HF006 'That provider has been cleared%' 'the set-up clearing Twilio again' "$again")" ||
+  { echo "NTU-08: the set-up's clearance of Twilio again wasn't refused as cleared before" >&2; exit 1; }
+sql -d "$db" --single-transaction -o /dev/null -c "select set_config('app.org_id', '$org_c', true), set_config('app.user_id', '$hearth_c', true),
+  set_config('hearth.break_glass', 'twilio_reclear', true)" \
+  -c "$(refused_like HF006 'Twilio Verify is cleared already.%' 'the re-clear of a cleared Twilio' "$again")" ||
+  { echo "NTU-08: the re-clear of org C's cleared Twilio wasn't refused as cleared already" >&2; exit 1; }
+
+echo "OK: 0010 and 0011 upgraded $db over the notice rows 0003 to 0009 allow; the rows, the writes, acknowledging, the contact's writer, the transfer gate and the re-clear's refusals check out, and the schema matches a fresh build."

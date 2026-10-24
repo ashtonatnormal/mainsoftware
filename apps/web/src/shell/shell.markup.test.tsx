@@ -117,6 +117,8 @@ describe('T21 D-08: the shell (shell/Shell.tsx) and its screens', () => {
     const h1 = tags(markup, 'h1')[0]
     expect(h1?.get('tabindex')).toBe('-1')
     expect(h1?.has('data-screen-title')).toBe(true)
+    // The id #screen names itself by while it is a tab stop of its own (ui/scroller-focus.ts).
+    expect(h1?.get('id')).toBe('screen-title')
     // The skip link is the first link or button, to #main.
     expect(markup.match(/<(?:a|button)\b[^>]*>/)?.[0]).toMatch(/href="#main"/)
     const main = tags(markup, 'main')

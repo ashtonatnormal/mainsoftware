@@ -8,7 +8,9 @@
 // ended roles, roles with no admin power yet, a run of every admin action an Admin may take, which
 // never opens #leadership, (from C0.8) the PIN roles and the re-authentication method each
 // session uses (D46), and (from C0.9) the registers, which are the DPO's alone (PDPA-13), and the
-// privacy notice, which the DPO alone publishes and everyone reads and acknowledges (PDPA-03).
+// privacy notice, which the DPO alone publishes and everyone reads and acknowledges (PDPA-03), and
+// (from C0.9 PR 3a) the DPO's business contact and the acknowledgements the DPO records for someone
+// else still at the organisation (OD-10, OD-19).
 //
 // The actors are the fixture org (src/testing) plus one persona per role holding exactly that role,
 // so each role's powers show on their own, and the seed's combined holders, which show that roles
@@ -1208,6 +1210,53 @@ const SECTIONS: readonly Section[] = [
     ],
   },
   {
+    ids: 'NTA-06 PDPA-13 PDPA-02 PDPA-03 ACC-12 C0.9 OD-10 OD-19 PD-76',
+    title:
+      'notice.contact.set, notice.people.read and notice.acknowledgement.record (the DPO alone; never for yourself, nor for someone who has left)',
+    rows: [
+      {
+        name: 'PDPA-13 OD-10: only a DPO records their business contact, never an Owner, Admin or Compliance Officer as such, nor a DPO who has left',
+        request: { action: 'notice.contact.set' },
+        allowed: DPOS,
+      },
+      {
+        name: 'PD-76: only a DPO lists the people still at the organisation to record an acknowledgement for',
+        request: { action: 'notice.people.read' },
+        allowed: DPOS,
+      },
+      {
+        name: 'PDPA-03 OD-19: only a DPO records that Marcus acknowledged outside Hearth',
+        request: { action: 'notice.acknowledgement.record', person: P.marcus },
+        allowed: DPOS,
+      },
+      {
+        name: 'OD-19: nobody records their own: Ashton, a DPO, acknowledges in Hearth, and only the other DPO records for Ashton',
+        request: { action: 'notice.acknowledgement.record', person: P.ashton },
+        allowed: ['dpo'],
+      },
+      {
+        name: 'OD-19: and only Ashton records for the other DPO',
+        request: { action: 'notice.acknowledgement.record', person: ONE.dpo },
+        allowed: ['ashton'],
+      },
+      {
+        name: 'ACC-05 OD-19: nobody records for someone who has left',
+        request: { action: 'notice.acknowledgement.record', person: P.formerDpo },
+        allowed: NOBODY,
+      },
+      {
+        name: 'ACC-11: nor for an id the organisation doesn’t hold',
+        request: { action: 'notice.acknowledgement.record', person: X.unknownPerson },
+        allowed: NOBODY,
+      },
+      {
+        name: 'ACC-11: nor for another org’s person',
+        request: { action: 'notice.acknowledgement.record', person: ORG_2_PEOPLE.owner },
+        allowed: NOBODY,
+      },
+    ],
+  },
+  {
     ids: 'ADM-03 ROOM-01 CHAT-01 FILE-01 D16',
     title: 'create (no re-authentication needed; only a person creates)',
     rows: [
@@ -1376,6 +1425,9 @@ const ADMIN_ACTION_IDS: Record<AdminRequest['action'], string> = {
   'register.transfer.set': 'PDPA-10 PDPA-13 D46',
   'notice.read': 'PDPA-02 PDPA-13',
   'notice.publish': 'PDPA-02 PDPA-03',
+  'notice.contact.set': 'PDPA-13 PDPA-02',
+  'notice.acknowledgement.record': 'PDPA-03 ACC-12',
+  'notice.people.read': 'PDPA-03 ACC-12',
 }
 const ADMIN_ACTIONS = Object.keys(ADMIN_ACTION_IDS) as AdminRequest['action'][]
 const isAdminRow = (row: Row) => (ADMIN_ACTIONS as string[]).includes(row.request.action)
@@ -2216,6 +2268,73 @@ describe('NTA-05 PDPA-02 PDPA-03 C0.9 PD-49: the notice is the DPO’s to publis
         const smuggled = { ...request, person: named, device: DEV.marcusPhone } as unknown as SelfRequest
         for (const a of ACTORS)
           expect(can(W, a.subject, smuggled), `${a.key} ${request.action}`).toBe(can(W, a.subject, request))
+      }
+    }
+  })
+})
+
+// The DPO's business contact and the acknowledgements the DPO records (PDPA-13, PDPA-03; C0.9
+// OD-10, OD-19, PD-76): the matrix's NTA-06 rows show each request on its own; these show the rule
+// across every actor, the fresh PIN each needs, and who an acknowledgement may be recorded for.
+// Whether each passes the notice gate before v0 is packages/access's notice.test.ts (NTA-01, NTA-02).
+describe('NTA-06 PDPA-13 PDPA-03 C0.9 OD-10 OD-19 PD-76: the DPO’s contact and the acknowledgements the DPO records', () => {
+  const REQUESTS: readonly AdminRequest[] = [
+    { action: 'notice.contact.set' },
+    { action: 'notice.people.read' },
+    { action: 'notice.acknowledgement.record', person: P.marcus },
+  ]
+
+  test('NTA-06 PDPA-13: a DPO, alone or with another role, does each, and nobody else does; Ashton does so as the DPO, not as the Owner', () => {
+    for (const request of REQUESTS) expect(allowedIn(W, request), request.action).toEqual(inOrder(DPOS))
+    const ashtonNotDpo = matrixWorld(f => ({
+      ...f,
+      roles: f.roles.map(r => (r.personId === P.ashton && r.role === 'dpo' ? { ...r, revokedAt: 1 } : r)),
+    }))
+    for (const request of REQUESTS) {
+      expect(can(ashtonNotDpo, human(P.ashton), request, REAUTH), request.action).toBe(false)
+      expect(allowedIn(ashtonNotDpo, request), request.action).toEqual(['dpo'])
+      expect(can(W, human(P.formerDpo), request, REAUTH), request.action).toBe(false)
+    }
+  })
+
+  test('NTA-06 §9.4 D46 C0.9 PD-30: each needs the DPO’s fresh PIN', () => {
+    const pinRule: ReauthFacts = { stampFresh: true, pinSet: true, issuedUnderPinRule: true }
+    for (const id of [ONE.dpo, P.ashton]) {
+      const request = (r: AdminRequest): AdminRequest =>
+        r.action === 'notice.acknowledgement.record' && r.person === id ? { ...r, person: P.rachel } : r
+      for (const r of REQUESTS.map(request)) {
+        const fresh = { reauthenticated: reauthenticated(W, id, pinRule) }
+        const stale = { reauthenticated: reauthenticated(W, id, { ...pinRule, stampFresh: false }) }
+        expect(can(W, human(id), r, fresh), `${id} ${r.action}`).toBe(true)
+        expect(can(W, human(id), r, stale), `${id} ${r.action}`).toBe(false)
+        expect(can(W, human(id), r), `${id} ${r.action}`).toBe(false)
+      }
+    }
+  })
+
+  test('NTA-06 OD-19 ACC-05 ACC-11: an acknowledgement is recorded only for someone else still at the organisation', () => {
+    const record = (person: Id): AdminRequest => ({ action: 'notice.acknowledgement.record', person })
+    for (const dpo of [ONE.dpo, P.ashton]) {
+      expect(can(W, human(dpo), record(dpo), REAUTH), dpo).toBe(false)
+      for (const person of [P.formerDpo, X.unknownPerson, ORG_2_PEOPLE.owner]) {
+        expect(can(W, human(dpo), record(person), REAUTH), `${dpo} ${person}`).toBe(false)
+      }
+      // Anyone else still here, whatever they hold: an Owner, an Admin, a Member, another DPO.
+      for (const person of [ONE.owner, ONE.admin, ONE.member, P.marcus, P.weiling]) {
+        expect(can(W, human(dpo), record(person), REAUTH), `${dpo} ${person}`).toBe(true)
+      }
+    }
+    // Someone deactivated a moment ago is refused at once (ACC-05).
+    const left = matrixWorld(f => ({
+      ...f,
+      people: f.people.map(p => (p.id === P.marcus ? { ...p, deactivatedAt: 1 } : p)),
+    }))
+    expect(can(left, human(P.ashton), record(P.marcus), REAUTH)).toBe(false)
+    // The contact and the list name nobody in the request, so a field naming someone changes nothing.
+    for (const action of ['notice.contact.set', 'notice.people.read'] as const) {
+      const smuggled = { action, person: ORG_2_PEOPLE.owner } as unknown as AdminRequest
+      for (const a of ACTORS) {
+        expect(can(W, a.subject, smuggled, REAUTH), `${a.key} ${action}`).toBe(can(W, a.subject, { action }, REAUTH))
       }
     }
   })

@@ -4,7 +4,8 @@
 // whose title isn't shown as a heading (C1's conversation view, say) keeps the h1 for screen
 // readers with `srOnlyTitle` (X16). Back goes through the router's history when there is a page
 // to go back to in this tab, else to the screen's fallback, never a store of its own (CHT-44).
-// `actions` sit at the end of the row (the avatar menu on phones).
+// `actions` sit at the end of the row (the avatar menu on phones). `titleId` is the h1's id, which
+// the shell's scroll container names itself by while it is a tab stop (ui/scroller-focus.ts).
 //
 // The h1 is finance's page title, Newsreader 600 drawn tight, at 36 px from the rail breakpoint as
 // finance's is, and 24 px on a phone, where finance's is 30 (T21 item 6): this bar never scrolls
@@ -25,6 +26,7 @@ import { cx } from './cx.ts'
 
 export interface ScreenHeaderProps {
   title: string
+  titleId?: string
   srOnlyTitle?: boolean
   back?: { label: string; fallback: AppPath }
   actions?: ReactNode
@@ -32,9 +34,10 @@ export interface ScreenHeaderProps {
 
 export const RAIL_TITLE_ROW = 'rail:mx-auto rail:w-full rail:max-w-3xl rail:px-6 rail:pt-10 rail:pb-1'
 
-export function ScreenHeader({ title, srOnlyTitle = false, back, actions }: ScreenHeaderProps) {
+export function ScreenHeader({ title, titleId, srOnlyTitle = false, back, actions }: ScreenHeaderProps) {
   const heading = (
     <h1
+      id={titleId}
       tabIndex={-1}
       data-screen-title
       className={cx(

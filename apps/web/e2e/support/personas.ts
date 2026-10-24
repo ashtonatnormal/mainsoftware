@@ -23,6 +23,7 @@
 // the roster with no account yet (ACC-03: her first sign-in makes it); +65 8000 9999 and the +65
 // 8000 90NN numbers are off the roster: they get the same answer and never a text (PRD-53). Ahmad
 // (Leadership) and Arjun (Admin, AI Admin) are kept, for C0.16's re-authentication specs.
+// CONTACT_PHONE, at the end, is a number no one is asked a code for.
 
 export type Project = 'chromium' | 'webkit' | 'firefox' | 'chromium-session-end'
 // Where a code is asked for: global setup (before every project), or a project's tests.
@@ -79,7 +80,7 @@ export const PERSONAS = {
     { what: 'SI-10 ACC-03', stage: 'chromium', requests: 1 },
   ]),
   ashton: person('Ashton', '+6580000001', { roster: true, account: true, pinRole: true }, [
-    { what: 'DPP-E1 to DPP-E6 PDPA-13 the DPO, the PIN set', stage: 'chromium', requests: 1 },
+    { what: 'DPP-E1 to DPP-E8 PDPA-13 the DPO, the PIN set', stage: 'chromium', requests: 1 },
     { what: 'SE-05 PDPA-03 the DPO publishes the notice', stage: 'chromium-session-end', requests: 1 },
   ]),
   priya: person('Priya', '+6580000002', { roster: true, account: true, pinRole: true }, [
@@ -133,3 +134,8 @@ export const shown = (persona: Persona): string => persona.e164.replace(/^\+(65)
 export const E2E_PIN = '284917'
 // A PIN that is wrong for anyone who set E2E_PIN.
 export const WRONG_PIN = '739164'
+
+// The DPO's made-up business line, which NTE-01 plants in the contact Settings shows (C0.9 PD-69):
+// in the seed's made-up range, held by no one in db/seed/tembusu.sql and by no persona above (NTE-01
+// checks both), and never texted: Settings only links it, and no code is asked for it.
+export const CONTACT_PHONE = '+65 8000 0199'

@@ -185,7 +185,7 @@ export const EVENTS = {
     entity: 'person',
     purposes: ['accounts'],
     ids: z.strictObject({ notice: z.uuid(), version: z.int().min(0).max(IDS_NUMBER_MAX) }),
-    description: 'A person acknowledged a version of the privacy notice',
+    description: 'A person acknowledged a version of the privacy notice, in the app or as the DPO recorded it',
   }),
 
   // Reserved: named in 0007's type list; the step after each gives it the rest.

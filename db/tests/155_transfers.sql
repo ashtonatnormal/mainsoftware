@@ -4,10 +4,14 @@
 -- org's time zone, and never for an AI provider (RGS-09); a cleared entry's facts can't change,
 -- recording them ends the clearance, "Save and keep cleared" grants the next one on the new facts or
 -- changes nothing, and each clearance is stamped with the facts it rests on (RGS-10); the transfer
--- gate answers for the org set, and only in a transaction that can lock (XFR-01); and the first-Owner
+-- gate answers for the org set, and only in a transaction that can lock (XFR-01); the first-Owner
 -- bootstrap's clearance runs only as the owner, acting as Hearth, once per provider (BSC-01 to
--- BSC-03). Every case runs as hearth_app (act_as), the owner or the role it tests unless it says it
--- arranges data as the superuser. The facts are made up.
+-- BSC-03); and its break-glass re-clear (0011, C0.9 OD-20) runs only with the emergency marker, for
+-- Twilio Verify once an earlier clearance has ended, while no DPO has a live session, within its own
+-- bounds (BSC-04), on the facts given, stated or not (BSC-05), recorded as break_glass, Twilio's
+-- alone (BSC-06), and again after the DPO's own clear and withdrawal (BSC-07). Every case runs as
+-- hearth_app (act_as), the owner or the role it tests unless it says it arranges data as the
+-- superuser. The facts are made up.
 \ir fixtures/two_orgs.sql
 
 -- Today in the transaction's org's time zone.
@@ -74,6 +78,46 @@ begin
     (f ->> 'dpa_terms_confirmed')::boolean, f ->> 'training', f ->> 'zero_retention', f ->> 'provider_retention',
     f ->> 'retention_confirmed', f ->> 'onward_recipients', (f ->> 'review_on')::date, why);
 end
+$$;
+-- The break-glass re-clear (0011, C0.9 OD-20), as the bootstrap script's recovery mode calls it:
+-- the emergency marker set in the transaction, and by default a review date 30 days ahead, inside
+-- the 90-day cap. A call that succeeds outside a savepoint leaves its own 2 s lock_timeout and 30 s
+-- transaction_timeout set, so this puts back the test transaction's (BSC-04 checks the bounds), and
+-- unsets the marker, so a later call is the set-up's.
+create function pg_temp.reclear(dpo uuid, changes jsonb default '{}', p text default 'twilio',
+                                why text default ' Twilio withdrawn and no DPO signed in ') returns uuid language plpgsql as $$
+declare
+  lock_was text := current_setting('lock_timeout');
+  transaction_was text := current_setting('transaction_timeout');
+  clearance uuid;
+begin
+  perform set_config('hearth.break_glass', 'twilio_reclear', true);
+  clearance := pg_temp.bootstrap(p, dpo, jsonb_build_object('review_on', pg_temp.today() + 30) || changes, why);
+  perform set_config('hearth.break_glass', '', true), set_config('lock_timeout', lock_was, true),
+          set_config('transaction_timeout', transaction_was, true);
+  return clearance;
+end
+$$;
+-- The sources publish_notice() derives (as 160 has them): each active or retired non-AI purpose's
+-- key and current version, in key order, and each open non-AI clearance's id.
+create function pg_temp.sources(out keys text[], out versions integer[], out clearances uuid[]) language sql as $$
+  with cur as (
+    select distinct on (r.purpose) r.purpose, r.version, r.status
+    from public.processing_register r
+    where r.org_id = current_setting('app.org_id')::uuid and not r.ai
+    order by r.purpose, r.version desc)
+  select array(select c.purpose from cur c where c.status <> 'planned' order by c.purpose),
+         array(select c.version from cur c where c.status <> 'planned' order by c.purpose),
+         array(select x.id from public.transfer_clearances x join public.transfer_register t on t.id = x.entry_id
+               where x.org_id = current_setting('app.org_id')::uuid and x.withdrawn_at is null and not t.ai order by x.id)
+$$;
+-- Every clearance a test makes is made in its one transaction, so all share now(). The re-clear's
+-- audit row names the clearance that ended last (the latest cleared_at), so before one, every
+-- earlier clearance of the provider but the given one is moved back an hour (as the superuser;
+-- only the end of a clearance is kept from change), as the episodes would be spread across days.
+create function pg_temp.backdate_but(o text, p text, latest uuid) returns void language sql as $$
+  update public.transfer_clearances set cleared_at = cleared_at - interval '1 hour'
+  where org_id = pg_temp.id(o, '00') and provider = p and id <> latest
 $$;
 -- Acting as the owner in an org, as Hearth (the bootstrap's transaction), or as someone else.
 create function pg_temp.act_as_owner(o text, suffix text) returns void language plpgsql as $$
@@ -464,8 +508,9 @@ begin
 end
 $$;
 
--- BSC-01 (C0.9 OD-01, PD-23): no runtime role can run the bootstrap's clearance (42501); only its
--- owner and a superuser can.
+-- BSC-01 (C0.9 OD-01, OD-20, PD-23): no runtime role can run the bootstrap's clearance (42501); only
+-- its owner and a superuser can. 0011 replaced it in place: still the owner's, a security invoker,
+-- granted to nobody.
 do $$
 declare
   r text;
@@ -477,6 +522,11 @@ begin
   end loop;
 end
 $$;
+select pg_temp.check(not prosecdef and proowner = 'hearth_owner'::regrole and proacl is not null
+                     and not exists (select 1 from aclexplode(proacl) a where a.grantee <> proowner),
+                     'the bootstrap''s clearance changed its owner, its rights or its grants')
+from pg_proc
+where oid = 'public.bootstrap_transfer_clearance(text,uuid,text,text,text[],text[],text,text,text,date,boolean,text,text,text,text,text,date,text)'::regprocedure;
 do $$
 declare
   r text;
@@ -605,7 +655,8 @@ from public.outbox_events e where e.id > current_setting('test.outbox_max')::big
 select pg_temp.act_as('2', 'a0');
 select pg_temp.check(public.transfer_cleared('twilio'), 'twilio does not read as cleared after the set-up');
 reset role;
--- Once the DPO withdraws it, the set-up can't clear it again (BSC-03); the DPO can, in the app.
+-- Once the DPO withdraws it, the set-up can't clear it again (BSC-03); the DPO can, in the app, and
+-- so can the break-glass re-clear (BSC-04).
 select pg_temp.act_as('2', 'a5');
 select pg_temp.check((select changed from pg_temp.withdraw('twilio')), 'the DPO could not withdraw the set-up''s clearance');
 reset role;
@@ -639,4 +690,388 @@ select pg_temp.check(count(*) = 1 and bool_and(cleared_via = 'bootstrap' and cle
 from public.transfer_clearances where org_id = pg_temp.id('3', '00') and provider = 'aws' and withdrawn_at is null;
 select pg_temp.check(count(*) = 1 and bool_and(reason = 'First set-up'), 'the set-up''s reason was not kept trimmed')
 from public.audit_events where org_id = pg_temp.id('3', '00') and action = 'register.transfer_cleared';
+select set_config('app.org_id', '', true), set_config('app.user_id', '', true);
+
+-- BSC-04 (C0.9 OD-20, PD-77 to PD-79): what the break-glass re-clear refuses, writing nothing. In
+-- org 2, Twilio was cleared by the set-up (BSC-02) and then in the app; its DPO (a5) now withdraws
+-- it, and aws (the fixture's e5). As the owner acting as org 2's Hearth principal, with the
+-- emergency marker set and a review date 30 days ahead unless a case says otherwise:
+--   - no marker, or a marker of another value: the set-up's refusal (0009's message and order);
+--   - the marker for a provider never cleared in the org (org 3's Twilio): refused, so no first
+--     clearance is ever an emergency;
+--   - aws, cleared before: 0009's message; a review date 91 days ahead (90 goes ahead, in a
+--     savepoint);
+--   - a person named as the DPO who isn't one, has left, is another org's, or is nobody (42501);
+--   - facts left incomplete, or a review date not after today (the clearance's trigger, HF006);
+--   - a5 with a live session; Twilio already cleared, with a review date inside the cap.
+select pg_temp.act_as('2', 'a5');
+select pg_temp.check((select changed from pg_temp.withdraw('twilio')) and (select changed from pg_temp.withdraw('aws')),
+                     'org 2''s DPO could not withdraw twilio and aws');
+reset role;
+select set_config('test.audit_max', (select max(id)::text from public.audit_events), true);
+select set_config('test.outbox_max', (select max(id)::text from public.outbox_events), true);
+select pg_temp.act_as_owner('2', 'a0');
+select pg_temp.expect_error($$select pg_temp.bootstrap('twilio', 'f2000000-0000-4000-8000-0000000000a5',
+  jsonb_build_object('review_on', pg_temp.today() + 30), 'Again')$$, 'HF006',
+  'That provider has been cleared in this organisation before. The DPO clears it again in Hearth.');
+select set_config('hearth.break_glass', 'reclear', true);
+select pg_temp.expect_error($$select pg_temp.bootstrap('twilio', 'f2000000-0000-4000-8000-0000000000a5',
+  jsonb_build_object('review_on', pg_temp.today() + 30), 'Again')$$, 'HF006', 'That provider has been cleared%');
+select set_config('hearth.break_glass', '', true);
+select pg_temp.expect_error($$select pg_temp.reclear('f2000000-0000-4000-8000-0000000000a5', '{}', 'aws')$$, 'HF006',
+                            'That provider has been cleared in this organisation before. The DPO clears it again in Hearth.');
+select pg_temp.expect_error($$select pg_temp.reclear('f2000000-0000-4000-8000-0000000000a5',
+  jsonb_build_object('review_on', pg_temp.today() + 91))$$, 'HF006',
+  'An emergency re-clear sets a review date at most 90 days ahead. The DPO sets a later one in Hearth.');
+-- The cap's edge: 90 days ahead goes ahead (in a savepoint, so the refusals below still start from
+-- Twilio withdrawn).
+do $$
+begin
+  perform pg_temp.check(pg_temp.reclear(pg_temp.id('2', 'a5'), jsonb_build_object('review_on', pg_temp.today() + 90)) is not null,
+                        'a re-clear with a review date 90 days ahead was refused');
+  perform set_config('role', 'none', true);
+  perform pg_temp.check((select cleared_via = 'break_glass' and review_on = pg_temp.today() + 90
+                         from public.transfer_clearances c join public.transfer_register t on t.id = c.entry_id
+                         where c.org_id = pg_temp.id('2', '00') and c.provider = 'twilio' and c.withdrawn_at is null),
+                        'a re-clear 90 days ahead did not clear twilio as break_glass with that review date');
+  raise exception 'roll the re-clear back' using errcode = 'HT001';
+exception when sqlstate 'HT001' then
+  null;
+end
+$$;
+do $$
+declare
+  who uuid;
+begin
+  foreach who in array array[pg_temp.id('2', 'a1'), pg_temp.id('2', 'a9'), pg_temp.id('1', 'a5'), null] loop
+    perform pg_temp.expect_error(format($f$select pg_temp.reclear(%L)$f$, who), '42501',
+                                 'The person named as the DPO must be at the organisation and hold the DPO role.');
+  end loop;
+end
+$$;
+select pg_temp.expect_error($$select pg_temp.reclear('f2000000-0000-4000-8000-0000000000a5', '{"services": null}')$$, 'HF006',
+                            'Record the services it provides before clearing it.');
+select pg_temp.expect_error($$select pg_temp.reclear('f2000000-0000-4000-8000-0000000000a5', '{"onward_recipients": " \t"}')$$,
+                            'HF006', 'Record who it passes the data on to (or None) before clearing it.');
+select pg_temp.expect_error($$select pg_temp.reclear('f2000000-0000-4000-8000-0000000000a5',
+  jsonb_build_object('review_on', pg_temp.today()))$$, 'HF006', 'Set a review date after today before clearing it.');
+select pg_temp.expect_error($$select pg_temp.reclear('f2000000-0000-4000-8000-0000000000a5', '{}', 'twilio', ' ')$$, '22023',
+                            'Give the set-up''s reason, from 1 to 2,000 characters.');
+reset role;
+select pg_temp.act_as_owner('3', 'a0');
+select pg_temp.expect_error($$select pg_temp.reclear('f3000000-0000-4000-8000-0000000000a5')$$, 'HF006',
+                            'The emergency re-clear restores only a clearance that has ended. Run the set-up without it.');
+reset role;
+-- a5 with a live session (its account's device and session, added as the superuser), and Twilio
+-- already cleared by a5 in the app: each in a savepoint.
+do $$
+begin
+  insert into public.devices (id, org_id, user_id, label) values (pg_temp.id('2', 'e9'), pg_temp.id('2', '00'), pg_temp.id('2', 'a5'), 'DPO phone');
+  insert into public.sessions (id, org_id, user_id, device_id, token_hash, expires_at)
+  values (pg_temp.id('2', 'f9'), pg_temp.id('2', '00'), pg_temp.id('2', 'a5'), pg_temp.id('2', 'e9'),
+          decode(md5('dpo session') || md5('dpo token'), 'hex'), now() + interval '7 days');
+  perform pg_temp.act_as_owner('2', 'a0');
+  perform pg_temp.expect_error($f$select pg_temp.reclear('f2000000-0000-4000-8000-0000000000a5')$f$, 'HF006',
+                               'A Data Protection Officer is signed in, so they clear Twilio Verify again in Hearth.');
+  raise exception 'roll the session back' using errcode = 'HT001';
+exception when sqlstate 'HT001' then
+  null;
+end
+$$;
+do $$
+begin
+  perform pg_temp.act_as('2', 'a5');
+  perform pg_temp.check((select cleared from pg_temp.clear('twilio')), 'org 2''s DPO could not clear twilio in the app');
+  perform pg_temp.act_as_owner('2', 'a0');
+  perform pg_temp.expect_error($f$select pg_temp.reclear('f2000000-0000-4000-8000-0000000000a5')$f$, 'HF006',
+                               'Twilio Verify is cleared already. The DPO changes its entry in Hearth.');
+  raise exception 'roll the clearance back' using errcode = 'HT001';
+exception when sqlstate 'HT001' then
+  null;
+end
+$$;
+select pg_temp.check(count(*) = 0, 'a refused re-clear wrote to the audit log')
+from public.audit_events where id > current_setting('test.audit_max')::bigint;
+select pg_temp.check(count(*) = 0, 'a refused re-clear appended an event')
+from public.outbox_events where id > current_setting('test.outbox_max')::bigint;
+select pg_temp.check(not exists (select 1 from public.transfer_clearances
+                                 where org_id = pg_temp.id('2', '00') and provider in ('twilio', 'aws') and withdrawn_at is null),
+                     'a refused re-clear cleared twilio or aws');
+-- Its bounds (PD-79): a re-clear that goes ahead leaves its 2 s lock_timeout and 30 s
+-- transaction_timeout set for the rest of its transaction (a refused one rolls back with them),
+-- whatever transaction_timeout the transaction already runs: a longer one, a shorter one, and one
+-- lowered under a longer one (whose timer Postgres keeps running, which is why the re-clear always
+-- restarts it); the set-up (org 3's twilio, cleared for the first time) never sets them. Each in a
+-- savepoint. (That the timer then ends the transaction 30 s after the re-clear, whatever ran
+-- before, is Postgres's: switched off and on again, it starts afresh. BGR-05 in
+-- apps/server/scripts/check-concurrency.ts shows it on a connection whose session set a longer one.)
+do $$
+declare
+  lock_was constant text := current_setting('lock_timeout');
+  transaction_was constant text := current_setting('transaction_timeout');
+begin
+  perform pg_temp.check(lock_was <> '2s' and transaction_was <> '30s', 'the test transaction already has the re-clear''s bounds');
+  begin
+    perform pg_temp.act_as_owner('2', 'a0');
+    perform set_config('hearth.break_glass', 'twilio_reclear', true);
+    perform pg_temp.bootstrap('twilio', pg_temp.id('2', 'a5'), jsonb_build_object('review_on', pg_temp.today() + 30), 'Bounds');
+    perform pg_temp.check(current_setting('lock_timeout') = '2s' and current_setting('transaction_timeout') = '30s',
+                          format('the re-clear left lock_timeout %s and transaction_timeout %s',
+                                 current_setting('lock_timeout'), current_setting('transaction_timeout')));
+    raise exception 'roll the re-clear back' using errcode = 'HT001';
+  exception when sqlstate 'HT001' then
+    null;
+  end;
+  perform pg_temp.check(current_setting('lock_timeout') = lock_was and current_setting('transaction_timeout') = transaction_was
+                        and current_setting('hearth.break_glass', true) is distinct from 'twilio_reclear',
+                        'a rolled-back re-clear left its bounds or its marker set');
+  declare
+    running text;
+    setting text;
+  begin
+    foreach running in array array['5min', '10s', '5min then 10s'] loop
+      begin
+        foreach setting in array string_to_array(running, ' then ') loop
+          perform set_config('transaction_timeout', setting, true);
+        end loop;
+        perform pg_temp.act_as_owner('2', 'a0');
+        perform set_config('hearth.break_glass', 'twilio_reclear', true);
+        perform pg_temp.bootstrap('twilio', pg_temp.id('2', 'a5'), jsonb_build_object('review_on', pg_temp.today() + 30), 'Bounds');
+        perform pg_temp.check(current_setting('transaction_timeout') = '30s',
+                              format('with %s running, the re-clear left transaction_timeout %s', running,
+                                     current_setting('transaction_timeout')));
+        raise exception 'roll the re-clear back' using errcode = 'HT001';
+      exception when sqlstate 'HT001' then
+        null;
+      end;
+    end loop;
+  end;
+  begin
+    perform pg_temp.act_as_owner('3', 'a0');
+    perform pg_temp.bootstrap('twilio', pg_temp.id('3', 'a5'), '{}', 'First set-up of Twilio');
+    perform pg_temp.check(current_setting('lock_timeout') = lock_was and current_setting('transaction_timeout') = transaction_was,
+                          'the set-up set the re-clear''s bounds');
+    raise exception 'roll the set-up back' using errcode = 'HT001';
+  exception when sqlstate 'HT001' then
+    null;
+  end;
+end
+$$;
+-- What isn't a live DPO session, each in a savepoint, after which the re-clear goes ahead: a5's
+-- session revoked; expired; on a signed-out device; of a5 once they have left, or once their dpo
+-- row is revoked (a second DPO, a6, granted as the superuser, is then the one named); and a live
+-- session of someone who isn't a DPO (the fixture's a8, e2, present in every case). Idle time
+-- isn't counted. The session on a signed-out device and the DPO who left keep their sessions open
+-- only because the superuser arranges them with triggers off (session_replication_role), so the
+-- re-clear's own reading, not a trigger's end of the session, is what lets them through.
+do $$
+declare
+  c text;
+  named uuid;
+begin
+  foreach c in array array['revoked', 'expired', 'signed_out_device', 'left', 'role_revoked', 'not_a_dpo'] loop
+    begin
+      perform pg_temp.check(exists (select 1 from public.sessions where id = pg_temp.id('2', 'e2') and revoked_at is null
+                                    and expires_at > now()), 'the fixture''s a8 has no live session');
+      named := pg_temp.id('2', 'a5');
+      if c <> 'not_a_dpo' then
+        insert into public.devices (id, org_id, user_id, label)
+        values (pg_temp.id('2', 'e9'), pg_temp.id('2', '00'), pg_temp.id('2', 'a5'), 'DPO phone');
+        insert into public.sessions (id, org_id, user_id, device_id, token_hash, created_at, expires_at)
+        values (pg_temp.id('2', 'f9'), pg_temp.id('2', '00'), pg_temp.id('2', 'a5'), pg_temp.id('2', 'e9'),
+                decode(md5('dpo session ' || c) || md5('dpo token ' || c), 'hex'),
+                case c when 'expired' then now() - interval '8 days' else now() end,
+                case c when 'expired' then now() - interval '1 day' else now() + interval '7 days' end);
+      end if;
+      if c = 'revoked' then
+        update public.sessions set revoked_at = now(), revoked_by = pg_temp.id('2', 'a5'), revoke_reason = 'sign_out'
+        where id = pg_temp.id('2', 'f9');
+      elsif c = 'signed_out_device' then
+        perform set_config('session_replication_role', 'replica', true);
+        update public.devices set signed_out_at = now(), signed_out_by = pg_temp.id('2', 'a5') where id = pg_temp.id('2', 'e9');
+        perform set_config('session_replication_role', 'origin', true);
+      elsif c in ('left', 'role_revoked') then
+        insert into public.role_assignments (org_id, person_id, role, created_by, approved_by, approved_at)
+        values (pg_temp.id('2', '00'), pg_temp.id('2', 'a6'), 'dpo', pg_temp.id('2', 'a1'), pg_temp.id('2', 'a2'), now());
+        named := pg_temp.id('2', 'a6');
+        if c = 'left' then
+          perform set_config('session_replication_role', 'replica', true);
+          update public.people set deactivated_at = now(), deactivated_by = pg_temp.id('2', 'a1') where id = pg_temp.id('2', 'a5');
+          perform set_config('session_replication_role', 'origin', true);
+        else
+          update public.role_assignments set revoked_at = now(), revoked_by = pg_temp.id('2', 'a1')
+          where org_id = pg_temp.id('2', '00') and person_id = pg_temp.id('2', 'a5') and role = 'dpo' and revoked_at is null;
+        end if;
+      end if;
+      if c not in ('expired', 'not_a_dpo') then
+        perform pg_temp.check((c = 'revoked') = exists (select 1 from public.sessions where id = pg_temp.id('2', 'f9')
+                                                        and revoked_at is not null),
+                              format('%s: the arranged session is not as the case needs', c));
+      end if;
+      perform pg_temp.act_as_owner('2', 'a0');
+      perform pg_temp.check(pg_temp.reclear(named) is not null, format('%s: the re-clear was refused', c));
+      perform set_config('role', 'none', true);
+      perform pg_temp.check((select cleared_via = 'break_glass' and cleared_by = named from public.transfer_clearances
+                             where org_id = pg_temp.id('2', '00') and provider = 'twilio' and withdrawn_at is null),
+                            format('%s: twilio is not cleared by the re-clear in the named DPO''s name', c));
+      raise exception 'roll the case back' using errcode = 'HT001';
+    exception when sqlstate 'HT001' then
+      null;
+    end;
+  end loop;
+end
+$$;
+
+-- BSC-05 (C0.9 OD-20, PD-78, PD-80): a re-clear with no live DPO session clears Twilio in the named
+-- DPO's name (cleared_via 'break_glass'), on the facts given. Org 2's registers are made ready (as
+-- the superuser), and its DPO records Twilio's facts with a review date 30 days ahead, clears it in
+-- the app, publishes version 1 (stating that clearance, on the fixture's contact e6) and withdraws
+-- it. With the facts read as the recovery mode reads them, from the snapshot of the Twilio
+-- clearance the latest version links, the revision stays and Twilio is cleared for every send.
+-- With one stated fact changed (in a savepoint, first) the revision moves on, with Hearth as
+-- updated_by, and sends wait for a version that states it (unstated). With no version at all (org
+-- 3, in a savepoint) it is no_notice. One audit row (Hearth acting, the reason, the bootstrap's
+-- details with the clearance that ended and why) and one register.transfer_changed, Hearth acting.
+insert into public.processing_register (org_id, purpose, ai, pinned, needs_switch, version, status, basis, retention, providers,
+                                        recorded_by)
+select c.org_id, c.purpose, c.ai, c.pinned, c.needs_switch, c.version + 1, 'active', 'employment', 'Kept for 12 months',
+       c.providers, pg_temp.id('2', 'a5')
+from (select distinct on (r.purpose) r.* from public.processing_register r
+      where r.org_id = pg_temp.id('2', '00') order by r.purpose, r.version desc) c
+where not c.ai and c.status = 'active'
+  and (c.basis is null or c.retention is null or c.basis in ('consent', 'deemed_consent_conduct', 'deemed_consent_notification'));
+select pg_temp.act_as('2', 'a5');
+select pg_temp.check((select changed and not cleared from pg_temp.record('twilio', jsonb_build_object('review_on', pg_temp.today() + 30)))
+                     and (select cleared from pg_temp.clear('twilio')),
+                     'org 2''s DPO could not record and clear twilio');
+select set_config('test.app_clearance', (select id::text from public.transfer_clearances
+                                         where org_id = pg_temp.id('2', '00') and provider = 'twilio' and withdrawn_at is null), true);
+select set_config('test.v1', p.notice::text, true)
+from pg_temp.sources() s,
+     public.publish_notice(0, 'Privacy notice', 'c09.2', s.keys, s.versions, s.clearances, 1, 'req-transfers', null, null) p;
+select pg_temp.check((select changed from pg_temp.withdraw('twilio')), 'org 2''s DPO could not withdraw twilio');
+reset role;
+-- The facts the latest version states for Twilio: the snapshot of the clearance it links.
+select set_config('test.stated', c.facts::text, true), set_config('test.revision', t.revision::text, true)
+from public.notice_version_providers l
+join public.transfer_clearances c on c.org_id = l.org_id and c.id = l.clearance_id
+join public.transfer_register t on t.org_id = c.org_id and t.id = c.entry_id
+where l.notice_version_id = current_setting('test.v1')::uuid and c.provider = 'twilio';
+select pg_temp.check(current_setting('test.stated', true) <> '' and current_setting('test.app_clearance', true) <> '',
+                     'version 1 does not state twilio''s clearance');
+do $$
+begin
+  perform pg_temp.act_as_owner('2', 'a0');
+  perform pg_temp.reclear(pg_temp.id('2', 'a5'),
+                          current_setting('test.stated')::jsonb || '{"provider_retention": "Verification records for 60 days"}');
+  perform set_config('role', 'none', true);
+  perform pg_temp.check(t.revision = current_setting('test.revision')::bigint + 1 and t.updated_by = pg_temp.id('2', 'a0')
+                        and t.provider_retention = 'Verification records for 60 days',
+                        'a re-clear with a changed fact did not move the revision on, as Hearth''s')
+  from public.transfer_register t where t.org_id = pg_temp.id('2', '00') and t.provider = 'twilio';
+  perform pg_temp.check(a.details -> 'changed' = '{"provider_retention": {"from": "Verification records for 30 days",
+                                                                      "to": "Verification records for 60 days"}}',
+                        format('the re-clear''s audit row does not record the changed fact: %s', a.details))
+  from public.audit_events a where a.id = (select max(id) from public.audit_events);
+  perform pg_temp.act_as('2', 'a0');
+  perform pg_temp.check(public.transfer_send_state('twilio') = 'unstated',
+                        format('twilio re-cleared on facts version 1 doesn''t state is %s', public.transfer_send_state('twilio')));
+  raise exception 'roll the re-clear back' using errcode = 'HT001';
+exception when sqlstate 'HT001' then
+  null;
+end
+$$;
+select pg_temp.backdate_but('2', 'twilio', current_setting('test.app_clearance')::uuid);
+select set_config('test.audit_max', (select max(id)::text from public.audit_events), true);
+select set_config('test.outbox_max', (select max(id)::text from public.outbox_events), true);
+select pg_temp.act_as_owner('2', 'a0');
+select set_config('test.reclear', pg_temp.reclear(pg_temp.id('2', 'a5'), current_setting('test.stated')::jsonb)::text, true);
+reset role;
+select pg_temp.check(c.cleared_via = 'break_glass' and c.cleared_by = pg_temp.id('2', 'a5') and c.provider = 'twilio'
+                     and c.withdrawn_at is null and c.facts = current_setting('test.stated')::jsonb
+                     and c.register_revision = current_setting('test.revision')::bigint
+                     and t.revision = current_setting('test.revision')::bigint and t.updated_by = pg_temp.id('2', 'a5'),
+                     'the re-clear did not clear twilio in a5''s name on the stated facts, keeping the revision')
+from public.transfer_clearances c join public.transfer_register t on t.id = c.entry_id
+where c.id = current_setting('test.reclear')::uuid;
+select pg_temp.check(count(*) = 1 and bool_and(
+                       a.org_id = pg_temp.id('2', '00') and a.actor_id = pg_temp.id('2', 'a0') and a.action = 'register.transfer_cleared'
+                       and a.target_type = 'transfer_entry' and a.target_id = 'twilio'
+                       and a.reason = 'Twilio withdrawn and no DPO signed in'
+                       and a.via is null and a.on_behalf_of_id is null and a.request_id is null
+                       and a.details = jsonb_build_object('by', 'break_glass', 'decided_by', pg_temp.id('2', 'a5'),
+                                                          'revision', current_setting('test.revision')::bigint,
+                                                          'was_revision', current_setting('test.revision')::bigint,
+                                                          'changed', '{}'::jsonb,
+                                                          'clearance', current_setting('test.reclear')::uuid,
+                                                          'ended_clearance', current_setting('test.app_clearance')::uuid,
+                                                          'ended_reason', 'dpo_decision')),
+                     format('the re-clear''s audit row is wrong: %s', array_agg(a.details)))
+from public.audit_events a where a.id > current_setting('test.audit_max')::bigint;
+select pg_temp.check(count(*) = 1 and bool_and(
+                       e.type = 'register.transfer_changed' and e.entity_type = 'transfer_entry'
+                       and e.entity_id = (select id from public.transfer_register where org_id = pg_temp.id('2', '00') and provider = 'twilio')
+                       and e.actor_id = pg_temp.id('2', 'a0') and e.actor_kind = 'system' and e.purpose = 'service_operation'
+                       and e.ids = '{"provider": "twilio", "cleared": true}'),
+                     'the re-clear did not append one register.transfer_changed event, Hearth acting')
+from public.outbox_events e where e.id > current_setting('test.outbox_max')::bigint;
+select pg_temp.act_as('2', 'a0');
+select pg_temp.check(public.transfer_send_state('twilio') = 'cleared' and public.transfer_cleared('twilio'),
+                     'twilio re-cleared on the facts version 1 states is not cleared');
+reset role;
+do $$
+begin
+  perform pg_temp.act_as_owner('3', 'a0');
+  perform pg_temp.bootstrap('twilio', pg_temp.id('3', 'a5'), '{}', 'First set-up of Twilio');
+  perform pg_temp.act_as('3', 'a5');
+  perform pg_temp.check((select changed from pg_temp.withdraw('twilio')), 'org 3''s DPO could not withdraw twilio');
+  perform pg_temp.act_as_owner('3', 'a0');
+  perform pg_temp.reclear(pg_temp.id('3', 'a5'));
+  perform pg_temp.act_as('3', 'a0');
+  perform pg_temp.check(public.transfer_send_state('twilio') = 'no_notice',
+                        format('twilio re-cleared with no version is %s', public.transfer_send_state('twilio')));
+  raise exception 'roll org 3 back' using errcode = 'HT001';
+exception when sqlstate 'HT001' then
+  null;
+end
+$$;
+
+-- BSC-06 (C0.9 PD-80): a clearance is the break-glass re-clear's only for Twilio Verify (23514,
+-- transfer_clearances_break_glass), and cleared_via is one of the three ways (23514), whoever
+-- writes (a superuser's insert, on org 2's aws, whose facts are complete and which no clearance
+-- holds open).
+select pg_temp.expect_error($$insert into public.transfer_clearances (org_id, entry_id, cleared_by, cleared_via)
+  select t.org_id, t.id, 'f2000000-0000-4000-8000-0000000000a5', 'break_glass' from public.transfer_register t
+  where t.org_id = 'f2000000-0000-4000-8000-000000000000' and t.provider = 'aws'$$, '23514', '%transfer_clearances_break_glass%');
+select pg_temp.expect_error($$insert into public.transfer_clearances (org_id, entry_id, cleared_by, cleared_via)
+  select t.org_id, t.id, 'f2000000-0000-4000-8000-0000000000a5', 'elsewhere' from public.transfer_register t
+  where t.org_id = 'f2000000-0000-4000-8000-000000000000' and t.provider = 'aws'$$, '23514', '%transfer_clearances_cleared_via%');
+
+-- BSC-07 (C0.9 OD-20): after a re-clear the DPO withdraws it and clears it again in the app as
+-- before; after a second withdrawal, a second re-clear still goes ahead with no DPO session, naming
+-- the app's clearance as the one that ended. One clearance is open at the end.
+select pg_temp.act_as('2', 'a5');
+select pg_temp.check((select changed from pg_temp.withdraw('twilio')) and (select cleared and changed from pg_temp.clear('twilio')),
+                     'org 2''s DPO could not withdraw the re-clear and clear twilio again in the app');
+select set_config('test.app_clearance', (select id::text from public.transfer_clearances
+                                         where org_id = pg_temp.id('2', '00') and provider = 'twilio' and withdrawn_at is null
+                                           and cleared_via = 'app'), true);
+select pg_temp.check((select changed from pg_temp.withdraw('twilio')), 'org 2''s DPO could not withdraw twilio again');
+reset role;
+select pg_temp.backdate_but('2', 'twilio', current_setting('test.app_clearance')::uuid);
+select pg_temp.act_as_owner('2', 'a0');
+select set_config('test.reclear', pg_temp.reclear(pg_temp.id('2', 'a5'), current_setting('test.stated')::jsonb,
+                                                  'twilio', 'Twilio withdrawn again')::text, true);
+reset role;
+select pg_temp.check(count(*) filter (where withdrawn_at is null) = 1
+                     and bool_and(withdrawn_at is not null or (id = current_setting('test.reclear')::uuid and cleared_via = 'break_glass')),
+                     'the second re-clear did not leave exactly one open clearance, its own')
+from public.transfer_clearances where org_id = pg_temp.id('2', '00') and provider = 'twilio';
+select pg_temp.check(details ->> 'ended_clearance' = current_setting('test.app_clearance')
+                     and details ->> 'ended_reason' = 'dpo_decision' and reason = 'Twilio withdrawn again',
+                     format('the second re-clear''s audit row is wrong: %s', details))
+from public.audit_events where id = (select max(id) from public.audit_events where action = 'register.transfer_cleared');
+select pg_temp.check(current_setting('lock_timeout') <> '2s' and current_setting('transaction_timeout') <> '30s'
+                     and current_setting('hearth.break_glass', true) is distinct from 'twilio_reclear',
+                     'a re-clear''s bounds or marker outlived the helper');
 select set_config('app.org_id', '', true), set_config('app.user_id', '', true);

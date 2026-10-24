@@ -2,9 +2,11 @@
 // OD-03; TECH-SPEC T22 items 25 and 31). Beside the two registers, under the same links, it shows
 // GET /api/admin/notice's answer (dpo/notice-model.ts):
 // - the published notice: its version, when and by whom, whether it still says what the registers
-//   say, and how many of the people at the organisation have acknowledged it (a count, never names);
-// - the next version: what it changes, what holds publishing back with links to the register page
-//   that fixes it, what to check, and Publish;
+//   say, and how many of the people at the organisation have acknowledged it (a count, never names),
+//   with "Record an acknowledgement" beside the count for someone who acknowledged outside Hearth
+//   (dpo/RecordAcknowledgement.tsx; C0.9 OD-19, PD-75, PD-76);
+// - the next version: what it changes (the DPO's contact included), what holds publishing back with
+//   links to the register page or the contact page that fixes it, what to check, and Publish;
 // - a preview of its words, which are what people will acknowledge, drawn by the same reader as
 //   /notice (NoticeBody), as text, never HTML;
 // - the versions published.
@@ -35,13 +37,18 @@ import { type NoticeTabView, noticeTabView, publishBodyOf, publishRefusalOf } fr
 import { Note, Pill } from './parts.tsx'
 import { noticeAdminQuery, publishNotice } from './queries.ts'
 import { ReauthPin } from './ReauthPin.tsx'
+import { RecordAcknowledgement } from './RecordAcknowledgement.tsx'
 import { ReadRefusal, RegisterLinks } from './RegisterPage.tsx'
 import { SignOutNotice } from './SignOutNotice.tsx'
 
 const STATUS_TONE = { up_to_date: 'ok', out_of_date: 'warn', none: 'muted' } as const
 
-const FIX_PATHS = { purposes: '/dpo/purposes', transfers: '/dpo/transfers' } as const
-const FIX_LABELS = { purposes: NOTICE_TAB.draft.toPurposes, transfers: NOTICE_TAB.draft.toTransfers } as const
+const FIX_PATHS = { purposes: '/dpo/purposes', transfers: '/dpo/transfers', contact: '/dpo/contact' } as const
+const FIX_LABELS = {
+  purposes: NOTICE_TAB.draft.toPurposes,
+  transfers: NOTICE_TAB.draft.toTransfers,
+  contact: NOTICE_TAB.draft.toContact,
+} as const
 
 export function NoticeTab() {
   const query = useQuery(noticeAdminQuery)
@@ -90,6 +97,7 @@ function NoticeAdmin({ answer }: { answer: NoticeAdminForClient }) {
         {view.published.map(line => (
           <p key={line}>{line}</p>
         ))}
+        {view.record !== undefined && <RecordAcknowledgement version={view.record.version} />}
       </Part>
       <Part title={NOTICE_TAB.draft.title(view.version)}>
         <Draft view={view} />
@@ -152,6 +160,7 @@ function Draft({ view }: { view: NoticeTabView }) {
               </ul>
             </div>
           ))}
+          {view.changes.contact !== undefined && <p>{view.changes.contact}</p>}
           {view.changes.wording && <p>{NOTICE_TAB.draft.wording}</p>}
         </div>
       )}

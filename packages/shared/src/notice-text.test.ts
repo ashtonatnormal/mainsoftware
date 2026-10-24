@@ -1,19 +1,25 @@
-// The privacy notice's words (PDPA-02; C0.9 PD-33, PD-35 to PD-38, PD-53, PD-58, PD-60, PD-62;
-// TECH-SPEC T22 items 22 to 25): what generateNotice() writes from the registers, and what
-// noticeProblems() and noticeWarnings() say of a draft. publish_notice() (migration 0010) refuses
-// the same problems in the database (db/tests/160_notice.sql, NTD-05); the screens that show the
-// words hold them to AI_COPY again (apps/web, NTW-10).
+// The privacy notice's words (PDPA-02; C0.9 PD-33, PD-35 to PD-38, PD-53, PD-58, PD-60, PD-62, and
+// from PR 3a PD-65 to PD-68, PD-73, PD-74 and PD-86; TECH-SPEC T22 items 22 to 25): what
+// generateNotice() writes from the registers and the DPO's contact, and what noticeProblems() and
+// noticeWarnings() say of a draft. publish_notice() (migration 0011) refuses the same problems in
+// the database (db/tests/160_notice.sql, NTD-05), but for the two only its route checks
+// (purpose_conduct_unstoppable and free_text_ai_copy); the screens that show the words hold them
+// to AI_COPY again (apps/web, NTW-10).
 import { describe, expect, it, vi } from 'vitest'
 import { aiCopyIn } from './ai-copy.ts'
+import type { DpoContact } from './dpo-contact.ts'
 import { PINNED_PURPOSES } from './flags.ts'
 import {
   NOTICE_BODY_MAX,
   NOTICE_GENERATOR_PATTERN,
   NOTICE_LINE,
+  NOTICE_PROBLEMS,
   type NoticeFacts,
   type NoticeSources,
+  noticeChanges,
 } from './notice.ts'
 import {
+  conductUnstoppable,
   DOES_NOT,
   DOES_NOT_EXEMPT,
   generateNotice,
@@ -31,10 +37,28 @@ import {
   noticeWarnings,
 } from './notice-text.ts'
 import { type ProviderKey, PURPOSE_KEYS, PURPOSES, type PurposeKey } from './purposes.ts'
-import { NON_AI_PROVIDERS, NON_AI_PURPOSE_KEYS } from './registers.ts'
+import { CONDUCT_WITHDRAWABLE, NON_AI_PROVIDERS, NON_AI_PURPOSE_KEYS } from './registers.ts'
 
 const ORG = 'Tembusu Logistics'
 const TODAY = '2026-10-23'
+
+// The DPO's business contact, fictional, on a reserved domain (C0.9 OD-10): a role title and an
+// email address, at the org's first settings version.
+const CONTACT: NonNullable<NoticeInput['contact']> = {
+  version: 1,
+  title: 'Data Protection Officer',
+  email: 'dpo@notice.example',
+  phone: null,
+  postal: null,
+}
+// A phone number in the seed's made-up range that no persona uses, and a postal address, fictional.
+const PHONE = '+65 8000 0198'
+const POSTAL = '1 Example Road\nSingapore 000000'
+
+// The warning every draft carries until C0.19 (C0.9 PD-57). The DPO's contact, which PR 2 warned
+// of too, is a problem from PR 3a (dpo_contact_pending, PD-68).
+const STANDING = ['production_access_pending']
+const NOTHING = { added: [], changed: [], removed: [] }
 
 // Twilio Verify's and AWS's stated facts, fictional.
 const TWILIO: NoticeFacts = {
@@ -78,8 +102,9 @@ const clearance = (
   ...change,
 })
 
-// What a new org's register and the bootstrap make, once the DPO has recorded the bases: the pinned
-// purposes, security_audit and backups active, Twilio and AWS cleared, the rest planned.
+// What a new org's register and the bootstrap make, once the DPO has recorded the bases and their
+// contact: the pinned purposes, security_audit and backups active, Twilio and AWS cleared, the rest
+// planned.
 const input = (change: Partial<NoticeInput> = {}): NoticeInput => ({
   org: ORG,
   purposes: [
@@ -99,6 +124,7 @@ const input = (change: Partial<NoticeInput> = {}): NoticeInput => ({
     purpose('presence_receipts', { version: 1, status: 'planned', basis: null, retention: null }),
   ],
   clearances: [clearance('twilio', TWILIO), clearance('aws', AWS)],
+  contact: CONTACT,
   ...change,
 })
 const withPurpose = (key: PurposeKey, change: Partial<NoticePurpose> = {}) => {
@@ -185,18 +211,25 @@ describe('NTG-01 C0.9 PD-36: the generator is pure and deterministic', () => {
     ])
     expect(sources.clearances.map(c => c.provider)).toEqual(['aws', 'twilio'])
     expect(sources.clearances.map(c => c.id)).toEqual([...sources.clearances.map(c => c.id)].sort())
+    expect(sources.contact).toEqual({
+      version: 1,
+      facts: { title: 'Data Protection Officer', email: 'dpo@notice.example', phone: null, postal: null },
+    })
   })
 
-  it('NTG-01 PD-36: the digest’s text is sorted-key JSON of the words, the clearance ids, the generator and each purpose’s version', () => {
+  it('NTG-01 PD-36 PD-66: the digest’s text is sorted-key JSON of the words, the clearance ids, the contact’s settings version, the generator and each purpose’s version', () => {
     const text = noticeDigestText(noticeDraftSources(input(), 'The words'))
-    expect(Object.keys(JSON.parse(text))).toEqual(['body', 'clearances', 'generator', 'purposes'])
+    expect(Object.keys(JSON.parse(text))).toEqual(['body', 'clearances', 'contact', 'generator', 'purposes'])
     expect(JSON.parse(text).purposes).toEqual({ accounts: 2, backups: 2, security_audit: 2, service_operation: 2 })
+    expect(JSON.parse(text).contact).toBe(1)
     const base = noticeDraftSources(input(), 'The words')
     for (const change of [
       { body: 'Other words' },
-      { generator: 'c09.2' },
+      { generator: 'c09.3' },
       { purposes: [...base.purposes.slice(1), { key: 'accounts' as const, version: 3 }] },
       { clearances: base.clearances.slice(1) },
+      { contact: null },
+      { contact: { version: 2, facts: base.contact?.facts ?? CONTACT } },
     ]) {
       expect(noticeDigestText({ ...base, ...change }), JSON.stringify(change).slice(0, 60)).not.toBe(text)
     }
@@ -268,14 +301,31 @@ describe('NTG-02 C0.9 PD-33 PD-35 PD-53: every section and every basis', () => {
     )
   })
 
-  it('NTG-02 PDPA-02: whether consent can be withdrawn, production access (PRD-101) and your rights', () => {
+  it('NTG-02 PDPA-02 PDPA-13 OD-10 PD-74: whether consent can be withdrawn, production access (PRD-101), and your rights with the DPO’s contact', () => {
     expect(textOf(sectionOf(body, NOTICE_SECTIONS.withdraw))).toBe(
-      'None of these purposes rests on your consent, so all of them continue if you withdraw it.',
+      'None of the purposes under “Why your data is processed” rests on your consent, so they all continue if you withdraw it.',
     )
     expect(textOf(sectionOf(body, NOTICE_SECTIONS.production))).toContain('only through a separate emergency role')
-    const rights = textOf(sectionOf(body, NOTICE_SECTIONS.rights))
-    expect(rights).toContain('request a copy of the personal data')
-    expect(rights).toContain('contact the Data Protection Officer')
+    expect(sectionOf(body, NOTICE_SECTIONS.rights)).toEqual([
+      {
+        kind: 'paragraph',
+        text: `You can request a copy of the personal data ${ORG} holds about you, have it corrected, or withdraw consent where a purpose rests on it.`,
+      },
+      {
+        kind: 'paragraph',
+        text: `To do any of these, or to raise a question or a complaint about how your personal data is handled, contact the Data Protection Officer of ${ORG}. You don't need a Hearth account for this, so it still works after you leave.`,
+      },
+      { kind: 'item', text: 'Role: Data Protection Officer' },
+      { kind: 'item', text: 'Email: dpo@notice.example' },
+      {
+        kind: 'paragraph',
+        text: "If you're not satisfied with the answer, you can complain to the Personal Data Protection Commission (PDPC).",
+      },
+    ])
+    // The contact is printed, so the pointer to the employee data protection policy goes; the first
+    // code's mention of that policy stays (OD-04).
+    expect(textOf(sectionOf(body, NOTICE_SECTIONS.rights))).not.toContain('employee data protection policy')
+    expect(textOf(sectionOf(body, NOTICE_SECTIONS.firstCode))).toContain('employee data protection policy')
   })
 
   it('NTG-02 PDPA-10 PDPA-02: each cleared provider, in the registry’s order, with what it does and receives, where, for how long, who else, and that it trains no models', () => {
@@ -314,6 +364,9 @@ describe('NTG-02 C0.9 PD-33 PD-35 PD-53: every section and every basis', () => {
       withPurpose('recording_drop_in', { providers: ['livekit'] }),
       input({ clearances: [clearance('twilio', { ...TWILIO, processingCountries: [], training: null })] }),
       input({ clearances: NON_AI_PROVIDERS.map(provider => clearance(provider, AWS)) }),
+      withPurpose('presence_receipts', { basis: 'deemed_consent_conduct' }),
+      input({ contact: { ...CONTACT, phone: PHONE, postal: POSTAL } }),
+      input({ contact: { ...CONTACT, email: null, postal: POSTAL } }),
     ]
     for (const branch of branches) {
       const body = generateNotice(branch)
@@ -330,7 +383,8 @@ describe('NTG-02 C0.9 PD-33 PD-35 PD-53: every section and every basis', () => {
     )
     // Every non-AI purpose active and every provider cleared, each field at the most its column
     // holds (0009), 60 of the longest-named countries where it processes and 60 more where it
-    // stores, and a 200-character org name.
+    // stores, a 200-character org name, and every channel of the DPO's contact at its longest
+    // (0011).
     const long = (n: number) => 'é'.repeat(n)
     const longest = Object.entries(NOTICE_COUNTRY_NAMES)
       .sort(([, a], [, b]) => b.length - a.length)
@@ -356,7 +410,16 @@ describe('NTG-02 C0.9 PD-33 PD-35 PD-53: every section and every basis', () => {
           onwardRecipients: long(1000),
         }),
       ),
+      contact: {
+        version: 1,
+        title: long(120),
+        email: `${'a'.repeat(64)}@${'b'.repeat(185)}.org`,
+        phone: `+1${' 2'.repeat(14)}`,
+        postal: long(500),
+      },
     }
+    expect(largest.contact?.email).toHaveLength(254)
+    expect(largest.contact?.phone).toHaveLength(30)
     expect([...generateNotice(largest)].length).toBeLessThan(NOTICE_BODY_MAX)
   })
 })
@@ -399,7 +462,6 @@ describe('NTG-04 C0.9 PD-35 D41: what the notice never lists', () => {
       ['a provider cleared twice', input({ clearances: [clearance('aws', AWS), clearance('aws', AWS)] })],
       ['no basis', withPurpose('backups', { basis: null })],
       ['consent', withPurpose('backups', { basis: 'consent' })],
-      ['deemed consent by conduct', withPurpose('backups', { basis: 'deemed_consent_conduct' })],
       ['s15A', withPurpose('backups', { basis: 'deemed_consent_notification', basisReference: 'x' })],
       ['no retention', withPurpose('backups', { retention: '  ' })],
       [
@@ -407,8 +469,13 @@ describe('NTG-04 C0.9 PD-35 D41: what the notice never lists', () => {
         withPurpose('recording_meetings', { status: 'retired', retention: null }),
       ],
       ['no org name', input({ org: ' \n ' })],
+      ['no contact for the DPO (C0.9 PD-68)', input({ contact: null })],
+      ['a contact with no channel', input({ contact: { ...CONTACT, email: '  ' } })],
+      ['a contact with no role title', input({ contact: { ...CONTACT, title: '' } })],
     ]
     for (const [label, refusedInput] of refused) expect(() => generateNotice(refusedInput), label).toThrow()
+    // OD-18: deemed consent by conduct is stated from c09.2.
+    expect(() => generateNotice(withPurpose('backups', { basis: 'deemed_consent_conduct' }))).not.toThrow()
   })
 })
 
@@ -466,6 +533,7 @@ describe('NTG-06 C0.9 PD-33: free text never starts a line', () => {
           onwardRecipients: planted('Carriers'),
         }),
       ],
+      contact: CONTACT,
     }
     const body = generateNotice(forged)
     const clean = generateNotice({
@@ -476,6 +544,7 @@ describe('NTG-06 C0.9 PD-33: free text never starts a line', () => {
         purpose('recording_meetings', { status: 'retired' }),
       ],
       clearances: [clearance('twilio', TWILIO)],
+      contact: CONTACT,
     })
     // The same lines, the same headings and items, as a notice with nothing planted.
     expect(body.split('\n').length).toBe(clean.split('\n').length)
@@ -492,15 +561,9 @@ describe('NTG-06 C0.9 PD-33: free text never starts a line', () => {
 })
 
 describe('NTG-07 C0.9 PD-37 PD-38: what holds a draft back, and what it warns of', () => {
-  // The warnings every draft carries until PR 3 and C0.19 (C0.9 PD-57).
-  const STANDING = ['dpo_contact_pending', 'production_access_pending']
-
-  it('NTG-07 PD-57: a draft the registers allow has no problem, and warns that the DPO’s contact and production access aren’t in place yet', () => {
+  it('NTG-07 PD-57 PD-68: a draft the registers allow has no problem, and warns that production access isn’t in place yet', () => {
     expect(noticeProblems(input(), null)).toEqual([])
-    expect(noticeWarnings(input(), null, TODAY)).toEqual([
-      { code: 'dpo_contact_pending' },
-      { code: 'production_access_pending' },
-    ])
+    expect(noticeWarnings(input(), null, TODAY)).toEqual([{ code: 'production_access_pending' }])
   })
 
   it('NTG-07 PD-37: every problem at once comes in publish_notice()’s order, then the registry’s', () => {
@@ -512,28 +575,37 @@ describe('NTG-07 C0.9 PD-37 PD-38: what holds a draft back, and what it warns of
         purpose('security_audit', { basis: null }),
         purpose('backups', { retention: null }),
         purpose('presence_receipts', { basis: 'deemed_consent_notification', basisReference: 'x' }),
+        purpose('session_slides', { basis: 'deemed_consent_conduct' }),
         purpose('content_delivery', { providers: ['livekit', 'aws', 'livekit'] }),
       ],
       clearances: [
         clearance('twilio', { ...TWILIO, onwardRecipients: 'Carriers and their agents' }),
         clearance('aws', AWS),
       ],
+      contact: null,
     }
     expect(noticeProblems(all, null)).toEqual([
       { code: 'purpose_basis_missing', purpose: 'security_audit' },
       { code: 'purpose_retention_missing', purpose: 'backups' },
       { code: 'purpose_consent_basis', purpose: 'presence_receipts' },
+      { code: 'purpose_conduct_unstoppable', purpose: 'session_slides' },
       { code: 'provider_not_cleared', purpose: 'content_delivery', provider: 'livekit' },
+      { code: 'dpo_contact_pending' },
       { code: 'free_text_ai_copy', provider: 'twilio', field: 'onward_recipients' },
     ])
   })
 
-  it('NTG-07 PD-38: none of the three consent-type bases can be published yet', () => {
-    for (const basis of ['consent', 'deemed_consent_conduct', 'deemed_consent_notification'] as const) {
+  it('NTG-07 PD-38 OD-18: consent and deemed consent by notification can’t be published yet; deemed consent by conduct can be written, and is held back only until its withdrawal is written down (PD-86)', () => {
+    for (const basis of ['consent', 'deemed_consent_notification'] as const) {
       expect(noticeProblems(withPurpose('presence_receipts', { basis }), null), basis).toEqual([
         { code: 'purpose_consent_basis', purpose: 'presence_receipts' },
       ])
     }
+    const conduct = withPurpose('presence_receipts', { basis: 'deemed_consent_conduct' })
+    expect(noticeProblems(conduct, null)).toEqual([
+      { code: 'purpose_conduct_unstoppable', purpose: 'presence_receipts' },
+    ])
+    expect(() => generateNotice(conduct)).not.toThrow()
     // A planned purpose holds nothing back, whatever it records.
     expect(noticeProblems(withPurpose('presence_receipts', { status: 'planned', basis: 'consent' }), null)).toEqual([])
   })
@@ -568,7 +640,7 @@ describe('NTG-07 C0.9 PD-37 PD-38: what holds a draft back, and what it warns of
     expect(noticeProblems(edited, latest)).toEqual([])
     expect(noticeWarnings(edited, latest, TODAY).map(w => w.code)).toEqual(STANDING)
     // Against a stand-in, nothing is ever unchanged.
-    const standIn: NoticeSources = { generator: null, body, purposes: [], clearances: [] }
+    const standIn: NoticeSources = { generator: null, body, purposes: [], clearances: [], contact: null }
     expect(noticeProblems(input(), standIn)).toEqual([])
     expect(noticeSaysTheSame(noticeDraftSources(input(), body), { ...standIn, ...latest, generator: null })).toBe(false)
   })
@@ -592,11 +664,13 @@ describe('NTG-07 C0.9 PD-37 PD-38: what holds a draft back, and what it warns of
       { code: 'sends_waiting', provider: 'twilio' },
       { code: 'sends_waiting', provider: 'livekit' },
       { code: 'sends_waiting', provider: 'apple_push' },
-      { code: 'dpo_contact_pending' },
       { code: 'production_access_pending' },
     ])
     // Before any generated version, a clearance alone lets sends go (C0.9 PD-41): nothing waits.
-    for (const before of [null, { generator: null, body: 'Local stand-in', purposes: [], clearances: [] }]) {
+    for (const before of [
+      null,
+      { generator: null, body: 'Local stand-in', purposes: [], clearances: [], contact: null },
+    ]) {
       expect(noticeWarnings(changed, before, TODAY).map(w => w.code)).not.toContain('sends_waiting')
     }
   })
@@ -606,8 +680,9 @@ describe('NTG-09 C0.9 PD-36: NOTICE_GENERATOR names these exact words', () => {
   // One digest per generator id. A change to the words fails this: give the generator a new id and
   // pin its digest here, so every version records which words wrote it, and the DPO's tab shows the
   // notice out of date. Country names come from the generator's own table (NTG-05), so a Node
-  // upgrade doesn't move it.
-  const PINNED: Readonly<Record<string, string>> = { 'c09.1': '4c47a8c307f25504' }
+  // upgrade doesn't move it. c09.1's digest is of its draft before the contact was an input; c09.2
+  // (C0.9 PR 3a) prints the fixture's contact too.
+  const PINNED: Readonly<Record<string, string>> = { 'c09.1': '4c47a8c307f25504', 'c09.2': 'd5da6ef62a264896' }
 
   it('NTG-09: the output of a fixed draft has the digest pinned for this generator id, which 0010 admits', () => {
     expect(NOTICE_GENERATOR_PATTERN.test(NOTICE_GENERATOR)).toBe(true)
@@ -667,6 +742,7 @@ describe('NTG-10 NTG-11 decision 5 C0.9 PD-58: what Hearth doesn’t do', () => 
         org: ORG,
         purposes: [...PINNED_PURPOSES, ...active].map(key => purpose(key)),
         clearances: [],
+        contact: CONTACT,
       })
       const printed = clauses(body)
       expect(printed, active.join()).toContain("Hearth doesn't transcribe anything.")
@@ -750,5 +826,305 @@ describe('NTG-13 C0.9 PD-62 decision 8: the DPO’s free text is held to AI_COPY
     expect(aiCopyIn(body)).toBeUndefined()
     // Any other name is printed as it is.
     expect(generateNotice(input({ org: 'Tembusu Logistics' }))).toContain('Tembusu Logistics')
+  })
+})
+
+describe('NTG-14 PDPA-02 PDPA-13 C0.9 OD-10 OD-13 PD-74: “Your rights” gives the DPO’s contact', () => {
+  const rights = (contact: NoticeInput['contact'], org = ORG) =>
+    sectionOf(generateNotice(input({ org, contact })), NOTICE_SECTIONS.rights)
+  const items = (contact: NoticeInput['contact']) =>
+    rights(contact)
+      .filter(line => line.kind === 'item')
+      .map(line => line.text)
+
+  it('NTG-14 PD-74: the role, then each channel recorded, in this order, as items with no full stop', () => {
+    const lines = {
+      email: 'Email: dpo@notice.example',
+      phone: `Phone: ${PHONE}`,
+      postal: 'Post: 1 Example Road, Singapore 000000',
+    }
+    for (let mask = 1; mask < 8; mask++) {
+      const has = (bit: number) => (mask & bit) !== 0
+      const contact = {
+        ...CONTACT,
+        email: has(1) ? CONTACT.email : null,
+        phone: has(2) ? PHONE : null,
+        postal: has(4) ? POSTAL : null,
+      }
+      expect(items(contact), String(mask)).toEqual([
+        'Role: Data Protection Officer',
+        ...(has(1) ? [lines.email] : []),
+        ...(has(2) ? [lines.phone] : []),
+        ...(has(4) ? [lines.postal] : []),
+      ])
+    }
+    // An address that ends in a full stop of its own keeps it; none is added.
+    expect(items({ ...CONTACT, title: 'Data Protection Officer, Tembusu Pte. Ltd.' })[0]).toBe(
+      'Role: Data Protection Officer, Tembusu Pte. Ltd.',
+    )
+  })
+
+  it('NTG-14 OD-13: you need no account to use it, so it works after you leave', () => {
+    expect(textOf(rights(CONTACT))).toContain(
+      "You don't need a Hearth account for this, so it still works after you leave.",
+    )
+  })
+
+  it('NTG-14 PD-74: a postal address prints on one line, its lines joined with commas', () => {
+    const postal = '1 Example Road\n#02-01 Example House\nSingapore 000000'
+    expect(items({ ...CONTACT, email: null, postal })).toEqual([
+      'Role: Data Protection Officer',
+      'Post: 1 Example Road, #02-01 Example House, Singapore 000000',
+    ])
+    // Commas or semicolons typed at a line's end aren't doubled; a full stop (an abbreviation's) stays.
+    for (const [typed, printed] of [
+      ['1 Example Road,\nUnit #01-02,\nSingapore 000000', 'Post: 1 Example Road, Unit #01-02, Singapore 000000'],
+      ['1 Example Road ;\n,\nSingapore 000000', 'Post: 1 Example Road, Singapore 000000'],
+      ['1 Example St.\nSingapore 000000', 'Post: 1 Example St., Singapore 000000'],
+    ] as const) {
+      expect(items({ ...CONTACT, email: null, postal: typed })[1], typed).toBe(printed)
+    }
+  })
+
+  it('NTG-14 PD-33: headings, items and line breaks planted in the contact stay inside their line', () => {
+    const separator = String.fromCodePoint(0x2028)
+    const planted = {
+      ...CONTACT,
+      title: 'Data Protection Officer\n## Forged section',
+      postal: `1 Example Road\n- Forged item\r\n### Forged entry${separator}# x`,
+    }
+    const body = generateNotice(input({ contact: planted }))
+    const clean = generateNotice(input({ contact: { ...CONTACT, postal: '1 Example Road' } }))
+    expect(body.split('\n').length).toBe(clean.split('\n').length)
+    expect(of(body, 'section')).toEqual(of(clean, 'section'))
+    expect(of(body, 'entry')).toEqual(of(clean, 'entry'))
+    expect(items(planted)).toEqual([
+      'Role: Data Protection Officer ## Forged section',
+      'Email: dpo@notice.example',
+      'Post: 1 Example Road, - Forged item, ### Forged entry # x',
+    ])
+    expect(body).not.toMatch(/\r/)
+    expect(body.includes(separator)).toBe(false)
+  })
+
+  it('NTG-14 PD-62: an org name AI_COPY refuses reads “your organisation” here too', () => {
+    const text = textOf(rights(CONTACT, 'Agents of Change Pte Ltd'))
+    expect(text).toContain('the personal data your organisation holds about you')
+    expect(text).toContain('contact the Data Protection Officer of your organisation.')
+    expect(text).not.toContain('Agents')
+  })
+})
+
+describe('NTG-15 PDPA-04 C0.9 OD-18 PD-73 PD-86: deemed consent by conduct, and withdrawing it', () => {
+  const conduct = (key: PurposeKey, change: Partial<NoticePurpose> = {}) =>
+    purpose(key, { basis: 'deemed_consent_conduct', ...change })
+  // The usual registers with these purposes in place of any of the same key.
+  const withPurposes = (...purposes: NoticePurpose[]): NoticeInput => {
+    const base = input()
+    const keys = new Set(purposes.map(p => p.key))
+    return { ...base, purposes: [...base.purposes.filter(p => !keys.has(p.key)), ...purposes] }
+  }
+  const withdraw = (draft: NoticeInput) => sectionOf(generateNotice(draft), NOTICE_SECTIONS.withdraw)
+
+  it('NTG-15 PD-73: the basis item says it is your deemed consent, and points to how to withdraw it', () => {
+    const body = generateNotice(withPurposes(conduct('presence_receipts')))
+    expect(itemsOf(body, NOTICE_SECTIONS.purposes, PURPOSES.presence_receipts.register)[0]).toBe(
+      'Legal basis: your deemed consent. You give this data yourself, for this purpose, and it is reasonable that you would. You can withdraw it, as “If you withdraw consent” below says.',
+    )
+  })
+
+  it('NTG-15 PD-73: with no purpose on it, the section says the purposes listed all continue', () => {
+    expect(withdraw(input())).toEqual([
+      {
+        kind: 'paragraph',
+        text: 'None of the purposes under “Why your data is processed” rests on your consent, so they all continue if you withdraw it.',
+      },
+    ])
+  })
+
+  it('NTG-15 PD-73: with some, it lists only the active ones in the registry’s order, says the others listed continue, and how to withdraw', () => {
+    const draft = withPurposes(
+      conduct('session_slides'),
+      conduct('presence_receipts'),
+      conduct('people_insights', { status: 'retired' }),
+    )
+    expect(withdraw(draft)).toEqual([
+      {
+        kind: 'paragraph',
+        text: 'These purposes rest on your deemed consent, so they stop for you if you withdraw it:',
+      },
+      { kind: 'item', text: PURPOSES.presence_receipts.register },
+      { kind: 'item', text: PURPOSES.session_slides.register },
+      {
+        kind: 'paragraph',
+        text: "The other purposes under “Why your data is processed” don't rest on consent, so they continue if you withdraw it.",
+      },
+      {
+        kind: 'paragraph',
+        text: "To withdraw, contact the Data Protection Officer, as “Your rights” below says. Hearth can't take a withdrawal in the app yet, so they carry it out by hand: they tell you first what withdrawing changes for you, and confirm once it has taken effect.",
+      },
+    ])
+  })
+
+  it('NTG-15 PD-60 PD-73: a retired purpose, even on a consent-type basis, is neither listed nor said to continue', () => {
+    for (const basis of ['consent', 'deemed_consent_conduct', 'deemed_consent_notification'] as const) {
+      const draft = withPurposes(purpose('people_insights', { status: 'retired', basis }))
+      expect(noticeProblems(draft, null), basis).toEqual([])
+      const body = generateNotice(draft)
+      expect(textOf(withdraw(draft)), basis).toBe(
+        'None of the purposes under “Why your data is processed” rests on your consent, so they all continue if you withdraw it.',
+      )
+      expect(textOf(withdraw(draft))).not.toContain(PURPOSES.people_insights.register)
+      expect(textOf(sectionOf(body, NOTICE_SECTIONS.retired))).toContain(PURPOSES.people_insights.register)
+    }
+  })
+
+  it('NTG-15 PD-38: consent and deemed consent by notification still can’t be written; deemed consent by conduct can', () => {
+    for (const basis of ['consent', 'deemed_consent_notification'] as const) {
+      const draft = withPurposes(purpose('presence_receipts', { basis, basisReference: 'x' }))
+      expect(
+        noticeProblems(draft, null).map(p => p.code),
+        basis,
+      ).toEqual(['purpose_consent_basis'])
+      expect(() => generateNotice(draft), basis).toThrow()
+    }
+    expect(() => generateNotice(withPurposes(conduct('presence_receipts')))).not.toThrow()
+  })
+
+  it('NTG-15 PD-86: conductUnstoppable() with the real list, empty in C0, finds every active purpose on the basis; with a planted list, only the rest', () => {
+    expect(CONDUCT_WITHDRAWABLE).toEqual([])
+    const { purposes } = withPurposes(
+      conduct('session_slides'),
+      conduct('presence_receipts'),
+      conduct('people_insights', { status: 'retired' }),
+      conduct('access_logs', { status: 'planned' }),
+    )
+    expect(conductUnstoppable(purposes)).toEqual(['presence_receipts', 'session_slides'])
+    expect(conductUnstoppable(purposes, ['session_slides'])).toEqual(['presence_receipts'])
+    expect(conductUnstoppable(purposes, ['presence_receipts', 'session_slides'])).toEqual([])
+    expect(conductUnstoppable(input().purposes)).toEqual([])
+  })
+
+  it('NTG-15 PD-86: purpose_conduct_unstoppable names its purpose, comes after purpose_consent_basis, and leaves the preview written', () => {
+    const both = withPurposes(conduct('session_slides'), purpose('presence_receipts', { basis: 'consent' }))
+    expect(noticeProblems(both, null)).toEqual([
+      { code: 'purpose_consent_basis', purpose: 'presence_receipts' },
+      { code: 'purpose_conduct_unstoppable', purpose: 'session_slides' },
+    ])
+    expect(NOTICE_PROBLEMS.indexOf('purpose_conduct_unstoppable')).toBe(
+      NOTICE_PROBLEMS.indexOf('purpose_consent_basis') + 1,
+    )
+    // It holds back only publishing: the words are written, so the DPO can read them, and a latest
+    // version with the same words is compared as usual.
+    const alone = withPurposes(conduct('session_slides'))
+    const body = generateNotice(alone)
+    const latest = noticeDraftSources(alone, body)
+    expect(noticeProblems(alone, latest)).toEqual([
+      { code: 'purpose_conduct_unstoppable', purpose: 'session_slides' },
+      { code: 'unchanged' },
+    ])
+  })
+})
+
+describe('NTG-16 PDPA-02 C0.9 OD-10 PD-65 PD-68: the DPO’s contact holds publishing back until it is recorded', () => {
+  it('NTG-16 PD-68: no contact is a problem, and no draft can be written; with one there is none, and it is never a warning', () => {
+    expect(noticeProblems(input({ contact: null }), null)).toEqual([{ code: 'dpo_contact_pending' }])
+    expect(() => generateNotice(input({ contact: null }))).toThrow(
+      'A notice gives the Data Protection Officer’s contact',
+    )
+    expect(noticeProblems(input(), null)).toEqual([])
+    const latest = noticeDraftSources(input(), generateNotice(input()))
+    for (const contact of [null, CONTACT]) {
+      for (const before of [null, latest]) {
+        const codes = noticeWarnings(input({ contact }), before, TODAY).map(warning => warning.code)
+        expect(codes as string[]).not.toContain('dpo_contact_pending')
+      }
+    }
+    // Unwritable: against the latest version it is never unchanged, and same_text isn't judged.
+    expect(noticeProblems(input({ contact: null }), latest)).toEqual([{ code: 'dpo_contact_pending' }])
+    expect(noticeWarnings(input({ contact: null }), latest, TODAY).map(w => w.code)).toEqual(STANDING)
+  })
+
+  it('NTG-16 PD-37: it sits in NOTICE_PROBLEMS order, after the purposes and providers and before the free text', () => {
+    expect(NOTICE_PROBLEMS.indexOf('dpo_contact_pending')).toBe(NOTICE_PROBLEMS.indexOf('provider_not_cleared') + 1)
+    expect(NOTICE_PROBLEMS.indexOf('free_text_ai_copy')).toBe(NOTICE_PROBLEMS.indexOf('dpo_contact_pending') + 1)
+    const draft = input({
+      contact: null,
+      purposes: [...input().purposes, purpose('content_delivery', { providers: ['livekit'] })],
+    })
+    expect(noticeProblems(draft, null).map(p => p.code)).toEqual(['provider_not_cleared', 'dpo_contact_pending'])
+  })
+
+  it('NTG-16 PD-65: the contact’s free text with an AI_COPY word holds publishing back, naming its field and never the word', () => {
+    const cases: [Partial<DpoContact>, string][] = [
+      [{ title: 'Ask the Data Protection Officer' }, 'contact_title'],
+      [{ email: 'agents@notice.example' }, 'contact_email'],
+      [{ postal: 'Co-pilot House\nSingapore 000000' }, 'contact_postal'],
+    ]
+    for (const [change, field] of cases) {
+      expect(noticeProblems(input({ contact: { ...CONTACT, ...change } }), null), field).toEqual([
+        { code: 'free_text_ai_copy', field },
+      ])
+    }
+    // A phone number holds no letter, so nothing of it is checked; and clean text holds nothing back.
+    expect(noticeProblems(input({ contact: { ...CONTACT, phone: PHONE, postal: POSTAL } }), null)).toEqual([])
+  })
+})
+
+describe('NTG-17 C0.9 PD-66 PD-67: the contact’s settings version is one of a version’s sources', () => {
+  it('NTG-17 PD-66: the sources and the digest carry the settings version, and none while no contact is recorded', () => {
+    const sources = noticeDraftSources(input(), 'The words')
+    expect(sources.contact).toEqual({
+      version: 1,
+      facts: { title: CONTACT.title, email: CONTACT.email, phone: null, postal: null },
+    })
+    expect(JSON.parse(noticeDigestText(sources)).contact).toBe(1)
+    const none = noticeDraftSources(input({ contact: null }), null)
+    expect(none.contact).toBeNull()
+    expect(JSON.parse(noticeDigestText(none)).contact).toBeNull()
+    expect(noticeDigestText(noticeDraftSources(input({ contact: { ...CONTACT, version: 2 } }), 'The words'))).not.toBe(
+      noticeDigestText(sources),
+    )
+  })
+
+  it('NTG-17 PD-67: a new settings version with the same words is out of date and warns same_text; the same version says the same', () => {
+    const body = generateNotice(input())
+    const latest = noticeDraftSources(input(), body)
+    expect(noticeProblems(input(), latest)).toEqual([{ code: 'unchanged' }])
+    expect(noticeSaysTheSame(noticeDraftSources(input(), body), latest)).toBe(true)
+    // The same details recorded again, as version 3 after a change and a change back.
+    const again = input({ contact: { ...CONTACT, version: 3 } })
+    expect(generateNotice(again)).toBe(body)
+    expect(noticeProblems(again, latest)).toEqual([])
+    expect(noticeWarnings(again, latest, TODAY).map(w => w.code)).toEqual(['same_text', ...STANDING])
+    expect(noticeSaysTheSame(noticeDraftSources(again, body), latest)).toBe(false)
+    // Other details are other words.
+    const moved = input({ contact: { ...CONTACT, version: 2, email: 'privacy@notice.example' } })
+    expect(generateNotice(moved)).not.toBe(body)
+    expect(noticeWarnings(moved, latest, TODAY).map(w => w.code)).toEqual(STANDING)
+  })
+
+  it('NTG-17 PD-67: what changed says the contact was added after a version that printed none, changed when its details differ, and the same when they match; a contact-only change isn’t new wording', () => {
+    const body = generateNotice(input())
+    const now = noticeDraftSources(input(), body)
+    const before = { ...now, generator: 'c09.1', body: 'Older words', contact: null }
+    const standIn: NoticeSources = { generator: null, body: 'Stand-in', purposes: [], clearances: [], contact: null }
+    expect(noticeChanges(before, now).contact).toBe('added')
+    expect(noticeChanges(standIn, now).contact).toBe('added')
+    const phoned = input({ contact: { ...CONTACT, version: 2, phone: PHONE } })
+    const changed = noticeDraftSources(phoned, generateNotice(phoned))
+    expect(noticeChanges(now, changed)).toEqual({
+      purposes: NOTHING,
+      providers: NOTHING,
+      contact: 'changed',
+      wording: false,
+    })
+    const again = noticeDraftSources(input({ contact: { ...CONTACT, version: 3 } }), body)
+    expect(noticeChanges(now, again)).toEqual({
+      purposes: NOTHING,
+      providers: NOTHING,
+      contact: 'same',
+      wording: false,
+    })
   })
 })

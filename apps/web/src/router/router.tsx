@@ -13,7 +13,8 @@
 //     ├── /more       the phone's More page
 //     ├── /settings /settings/privacy   Settings and its sections (C0.9 PD-47): no nav entry; the
 //     │                                 avatar menu opens them
-//     ├── /dpo/purposes /dpo/transfers /dpo/notice   the DPO's registers and notice (C0.9 PD-26,
+//     ├── /dpo/purposes /dpo/transfers /dpo/contact /dpo/notice   the DPO's registers, their
+//     │                                  contact details (C0.9 PR 3a, PD-70) and notice (C0.9 PD-26,
 //     │                                  PD-48): no nav entry; the avatar menu opens them, and the
 //     │                                  server decides who may read them
 //     └── $           every other path: "Page not found" inside the shell
@@ -239,6 +240,14 @@ const transfersRoute = createRoute({
   component: lazyRouteComponent(() => import('@/dpo/TransfersScreen.tsx'), 'TransfersScreen'),
 })
 
+// The DPO's business contact (PDPA-13, PDPA-02; C0.9 OD-10, PD-70), which the notice prints.
+const dpoContactRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/dpo/contact',
+  staticData: { title: SHELL.dpo.contact },
+  component: lazyRouteComponent(() => import('@/dpo/ContactScreen.tsx'), 'ContactScreen'),
+})
+
 const dpoNoticeRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/dpo/notice',
@@ -269,6 +278,7 @@ export const routeTree = rootRoute.addChildren([
     privacyRoute,
     purposesRoute,
     transfersRoute,
+    dpoContactRoute,
     dpoNoticeRoute,
     notFoundRoute,
   ]),
